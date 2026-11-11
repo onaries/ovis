@@ -11,6 +11,7 @@ import { herdrRpc, herdrSocketPath, type WorkspaceCreateResult, paneRead, paneSe
 import { chromePath } from "./chrome-path.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
 import { clickTab } from "./tab-pick.ts";
+import { openLens } from "./header-lens.ts";
 
 /** how long a resize that should not happen gets to show up */
 const NO_RESIZE_WAIT_MS = 400;
@@ -166,7 +167,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
 
     // the phone's terminal lens fits the grid to the phone: the shell sees it change
     // On a phone the label is hidden, but the lens keeps its accessible name.
-    await phone.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).tap();
+    await openLens(phone, "terminal", "tap");
     await phone.waitForFunction(() => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"), undefined, { timeout: 10_000 });
     const deadline = Date.now() + 10_000;
     let phoneSize = desktopSize;
@@ -208,7 +209,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
       socket.addEventListener("message", receive);
     }, desktopSize.split(" ").map(Number));
     const chatAt = Date.now();
-    await phone.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).tap();
+    await openLens(phone, "chat", "tap");
     const restoredAt = await desktop.evaluate(() => (window as unknown as { gridRestored_: Promise<number> }).gridRestored_);
     assert.ok(restoredAt - chatAt <= 1_000, "phone Chat restores the visible desktop grid within 1 s");
     // pane-geometry announces the resize before the sidecar applies it to herdr's pty.
@@ -218,7 +219,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     assert.equal(restoredSize, desktopSize, "the unfocused desktop's grid is restored in the real pty");
     assert.ok(Date.now() - chatAt <= 1_000, "the real pty restores the desktop grid within 1 s");
     console.log(`PASS phone Chat restores the visible unfocused desktop's ${desktopSize}`);
-    await phone.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).tap();
+    await openLens(phone, "terminal", "tap");
     let reclaimedSize = "";
     const reclaimDeadline = Date.now() + 10_000;
     while (Date.now() < reclaimDeadline && reclaimedSize !== phoneSize) reclaimedSize = await size();

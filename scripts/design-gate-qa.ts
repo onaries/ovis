@@ -74,6 +74,7 @@ interface AllowEntry { check: string; key: string; reason: string }
 const LAYOUT_ANCHORS: [string, string][] = [
   ["tab-more", ".header-tabs .tab-strip-more"],
   ["view-switch", ".app-header .view-switch"],
+  ["lens-toggle", ".app-header .lens-toggle"],
   ["files-button", ".app-header .header-files-button"],
   ["more-button", ".app-header .header-more-button"],
   ["drawer-toggle", ".app-header .drawer-toggle"],

@@ -20,11 +20,9 @@ it("places the selected pane's tab among its workspace's tabs", () => {
   expect(tabPosition(roster, "missing")).toBeNull();
 });
 
-it("counts working, waiting and unseen done; background work counts as working", () => {
-  const panes = [pane("a", "working"), pane("b", "blocked"), pane("c", "blocked"), pane("d", "done"), pane("e", "idle"), pane("f", "done", "t1", "w1", { background_wait: true })];
-  expect(sessionCounts(panes, (p) => (p.background_wait ? "waiting" : p.agent_status))).toEqual({ working: 2, waiting: 2, done: 1 });
-  expect(sessionCounts(panes, (p) => (p.pane_id === "d" ? "idle" : raw(p))).done).toBe(1);
-  expect(sessionCounts(panes, (p) => (p.pane_id === "d" || p.pane_id === "f" ? "idle" : raw(p))).done).toBe(0);
+it("counts the sessions waiting for the person; background work is not waiting", () => {
+  const panes = [pane("a", "working"), pane("b", "blocked"), pane("c", "blocked"), pane("d", "done"), pane("e", "idle"), pane("f", "blocked", "t1", "w1", { background_wait: true })];
+  expect(sessionCounts(panes, (p) => (p.background_wait ? "waiting" : p.agent_status))).toEqual({ waiting: 2 });
 });
 
 it("opens the next waiting pane after the selected one, wrapping, never the selected one", () => {
@@ -42,7 +40,7 @@ it("counts and walks the waiting panes of every connected PC, the selected PC fi
     { machineId: "work", panes: [pane("c", "blocked"), pane("d", "working")], status: raw },
     { machineId: "lab", panes: [pane("e", "blocked")], status: raw },
   ];
-  expect(sessionCountsAcross(rosters)).toEqual({ working: 1, waiting: 3, done: 0 });
+  expect(sessionCountsAcross(rosters)).toEqual({ waiting: 3 });
   // from the selected PC's own next, then the PCs after it, wrapping round to the ones before
   expect(nextWaitingTarget(rosters, { machineId: "local", paneId: "a" })).toEqual({ machineId: "local", paneId: "b" });
   expect(nextWaitingTarget(rosters, { machineId: "local", paneId: "b" })).toEqual({ machineId: "work", paneId: "c" });

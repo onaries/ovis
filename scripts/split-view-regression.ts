@@ -944,7 +944,49 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
     {
       const [left, right, , ] = await panesFor("tui-left", "tui-right", "tui-target") as [string, string, string];
       const target = workspaces.at(-1)!;
-      const { page, errors } = await open([left, right], "chat");
+      // herdr tells this server of the move on its event stream, while the roster is read on another connection and can
+      // show the move first: the page is told the pane-moved only after a roster without the old ID, so the half follows
+      // the pane from that roster alone (its terminal stays the same)
+      const { page, errors } = await open([left, right], "chat", (context) => context.addInitScript((pane) => {
+        type Data = { type?: string; message?: { type?: string; from?: string }; machines?: Array<{ snapshot?: { panes: Array<{ pane_id: string }> } | null }> };
+        const held: MessageEvent<string>[] = [];
+        // a roster without the pane may come first by itself: then the notice that follows is let through
+        // once that roster's render and its effects have run, instead of being held for a roster that came.
+        // Only a roster with panes, after one that showed the pane, proves it moved: the first, cached one
+        // may predate the pane, and one with no snapshot shows nothing
+        let present = false;
+        let without = false;
+        const release = (handler: (event: MessageEvent<string>) => void, target: EventSource) => {
+          const late = held.splice(0);
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            for (const event of late) handler.call(target, event);
+            (window as { rosterWithout?: boolean }).rosterWithout = true;
+          }));
+        };
+        const own = Object.getOwnPropertyDescriptor(EventSource.prototype, "onmessage")!;
+        Object.defineProperty(EventSource.prototype, "onmessage", {
+          configurable: true,
+          get(this: EventSource) { return own.get!.call(this); },
+          set(this: EventSource, handler: ((event: MessageEvent<string>) => void) | null) {
+            own.set!.call(this, handler && function (this: EventSource, event: MessageEvent<string>) {
+              const data = JSON.parse(event.data) as Data;
+              if (data.type === "machine-message" && data.message?.type === "pane-moved" && data.message.from === pane) {
+                held.push(event);
+                if (without) release(handler, this);
+                return;
+              }
+              handler.call(this, event);
+              const shows = data.type === "machines" && data.machines!.some((machine) => machine.snapshot?.panes.some((item) => item.pane_id === pane));
+              if (shows) present = true;
+              else if (data.type === "machines" && present && !without && data.machines!.some((machine) => machine.snapshot)) {
+                without = true;
+                // told once that roster's render and its effects have run, as a later message would be
+                if (held.length > 0) release(handler, this);
+              }
+            });
+          },
+        });
+      }, left));
       await splitRight(page, right);
       const shows = (side: string, pane: string) => page.waitForFunction(([which, id]) =>
         document.querySelector(`.pane-slot[data-side="${which}"] [data-layout-pane="${id}"]:not([inert])`) !== null, [side, pane] as const);
@@ -958,6 +1000,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       });
       const moved = move_result.pane.pane_id;
       assert.notEqual(moved, left, "herdr gives the moved pane a new ID");
+      await page.waitForFunction(() => (window as { rosterWithout?: boolean }).rosterWithout === true);
       await shows("left", moved);
       await shows("right", right);
       assert.equal(await page.locator(".pane-slot").count(), 2, "the split stays when a pane moves elsewhere");

@@ -2404,6 +2404,19 @@ button {
   font-weight: var(--fw-semibold);
 }
 
+/* a phone's lens button (components/LensToggle.tsx): its radius would cut a finger's target at its corners
+   (Chromium hit-tests the rounded box), so an empty, square layer over its border box keeps them, as the
+   switch's options do */
+.lens-toggle {
+  position: relative;
+}
+
+.lens-toggle::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--hairline));
+}
+
 .header-text-button.is-icon {
   width: var(--bar-control-h);
   padding: 0;
@@ -2928,56 +2941,6 @@ button {
 
 /* alerts are off on this device: the one state of the menu worth a glance. The button's name
    and the Alerts item say it in words. */
-/* a phone's header counts (components/HeaderCounts.tsx): the running and the unseen finished sessions in
-   the sidebar's marks, tabular so a count that changes moves nothing; as tall as the header's buttons */
-.header-counts {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--touch-target-header);
-  padding: 0 var(--space-1);
-  border: 0;
-  background: transparent;
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.header-count {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.header-count-mark {
-  flex: 0 0 auto;
-  width: var(--dot-size);
-  height: var(--dot-size);
-  border-radius: var(--radius-pill);
-  background: var(--status-working);
-}
-
-/* the narrowest phones keep their room for the pane's title: the drawer still says each state */
-@media (max-width: 359px) {
-  .header-counts { display: none; }
-}
-
-/* a finish is a check, as the sidebar's rows draw it (Sidebar.css) */
-.header-count.is-done .header-count-mark {
-  width: calc(var(--space-1) + 1px);
-  height: calc(var(--space-2) + 1px);
-  margin-top: calc(-1 * var(--hairline) * 2);
-  border: solid var(--status-done);
-  border-width: 0 2px 2px 0;
-  border-radius: 0;
-  background: transparent;
-  transform: rotate(45deg);
-}
-
 /* a session waiting where no tab row carries the sessions' pill (App.tsx): More's first item opens it */
 .header-more-dot.is-waiting {
   background: var(--status-blocked);

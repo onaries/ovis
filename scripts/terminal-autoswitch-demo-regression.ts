@@ -8,6 +8,7 @@ import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
 import { shownRows } from "./shown-rows.ts";
 import panes from "../site/demo/fixtures/panes.json";
+import { openLens } from "./header-lens.ts";
 
 // Real client and demo transport. Only receipts and demo-turn completion are held, then released
 // explicitly: no provider, live herdr, sleeps or deadline-dependent assertions.
@@ -176,7 +177,10 @@ try {
       await page.waitForFunction(() => (window as unknown as PeekWindow).promptReads > 0);
       const tag = `${width}-${theme}`;
       const chatLens = await lens(page);
-      assert.deepEqual({ stored: chatLens.stored, chatPressed: chatLens.chatPressed }, { stored: "chat", chatPressed: "true" });
+      // a phone has no track: its one button names the other lens (components/LensToggle.tsx)
+      assert.deepEqual({ stored: chatLens.stored, chatPressed: chatLens.chatPressed }, { stored: "chat", chatPressed: touch ? null : "true" });
+      const phoneButton = () => page.locator(".app-header .lens-toggle").evaluate((node) => ({ view: node.getAttribute("data-view"), label: node.getAttribute("aria-label") }));
+      if (touch) assert.deepEqual(await phoneButton(), { view: "chat", label: "Switch to terminal" });
 
       /** The peek is up: the grid over the mounted chat, nothing written about the lens, the composer out of the way. */
       const expectPeek = async (auto: boolean, command: string) => {
@@ -184,6 +188,8 @@ try {
         await hint(page).getByText(`${command} ran`, { exact: true }).waitFor();
         assert.equal(await hint(page).getByText(AUTO_NOTE, { exact: true }).count(), auto ? 1 : 0, `${command}: the head says whether the chat comes back by itself`);
         assert.deepEqual(await lens(page), chatLens, "a peek writes no lens or address, and the header keeps Chat pressed");
+        // a phone's button takes the peek for the terminal shown: a press goes back to the chat
+        if (touch) assert.deepEqual(await phoneButton(), { view: "terminal", label: "Switch to chat" }, "the phone's lens button reflects the peek");
         assert.deepEqual(await logState(page), { same: true, visibility: "hidden" }, "the chat stays mounted under the grid, hidden");
         // shown, not only laid out: under the chat the grid keeps its box with content-visibility hidden
         assert.ok(await stack(page).locator(".xterm-screen").isVisible(), "the grid shows");
@@ -327,7 +333,7 @@ try {
       await page.waitForFunction((reads) => (window as unknown as PeekWindow).promptReads >= reads + 2, reads);
       assert.equal(await peek(page).count(), 1, "a command Claude does not record closing stays until the reader leaves it");
       await capture(page, `${tag}-peek-manual`);
-      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+      await openLens(page, "chat");
       await expectReturned();
       console.log(`PASS ${tag}: an unrecorded command keeps the peek after Escape; the header's Chat ends it`);
 
@@ -336,6 +342,7 @@ try {
       await page.keyboard.press("Control+Shift+J");
       await expectReturned();
       assert.deepEqual(await lens(page), chatLens, "the shortcut ends the peek instead of switching lenses");
+      if (touch) assert.deepEqual(await phoneButton(), { view: "chat", label: "Switch to terminal" }, "the phone's lens button follows the peek's end");
       console.log(`PASS ${tag}: Mod+Shift+J ends the peek`);
 
       if (touch) {
@@ -369,7 +376,8 @@ try {
 
       const keepWays: [string, () => Promise<void>][] = [
         ["Keep Terminal", () => hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click()],
-        ["the header's Terminal", () => page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click()],
+        // a phone's one button names the chat over a peek: there the hint's Keep Terminal keeps it
+        ...(touch ? [] : [["the header's Terminal", () => openLens(page, "terminal")] as [string, () => Promise<void>]]),
       ];
       for (const [way, keep] of keepWays) {
         await send(page, "/doctor");
@@ -381,7 +389,7 @@ try {
         const kept = await lens(page);
         assert.deepEqual({ stored: kept.stored, address: kept.address }, { stored: "terminal", address: "terminal" }, `${way} saves the terminal lens`);
         if (!touch) await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
-        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+        await openLens(page, "chat");
         await chat(page).locator(".composer").waitFor();
         assert.deepEqual(await lens(page), chatLens);
         await noteLog(page);
@@ -391,11 +399,11 @@ try {
       if (!touch) {
         // a find bar left open under the Terminal lens is not the peek's: it would take the focus,
         // the first Escape (the agent's) and a grid row
-        await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+        await openLens(page, "terminal");
         await chat(page).waitFor({ state: "detached" });
         await page.keyboard.press("Control+Shift+F");
         await stack(page).locator(".find-bar input").waitFor();
-        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+        await openLens(page, "chat");
         await chat(page).locator(".composer").waitFor();
         await noteLog(page);
         // the composer is a dictation target in the chat (the mic shows), and none under a peek
@@ -685,7 +693,7 @@ try {
       await screen(owner, "Escape to dismiss").waitFor();
       await hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click();
       await of(owner).peek.waitFor({ state: "detached" });
-      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+      await openLens(page, "chat");
       await of(owner).chat.locator(".composer").waitFor();
       const kept = "Is that screen still up?";
       await sendIn(owner, kept);

@@ -4,6 +4,8 @@ import { applyToDraft, draftIsEmpty, DRAFT_TTL_MS, EMPTY_DRAFT, holdBefore, rest
 describe("holdBefore", () => {
   it("holds typing a connection lost unconfirmed ahead of what was typed after it, each chunk folded as typed (#2587)", () => {
     expect(holdBefore(["ls", "s", "\x7f", " -la"], EMPTY_DRAFT)).toEqual({ text: "ls -la", truncated: false, leftOut: false });
+    // Ctrl+Backspace's Ctrl+W erased a word before the disconnect (#3415)
+    expect(holdBefore(["echo alpha", "\x17", "beta"], EMPTY_DRAFT)).toEqual({ text: "echo beta", truncated: false, leftOut: false });
     expect(holdBefore(["echo", "\r"], { text: "hi", truncated: false, leftOut: false })).toEqual({ text: "echo hi", truncated: false, leftOut: true });
   });
 
@@ -37,6 +39,16 @@ describe("applyToDraft", () => {
     expect(applyToDraft({ text: "abc", truncated: false, leftOut: false }, "\x7f\x7f").text).toBe("a");
     // deletions and the text that replaces them in one chunk, as an autocorrect may send
     expect(applyToDraft({ text: "teh", truncated: false, leftOut: false }, "\x7f\x7f\x7fthe").text).toBe("the");
+  });
+
+  it("applies Ctrl+Backspace's Ctrl+W to the held text as a shell does: the blanks, then the word before them", () => {
+    const held = (text: string) => ({ text, truncated: false, leftOut: false });
+    expect(applyToDraft(held("git sta"), "\x17")).toEqual(held("git "));
+    expect(applyToDraft(held("echo held-b  "), "\x17")).toEqual(held("echo "));
+    expect(applyToDraft(held("git sta"), "\x17status").text).toBe("git status");
+    expect(applyToDraft(held("한글 단어"), "\x17\x7f").text).toBe("한글");
+    expect(applyToDraft(held("word"), "\x17")).toBe(EMPTY_DRAFT);
+    expect(applyToDraft(EMPTY_DRAFT, "\x17")).toBe(EMPTY_DRAFT);
   });
 
   it("leaves the empty draft as it is on Backspace", () => {

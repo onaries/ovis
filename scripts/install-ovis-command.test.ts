@@ -786,8 +786,9 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
 
   it("does not promise that another ovis is never hidden", () => {
     // it keeps the name only while it comes first on the PATH: the changelog and the guide say so
-    const fragment = readFileSync(join(ROOT, "changelog.d", "install-ovis-command.md"), "utf8");
-    expect(fragment).not.toMatch(/never\s+replaced\s+or\s+hidden/);
+    // the fragment was folded into CHANGELOG.md at 0.5.3
+    const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+    expect(changelog).not.toMatch(/never\s+replaced\s+or\s+hidden/);
     const guide = readFileSync(join(ROOT, "docs", "guide.md"), "utf8");
     expect(guide).toContain("until `~/.local/bin` comes before it on your PATH");
   });

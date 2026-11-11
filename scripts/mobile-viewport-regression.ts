@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { sheetsSettled } from "./sheets-settled.ts";
+import { openLens } from "./header-lens.ts";
 
 type ViewportQA = Window & { viewportQA: { resize: (height: number) => void; pointer: (touch: boolean) => void } };
 
@@ -32,7 +33,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
-    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
+    await openLens(page, "chat");
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
     // read in one step: the transcript's first node is replaced as the conversation loads, and a node
@@ -120,7 +121,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await page.setViewportSize({ width: 390, height: 844 });
     await height(500);
 
-    await page.getByTitle(/^Live terminal \(.+\)$/).click();
+    await openLens(page, "terminal");
     const terminal = page.locator(".xterm-helper-textarea");
     await terminal.focus();
     await shell(false, "", 844);
@@ -150,7 +151,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await height(795);
     await shell(false, "", 844);
 
-    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
+    await openLens(page, "chat");
     await composer.focus();
     await height(500);
     await shell(true, "500px", 500);

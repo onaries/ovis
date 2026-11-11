@@ -7,9 +7,9 @@
  * uses herdr's TUI. So a candidate is only ever asked `--version`, and the core counts as running
  * when its socket file is there: nothing connects to it.
  */
-import { lstatSync, readFileSync, readlinkSync, statSync, type Stats } from "node:fs";
-import { userInfo } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync, type Stats } from "node:fs";
+import { homedir, userInfo } from "node:os";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { HerdrCoreFacts } from "../../shared/machines.ts";
 import { readHerdrConfig } from "../herdr-sidebar.ts";
 import { loginPathProbe, loginShell } from "../shell-agent.ts";
@@ -56,8 +56,9 @@ const PROBE_OUTPUT_LIMIT = 64 * 1024;
  *
  * Asking `--version` runs the candidate as this user, so on Linux and macOS only one that no
  * other account can have put or changed there is run (ownedByUser); an OVIS_HC_BIN path is the
- * user's own choice and is run as named. Windows has no mode bits to read: there the usual places
- * (under the user's profile) coming before the PATH is the only protection.
+ * user's own choice and is run as named. Windows has no mode bits to read: there only an hc inside
+ * the user's profile is run (insideProfile), since any account may write a folder made at the top
+ * of a drive (C:\tools), and such folders sit on many a PATH.
  */
 export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | null> {
   const env = options.env ?? process.env;
@@ -81,6 +82,8 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
     ...env,
     PATH: [...new Set(checkedDirs(dirsOn(env["PATH"])))].join(delimiter) || checkedDirs(SYSTEM_PATH).join(delimiter) || "/nonexistent",
   };
+  // Windows' trust boundary: the profile as the OS gives it, never a HOME the environment sets
+  const profile = options.home ?? (env["USERPROFILE"] || homedir());
   const pick = async (candidates: string[], named = false): Promise<FoundHc | null> => {
     for (const candidate of candidates) {
       // absolute: a terminal attach runs it from another folder (server/core/terminal-process.ts),
@@ -89,7 +92,7 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
       if (seen.has(bin)) continue;
       seen.add(bin);
       if (!isFile(bin)) continue;
-      const refused = named || harmless === null ? null : trustRefusal(bin, harmless, false, acl);
+      const refused = named ? null : harmless === null ? insideProfile(bin, profile) : trustRefusal(bin, harmless, false, acl);
       if (refused !== null) {
         options.onRefused?.(bin, refused);
         continue;
@@ -100,16 +103,33 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
     return null;
   };
   // a bare name is looked up on the PATH, as a shell would run it, and checked like anything found
-  // there: one refused leaves the next PATH folder to look in (Windows checks nothing, so its first)
+  // there: one refused leaves the next PATH folder to look in
   const configured = env["OVIS_HC_BIN"];
   const bare = configured !== undefined && !/[\\/]/.test(configured);
   const named = !configured ? [] : !bare ? [configured]
-    : harmless === null ? [Bun.which(configured, { PATH: env["PATH"] ?? "" }) ?? configured]
-    : dirsOn(env["PATH"]).map((dir) => join(dir, configured));
+    : dirsOn(env["PATH"]).map((dir) => join(dir, platform === "win32" && !/\.[^.]+$/.test(configured) ? `${configured}.exe` : configured));
   return await pick(named, !bare)
     ?? await pick((options.usualDirs ?? usualHcDirs(home, platform, env)).flatMap(names))
     ?? await pick(dirsOn(env["PATH"]).flatMap(names))
     ?? await pick(dirsOn(await (options.loginShellPath ?? (() => loginShellPath(env, platform)))() ?? "").flatMap(names));
+}
+
+/**
+ * Windows: null when `bin` is inside the user's profile, which only they, SYSTEM and administrators
+ * may write, both as written (what is stored and run later) and with links and junctions followed;
+ * else why not. Elsewhere on a drive, a folder made at its top inherits Modify for every signed-in
+ * account, so a junction there could be pointed elsewhere after the check.
+ */
+function insideProfile(bin: string, home: string): string | null {
+  const inside = (from: string, to: string) => {
+    const rel = relative(from, to);
+    return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  };
+  try {
+    return inside(resolve(home), resolve(bin)) && inside(realpathSync(home), realpathSync(bin)) ? null : `${bin} is outside your profile folder, where another account may have put it`;
+  } catch (error) {
+    return `${bin} could not be checked (${(error as NodeJS.ErrnoException).code ?? String(error)})`;
+  }
 }
 
 /** the PATH a probe gets when no PATH folder passes the check */

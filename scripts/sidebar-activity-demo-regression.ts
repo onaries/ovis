@@ -9,6 +9,7 @@ import { chromePath } from "./chrome-path.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
 import type { Machine } from "../shared/machines.ts";
 import type { AgentStatus, ConversationResponse, ServerMessage } from "../shared/protocol.ts";
+import { openLens } from "./header-lens.ts";
 
 declare global {
   interface Window {
@@ -420,7 +421,7 @@ try {
             return window.sidebarFixture.finish(id, "done", 103);
           }, panes.omp);
           await agent(page, INFRA).locator(".agent-select").click();
-          await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+          await openLens(page, "terminal");
           await waitStatus(page, INFRA, "idle");
           await page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]").waitFor();
           assert.equal(await page.locator(".pane-frame.is-current .terminal-stack").evaluate((node, previous) => node === previous, retained), true,
@@ -472,7 +473,7 @@ try {
           }, panes.omp);
           await waitStatus(page, INFRA, "done");
           await agent(page, INFRA).locator(".agent-select").click();
-          await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+          await openLens(page, "terminal");
           const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
           await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
           await outputParsed(page, "previous answer\r\n");
@@ -494,7 +495,7 @@ try {
             window.sidebarFixture.block(id, "loading");
           }, panes.omp);
           await agent(page, INFRA).locator(".agent-select").click();
-          await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+          await openLens(page, "terminal");
           const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
           await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
           await outputParsed(page, "previous answer\r\n");
@@ -519,7 +520,7 @@ try {
             window.sidebarFixture.block(id, "loading");
           }, panes.omp);
           await agent(page, INFRA).locator(".agent-select").click();
-          await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+          await openLens(page, "terminal");
           const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
           await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
           await page.waitForFunction((id) => (window.sidebarFixture.attaches[id] ?? 0) > 0, panes.omp);
@@ -820,12 +821,12 @@ try {
           await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor();
           if (arrival === "restore") {
             const height = await log.evaluate((node) => node.scrollHeight * 3 + 2000);
-            await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+            await openLens(page, "terminal");
             await page.setViewportSize({ width: 390, height });
             await page.evaluate(() => document.addEventListener("scroll", (event) => {
               if (event.target instanceof Element && event.target.matches('[role="log"]')) event.stopImmediatePropagation();
             }, true));
-            await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+            await openLens(page, "chat");
             await page.locator(".chat-turn").first().waitFor();
             await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
             await statusIs("idle");

@@ -114,7 +114,7 @@ export interface SlotView {
   attach: boolean;
 }
 
-export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, arrangeRefused }: {
+export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, arrangeRefused, followPaneMove }: {
   machines: Machine[];
   split: SplitState | null;
   wideScreen: boolean;
@@ -156,6 +156,8 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
   movePanes: (dragged: SplitTarget, targetPaneId: string, side: PaneDirection) => void;
   /** a PC whose panes cannot be arranged (herdr-core: the Herdr app owns its splits): its pane docks in a slot instead */
   arrangeRefused: (machineId: string) => boolean;
+  /** herdr moved a pane under a new ID: what is kept under the old one, and every view of it, goes to the new one (App's followPaneMove) */
+  followPaneMove: (machineId: string, from: string, to: string) => void;
 }) {
   // The split view (lib/split.ts): drawn only where the sidebar stands beside the pane, and only
   // while a pane is selected; a narrower window shows the active slot alone and keeps the split
@@ -197,12 +199,12 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
 
   // a slot's pane closed: another pane of its tab takes its place, else the slot closes. An offline
   // PC's cached roster cannot say so, as for the selection itself
-  const slotTabsRef = useRef(new Map<string, string>());
+  const slotTabsRef = useRef(new Map<string, Pick<HerdrPane, "tab_id" | "terminal_id">>());
   const slotKeys = new Set<string>();
   for (const view of others.values()) {
     const key = paneStorageId(view.target.machineId, view.target.paneId);
     slotKeys.add(key);
-    if (view.pane) slotTabsRef.current.set(key, view.pane.tab_id);
+    if (view.pane) slotTabsRef.current.set(key, { tab_id: view.pane.tab_id, terminal_id: view.pane.terminal_id });
   }
   for (const key of [...slotTabsRef.current.keys()]) if (!slotKeys.has(key)) slotTabsRef.current.delete(key);
   const applyLayout = useCallback((next: { split: SplitState | null; solo: SplitSlot }): void => {
@@ -213,6 +215,7 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     const moving = (target: SplitTarget): boolean => movingPanes.current.has(paneStorageId(target.machineId, target.paneId));
     const closed = new Set<SplitSlot>();
     const asks: [SplitSlot, SplitTarget][] = [];
+    const moved: [SplitTarget, string][] = [];
     let next = split;
     for (const [slot, target] of Object.entries(split.panes)) {
       const machine = machines.find((m) => m.id === target.machineId);
@@ -220,7 +223,12 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
       if (!machine.snapshot || machine.state !== "connected") continue;
       const panes = machine.snapshot.panes;
       if (panes.some((pane) => pane.pane_id === target.paneId) || moving(target)) continue;
-      const tabId = slotTabsRef.current.get(paneStorageId(target.machineId, target.paneId)) ?? null;
+      const seen = slotTabsRef.current.get(paneStorageId(target.machineId, target.paneId));
+      // herdr moved the pane under a new ID (pane.move keeps its terminal): a roster read after the move can come
+      // before the server's pane-moved, which then finds no slot showing the old ID. The slot follows it here
+      const movedTo = seen?.terminal_id ? panes.find((pane) => pane.terminal_id === seen.terminal_id) : undefined;
+      if (movedTo) { moved.push([target, movedTo.pane_id]); continue; }
+      const tabId = seen?.tab_id ?? null;
       // a pane this page has not seen in the roster yet (a saved split, a pane made just before the page
       // loaded) may be newer than the cached roster: ask the PC before the slot closes, as the selection does
       if (tabId === null) { asks.push([slot, target]); continue; }
@@ -229,6 +237,8 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
       if (heir) next = replaceSlotPane(next, slot, { machineId: target.machineId, paneId: heir.pane_id });
       else closed.add(slot);
     }
+    // each follow sets the split anew: what else this roster changed is applied on the render after it
+    if (moved.length > 0) { for (const [target, to] of moved) followPaneMove(target.machineId, target.paneId, to); return; }
     if (closed.size > 0) { applyLayout(withoutSlots(next, closed)); return; }
     if (next !== split) { setSplit(next); return; }
     if (asks.length === 0) return;

@@ -1,9 +1,10 @@
 /**
- * The phone header's Chat/Terminal switch is a compact segmented control: its track sits inside the
- * header bar with clear space above and below (never edge to edge), below a safe-area top inset and
- * in the compact density's shorter bar too, and each option still offers a touch target at least
- * 44px tall and wide through its invisible expander, which stays inside the bar. Folded (412) and
- * unfolded (720) foldable widths, a short landscape phone, a notched screen and the compact density.
+ * The touch header's Chat/Terminal switch. From 641px it is a compact segmented control: its track sits
+ * inside the header bar with clear space above and below (never edge to edge), and each option still
+ * offers a touch target at least 44px tall and wide through its invisible expander, which stays inside
+ * the bar. On a phone (640px and below) it is one 44px button inside the bar that names the other lens
+ * and switches to it, and the header counts no running or finished sessions beside More. Folded (412)
+ * and unfolded (720) foldable widths, a short landscape phone, a notched screen and the compact density.
  * On the isolated test herdr; UI_EVIDENCE_DIR=<dir> keeps the screenshots.
  */
 import assert from "node:assert/strict";
@@ -41,6 +42,32 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
           await cdp.send("Emulation.setSafeAreaInsetsOverride" as never, { insets: { top: size.inset, topMax: size.inset, left: 0, leftMax: 0, bottom: 0, bottomMax: 0, right: 0, rightMax: 0 } } as never);
         }
         await page.goto(`${origin}/?pane=${encodeURIComponent(created.root_pane.pane_id)}`);
+        if (size.width <= 640) {
+          const toggle = page.locator(".app-header .lens-toggle");
+          await toggle.waitFor();
+          const placed = await page.evaluate(() => {
+            const header = document.querySelector(".app-header")!;
+            return { header: header.getBoundingClientRect().toJSON() as DOMRect, button: document.querySelector(".app-header .lens-toggle")!.getBoundingClientRect().toJSON() as DOMRect,
+              insetTop: parseFloat(getComputedStyle(header).paddingTop), track: document.querySelector(".app-header .view-switch") !== null, counts: document.querySelector(".app-header .header-counts") !== null };
+          });
+          const bar = { top: placed.header.top + placed.insetTop, bottom: placed.header.bottom };
+          assert.ok(Math.abs(placed.insetTop - size.inset) <= 0.5, `${size.label}: the header's top padding is the emulated safe-area inset, ${size.inset}px (${placed.insetTop}px)`);
+          assert.equal(placed.track, false, `${size.label}: a phone draws no two-option track`);
+          assert.equal(placed.counts, false, `${size.label}: a phone's header counts no running or finished sessions`);
+          assert.ok(placed.button.width >= TOUCH_TARGET - 0.5 && placed.button.height >= TOUCH_TARGET - 0.5, `${size.label}: the lens button is a finger's ${TOUCH_TARGET}px (${JSON.stringify(placed.button)})`);
+          assert.ok(placed.button.top >= bar.top - 0.5 && placed.button.bottom <= bar.bottom + 0.5, `${size.label}: the lens button stays inside the bar`);
+          // a press opens the lens the button names, and the button then names the other one
+          for (let press = 0; press < 2; press++) {
+            const before = await toggle.getAttribute("data-view");
+            const after = before === "chat" ? "terminal" : "chat";
+            assert.equal(await toggle.getAttribute("aria-label"), `Switch to ${after}`, `${size.label}: the button names the lens a press opens`);
+            await toggle.tap();
+            await page.locator(`.app-header .lens-toggle[data-view="${after}"]`).waitFor();
+            assert.equal(await toggle.getAttribute("aria-label"), `Switch to ${before}`, `${size.label}: after a press the button names the lens it left`);
+          }
+          if (evidence) await page.screenshot({ path: join(evidence, `lens-switch-${size.label.replace(/\s+/g, "-")}.png`), clip: { x: 0, y: 0, width: size.width, height: 140 } });
+          continue;
+        }
         await page.locator(".app-header .view-switch").waitFor();
         const geometry = await page.evaluate(() => {
           const box = (node: Element) => node.getBoundingClientRect();
@@ -70,7 +97,7 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
         if (evidence) await page.screenshot({ path: join(evidence, `lens-switch-${size.label.replace(/\s+/g, "-")}.png`), clip: { x: 0, y: 0, width: size.width, height: 140 } });
       } finally { await context.close(); }
     }
-    console.log("PASS the phone header's Chat/Terminal switch is a compact track with room above and below, 44px touch targets inside the bar, folded, unfolded, landscape, under a notch and in the compact density");
+    console.log("PASS the touch header's Chat/Terminal switch: from 641px a compact track with room above and below and 44px touch targets inside the bar, on a phone one 44px button inside the bar that switches the lens and no session counts, folded, unfolded, landscape, under a notch and in the compact density");
   } finally {
     if (workspaceId) await workspaceClose(workspaceId).catch(() => {});
     rmSync(root, { recursive: true, force: true });

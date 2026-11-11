@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 export async function checkTerminalKeyboardSuggestions(browser: Browser, origin: string): Promise<void> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-suggestions-")));
@@ -31,7 +32,7 @@ export async function checkTerminalKeyboardSuggestions(browser: Browser, origin:
       const attributes = await field.evaluate((node) => Object.fromEntries(["autocomplete", "autocorrect", "autocapitalize", "spellcheck"].map((name) => [name, node.getAttribute(name)])));
       assert.deepEqual(attributes, { autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: "false" }, `${name} asks the keyboard for no suggestions`);
     }
-    await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+    await openLens(page, "chat");
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
     assert.notEqual(await composer.getAttribute("autocomplete"), "off", "the chat composer keeps its suggestions");

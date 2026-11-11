@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 // What became of a command sent from Chat, on the unmodified app over the demo's fixture transport
 // (site/demo/transport.ts tracks each send as the bridge would): the chip under the sent bubble
@@ -58,7 +59,7 @@ try {
       await page.locator(`.pane-select[title^="${pane} —"][aria-current="true"]`).first().waitFor({ state: "attached" });
     }
     const stack = chatStack(page, pane);
-    if (await stack.count() === 0) await page.getByTitle(/^Chat transcript \(.+\)$/).click();
+    if (await stack.count() === 0) await openLens(page, "chat");
     await stack.waitFor();
     return stack.getByRole("log");
   };

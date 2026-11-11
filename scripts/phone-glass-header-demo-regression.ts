@@ -7,6 +7,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openMoreGroup } from "./header-more.ts";
+import { openLens } from "./header-lens.ts";
 
 // #1457: a compact-height phone (including the iPhone Duo's outer display, or a phone with its
 // keyboard up) drops a lone tab's row, and the chat then puts the glass header over the pane. The
@@ -86,8 +87,19 @@ try {
         assert.ok(closed > 0, "the demo pane's workspace had another tab to close");
         // the title's place among the workspace's tabs goes with the second tab
         await page.waitForFunction(() => document.querySelector(".context-position") === null);
+        // a finished session and a running one: a phone's header counts neither beside More (the drawer says them)
+        await page.evaluate(async () => {
+          const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: { panes: { pane_id: string; agent: string | null; agent_status: string }[] } };
+          const idle = snapshot.panes.find((pane) => pane.agent && pane.agent_status === "idle");
+          if (!idle) throw new Error("the demo has an idle agent to finish");
+          const hooks = (window as unknown as { __herdrDemoOrder: { status(pane: string, status: string): void } }).__herdrDemoOrder;
+          hooks.status(idle.pane_id, "done");
+        });
+        await page.locator('.sidebar .sidebar-status[data-status="done"]').first().waitFor({ state: "attached" });
+        await page.locator('.sidebar .sidebar-status[data-status="working"]').first().waitFor({ state: "attached" });
+        assert.equal(await page.locator(".app-header .header-counts, .app-header .header-count").count(), 0, "a phone's header counts no running or finished sessions");
 
-        await page.locator(".view-switch .is-chat").click();
+        await openLens(page, "chat");
         const message = page.getByRole("textbox", { name: "Message", exact: true });
         await message.waitFor();
 

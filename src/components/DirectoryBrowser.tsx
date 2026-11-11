@@ -200,7 +200,7 @@ export function DirectoryBrowser({ start, onPick, onOpenFile, onFolder }: Direct
           {/* inside New workspace's form: Enter makes the folder rather than starting the workspace,
               Escape closes this field rather than the dialog, and an IME keeps its own keys */}
           <input className="input" aria-label={t("New folder name")} placeholder={t("New folder name")} autoFocus value={naming} readOnly={creating}
-            autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={namingError !== null}
+            autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="done" aria-invalid={namingError !== null}
             onChange={(event) => { setNaming(event.target.value); setNamingError(null); }}
             onBlur={() => { if (naming.trim() === "") setNaming(null); }}
             onKeyDown={(event) => {

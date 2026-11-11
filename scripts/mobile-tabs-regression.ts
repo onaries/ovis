@@ -6,6 +6,7 @@ import type { Browser, Locator, Page } from "playwright-core";
 import { appFaces } from "./app-faces.ts";
 import { herdrRpc, paneSplit, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 type Box = { left: number; top: number; right: number; bottom: number; width: number; height: number };
 type KeyboardQA = Window & { keyboardQA: (height: number | null) => void };
@@ -117,7 +118,7 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
     await page.goto(`${origin}/?pane=${encodeURIComponent(first)}`);
     await page.locator(".conn-live").waitFor();
     await page.locator(".app-header .context-tabs").waitFor();
-    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
+    await openLens(page, "chat");
     const firstFrame = page.locator(`[data-layout-pane=${JSON.stringify(first)}]`);
     const composer = firstFrame.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
@@ -154,7 +155,7 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
     await addedTabs.getByRole("button", { name: "Cancel", exact: true }).tap();
     await addedTabs.waitFor({ state: "detached" });
 
-    await page.getByTitle(/^Live terminal \(.+\)$/).click();
+    await openLens(page, "terminal");
     await firstFrame.locator(".key-bar").waitFor();
     assert.equal(await page.locator(".pane-frame:visible").count(), 1, "a phone shows the split tab's open pane alone");
     assert.equal(await page.locator(".pane-frame").count(), 2, "and keeps its sibling mounted");

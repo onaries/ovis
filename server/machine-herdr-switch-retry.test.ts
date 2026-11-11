@@ -8,6 +8,7 @@ import { MachineManager } from "./machines.ts";
 import { createPushService } from "./push.ts";
 import { posixHost } from "./remote-host.ts";
 import { SshConnection } from "./ssh.ts";
+import { tunnelRelays } from "./machine-tunnel.fixture.ts";
 
 it.each([
   { loss: "before", result: "connected", session: "a" },
@@ -53,15 +54,16 @@ it.each([
     spyOn(posixHost, "chosenSocketStatus").mockResolvedValue("usable"),
     spyOn(posixHost, "start").mockImplementation(async () => { oldStarts++; resumed.resolve(); throw new Error("Old bridge unavailable"); }),
     spyOn(posixHost, "installBundle").mockResolvedValue(undefined),
-    spyOn(SshConnection.prototype, "forward").mockImplementation(async (port, remotePort) => {
+    // the SSH tunnel to a bridge (machine-tunnel.fixture.ts)
+    ...tunnelRelays(relays, (remotePort) => {
       const socket = remotePort === 12345 ? a.herdr_socket : b.herdr_socket;
-      relays.push(Bun.serve({ port, hostname: "127.0.0.1", fetch(request, server) {
+      return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request, server) {
         const path = new URL(request.url).pathname;
         if (path === "/api/bridge") return Response.json({ ...descriptor(socket), socket_id: socket, herdr: { protocol: 22, version: "0.9.3" } });
         if (path === "/api/session") return Response.json({ snapshot: { panes: [], workspaces: [{ id: socket, name: socket }] } });
         if (path === "/ws" && server.upgrade(request, { data: undefined })) return;
         return new Response("absent", { status: 404 });
-      }, websocket: { message() {} } }));
+      }, websocket: { message() {} } });
     }),
   ];
   const manager = new MachineManager(dir, createPushService({ stateDir: dir }), new CompletionTracker(null), async () => { throw new Error("isolated"); }, { now: () => clock });

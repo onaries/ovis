@@ -49,6 +49,11 @@ export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string,
     await page.locator(".pane-frame.is-current .xterm-helper-textarea").focus();
     await page.keyboard.type("echo held-b");
     await held.filter({ hasText: "echo held-b" }).waitFor({ timeout: 10_000 });
+    // Ctrl+Backspace erases the held draft's last word, and sends no Ctrl+W to the pane (#3415)
+    await page.keyboard.press("Control+Backspace");
+    await held.filter({ hasText: /^echo\s*$/ }).waitFor({ timeout: 10_000 });
+    await page.keyboard.type("held-b");
+    await held.filter({ hasText: /^echo held-b$/ }).waitFor({ timeout: 10_000 });
     await page.locator(".pane-frame.is-current .terminal-banner-draft .draft-send").click();
     await held.filter({ hasText: "echo held-b" }).waitFor({ timeout: 10_000 });
     await select(paneB);

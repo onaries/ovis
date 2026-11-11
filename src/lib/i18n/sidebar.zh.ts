@@ -69,4 +69,5 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Agent state unknown": "代理状态未知",
   "Move to {group}": "移到 {group}",
   "Remove from {group}": "从 {group} 移出",
+  "{count} working": "{count} 个工作中",
 };

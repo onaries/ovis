@@ -108,7 +108,7 @@ import { useConnectionChip, useServerMessageHandler } from "./lib/useConnectionC
 import { useHeaderConnection } from "./lib/headerConnection.ts";
 import { ConnectionRouteMark } from "./components/ConnectionRouteMark.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
-import { HeaderCounts } from "./components/HeaderCounts.tsx";
+import { LensToggle } from "./components/LensToggle.tsx";
 import { PcLoadStatus } from "./components/MachineStats.tsx";
 import logoDark from "./assets/brand/logo-dark.png";
 import logoLight from "./assets/brand/logo-light.png";
@@ -467,7 +467,7 @@ export function App() {
   // up under a sheet or Settings opened over it: their close, or a Back, comes back to the peek
   usePhoneSheetBack(() => endPeek(), terminalPeek !== null, true);
 
-  const { splitOn, others, shownSlots, rects, follows, activateSlot, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview } = useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, arrangeRefused: (machineId) => !appLayoutOn(machineId).arrange });
+  const { splitOn, others, shownSlots, rects, follows, activateSlot, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview } = useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, followPaneMove, arrangeRefused: (machineId) => !appLayoutOn(machineId).arrange });
 
   useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef });
 
@@ -760,8 +760,8 @@ export function App() {
   const paneMenuInMore = selectedPane !== null
     && tabRowHidden(cramped, snapshot?.tabs.filter((tab) => tab.workspace_id === selectedPane.workspace_id).length ?? 0, tabsInHeader);
   // More's first item jumps to the next session waiting for you, and where no status bar says it, a
-  // waiting-coloured dot on its button says how many. A phone's header also counts the running and the
-  // unseen finished sessions beside it (components/HeaderCounts.tsx); a wider screen's sidebar shows them
+  // waiting-coloured dot on its button says how many. The running and the finished ones are the sidebar's
+  // (the drawer's on a phone): the header does not count them
   const waitingInMore = sessionTally.waiting > 0;
   const currentTabInMore = paneMenuInMore && selectedPane ? snapshot?.tabs.find((tab) => tab.tab_id === selectedPane.tab_id) : undefined;
   const currentTabPlace = currentTabInMore && snapshot ? snapshot.tabs.filter((tab) => tab.workspace_id === selectedPane!.workspace_id).indexOf(currentTabInMore) + 1 : 1;
@@ -959,9 +959,13 @@ export function App() {
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
         )}
-        {/* both lenses, the open one on a thumb that slides to it (Apple's segmented control): the chat in the
-            rounded face with its bubble, the terminal in the mono face with its prompt. Mod+Shift+J switches too */}
-        {selectedPane && (
+        {/* a phone: one button to the other lens (components/LensToggle.tsx). Wider, both lenses, the open one on
+            a thumb that slides to it (Apple's segmented control). Mod+Shift+J switches too */}
+        {selectedPane && isSheetWidth && (
+          <LensToggle view={view} peek={terminalPeek !== null} terminalAttach={terminalAttach}
+            title={(label) => shortcutTitle(label, "toggle-view")} onToggle={actions.toggleView} />
+        )}
+        {selectedPane && !isSheetWidth && (
           <div className="view-switch" data-view={view} role="group" aria-label={`${t("Chat")} / ${t("Terminal")}`}>
             <button type="button" className="lens-option is-chat" aria-pressed={view === "chat"} aria-label={t("Chat")} title={shortcutTitle(t("Chat transcript"), "toggle-view")}
               onClick={() => { setView("chat"); setDrawerOpen(false); }}>
@@ -1002,7 +1006,6 @@ export function App() {
               : localFreshness === "unavailable" && (health?.herdr.runtime === "herdr-core"
                 ? <span className="pill pill-offline" title={t("Open the Herdr app on this PC, or check HC_SESSION and HC_SOCKET.")}>{t("herdr-core unavailable")}</span>
                 : <span className="pill pill-offline" title={t("Start herdr on this PC, or check HERDR_SOCKET.")}>{t("herdr unavailable")}</span>)}
-          {isSheetWidth && <HeaderCounts counts={sessionTally} onOpen={() => setDrawerOpen(true)} />}
           <span className="header-more">
             <button
               type="button"

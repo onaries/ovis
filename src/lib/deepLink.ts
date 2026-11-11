@@ -118,6 +118,9 @@ export function readLink(search: string): AppLink {
   };
 }
 
+/** The names Windows serves WSL's own files under: this PC, no other host (server/windows-share.ts) */
+const WSL_HOSTS = new Set(["wsl$", "wsl.localhost"]);
+
 function readCreate(query: URLSearchParams): CreateDraft | null {
   const kind = query.get("new");
   if (kind !== "workspace" && kind !== "tab") return null;
@@ -125,9 +128,11 @@ function readCreate(query: URLSearchParams): CreateDraft | null {
   const agent = query.get("agent");
   // A folder that begins with two separators is a network share on a Windows PC, and reading one asks its host for
   // it with the user's sign-in. The dialog's Start reads the folder it shows, and shows a long path by its end, so
-  // an address fills in none: a share is typed or picked by the person who means it
+  // an address fills in none: a share is typed or picked by the person who means it. WSL's own folders
+  // (`\\wsl$\…`, `\\wsl.localhost\…`) are this PC's, as the server's share rule has them (#3634)
   const cwd = field("cwd");
-  return { kind, cwd: cwd !== null && /^(?:~\/)?[\\/]{2}/.test(cwd) ? null : cwd, name: field("name"), agent: agent === "" || agent === "shell" ? "" : agent && AGENT_KIND.test(agent) ? agent : null };
+  const share = cwd === null ? null : /^(?:~\/)?[\\/]{2}([^\\/]*)/.exec(cwd);
+  return { kind, cwd: share && !WSL_HOSTS.has(share[1]!.toLowerCase()) ? null : cwd, name: field("name"), agent: agent === "" || agent === "shell" ? "" : agent && AGENT_KIND.test(agent) ? agent : null };
 }
 
 /** Whether an address names a place at all, as opposed to the app's own start. */

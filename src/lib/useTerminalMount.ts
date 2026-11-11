@@ -1663,12 +1663,17 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         }
       });
       // Let xterm finish pending IME text before remapping the key's following data.
-      // Cmd+Backspace uses the terminal's Ctrl+U line-deletion shortcut on macOS.
+      // Cmd+Backspace uses the terminal's Ctrl+U line-deletion shortcut on macOS. Ctrl+Backspace erases the word
+      // before the cursor with Ctrl+W, where xterm sends Ctrl+H, which a shell reads as a one-character erase (#3415).
+      // Only on an attached pane: a mirrored one is a Windows PC's, whose shells (PowerShell) already read Ctrl+H
+      // as the word erase and have no Ctrl+W.
       let commandBackspace = false;
+      let controlBackspace = false;
       const onCommandBackspace = term.onKey(({ key, domEvent: event }) => {
-        commandBackspace = !term.options.disableStdin && isMac && key === "\x7f" && event.type === "keydown"
-          && event.key === "Backspace" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
-          && !event.isComposing && event.keyCode !== 229;
+        const backspace = !term.options.disableStdin && event.type === "keydown" && event.key === "Backspace"
+          && !event.altKey && !event.shiftKey && !event.isComposing && event.keyCode !== 229;
+        commandBackspace = backspace && isMac && key === "\x7f" && event.metaKey && !event.ctrlKey;
+        controlBackspace = backspace && key === "\b" && event.ctrlKey && !event.metaKey && mirroredRef.current === false;
       });
       // A paste is text, even when it happens to contain just one letter. xterm
       // handles the DOM paste synchronously after this capture-phase listener.
@@ -1732,7 +1737,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // lost in silence. Not Backspace, which edits the draft, nor a mouse report, nor what xterm sends by itself, which
         // no one typed (a focus report, its answers to the program's queries). Told apart at the source, not by the bytes:
         // Shift+F3 sends what a cursor-position report does, Alt+] the start of a colour report.
-        else if (typed.automatic !== true && !/^([\x7f\b]+|\x1b\[(<|M)[\s\S]*)$/.test(typed.input)) {
+        else if (typed.automatic !== true && !/^([\x7f\b\x17]+|\x1b\[(<|M)[\s\S]*)$/.test(typed.input)) {
           setInputError(tRef.current("Not sent: the terminal is not ready for keys."));
         }
       };
@@ -1762,7 +1767,9 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         enterAs = null;
         enterKey = null;
         if (commandBackspace && data === "\x7f") data = "\x15";
+        if (controlBackspace && data === "\b") data = "\x17";
         commandBackspace = false;
+        controlBackspace = false;
         const current = paneRef.current;
         // Hiding a cached pane blurs xterm, which may commit its pending IME text.
         // That abandoned input must reach neither the old PTY nor its held draft.
@@ -1789,10 +1796,10 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
             setInputError(t("Not sent: send or discard the held input first."));
             return;
           }
-          // Text, a paste, Backspace and anything with a line break go to the draft, which leaves
+          // Text, a paste, Backspace (Ctrl+Backspace's word erase too) and anything with a line break go to the draft, which leaves
           // Enter out, so a partial command never runs. Other control keys (Ctrl+C, Escape, Tab,
           // arrows) still reach the program below: an interrupt must not wait on the draft.
-          if (pasted || /[\r\n\x7f\b]/.test(input) || applyToDraft(EMPTY_DRAFT, input) !== EMPTY_DRAFT) {
+          if (pasted || /[\r\n\x7f\b\x17]/.test(input) || applyToDraft(EMPTY_DRAFT, input) !== EMPTY_DRAFT) {
             if (secret) {
               const t = tRef.current;
               setInputError(t("Not sent: send or discard the held input first."));

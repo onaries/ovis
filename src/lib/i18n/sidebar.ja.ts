@@ -69,4 +69,5 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Agent state unknown": "エージェントの状態は不明",
   "Move to {group}": "{group} に移動",
   "Remove from {group}": "{group} から外す",
+  "{count} working": "作業中 {count} 件",
 };

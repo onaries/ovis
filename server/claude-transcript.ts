@@ -1,7 +1,7 @@
 import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../shared/protocol.ts";
 import { invokedSkill } from "./skill-activity.ts";
 import { claudeCommandEcho } from "./skill-invocations/claude.ts";
-import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary, type TranscriptParser } from "./transcript-records.ts";
+import { agentTaskResult, CLAUDE_HANDBACK_POINTER, claudeHandback, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary, type TranscriptParser } from "./transcript-records.ts";
 import { taskNotification, type SubagentDetail } from "./claude-subagents.ts";
 import { trimOutput } from "./tool-output.ts";
 import { base64Size, inlineImageType, MAX_IMAGE_BYTES } from "./codex-images.ts";
@@ -503,12 +503,21 @@ interface ClaudeParseState {
   noticed: Set<string>;
   lastPrompt: { turn: ConversationTurn; parent: string | null | undefined; answered: boolean } | null;
   peersSeen: Set<string>;
+  /** By task id, a subagent's SubagentHandback report and the card of its notification that points at it,
+   * whichever came first, until the report is in the card */
+  handbacks: Map<string, { report?: string; notice?: ConversationTurn; card?: OmoTaskResult }>;
+}
+
+/** a subagent's hand-back report as its card's result (claudeHandback reads only one a card holds whole) */
+function fillCard(card: OmoTaskResult, report: string): void {
+  card.result = report;
+  delete card.result_cut;
 }
 
 function claudeParseState(options: ClaudeTranscriptOptions): ClaudeParseState {
   return {
     turns: [], pending: new Map(), calls: new Map(), atWork: false, completed: false,
-    noticed: options.noticed ?? new Set(), lastPrompt: null, peersSeen: new Set(),
+    noticed: options.noticed ?? new Set(), lastPrompt: null, peersSeen: new Set(), handbacks: new Map(),
   };
 }
 
@@ -526,7 +535,7 @@ export function createClaudeTranscriptParser(options: ClaudeTranscriptOptions = 
 }
 
 function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeParseState): TranscriptParser {
-  const { turns, pending, calls, noticed, peersSeen } = state;
+  const { turns, pending, calls, noticed, peersSeen, handbacks } = state;
   /** Where a notice goes: before the turn at work it was written in, else at the end. */
   const noticeAt = (): number => state.atWork && turns.at(-1)?.role === "assistant" ? turns.length - 1 : turns.length;
   /** True when the block was a notification (shown or not): it is no turn of anyone's typing. */
@@ -536,7 +545,23 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     const key = `${notice.taskId}\0${notice.toolUseId ?? ""}`;
     if (notice.agent && !noticed.has(key)) {
       noticed.add(key);
-      turns.splice(noticeAt(), 0, { role: "user", ts, parts: [{ kind: "task_result", tasks: [agentTaskResult(notice, options.subagents?.get(notice.taskId))] }] });
+      const card = agentTaskResult(notice, options.subagents?.get(notice.taskId));
+      const turn: ConversationTurn = { role: "user", ts, parts: [{ kind: "task_result", tasks: [card] }] };
+      // the report it points at is drawn in the card, as a report in the notification itself is
+      const pointed = CLAUDE_HANDBACK_POINTER.exec(card.result)?.[1];
+      const held = pointed === undefined ? undefined : handbacks.get(pointed);
+      if (held?.report !== undefined && held.card === undefined) {
+        fillCard(card, held.report);
+        held.card = card;
+        // the card takes the row the report was drawn in, before what the agent said after it
+        const at = held.notice === undefined ? -1 : turns.indexOf(held.notice);
+        if (at !== -1) turns[at] = { ...turn, ts: held.notice!.ts };
+        else turns.splice(noticeAt(), 0, turn);
+        delete held.notice;
+      } else {
+        turns.splice(noticeAt(), 0, turn);
+        if (pointed !== undefined) handbacks.set(pointed, { card });
+      }
     }
     return true;
   };
@@ -556,7 +581,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     if (lastPrompt !== null && !lastPrompt.answered && typeof entry.parentUuid === "string" && entry.parentUuid === lastPrompt.parent) {
       const index = turns.indexOf(lastPrompt.turn);
       if (index !== -1) turns.splice(index, 1);
-    }
+    } else handbacks.clear();
     turns.push(turn);
     state.lastPrompt = { turn, parent: entry.parentUuid, answered: false };
   };
@@ -568,13 +593,29 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     // another session's message: its own turn, so the work it started is not appended to the answer before it
     const peer = claudePeerNotice(entry);
     if (peer !== null) {
+      // a subagent's hand-back is its card's report: into the card when the card came first, else
+      // shown as the message until the card comes
+      const handback = claudeHandback(entry);
+      // A hand-back and its notification pair only within one turn, as the page reader parses a
+      // settled turn on its own (transcript-turns.ts turnStarts): a record that starts a turn there (a
+      // prompt, any other session's message) ends the wait, so a warm read and a cold one agree (#3658)
+      if (handback === null) handbacks.clear();
       const id = claudePeerId(entry);
       if (id !== null) { if (peersSeen.has(id)) return; peersSeen.add(id); }
-      turns.push({ role: "user", ts: entry.timestamp ?? null, parts: [peer] });
+      const held = handback === null ? undefined : handbacks.get(handback.taskId);
+      if (handback !== null && held?.report === handback.report) return;
+      if (handback !== null && held?.card !== undefined && held.report === undefined) {
+        fillCard(held.card, handback.report);
+        held.report = handback.report;
+        return;
+      }
+      const turn: ConversationTurn = { role: "user", ts: entry.timestamp ?? null, parts: [peer] };
+      turns.push(turn);
+      if (handback !== null) handbacks.set(handback.taskId, { report: handback.report, notice: turn });
       return;
     }
     if (entry.isMeta) return;
-    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); calls.clear(); state.lastPrompt = null; return; }
+    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); calls.clear(); handbacks.clear(); state.lastPrompt = null; return; }
     const content = entry.message?.content;
     // a compaction's summary marks where the conversation was folded, readable on request
     if (entry.isCompactSummary) {

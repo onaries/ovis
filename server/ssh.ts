@@ -188,6 +188,8 @@ export class SshConnection {
   private children = new Set<Subprocess>();
   /** direct mode's forwards; one ending is the connection ending */
   private tunnels = new Set<Subprocess>();
+  /** forwards still waiting for ssh's word: close() ends each at once, not when ssh's stderr closes */
+  private pending = new Set<(error: Error) => void>();
   private broken = false;
   private closed = false;
   private started = false;
@@ -444,23 +446,68 @@ export class SshConnection {
     if (CONFIG_FORWARD.test(await this.exec([this.client.ssh, "-G", ...this.options(false), this.target.destination]))) {
       throw new Error(`The SSH config for ${this.target.destination} sets LocalForward, RemoteForward or DynamicForward, which the web UI on Windows cannot switch off. Use a host alias without them.`);
     }
-    const proc = Bun.spawn([...this.direct(undefined, false), "-N", "-T", "-o", "ExitOnForwardFailure=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination], { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: this.askEnv() });
+    // Windows' own OpenSSH writes none of its -v lines to a pipe (checked on Windows 11 with 9.5p2: a file
+    // or a console gets them, a pipe nothing), so with it the forward is still taken from the first
+    // listener on the port, as before. Git for Windows' ssh, and OpenSSH elsewhere, say it on a pipe.
+    const told = this.client.git === true || !WINDOWS;
+    const proc = Bun.spawn([...this.direct(undefined, false), ...(told ? ["-v"] : []), "-N", "-T", "-o", "ExitOnForwardFailure=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination], { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: this.askEnv() });
     this.tunnels.add(proc);
-    const stderr = new Response(proc.stderr).text();
     void proc.exited.then(() => {
       this.tunnels.delete(proc);
       if (this.closed) return;
       this.broken = true;
       this.onExit?.();
     });
-    // ssh opens the local port only once it authenticated and the forward stands
-    const until = Date.now() + 25_000;
-    while (!(await listening(port))) {
-      if (this.closed) throw new Error("Connection cancelled");
-      if (proc.exitCode !== null || proc.signalCode !== null) throw new Error((await stderr).trim() || "SSH port forward failed");
-      if (Date.now() > until) { proc.kill(); throw new Error("SSH port forward timed out"); }
-      await Bun.sleep(100);
+    if (!told) {
+      const stderr = new Response(proc.stderr).text();
+      // ssh opens the local port only once it authenticated and the forward stands
+      const until = Date.now() + 25_000;
+      while (!(await listening(port))) {
+        if (this.closed) throw new Error("Connection cancelled");
+        if (proc.exitCode !== null || proc.signalCode !== null) throw new Error((await stderr).trim() || "SSH port forward failed");
+        if (Date.now() > until) { proc.kill(); throw new Error("SSH port forward timed out"); }
+        await Bun.sleep(100);
+      }
+      return;
     }
+    // Something listening on the port proves nothing: another process on this PC may have taken it
+    // after it was found free, before ssh's own bind, and a request sent there would hand it the
+    // bridge's token. ssh enters its session only once its forwards are bound, and with
+    // ExitOnForwardFailure it exits instead when the port is taken. (Its "Local forwarding
+    // listening" comes before the bind.) Only this ssh's own "Entering interactive session" counts:
+    // the one that follows its line naming this forward. A ProxyJump's ssh gets -v too, shares this
+    // stderr and enters its own session once it is in the jump host, before this ssh has even
+    // authenticated, and names no forward. A LogVerbose config puts a source location after the
+    // level, so the messages are looked for anywhere in a debug line. The rest of stderr is drained
+    // and only ssh's own words, not the debug lines, are kept for an error.
+    const own = `Local connections to 127.0.0.1:${port} forwarded to remote address 127.0.0.1:${remotePort}`;
+    const ready = Promise.withResolvers<void>();
+    void (async () => {
+      const decoder = new TextDecoder();
+      let partial = "";
+      let said = "";
+      let named = false;
+      for await (const chunk of proc.stderr) {
+        const lines = (partial + decoder.decode(chunk, { stream: true })).split("\n");
+        partial = lines.pop()!.slice(-4096);
+        for (const line of lines) {
+          if (!/^debug\d: /u.test(line)) said = (said + line.replace(/\r$/, "") + "\n").slice(-8192);
+          else if (line.includes(own)) named = true;
+          else if (named && line.includes("Entering interactive session.")) ready.resolve();
+        }
+      }
+      ready.reject(new Error(said.trim() || "SSH port forward failed"));
+    })().catch((error: unknown) => ready.reject(error));
+    let timedOut = false;
+    // a ProxyCommand child that outlives the kill can hold stderr open: neither the timeout nor a close waits for it
+    const timer = setTimeout(() => { timedOut = true; proc.kill(); ready.reject(new Error("SSH port forward timed out")); }, 25_000);
+    this.pending.add(ready.reject);
+    try { await ready.promise; }
+    catch (error) {
+      if (this.closed) throw new Error("Connection cancelled");
+      if (timedOut) throw new Error("SSH port forward timed out");
+      throw error;
+    } finally { clearTimeout(timer); this.pending.delete(ready.reject); }
   }
   private async exec(args: string[], input?: Uint8Array | StreamInput, timeout = 30_000, maxOutput?: number): Promise<string> {
     const stream = input !== undefined && !(input instanceof Uint8Array) ? input : undefined;
@@ -509,6 +556,7 @@ export class SshConnection {
     this.master?.kill();
     for (const child of this.children) child.kill();
     for (const tunnel of this.tunnels) tunnel.kill();
+    for (const reject of this.pending) reject(new Error("Connection cancelled"));
     for (const socket of this.askSockets) socket.destroy();
     this.askServer.close();
     this.typed.clear(); this.answers.clear();

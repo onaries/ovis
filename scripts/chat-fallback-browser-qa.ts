@@ -361,7 +361,8 @@ try {
   polling.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/pane/conversation") pollingReads += 1;
   });
-  await polling.clock.install();
+  // pauseAt installs the fake clock itself; an install() first starts it running in real time, and
+  // under load it can pass the pause time before pauseAt arrives ("Cannot fast-forward to the past")
   await polling.clock.pauseAt(new Date());
   await polling.addInitScript(() => {
     localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
@@ -369,15 +370,23 @@ try {
   await polling.goto(`http://127.0.0.1:${server.port}/?pushes`);
   await polling.locator(".chat-terminal-fallback summary").waitFor();
   const codexReads = pollingReads;
+  // a response is in before the chat has handled it, and only then does it set the next poll: the
+  // clock moves on once the chat forwarded that read's metadata, in the same task that sets it
+  const forwarded = () => polling.evaluate(() => window.chatFallbackQA.forwarded());
+  const handled = (before: number) => polling.evaluate((before) => window.chatFallbackQA.until(() => window.chatFallbackQA.forwarded() > before), before);
   await polling.clock.runFor(2000);
   assert.equal(pollingReads, codexReads, "Codex terminal fallback keeps its 10s backstop");
   const codexBackstop = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  const beforeBackstop = await forwarded();
   await polling.clock.runFor(8000);
   await codexBackstop;
+  await handled(beforeBackstop);
   assert.equal(pollingReads, codexReads + 1);
   const changedAgent = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  const beforeChange = await forwarded();
   await polling.evaluate(() => window.chatFallbackQA.agent("copilot"));
   await changedAgent;
+  await handled(beforeChange);
   const copilotReads = pollingReads;
   const copilotPoll = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
   await polling.clock.runFor(2000);
@@ -430,7 +439,6 @@ try {
     const paused = await browser.newPage();
     let reads = 0;
     paused.on("request", (request) => { if (new URL(request.url()).pathname === "/api/pane/conversation") reads += 1; });
-    await paused.clock.install();
     await paused.clock.pauseAt(new Date());
     await paused.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     await paused.goto(`http://127.0.0.1:${server.port}/?pushes`);
@@ -453,6 +461,9 @@ try {
     const failed = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
     await paused.evaluate(() => window.chatFallbackQA.output());
     await failed;
+    // the response is in before the chat has handled it: the backstop is set once the failure ends
+    // the wait (setWaiting), in the same effects that stop listening to the terminal
+    await paused.evaluate(() => window.chatFallbackQA.until(() => !window.chatFallbackQA.listening()));
     copilotWaiting = true; lookupTimeout = false;
     const afterFailure = reads;
     const retried = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation", { timeout: 5000 })
@@ -485,7 +496,6 @@ try {
       const url = new URL(request.url());
       if (url.pathname === "/api/pane/conversation" && url.searchParams.get("pane_id") === "screen") screenReads += 1;
     });
-    await screen.clock.install();
     await screen.clock.pauseAt(new Date());
     await screen.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     await screen.goto(`http://127.0.0.1:${server.port}/?pushes`);

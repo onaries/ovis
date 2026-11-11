@@ -19,6 +19,7 @@ import { codexRolloutPath, directoryKey, sameDirectory, storedCwdCondition } fro
 import { gjcSessionFile, storeRelative } from "./gjc-runtime.ts";
 import { descendantArgv, windowsProcessTable } from "./windows-processes.ts";
 import { windowsBridgeFiles, windowsHost } from "./remote-host.ts";
+import { bridgeRegistry } from "./bridge.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
 import { powershellNativeArgs, shellCommandLine } from "./shell-agent.ts";
@@ -248,6 +249,25 @@ it.skipIf(!onWindows)("recognizes Windows Agy executable names and full paths re
   expect(isAgyProcessName("C:\\Programs\\agyx.exe")).toBe(false);
 }, 30_000);
 
+it.skipIf(!onWindows)("keeps the bridges in the migration junction's target, read without going through it (release QA 7c)", async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "ovis-bridge-registry-")));
+  const before = process.env["USERPROFILE"];
+  const legacy = join(home, ".config", "herdr-web-ui");
+  try {
+    process.env["USERPROFILE"] = home;
+    // not migrated: the legacy folder, made or not
+    expect(bridgeRegistry()).toBe(join(legacy, "bridges"));
+    const target = join(home, ".config", "ovis");
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, legacy, "junction");
+    expect(bridgeRegistry()).toBe(join(target, "bridges"));
+  } finally {
+    if (before === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = before;
+    if (existsSync(legacy)) rmSync(legacy);
+    await rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+}, 30_000);
+
 for (const migrated of [false, true]) {
   it.skipIf(!onWindows)(`writes the Windows bridge launcher and reads startup status with migration junction=${migrated}`, async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "ovis-registry-native-")));
@@ -283,13 +303,17 @@ for (const migrated of [false, true]) {
       mkdirSync(join(inspection.runtimeDir, "bin"), { recursive: true });
       mkdirSync(join(inspection.runtimeDir, "server"));
       copyFileSync(process.execPath, join(inspection.runtimeDir, "bin", "bun.exe"));
-      writeFileSync(join(inspection.runtimeDir, "server", "remote-entry.ts"), `await Bun.write(${JSON.stringify(join(home, "started.json"))}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd() }));`);
+      writeFileSync(join(inspection.runtimeDir, "server", "remote-entry.ts"), `await Bun.write(${JSON.stringify(join(home, "started.json"))}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd() })); console.log("bridge log line");`);
       writeFileSync(join(registry, files.status), "interactive_failed: stale attempt");
       await windowsHost.start(ssh, { session, herdrPath: "C:\\herdr.exe", inspection });
       expect(JSON.parse(readFileSync(join(home, "started.json"), "utf8"))).toEqual({ session: session ?? "", cwd: home });
       const launcher = readFileSync(join(registry, files.launcher), "utf8");
       expect(launcher.startsWith("@echo off\r\n")).toBe(true);
       expect(launcher).toContain(`set "HERDR_REMOTE_SESSION=${session ?? ""}"`);
+      // the log goes beside the launcher, in the registry's resolved folder: over SSH cmd.exe cannot open a path
+      // through the migration junction, and then never runs Bun (release QA 7c)
+      expect(launcher.toLowerCase()).not.toContain(legacy.toLowerCase());
+      expect(readFileSync(join(registry, files.log), "utf8")).toContain("bridge log line");
       expect(existsSync(join(registry, files.status))).toBe(false);
       writeFileSync(join(registry, files.status), "interactive_failed: this attempt");
       expect(await windowsHost.startupNotice!(ssh, session)).toBe("this attempt");
