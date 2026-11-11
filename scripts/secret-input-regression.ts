@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { createServer } from "../server/index.ts";
-import { paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { paneRead, paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
 
 /** Only owned no-echo fixtures; assert delivery without storing the entered value. */
@@ -19,13 +19,22 @@ export async function checkSecretInput(browser: Browser, origin: string): Promis
 const { writeFileSync } = require("node:fs");
 process.stdin.setRawMode(true); process.stdin.resume();
 let count = 0;
+// after Ctrl+T: the answer is read and a line break printed, as git does before it signs in, and nothing more
+let working = false;
 process.stdout.write("\\x1b[2J\\x1b[HPassword:");
 process.stdin.on("data", chunk => {
   const text = chunk.toString();
   if (text === "\\x10") { count = 0; process.stdout.write("\\x1b[2J\\x1b[HEnter passphrase for key '/tmp/my private key for testing':"); return; }
+  if (text === "\\x0e") { count = 0; process.stdout.write("\\x1b[2J\\x1b[HPassword for 'https://alice@github.com':"); return; }
+  if (text === "\\x0f") { count = 0; process.stdout.write("\\x1b[2J\\x1b[HEnter passphrase (empty for no passphrase):"); return; }
+  if (text === "\\x14") { count = 0; working = true; process.stdout.write("\\x1b[2J\\x1b[HPassword for 'https://alice@github.com':"); return; }
+  // a prompt whose colon fills the row's last column: the space after it wraps, and the cursor is on the next row
+  if (text === "\\x15") { count = 0; process.stdout.write("\\x1b[2J\\x1b[HPassword for " + "a".repeat(process.stdout.columns - 14) + ": "); return; }
+  // a script's prompt, printed with its line break and read below it (echo "Password:"; read -s)
+  if (text === "\\x16") { count = 0; process.stdout.write("\\x1b[2J\\x1b[HPassword:\\r\\n"); return; }
   if (text === "\\x03") { count = 0; process.stdout.write("\\r\\nCancelled>"); return; }
   count += text.length;
-  if (text.includes("\\r")) { writeFileSync(${JSON.stringify(result)}, String(count)); count = 0; process.stdout.write("\\r\\nAccepted\\r\\nReady>"); }
+  if (text.includes("\\r")) { writeFileSync(${JSON.stringify(result)}, String(count)); count = 0; process.stdout.write(working ? "\\r\\n" : "\\r\\nAccepted\\r\\nReady>"); working = false; }
 });
 `);
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -93,9 +102,13 @@ process.stdin.on("data", chunk => {
     await field.fill("fixture-secret");
     await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
     await field.waitFor({ state: "detached" });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(result)) { if (Date.now() > deadline) throw new Error("Masked input never reached fixture"); await Bun.sleep(25); }
-    assert.equal(readFileSync(result, "utf8"), String("fixture-secret\r".length));
+    /** The fixture took one line of that many characters, Enter counted. */
+    const accepted = async (value: string): Promise<void> => {
+      const deadline = Date.now() + 5000;
+      while (!existsSync(result)) { if (Date.now() > deadline) throw new Error("Masked input never reached fixture"); await Bun.sleep(25); }
+      assert.equal(readFileSync(result, "utf8"), String(`${value}\r`.length));
+    };
+    await accepted("fixture-secret");
     assert.deepEqual(sent, ["secret"]);
     assert.equal(await page.evaluate(() => JSON.stringify({ ...localStorage }).includes("fixture-secret")), false);
     assert.equal(await page.locator("body").innerText().then((text) => text.includes("fixture-secret")), false);
@@ -107,6 +120,57 @@ process.stdin.on("data", chunk => {
     await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
     await field.waitFor({ state: "detached" });
     assert.deepEqual(sent, ["secret", "secret"]);
+    // git's HTTPS password, a prompt of the wider set (the server says secret-prompts-2): masked like the others,
+    // the input line gone, and sent as a secret
+    rmSync(result, { force: true });
+    await paneSendText(pane, "\u000e");
+    await field.waitFor();
+    assert.equal(await page.locator(".terminal-input").count(), 0);
+    await field.fill("git-token-secret");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
+    await field.waitFor({ state: "detached" });
+    await accepted("git-token-secret");
+    assert.deepEqual(sent, ["secret", "secret", "secret"]);
+    assert.equal(await page.evaluate(() => JSON.stringify({ ...localStorage }).includes("git-token-secret")), false);
+    // ssh-keygen's offer of no passphrase: the empty field is an answer there, and the program gets Enter alone
+    rmSync(result, { force: true });
+    await paneSendText(pane, "\u000f");
+    await field.waitFor();
+    assert.equal(await field.inputValue(), "");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
+    await field.waitFor({ state: "detached" });
+    await accepted("");
+    assert.deepEqual(sent, ["secret", "secret", "secret", "secret"]);
+    // A program that read its answer and works on, its prompt still the last text on the screen, asks no more: the
+    // field leaves, so a second Send cannot wait in the terminal for what comes next
+    rmSync(result, { force: true });
+    await paneSendText(pane, "\u0014");
+    await field.waitFor();
+    await field.fill("git-token-secret");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
+    await accepted("git-token-secret");
+    await field.waitFor({ state: "detached" });
+    assert.match((await paneRead({ paneId: pane, source: "visible", format: "text" })).text.trimEnd(), /Password for 'https:\/\/alice@github\.com':$/, "the prompt is still the last text");
+    assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret"]);
+    // A prompt as wide as the pane, its last space wrapped onto the next row: herdr draws the two rows apart, and
+    // the cursor past that space is still the prompt asking
+    rmSync(result, { force: true });
+    await paneSendText(pane, "\u0015");
+    await field.waitFor();
+    await field.fill("edge-secret");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
+    await field.waitFor({ state: "detached" });
+    await accepted("edge-secret");
+    assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret", "secret"]);
+    // A prompt printed with its line break and answered on the row below: the cursor was never on it, so it asks
+    rmSync(result, { force: true });
+    await paneSendText(pane, "\u0016");
+    await field.waitFor();
+    await field.fill("below-secret");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
+    await field.waitFor({ state: "detached" });
+    await accepted("below-secret");
+    assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret", "secret", "secret"]);
     await paneSendText(pane, "\u0010");
     await field.waitFor();
     await page.getByTitle(/^Live terminal \(.+\)$/).click();
@@ -115,7 +179,7 @@ process.stdin.on("data", chunk => {
     await field.fill("discarded-secret");
     await page.locator(".secret-input").getByRole("button", { name: "Cancel", exact: true }).click();
     await field.waitFor({ state: "detached" });
-    assert.deepEqual(sent, ["secret", "secret", "input"]);
+    assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret", "secret", "secret", "input"]);
     assert.deepEqual(errors, []);
     // On a desktop (no key bar, which a touch screen hides while the masked input is up) the masked
     // input floats over the grid's last rows: its arrival leaves the grid's height, the shared pty's

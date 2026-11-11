@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DevicePairedEvent } from "../shared/protocol.ts";
-import { DeviceStore, newStreamKey, normalizeLabel, PairingRateLimitedError, readDeviceRegistry, sameBrowser, streamCookie, streamKeys } from "./devices.ts";
+import { DeviceGoneError, DeviceStore, handleDeviceRequest, newStreamKey, normalizeLabel, PairingRateLimitedError, readDeviceRegistry, sameBrowser, streamCookie, streamKeys } from "./devices.ts";
 import { privateStateFs } from "./private-state.ts";
 import { isTaggedNode, parseTailscaleOwner } from "./tailscale.ts";
 
@@ -19,6 +19,80 @@ async function relaySignature(key: CryptoKey, nonce: Uint8Array, serverId = "ser
   return Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key,
     Buffer.concat([Buffer.from("ovis-relay-auth/1"), nonce, Buffer.from(serverId)]))).toString("base64url");
 }
+
+describe("the gate closing", () => {
+  it("is told once, when the first device's cookie came back or the relay closed it, never for a later device or a revoke", async () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "gate-closed-")));
+    let told = 0;
+    const stop = store.onGateClosed(() => { told++; });
+    const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
+    // an unconfirmed first pairing closes nothing: a cookie that never came back must not lock the LAN out
+    expect([store.gated, told]).toEqual([false, 0]);
+    // told after the call that closed the gate, when the store says it is closed; one that fails ends nothing else
+    const seen: boolean[] = [];
+    store.onGateClosed(() => { throw new Error("a teardown that failed"); });
+    store.onGateClosed(() => { seen.push(store.gated); });
+    const warned = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(store.match(phone.token)).toMatchObject({ id: phone.device.id });
+      expect([store.gated, told]).toEqual([true, 0]);
+      await Promise.resolve();
+      expect([told, seen, warned.mock.calls.length]).toEqual([1, [true], 1]);
+    } finally { warned.mockRestore(); }
+    const tablet = store.pair(store.startPairing().code, "Tablet", "drive")!;
+    store.match(tablet.token);
+    store.revokeAll();
+    store.closeGate();
+    await Promise.resolve();
+    expect(told).toBe(1);
+    stop();
+    // what the gate ends: at once when it is closed already
+    let ended = 0;
+    store.endWithGate(() => { ended++; })();
+    expect(ended).toBe(1);
+    const relayed = new DeviceStore(mkdtempSync(join(dir, "gate-closed-relay-")));
+    let closed = 0, unheard = 0;
+    relayed.onGateClosed(() => { closed++; });
+    relayed.onGateClosed(() => { unheard++; })();
+    let later = 0;
+    const stopLater = relayed.endWithGate(() => { later++; });
+    expect(later).toBe(0);
+    relayed.closeGate();
+    await Promise.resolve();
+    expect([relayed.gated, closed, unheard, later]).toEqual([true, 1, 0, 1]);
+    stopLater();
+  });
+});
+
+describe("a code started while the gate was open", () => {
+  it("ends when the first device's cookie closes the gate, and whoever shows it is told", () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "gate-voids-code-")));
+    // the owner's phone redeemed its code: an unconfirmed first pairing, the gate still open
+    const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
+    // anyone on the open LAN may start a code then
+    const stranger = store.startPairing(Date.now(), { remote: false, startedBy: null, memberRequired: false, open: true }).code;
+    let told = 0;
+    const stop = store.onPairingStarted(() => { told++; });
+    store.match(phone.token);
+    expect([store.gated, told]).toEqual([true, 1]);
+    // that code admits whoever holds it: it does not outlive the gate it was started under
+    expect(store.pair(stranger, "Stranger", "drive")).toBeNull();
+    expect(store.list(null).map((device) => device.label)).toEqual(["Phone"]);
+    // a code started through the closed gate is another matter, and a later cookie ends none
+    const tablet = store.startPairing().code;
+    store.match(phone.token);
+    expect(store.pair(tablet, "Tablet", "drive")).not.toBeNull();
+    expect(told).toBe(2);
+    stop();
+    // one this PC itself started under the open gate stays: the request that brings the first cookie back may
+    // be the one that redeems it
+    const own = new DeviceStore(mkdtempSync(join(dir, "gate-keeps-own-code-")));
+    const first = own.pair(own.startPairing().code, "Phone", "drive")!;
+    const second = own.startPairing().code;
+    own.match(first.token);
+    expect([own.gated, own.pair(second, "Tablet", "drive") !== null]).toEqual([true, true]);
+  });
+});
 
 describe("ending a pairing", () => {
   it("leaves no six-digit code to redeem and ends a typed code bound to it", () => {
@@ -481,6 +555,119 @@ describe("DeviceStore", () => {
     expect(store.revoke(b.device.id)).toBe(true);
     expect(store.gated).toBe(true);
     expect(new DeviceStore(root).gated).toBe(true);
+  });
+});
+
+describe("revoking a device unless an account vouches for it", () => {
+  const revoke = (store: DeviceStore, id: string, unless?: string) => handleDeviceRequest(new Request(`http://127.0.0.1/api/devices/${id}`, {
+    method: "DELETE", headers: { origin: "http://127.0.0.1", "x-herdr-machine": "1", ...(unless === undefined ? {} : { "x-ovis-unless-account": unless }) },
+  }), `/api/devices/${id}`, store, { level: "full", via: "local", role: "drive" }, null);
+
+  it("leaves a device that linked itself to that account since the caller read the list, and removes any other", async () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "revoke-unless-")));
+    const pair = async (label: string) => {
+      const keys = await relayKeys();
+      return { id: store.pairRelay(store.startPairing().code, label, keys.publicKeySpki)!.device.id, key: keys.publicKeySpki };
+    };
+    // read as paired and in no account; a member of the account that signed in by the time its removal lands
+    const own = await pair("Own phone");
+    expect(store.linkAccountKey(own.id, own.key, own.key, "acct_1")).not.toBeNull();
+    const kept = await revoke(store, own.id, "acct_1");
+    expect([kept.status, await kept.json()]).toEqual([409, { error: { code: "account_member", message: "that device is a member of the account by now" } }]);
+    expect(store.list(null).map((device) => device.id)).toEqual([own.id]);
+    // a member of another account is vouched for by nobody the caller named, and one in no account by nobody at all
+    expect((await revoke(store, own.id, "acct_2")).status).toBe(204);
+    const stray = await pair("Stray");
+    expect((await revoke(store, stray.id, "acct_1")).status).toBe(204);
+    expect(store.list(null)).toEqual([]);
+    // without the header a revoke is what it was: the member goes
+    const member = await pair("Member");
+    store.linkAccountKey(member.id, member.key, member.key, "acct_1");
+    expect((await revoke(store, member.id)).status).toBe(204);
+    expect((await revoke(store, member.id, "acct_1")).status).toBe(404);
+  });
+});
+
+describe("revoking a device that holds a pairing code", () => {
+  const guard = { origin: "http://127.0.0.1", "x-herdr-machine": "1" };
+  const call = (store: DeviceStore, method: string, path: string, access: Parameters<typeof handleDeviceRequest>[3], relayKey: string | null = null) =>
+    handleDeviceRequest(new Request(`http://127.0.0.1${path}`, { method, headers: guard }), path, store, access, relayKey);
+  const local = { level: "full", via: "local", role: "drive" } as const;
+
+  it("ends the code that device started through the relay, so nobody pairs with it after the device is gone", async () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "revoke-code-relay-")));
+    // let in by a code this PC showed, on a PC in no account: any driving relay device may start a code there
+    const keys = await relayKeys();
+    const stranger = store.pairRelay(store.startPairing().code, "Stranger", keys.publicKeySpki)!.device;
+    let told = 0;
+    store.onPairingStarted(() => { told++; });
+    const started = await call(store, "POST", "/api/devices/pair/start", { level: "full", via: "relay", role: "drive", device: stranger }, keys.publicKeySpki);
+    expect(started.status).toBe(200);
+    const { code } = await started.json() as { code: string };
+    expect(store.activePairing()?.code).toBe(code);
+    expect((await call(store, "DELETE", `/api/devices/${stranger.id}`, local)).status).toBe(204);
+    // the code went with it, and so does a typed relay code bound to it (its listeners hear of the end)
+    expect(store.activePairing()).toBeNull();
+    expect(told).toBe(2);
+    expect(store.pairRelay(code, "Stranger 2", (await relayKeys()).publicKeySpki)).toBeNull();
+    expect(store.list(null)).toEqual([]);
+  });
+
+  it("ends the code a device paired at this PC's own address started, and leaves a code nobody revoked started", async () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "revoke-code-direct-")));
+    const pairHere = (label: string) => {
+      const paired = store.pair(store.startPairing().code, label, "drive")!;
+      store.match(paired.token);
+      return paired.device;
+    };
+    const laptop = pairHere("Laptop");
+    const tablet = pairHere("Tablet");
+    const started = await call(store, "POST", "/api/devices/pair/start", { level: "full", via: "device", role: "drive", device: laptop });
+    const { code } = await started.json() as { code: string };
+    // another device's removal leaves it
+    expect((await call(store, "DELETE", `/api/devices/${tablet.id}`, local)).status).toBe(204);
+    expect(store.activePairing()?.code).toBe(code);
+    expect((await call(store, "DELETE", `/api/devices/${laptop.id}`, local)).status).toBe(204);
+    expect(store.activePairing()).toBeNull();
+    expect(store.pair(code, "Too late", "drive")).toBeNull();
+    // a code this PC itself started is nobody's to take along
+    const phone = pairHere("Phone");
+    const own = await (await call(store, "POST", "/api/devices/pair/start", local)).json() as { code: string };
+    expect((await call(store, "DELETE", `/api/devices/${phone.id}`, local)).status).toBe(204);
+    expect(store.activePairing()?.code).toBe(own.code);
+  });
+
+  it("starts no code for a device that is gone by then, and hands it none: no later revoke would end it", async () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "revoke-code-gone-")));
+    const paired = store.pair(store.startPairing().code, "Laptop", "drive")!;
+    store.match(paired.token);
+    const laptop = paired.device;
+    // revoked while its request was on its way (a relay round trip, a look-up of who asks)
+    expect(store.revoke(laptop.id)).toBe(true);
+    expect(() => store.startPairing(Date.now(), { remote: false, startedBy: null, memberRequired: false, by: laptop.id })).toThrow(DeviceGoneError);
+    expect(() => store.startPairing(Date.now(), { remote: true, startedBy: laptop.id, memberRequired: false })).toThrow(DeviceGoneError);
+    expect(store.activePairing()).toBeNull();
+    // nor is it handed the code this PC started, which stays this PC's
+    const own = store.startPairing();
+    expect(() => store.holdPairing(laptop.id)).toThrow(DeviceGoneError);
+    const refused = await call(store, "POST", "/api/devices/pair/start", { level: "full", via: "device", role: "drive", device: laptop });
+    expect([refused.status, await refused.json()]).toEqual([401, { error: { code: "unauthorized", message: "this device is no longer paired" } }]);
+    expect(store.activePairing()?.code).toBe(own.code);
+    // a refused start is not one of the ten codes a window allows
+    for (let asked = 0; asked < 12; asked++) expect(() => store.startPairing(Date.now(), { remote: false, startedBy: null, memberRequired: false, by: laptop.id })).toThrow(DeviceGoneError);
+    expect(store.startPairing().code).toMatch(/^\d{6}$/);
+  });
+
+  it("ends a code a device was handed, not only one it started", () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "revoke-code-handed-")));
+    const paired = store.pair(store.startPairing().code, "Laptop", "drive")!;
+    store.match(paired.token);
+    // this PC's own code, which the laptop then asked the relay offer for
+    const own = store.startPairing();
+    store.holdPairing(paired.device.id);
+    expect(store.revoke(paired.device.id)).toBe(true);
+    expect(store.activePairing()).toBeNull();
+    expect(store.pair(own.code, "Too late", "drive")).toBeNull();
   });
 });
 

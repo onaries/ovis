@@ -4,6 +4,7 @@
  * itself (createSubmitText), handed the state it reads. Pending delivery and the immediate send
  * share them.
  */
+import { withoutTrailingBreaks } from "../../shared/launch-rules.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { displayWidth, secretPrompt } from "../../shared/secret-prompt.ts";
@@ -18,6 +19,7 @@ import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
 import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
 import { registry } from "../dialogs/registry.ts";
+import { codexOwnScreenOpen, CODEX_OWN_SCREEN_MESSAGE } from "../dialogs/codex.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "../dialogs/claude.ts";
 import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
@@ -176,8 +178,11 @@ export const pendingIdentity = (pane: HerdrPane): PendingIdentity => ({
 });
 
 export const pendingText = (text: string): string => {
-  const normalized = text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
-  if (!normalized.trim() || normalized.length > 20_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(normalized)) {
+  const written = withoutTrailingBreaks(text);
+  // a CRLF is read as one character, so a message of more than twice the limit cannot fit: its megabytes are not
+  // rewritten to be measured
+  const normalized = written.length > 2 * 20_000 ? written : written.replace(/\r\n?/g, "\n");
+  if (normalized.length > 20_000 || !normalized.trim() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(normalized)) {
     throw new HerdrError("invalid_submit_text", "A pending chat message must be nonempty text, at most 20000 characters, without terminal control characters");
   }
   return normalized;
@@ -196,13 +201,16 @@ const MAX_TYPED_SUBMIT_CHARS = 32_768;
  * commands. `typed`: the terminal's input line, whose cap is the longer one.
  */
 export function submitFraming(text: string, payload: string, typed: boolean): { text: string; payload: string } {
-  const message = text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+  const written = withoutTrailingBreaks(text);
   const limit = typed ? MAX_TYPED_SUBMIT_CHARS : MAX_CHAT_SUBMIT_CHARS;
+  const refusal = (): HerdrError => new HerdrError("invalid_submit_text", `A message must be at most ${limit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed`);
+  // a CRLF is read as one character, so a message of more than twice the limit cannot fit: its megabytes are not
+  // rewritten twice to be measured
+  if (written.length > 2 * limit) throw refusal();
+  const message = written.replace(/\r\n?/g, "\n");
   const body = message.replace(/\n/g, "\r");
   if (message.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(message)
-    || (payload !== body && payload !== `\u001b[200~${body}\u001b[201~`)) {
-    throw new HerdrError("invalid_submit_text", `A message must be at most ${limit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed`);
-  }
+    || (payload !== body && payload !== `\u001b[200~${body}\u001b[201~`)) throw refusal();
   return { text: message, payload };
 }
 
@@ -228,6 +236,20 @@ export async function freeHermesInput(paneId: string, identity?: PendingIdentity
     throw new InputDraftError(null, identity, null, HERMES_INPUT_DRAFT_MESSAGE);
   }
   return live;
+}
+
+/**
+ * Codex's screen as every chat send reads it last, right before herdr is written to. herdr reports Codex at rest
+ * with one of its own screens up (a list such as `/model` or `/permissions`, `/rename`'s field, the `/diff` pager:
+ * dialogs/codex.ts codexOwnScreenOpen), so agent.prompt would paste the message there and its Enter would take the
+ * row under the cursor. While one is on screen the send is refused as for a menu herdr does report, and the message
+ * stays where it was written. herdr cannot compare and write in one step: a screen that opens during this read's
+ * answer or herdr's write is not seen.
+ */
+export async function freeCodexInput(paneId: string): Promise<void> {
+  if (codexOwnScreenOpen((await paneRead({ paneId, source: "detection", format: "text" })).text)) {
+    throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
+  }
 }
 
 /**
@@ -605,6 +627,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             throw new HerdrError("submit_partial", "Part of the message was typed into OpenCode's input, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
           }
         }
+        // the last read before herdr is written to: one of Codex's own screens gets no paste and no Enter
+        if (agent === "codex") await freeCodexInput(paneId);
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();

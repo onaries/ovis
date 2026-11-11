@@ -457,7 +457,8 @@ export function PaneTerminal({
     return () => { live = false; };
   }, [role]);
   const viewOnly = observing || role === "observe" || authWatching;
-  const [secret, setSecret] = useState<{ pane: string; prompt: string } | null>(null);
+  // `unchecked`: the PC types the answer without reading its screen first (useTerminalMount showSecret)
+  const [secret, setSecret] = useState<{ pane: string; prompt: string; unchecked: boolean } | null>(null);
   const secretRef = useRef<string | null>(null);
   const secretActive = secret !== null && secret.pane === paneId;
   // a touch screen writes in the terminal's input line; typing straight into the grid is chosen
@@ -761,18 +762,6 @@ export function PaneTerminal({
     paneObserving.set(key, observingMount, mountRole({ observing: viewOnly, inputReady }));
     return () => paneObserving.set(key, observingMount, null);
   }, [machineId, paneId, viewOnly, inputReady, observingMount]);
-
-  useLayoutEffect(() => {
-    const stack = stackRef.current;
-    if (!stack) return;
-    const composer = stack.querySelector<HTMLElement>(".composer");
-    if (!composer) return;
-    const text = composer.querySelector<HTMLTextAreaElement>(".composer-text");
-    if (text) text.disabled = viewOnly;
-    for (const button of composer.querySelectorAll<HTMLButtonElement>(".composer-controls button:not(.bg-tasks-toggle)")) {
-      if (viewOnly) button.disabled = true;
-    }
-  });
 
   useEffect(() => {
     if (active) onRoleAckRef.current?.(observing ? "observe" : "interact");
@@ -1136,8 +1125,8 @@ export function PaneTerminal({
   }, [controls, active, paneId]);
 
   const secretInput = presented && paneId !== null && secretActive && !observing && !ended && connected && outputReady ? <SecretInput
-    key={`${paneId}:${secret.prompt}`} prompt={secret.prompt} active={active}
-    onSend={(value) => socketRef.current?.sendSecret(paneId, secret.prompt, value) ?? null}
+    key={`${paneId}:${secret.prompt}`} prompt={secret.prompt} active={active} unchecked={secret.unchecked}
+    onSend={(value) => socketRef.current?.sendSecret(paneId, secret.prompt, value, () => secretRef.current === secret.prompt) ?? null}
     onCancel={() => { if (socketRef.current?.connected) { cancelTouchRef.current(); socketRef.current.sendInput(paneId, "\u0003"); } }}
   /> : null;
   // the input line's row, kept while the masked input stands in for it
@@ -1526,6 +1515,8 @@ export function PaneTerminal({
           suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
           restored={chatPrompt?.pane !== paneId && chatRestored?.pane === paneId ? chatRestored.value : null}
           notices={composerNotices}
+          // a device that only watches: the composer locks what writes from this role alone, in its own
+          // render. Its lists (background tasks, side conversations) only read, so their rows stay usable
           role={viewOnly ? "observe" : role}
           onOpenHistory={historyOffered ? onOpenHistory : undefined}
           greeting={greetingDue ? (

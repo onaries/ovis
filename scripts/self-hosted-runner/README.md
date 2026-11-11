@@ -145,7 +145,23 @@ wait for it) and its slot's own outbox, on disk under `~/.local/state/ovis-ci-ru
 job that built a commit leaves `<key>.tar` and `<key>.claim` (its run) in that outbox, and the launcher
 (`build-cache-promote.sh`, every second) takes it in only when GitHub says that runner is running a
 job of that run and the run is trusted: a push to the default branch, or a pull request from this
-repository that `--build-cache-writer` opened and started. Without the flag only pushes write. The
+repository that `--build-cache-writer` opened and started. Without the flag only pushes write. A
+slot runs one job per container under the same runner name, and GitHub answers for the job the
+slot runs when it answers, so a claim is also tied to the container whose job wrote it. The build
+is taken in only while the container docker names for the slot is the one it named when the claim
+was taken, and only for a job that started once that container had (to the second, with nothing
+allowed for the two clocks: `run.sh` waits two seconds before a slot's next container, and a
+container's own job starts ten or more after it), on the runner registered under the slot's name
+now. GitHub goes on listing the job
+of a container that was killed as running, for minutes and sometimes for days, and the container
+after it registers over the dead one's runner and keeps its id, so the start time is what tells
+that job from the container's own. `run.sh` empties a slot's outbox before it starts the slot's next
+container, so a claim naming the run of the slot's next job, or of an earlier one, is refused. Were
+the outbox not emptied, what an earlier job left would be read as the next one's: a claim or a
+build last changed before the slot's container started is refused (the system's own time of the
+change, which a job cannot set back; removing another name of a file sets it to now, so the times
+are read before anything in the outbox is removed, and a file with a second name is not taken), and
+a runner whose outbox still holds a file starts without the build cache. The
 launcher unpacks only files and directories and writes the sha256 of each into the entry's
 `.manifest`; a restore refuses an entry with a link, a missing, changed or extra file. Every other
 outbox file is deleted. One claim per outbox is judged per pass, and a refusal is remembered (the
@@ -156,12 +172,44 @@ Pull request runs and pushes to main read it; the CI a Release run runs itself a
 always build, and a run whose build the launcher would refuse (another author's pull request, say)
 builds at once instead of waiting on the lock. A release validated by main's push run instead
 ([Releasing](../../docs/development.md#releasing)) ran no Integration or Browser job of its own: it
-took that run's, which tested a `dist/` restored from here.
+took that run's, which tested a `dist/` restored from here, built by a job of that same run.
 
 An entry is named after the commit, Bun's version, the variables Vite reads and any `.env` file; a
 checkout with uncommitted changes, or with ignored files where Vite reads, never uses it. The
 key does not hash `node_modules`: it takes it to be what `bun install --frozen-lockfile` makes of the
 commit's `bun.lock` and patches, as in every CI job, so a hand-edited `node_modules` is not one to use it with.
+
+An entry belongs to the run that built it. The launcher files a build as `entries/<run id>/<key>`,
+under the run GitHub confirmed for the slot that handed it in, and a job reads only
+`/build-cache/<its GITHUB_RUN_ID>/<key>`: a run restores only what a job of the same run built (a
+rerun keeps its run id, so it restores what its earlier attempt built). The key is the job's own word
+for what it built, which the launcher cannot check. Filed by the key alone, a build that a trusted
+pull request run handed in under the key of a new commit of main, before main's own run had built
+it, would be the `dist/` main's Integration and Browser jobs restore and test, and since a release
+can be validated by main's run, the one behind that release; agents open pull requests as the
+writer, and CI runs before any review. Sharing a build between runs was never the purpose, the jobs
+of one run are. The lock is the run's as well (`.lock-<key>-<run id>`), so two runs of one commit (a
+pull request opened again, a draft made ready) do not wait for each other's build. A restore's
+`used-<key>` names no run: it stamps `used/<key>` when some run's directory holds that key, for all
+of them, which only moves eviction. Eviction keeps the most recently used entries of all runs
+within `--build-cache-mb` and removes a run's directory once it is empty.
+
+The job's side (`scripts/build-cache.ts`) comes with the commit a run checks out; the launcher's
+(`run.sh`, `build-cache-promote.sh`) is the copy installed on the PC ([below](#routing-jobs-to-it)),
+which is updated by hand. While only one of the two keeps entries per run, nothing is restored and
+every job builds. A launcher from before files a build by its key alone, where no job of a newer
+commit reads; the job's log then says the build `was not filed under this run but by its key alone`.
+A job of a commit from before reads by the key alone, where the launcher no longer files. Neither is
+a failure and neither wait runs out: the job that built gets its verdict as before, and the jobs of
+its run that waited for it build once it releases the lock, together, about one build later than
+without the cache (those of a commit from before one after another, as they always did when a build
+was not taken in). So copy this directory again when a change here moves where entries are filed
+(the copy alone switches the promoter, [below](#routing-jobs-to-it)); runs of commits that have the
+change restore again from then on. What the earlier launcher left as `entries/<key>` the new one
+moves out of the names a job reads and removes in its first pass: a job of a commit from before
+would still read it there, whichever run had filed it. One it cannot remove stays under a
+`.new-gone-` name, which no job reads, and is tried again by an eviction once it is over an hour
+old; one it cannot even move is emptied where it is, and logged once a day while it stays.
 
 ## Routing jobs to it
 
@@ -202,8 +250,16 @@ share `check.ts`'s slots (`CHECK_HOST_MAX_RUNS`) with theirs, so they can wait t
 On the maintainer PC the launcher runs as the systemd user unit `ovis-ci-runner.service`
 (`run.sh --repo devswha/ovis --count 4 --labels self-hosted-ovis` from a copy of this directory in
 `~/.local/share/ovis-ci-runner`): four slots let one CI run's four Linux jobs start together, and
-`check.ts`'s shared slots cap its herdr-backed lanes at `ci.yml`'s `CHECK_MAX_RUNS`. Copy the directory again and
-restart the unit after changing these files.
+`check.ts`'s shared slots cap its herdr-backed lanes at `ci.yml`'s `CHECK_MAX_RUNS`. Copy the directory again
+after changing these files, on every host whose launcher runs with `--build-cache`. For a change to
+`build-cache-promote.sh` the copy is all it takes: the launcher starts the promoter from that
+directory every second, so the next pass is the new one. A change to `run.sh` takes a restart of
+the unit, and a restart stops every slot's container, which cancels the jobs in flight: restart
+when the slots are idle. Replace the files by rename (`rsync -a` does), not in place: a pass under
+way keeps the script it started with, as does the running `run.sh`. Jobs run the
+repository's `scripts/build-cache.ts` against the installed `build-cache-promote.sh`: after a change
+to where the build cache's entries are filed, no job restores a build until the copy is the new one
+([Build cache](#build-cache)).
 
 ## Per-host limits
 
@@ -269,6 +325,7 @@ the default branch's lockfile. A git object is named by its hash, so the mirror 
 commit a job checks out; Bun does not check a cached package again, which is why only that
 lockfile, never a job, fills the Bun cache. A job's copy of it is its own. The build cache (with
 `--build-cache`) is read-only to jobs as well: only the launcher writes it, from the builds of runs
-GitHub names as trusted (above). A job can write its own outbox (on disk, as its workspace is) and the
-16 MiB locks volume, so at worst it makes the jobs waiting on a key wait up to five minutes and build
-themselves.
+GitHub names as trusted (above), each under the run that built it, which is the only run whose jobs
+restore it: a trusted run's build never reaches another run, main's included. A job can write its
+own outbox (on disk, as its workspace is) and the 16 MiB locks volume, so at worst it makes the jobs
+waiting on a key wait up to five minutes and build themselves.

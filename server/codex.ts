@@ -1103,7 +1103,8 @@ function codexScreenParts(screen: string): { prompt: boolean; tool?: true; text:
   const parts: { prompt: boolean; tool?: true; text: string }[] = [];
   for (const line of screen.split("\n")) {
     const last = parts.at(-1);
-    const prompt = /^(?:\u203a|\s*\u21b3(?:\s|$))/.test(line);
+    // the input box is marked "»" at Ultra reasoning effort (Codex 0.164 on): a draft in it is no answer shown either
+    const prompt = /^(?:[\u203a\u00bb]|\s*\u21b3(?:\s|$))/.test(line);
     // "You ran": a shell command the user ran from the composer, as Codex 0.163 titles it. An answer that
     // starts with one of these words is taken for a call too: telling them apart could show another's chat
     const tool = !prompt && (/^\s+\u2514(?:\s|$)/.test(line)
@@ -1251,19 +1252,17 @@ function noticeStart(rows: readonly { line: string }[], end: number, kind: "limi
 }
 
 /**
- * The answer a screen shows Codex finished last, with the prompt of its turn, both whitespace-collapsed: an
- * answer block (its "\u2022" line and the indented lines it wraps onto) with Codex's completed-turn footer
- * (CODEX_TURN_FOOTER) directly under it, one blank line between, then only blank lines down to Codex's
- * composer idle and empty ("\u203a" alone or with its placeholder) with nothing below it but Codex's own
- * status rows (FOOTER, at most four). Its prompt is the last "\u203a" line above it, with the indented lines
- * it wraps onto. Null when the screen shows no such turn: one still under way, a message sent since, a read
- * cut before the composer, or a screen without its prompts (shownAnswers), whose answers fall back as before.
+ * Where a screen shows Codex's last turn finished, as the row of its completed-turn footer (CODEX_TURN_FOOTER):
+ * what the turn ended on directly above it, one blank line between, then only blank lines (and Codex's own
+ * notices) down to Codex's composer idle and empty ("›" alone or with its placeholder) with nothing below
+ * it but Codex's own status rows (FOOTER, at most four). Null when the screen shows no such turn: one still under
+ * way, a message sent since, or a read cut before the composer.
  */
-function footedAnswer(screen: string): { text: string; prompt: string } | null {
-  const lines = screen.split("\n").map((line) => line.replace(/\r$/, ""));
+function idleTurnFooter(lines: readonly string[]): number | null {
   const rows = lines.map((line, at) => ({ line, at })).filter(({ line }) => line.trim() !== "");
-  const composer = rows.length - 1 - [...rows].reverse().findIndex(({ line }) => line.startsWith("\u203a"));
-  if (composer >= rows.length || !/^\u203a(?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
+  // the composer's mark is "»" at Ultra reasoning effort (Codex 0.164 on)
+  const composer = rows.length - 1 - [...rows].reverse().findIndex(({ line }) => /^[\u203a\u00bb]/.test(line));
+  if (composer >= rows.length || !/^[\u203a\u00bb](?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
   const status = rows.slice(composer + 1);
   if (status.length === 0 || status.length > 4 || !status.every(({ line }) => FOOTER.test(line.trim()))) return null;
   let before = composer - 1;
@@ -1283,7 +1282,25 @@ function footedAnswer(screen: string): { text: string; prompt: string } | null {
   const footer = rows[before];
   if (footer === undefined || !CODEX_TURN_FOOTER.test(footer.line)) return null;
   const index = footer.at;
-  if (index < 2 || lines[index - 1]!.trim() !== "" || lines[index - 2]!.trim() === "") return null;
+  return index < 2 || lines[index - 1]!.trim() !== "" || lines[index - 2]!.trim() === "" ? null : index;
+}
+
+/**
+ * The answer a screen shows Codex finished last (idleTurnFooter), with the prompt of its turn, both
+ * whitespace-collapsed: an answer block (its "•" line and the indented lines it wraps onto) directly above
+ * that footer. Its prompt begins at the last "›" line above it, and nothing on screen tells where it ends: the
+ * rows below it, indented or blank, up to the next row at the start of a line (`rows`, as drawn; the first without
+ * its "›") may be the rows it wraps onto and its further paragraphs, or something Codex drew under it (a code block
+ * the assistant printed first has no bullet either). So every row it may end on is a reading of it (`prompts`,
+ * shortest first), and a conversation asked any of them may be the one shown: read to its first blank row alone,
+ * the conversation asked just that paragraph owned the turn of one asked all of it; read to the cell's end alone,
+ * the one asked the prompt with those rows pasted under it did. Null when the screen shows no such turn, or none
+ * with its prompt (shownAnswers), whose answers fall back as before.
+ */
+function footedAnswer(screen: string): { text: string; prompts: string[]; rows: string[] } | null {
+  const lines = screen.split("\n").map((line) => line.replace(/\r$/, ""));
+  const index = idleTurnFooter(lines);
+  if (index === null) return null;
   let start = index - 2;
   while (start > 0 && /^(?:\s|$)/.test(lines[start]!)) start--;
   if (!lines[start]!.startsWith("\u2022 ")) return null;
@@ -1291,8 +1308,340 @@ function footedAnswer(screen: string): { text: string; prompt: string } | null {
   while (prompt >= 0 && !lines[prompt]!.startsWith("\u203a")) prompt--;
   if (prompt < 0) return null;
   let end = prompt + 1;
-  while (end < start && /^\s+\S/.test(lines[end]!)) end++;
-  return { text: lines.slice(start, index - 1).join("\n").slice(2).trim(), prompt: collapsed(lines.slice(prompt, end).join("\n").slice(1)) };
+  while (end < start && /^(?:\s|$)/.test(lines[end]!)) end++;
+  const rows = lines.slice(prompt, end);
+  rows[0] = rows[0]!.slice(1);
+  const prompts = rows.flatMap((row, at) => row.trim() === "" ? [] : [collapsed(rows.slice(0, at + 1).join("\n"))]).filter((reading) => alnum(reading) !== "");
+  return { text: lines.slice(start, index - 1).join("\n").slice(2).trim(), prompts, rows };
+}
+
+/** An answer without the fence lines of its code blocks, which Codex does not draw: the code between them shows as written. */
+function withoutFences(text: string): string {
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.split("\n")) {
+    // (the backtick as \x60: the convention tests' scanner pairs backticks as template literals)
+    const mark = /^\s*(\x60{3,}|~{3,})/.exec(line)?.[1];
+    if (mark !== undefined && fence === null) { fence = mark; continue; }
+    if (mark !== undefined && fence !== null && mark[0] === fence[0] && mark.length >= fence.length && line.trim() === mark) { fence = null; continue; }
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+/** The answer a rollout records its last finished turn ended on (task_complete): null when it ended on none, or no turn is read finished. */
+function lastFinishedAnswer(rollout: string): string | null {
+  let last: string | null = null;
+  for (const line of rollout.split("\n")) {
+    if (!line.includes('"task_complete"')) continue;
+    try {
+      const payload = (JSON.parse(line) as { payload?: Record<string, unknown> }).payload ?? {};
+      if (payload["type"] === "task_complete") last = typeof payload["last_agent_message"] === "string" ? payload["last_agent_message"] : null;
+    } catch { /* a record cut by the tail read */ }
+  }
+  return last;
+}
+
+/** What a line of a rollout must hold to tell of a turn's start or end (turnUnderWay), looked for before it is parsed. */
+const TURN_RECORDS = ['"task_started"', '"turn_started"', '"task_complete"', '"turn_complete"', '"turn_aborted"', '"user_message"', '"agent_message"', '"item_completed"', '"assistant"'];
+
+/**
+ * Whether a rollout's read ends inside a turn: one begun (task_started, or what an older Codex records of one: a
+ * prompt, an answer) and not ended since (task_complete, turn_aborted). Its screen may show an answer the rollout
+ * does not hold yet: Codex writes one only once it is complete (turnAfter). Null when the read records nothing of
+ * a turn at all: read whole, that is a thread that was only started, which is not under way (a turn its screen
+ * shows finished was recorded begun long before); cut, its turn may have begun before the read and written no
+ * message since (underWay).
+ */
+function turnUnderWay(rollout: string): boolean | null {
+  let open: boolean | null = null;
+  for (const line of rollout.split("\n")) {
+    if (!TURN_RECORDS.some((marker) => line.includes(marker))) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: unknown; payload?: Record<string, unknown> };
+      const payload = entry.payload ?? {};
+      const type = payload["type"];
+      if (entry.type === "event_msg" && (type === "task_complete" || type === "turn_complete" || type === "turn_aborted")) open = false;
+      else if (entry.type === "event_msg" && (type === "task_started" || type === "turn_started" || type === "user_message" || type === "agent_message"
+        || type === "item_completed" && (payload["item"] as { type?: unknown } | undefined)?.type === "UserMessage")
+        || entry.type === "response_item" && type === "message" && payload["role"] === "assistant" && payload["channel"] !== "analysis") open = true;
+    } catch { /* a record cut by the tail read */ }
+  }
+  return open;
+}
+
+/** A text without its parenthesized stretches, nested ones too (four deep). */
+function withoutParens(text: string): string {
+  let out = text;
+  for (let pass = 0; pass < 4; pass++) {
+    const next = out.replace(/\([^()]*\)/g, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/**
+ * The letters of a text, without what a screen may draw another way than a rollout records it: a parenthesized
+ * stretch (a link's target, which Codex draws after its label, relative to the folder: "the runbook
+ * (docs/runbook.md)" for `[the runbook](/repo/docs/runbook.md)`), a named entity, a task mark, a tag, every
+ * digit (a list Codex numbers itself, a location it writes its own way) and the case of its letters. An autolink
+ * (`<https://…>`, `<a@b.c>`) is no tag: Codex draws its address, so its letters stay. Only for what a conversation
+ * may have said (saidAnywhere), where leaving more out only adds a doubt.
+ */
+const bareLetters = (text: string): string => withoutParens(text).replace(/&[A-Za-z][A-Za-z0-9]{1,31};|\[[ xX]\]|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>\n]{0,40})?\/?>/g, "")
+  .normalize("NFKC").toLowerCase().replace(/[^\p{L}]/gu, "");
+
+/** A stretch of JSON text with its string escapes read: what a record that could not be parsed holds as written. */
+const unescaped = (json: string): string => json.replace(/\\(?:u([0-9a-fA-F]{4})|([\s\S]))/g, (_escape, hex: string | undefined, char: string) =>
+  hex !== undefined ? String.fromCharCode(Number.parseInt(hex, 16)) : char === "n" ? "\n" : char === "t" ? "\t" : char === "r" || char === "b" || char === "f" ? " " : char);
+
+/**
+ * Named entities a screen shows as a sign or a space, never as a letter or a digit (NFKC): no word is read through
+ * one of them (saidAnywhere), where a run of three unknown ones could stand for any word of nine letters.
+ */
+const SIGN_ENTITY = /&(?:amp|lt|gt|quot|apos|nbsp|ensp|emsp|thinsp|middot|bull|hellip|mdash|ndash|lsquo|rsquo|ldquo|rdquo|laquo|raquo|larr|rarr|uarr|darr|harr|times|divide|plusmn|deg|sect|para|copy|reg|cent|pound|euro|yen|shy|zwj|zwnj);/g;
+
+/** The forms a screen may show a recorded text in beside the text itself (lineForms'), where they differ from it. */
+function shownForms(text: string): string[] {
+  const forms = [text];
+  const add = (form: string) => { if (form !== text && !forms.includes(form)) forms.push(form); };
+  if (text.includes("&#") || text.includes("%")) add(decoded(text));
+  if (text.includes("][") || text.includes("]:") || text.includes("#L")) add(shownMarkup(text));
+  if (text.includes("<oai-mem-citation>")) add(withoutMemoryCitations(text));
+  return forms;
+}
+
+/**
+ * Whether what was read of a rollout holds `letters` (letters and digits) anywhere: in a message, a prompt, a tool's
+ * call or its output. Each text is read as written, in the forms a screen shows it in (shownForms) and as an
+ * answer's anchor is looked for (saidText, cut at link targets); and, against `bare` (bareLetters of the text
+ * shown), without what Codex draws another way (withoutFences: a fence's language is not on screen; bareLetters),
+ * so that an answer with a local link counts as said where the screen shows its target relative to the folder. Any
+ * stretch of the text counts, not only all of it (holdsStretch). A line that is no record counts too, for all it
+ * holds: the read began inside it (an answer or an output longer than the read), or it is being written.
+ *
+ * With `words` (the words the text shown ends on, their letters alone: Codex numbers a list itself), a record that
+ * holds every one of them counts as well (mayShowWords, as loadedConversation weighs what another conversation may
+ * show): Codex draws some answers so that no stretch of the screen is in their record, its words in another order
+ * or said again (a table's rows as records, its cells wrapped side by side, a named entity as a letter).
+ */
+function saidAnywhere(rollout: string, letters: string, bare: string, words: readonly string[] | null = null): boolean {
+  // each record's text as readSaid keeps one (its pieces between link targets, whole where it has a link, its named
+  // entities as ENTITY, but for those that are signs), and where each record ends in it
+  let said = "";
+  const ends: number[] = [];
+  let stripped = "";
+  const weigh = (text: string) => {
+    for (const form of shownForms(text)) {
+      const pieces = saidText(form);
+      said += pieces.join("") + (pieces.length > 1 ? normalizeDisplay(form) : "") + (form.includes("&") ? entityForm(form.replace(SIGN_ENTITY, " ")) : "");
+      // (the backtick as \x60: the convention tests' scanner pairs backticks as template literals)
+      stripped += bareLetters(form.includes("\x60\x60\x60") || form.includes("~~~") ? withoutFences(form) : form);
+    }
+  };
+  for (const line of rollout.split("\n")) {
+    const record = parseJson(line);
+    if (record !== undefined) for (const text of deepStrings(record)) weigh(text);
+    // its escapes read once, and twice: a tool's output is JSON in a string
+    else if (line.trim() !== "") for (const text of new Set([line, unescaped(line), unescaped(unescaped(line))])) weigh(text);
+    if (said.length > (ends.at(-1) ?? 0)) ends.push(said.length);
+  }
+  return holdsStretch(said, letters) || holdsStretch(stripped, bare) || words !== null && mayShowWords(words, { text: said, ends });
+}
+
+/**
+ * Whether `said` holds a stretch of `shown`: all of it when it is short, else any 48 of its characters, taken
+ * every 16. What Codex draws another way than a rollout records it changes a letter here and there (an entity
+ * that is a letter, a mark), not every stretch: a conversation that holds any stretch of the text shown may be
+ * the one that said it.
+ */
+function holdsStretch(said: string, shown: string): boolean {
+  if (shown.length <= 48) return shown !== "" && said.includes(shown);
+  for (let at = 0; at + 48 <= shown.length; at += 16) if (said.includes(shown.slice(at, at + 48))) return true;
+  return said.includes(shown.slice(-48));
+}
+
+/** What a conversation's turns tell of it, for a footed turn (footedTurnOwner): read from its parsed turns once per read. */
+interface Told { any: boolean; footerEnded: boolean; users: string[]; lastAnswer: string | undefined }
+
+/**
+ * What the footer paths found in a rollout's read, kept while that read stands. A rollout only grows, so a read is
+ * told by its length and its hash, and a lookup made every few seconds scans again only the reads that changed.
+ */
+interface ReadFacts {
+  turn?: { open: boolean | null };
+  ended?: { answer: string | null };
+  last?: { turn: { asked: string | null; answer: string } | null };
+  finished?: string[];
+  asked?: string[];
+  unfinished?: boolean;
+  told?: Told;
+  said: Map<string, boolean>;
+}
+const readFacts = new Map<string, ReadFacts>();
+const readStamps = new WeakMap<object, { text: string; stamp: string }>();
+
+/** A read's stamp: its length and hash, taken once per candidate. */
+function stampOf(candidate: { path: string; text: string }): string {
+  const known = readStamps.get(candidate);
+  if (known !== undefined && known.text === candidate.text) return known.stamp;
+  const stamp = `${candidate.text.length}:${Bun.hash(candidate.text)}`;
+  readStamps.set(candidate, { text: candidate.text, stamp });
+  return stamp;
+}
+
+function factsOf(candidate: { path: string; text: string }): ReadFacts {
+  const stamp = stampOf(candidate);
+  const facts = readFacts.get(stamp) ?? { said: new Map<string, boolean>() };
+  // the most recently used last, the oldest dropped
+  readFacts.delete(stamp);
+  readFacts.set(stamp, facts);
+  if (readFacts.size > 128) readFacts.delete(readFacts.keys().next().value!);
+  return facts;
+}
+
+/** What each scan of a candidate's read found (turnUnderWay, lastFinishedAnswer, lastFinishedTurn and so on), each found once per read. */
+type Candidate = { path: string; text: string };
+const turnOf = (candidate: Candidate): boolean | null => (factsOf(candidate).turn ??= { open: turnUnderWay(candidate.text) }).open;
+const endedOn = (candidate: Candidate): string | null => (factsOf(candidate).ended ??= { answer: lastFinishedAnswer(candidate.text) }).answer;
+const lastTurnOf = (candidate: Candidate): { asked: string | null; answer: string } | null => (factsOf(candidate).last ??= { turn: lastFinishedTurn(candidate.text) }).turn;
+const finishedOf = (candidate: Candidate): string[] => factsOf(candidate).finished ??= finishedAnswerTexts(candidate.text);
+const askedOf = (candidate: Candidate): string[] => factsOf(candidate).asked ??= askedPrompts(candidate.text);
+const unfinishedOf = (candidate: Candidate): boolean => factsOf(candidate).unfinished ??= endsOnUnfinishedAnswer(candidate.text);
+function toldOf(candidate: Candidate): Told {
+  const facts = factsOf(candidate);
+  if (facts.told === undefined) {
+    const turns = turnsOf(candidate);
+    const answers = answersOf(turns);
+    facts.told = {
+      any: turns.length > 0,
+      footerEnded: answers.some(endsInTurnFooter),
+      users: turns.filter((turn) => turn.role === "user").map((turn) => alnum(turn.parts.filter((part) => part.kind === "text").map((part) => part.text).join("\n"))),
+      lastAnswer: answers.at(-1),
+    };
+  }
+  return facts.told;
+}
+
+/**
+ * Whether a candidate may be showing an answer its read does not hold: a turn under way (turnUnderWay), or a read
+ * that records nothing of a turn and is not known whole (`whole`): cut by its budget or continuing a rollout that
+ * was not found, its turn may have begun before the read and written no message since.
+ */
+const underWay = (candidate: Candidate, whole: (path: string) => boolean): boolean => turnOf(candidate) ?? !whole(candidate.path);
+
+function saidBy(candidate: Candidate, letters: string, bare: string, words: readonly string[] | null): boolean {
+  const { said } = factsOf(candidate);
+  const asked = `${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
+  let known = said.get(asked);
+  if (known === undefined) {
+    known = saidAnywhere(candidate.text, letters, bare, words);
+    said.set(asked, known);
+    if (said.size > 8) said.delete(said.keys().next().value!);
+  }
+  return known;
+}
+
+/**
+ * saidAnywhere, for the record a read was cut inside (a lead): kept by the lead's length and hash and by what was
+ * asked, apart from the reads' facts (readFacts), of which a lead has no other and would take the place of a read's.
+ */
+const saidInLeads = new Map<string, boolean>();
+function saidInLead(lead: string, letters: string, bare: string, words: readonly string[] | null): boolean {
+  const asked = `${lead.length}:${Bun.hash(lead)}\0${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
+  const known = saidInLeads.get(asked) ?? saidAnywhere(lead, letters, bare, words);
+  // the most recently asked last, the oldest dropped
+  saidInLeads.delete(asked);
+  saidInLeads.set(asked, known);
+  if (saidInLeads.size > 256) saidInLeads.delete(saidInLeads.keys().next().value!);
+  return known;
+}
+
+/** Whether a recorded prompt is one of the readings of the prompt a screen shows (footedAnswer's `rows`), row for row. */
+const askedAsShown = (asked: string, rows: readonly string[]): boolean => rows.some((row, at) => row.trim() !== "" && completedRowsMatch(asked, rows.slice(0, at + 1).join("\n")));
+
+/**
+ * The conversation whose last finished answer the screen shows above the footer of its last turn, where
+ * matchCodexTranscript cannot read it (#3262 case 1): an answer longer than the screen, whose start has scrolled
+ * off, or one with a code block, whose fences Codex does not draw. A Codex TUI on the shared app-server daemon
+ * holds no rollout open and herdr may report no thread for it, so only its screen binds it.
+ *
+ * The screen, from its last header on and without Codex's own hook and hint rows (footedView), must show the last
+ * turn finished and the composer idle (idleTurnFooter). What counts is the one block that ends right above that
+ * footer, since the footer before it: never a prompt, a queued message, a tool's call or its output
+ * (codexScreenParts), which may quote any conversation. That block is compared with the answer as Codex draws it
+ * (withoutFences), character for character but for the spaces and line breaks a screen wraps at (markedDisplay:
+ * `a && b` is not `a || b`), in one of two ways:
+ * - its start is on screen (a "•" row): from that row to the footer it is the whole answer, nothing more at
+ *   either end;
+ * - its start has scrolled off: it runs from the very top of a read that shows no header and no earlier footer,
+ *   and all of it is the end of the answer.
+ * Either way it holds at least 64 letters and digits, 12 distinct, as an anchor does (answerAnchor).
+ *
+ * Exactly one candidate may have finished its last turn on that answer, and it must be this folder's (`owners`:
+ * never one herdr reported, a title named or the command line resumed, of another folder). Where the turn's
+ * prompt is on screen above the answer, that candidate must also own the turn as footedTurnOwner tells: asked one
+ * of the readings of that prompt, and no other candidate asked any of them (another conversation may have ended
+ * on the text Codex drew for this pane's own answer, a link's target relative to the folder; its prompt was
+ * another). And none of the candidates may be showing something else than its read holds: none that may be under
+ * way, whose screen may show an answer it has not written yet (underWay, asked of every candidate before any
+ * read is searched), and no other whose read holds the end of that text anywhere (saidAnywhere: a fork, two that
+ * printed the same file, one that quoted it or whose tool printed it, the pane's own that recorded it with a
+ * link; and, where the prompt is not on screen, one of whose records holds every word of that end, however Codex
+ * drew it). None does while a candidate's answer ends in a footer-shaped line of its own. The caller offers this only
+ * while every conversation the pane may be running is a candidate (lastTurnConversation). `leads`: what each read
+ * that is not whole cut at its start, as reads of their own, asked for only once everything else leaves one
+ * conversation.
+ */
+export function footedTailTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, wholeRead: (path: string) => boolean = () => false,
+  leads: () => { path: string; text: string }[] = () => []): string | null {
+  const header = screen.lastIndexOf("OpenAI Codex (v");
+  const lines = footedView(header < 0 ? screen : screen.slice(header)).split("\n").map((line) => line.replace(/\r$/, ""));
+  const footer = idleTurnFooter(lines);
+  if (footer === null) return null;
+  let above = footer - 1;
+  while (above >= 0 && !CODEX_TURN_FOOTER.test(lines[above]!)) above--;
+  const parts = codexScreenParts(lines.slice(above + 1, footer - 1).join("\n"));
+  const block = parts.at(-1);
+  if (block === undefined || block.prompt || block.tool) return null;
+  const rows = block.text.split("\n");
+  // the last row at the start of the screen's line begins what ends above the footer: an answer's "•"
+  let start = rows.length - 1;
+  while (start >= 0 && /^(?:\s|$)/.test(rows[start]!)) start--;
+  const whole = start >= 0;
+  if (whole ? !rows[start]!.startsWith("• ") : header >= 0 || above >= 0 || parts.length !== 1) return null;
+  const drawn = whole ? rows.slice(start).join("\n").slice(2) : block.text;
+  const shown = markedDisplay(drawn);
+  const letters = normalizeDisplay(shown);
+  if (letters.length < 64 || new Set(letters).size < 12) return null;
+  if (candidates.some((candidate) => finishedOf(candidate).some(endsInTurnFooter))) return null;
+  const fits = (answer: string) => { const recorded = markedDisplay(withoutFences(answer)); return whole ? recorded === shown : recorded.endsWith(shown); };
+  // every candidate that ended on it counts, this folder's or not: two of them leave the choice open, and one
+  // of another folder is never taken (it only keeps this folder's from winning by elimination)
+  const found = candidates.filter((candidate) => { const answer = endedOn(candidate); return answer !== null && fits(answer); });
+  const own = found[0];
+  if (found.length !== 1 || own === undefined || !owners.has(own.path)) return null;
+  // the prompt of that turn, where the screen shows it: the answer's "•" row with a "›" row above it
+  const footed = whole ? footedAnswer(lines.join("\n")) : null;
+  if (footed !== null) {
+    const turn = footedTurnOwner(footed, candidates, [], owners, fits);
+    if (turn === null || turn.path !== own.path || !askedAsShown(turn.asked, footed.rows) || turn.askedElsewhere(true)) return null;
+  }
+  if (candidates.some((candidate) => underWay(candidate, wholeRead))) return null;
+  const anchor = letters.slice(-160);
+  const bare = bareLetters(drawn).slice(-160);
+  // too few letters outside what Codex draws its own way (rows of figures, each numbered): nothing is left to
+  // look for in another read, so nothing tells whether another conversation said this
+  if (bare.length < 48) return null;
+  // Where no prompt on screen tells whose turn this is, a read that holds every word of the end shown counts too:
+  // the pane's own answer may be drawn with no stretch of its record left (saidAnywhere), and another
+  // conversation that ended on the text as drawn would be the only one that fits
+  // (its letters alone, outside parentheses, as `bare` is read: a list Codex numbers itself shows figures its record
+  // does not hold, and what Codex draws in parentheses after a link may be in no record, a "mailto:")
+  const words = footed === null ? wordsEnding(withoutParens(drawn), anchor.length, /[^\p{L}]+/u) : null;
+  if (candidates.some((candidate) => candidate.path !== own.path && saidBy(candidate, anchor, bare, words))) return null;
+  return leads().some((lead) => lead.path !== own.path && saidInLead(lead.text, anchor, bare, words)) ? null : own.path;
 }
 
 /** The answers a conversation's rollout records its turns finished on (task_complete), as written. */
@@ -1304,6 +1653,75 @@ function finishedAnswerTexts(rollout: string): string[] {
       return payload["type"] === "task_complete" && typeof payload["last_agent_message"] === "string" ? [payload["last_agent_message"]] : [];
     } catch { return []; }
   });
+}
+
+/** A hook's message as Codex draws it under an answer: "↳ Hook · ...", wrapped at the terminal's edge. */
+const HOOK_ROW = /^\s*↳ Hook · /;
+/** Codex's hint row under the composer ("← for agents · ? for shortcuts"), which a narrow pane cuts short. */
+const HINT_ROW = /^\s*(?:←|\?\s+for\b)/;
+
+/**
+ * A screen as the footer paths read it, as the reporter of #3262 saw it live (2026-11-07, Codex 0.164): without
+ * the hooks' messages Codex draws between an answer and its footer (a Stop hook's: each "↳ Hook ·" row, the
+ * lines it wraps onto up to the next blank line, and that blank line), and without the hint row under the idle
+ * composer, which a split pane cuts ("? for shortcu") so FOOTER no longer reads it. The model row (FOOTER) must
+ * still be there. An answer may hold a paragraph shaped like a hook row, drawn the same way: what is left then
+ * reads as a shorter answer, which binds nothing by itself (the conversation that gave the whole answer was asked
+ * the prompt shown, and keeps any other from owning the turn: footedTurnOwner).
+ */
+function footedView(screen: string): string {
+  const lines = screen.split("\n");
+  let composer = -1;
+  for (let at = lines.length - 1; at >= 0; at--) if (/^[›»]/.test(lines[at]!)) { composer = at; break; }
+  const kept: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    if (composer >= 0 && at > composer && HINT_ROW.test(lines[at]!)) continue;
+    if (!HOOK_ROW.test(lines[at]!)) { kept.push(lines[at]!); continue; }
+    while (at + 1 < lines.length && lines[at + 1]!.trim() !== "") at++;
+    if (at + 1 < lines.length) at++;
+  }
+  return kept.join("\n");
+}
+
+/**
+ * The conversation whose last turn the screen shows finished, when its answer is too short for an anchor
+ * (answerAnchor wants 64 letters and digits: "확인", "ok"), which matchCodexTranscript cannot find (#3262 case 2).
+ * The screen, from its last header on and without Codex's own hook and hint rows (footedView), must show that turn
+ * as footedAnswer reads one: its prompt, its answer ending right above Codex's "Worked for" footer, the composer
+ * idle below. One candidate of this folder (`owners`: never one herdr reported or a title named, of another
+ * folder) owns it as footedTurnOwner tells, under matchCodexTranscript's own rules for a footed turn, and its last
+ * finished turn was asked exactly that prompt and answered exactly that text: character for character, but for
+ * where the screen wrapped a row (completedRowsMatch: inside a word too). An answer Codex renders its own way (a
+ * link, emphasis) is not read: the terminal stands in.
+ *
+ * A word proves less than a long answer, so every doubt keeps the terminal standing in: another candidate whose
+ * latest turn was asked the prompt shown, or may have been (its read shows no prompt, its turn is not read
+ * finished: it may have recorded the answer another way, or not yet), any candidate that ever finished on the same
+ * letters and digits (another conversation that said "ok", a fork, an older turn of another thread), a screen
+ * without the footer (a turn under way), an answer ending in a footer-shaped line of its own. Only a thread that
+ * was only started is left out of the doubt: one read whole (`whole`) that records no turn at all shows no
+ * finished one. The caller offers this only while every conversation the pane may be running is a candidate
+ * (lastTurnConversation).
+ */
+export function footedShortTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, whole: (path: string) => boolean = () => false): string | null {
+  const footed = footedAnswer(footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))));
+  if (footed === null) return null;
+  const shown = alnum(footed.text);
+  if (shown === "" || footed.prompts.length === 0) return null;
+  const weighed = candidates.filter((candidate) => !(turnless(candidate) && whole(candidate.path)));
+  const turn = footedTurnOwner(footed, weighed, [], owners);
+  // an answer long enough for an anchor is matchCodexTranscript's to find
+  if (turn === null || answerAnchor(turn.answer) !== null) return null;
+  // its prompt is one of the readings of the prompt shown, row for row
+  if (!askedAsShown(turn.asked, footed.rows) || !completedRowsMatch(turn.answer, footed.text)) return null;
+  if (turn.askedElsewhere(true)) return null;
+  return weighed.some((candidate) => candidate.path !== turn.path && finishedOf(candidate).some((answer) => alnum(answer) === shown)) ? null : turn.path;
+}
+
+/** Whether what was read of a rollout records no turn at all: no prompt, no answer, none begun or finished. */
+function turnless(candidate: { path: string; text: string }): boolean {
+  return !toldOf(candidate).any && askedOf(candidate).length === 0 && finishedOf(candidate).length === 0
+    && !candidate.text.includes('"task_complete"') && turnOf(candidate) !== true;
 }
 
 /**
@@ -1391,9 +1809,9 @@ function markedEnding(text: string, letters: number): string {
   return marked.slice(at);
 }
 
-/** The words a text ends with (runs of letters and digits), as many as make up its last `length` of them, the first cut to fit. */
-function wordsEnding(text: string, length: number): string[] {
-  const words = text.normalize("NFKC").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+/** The words a text ends with (runs of letters and digits, or `between` them), as many as make up its last `length` of them, the first cut to fit. */
+function wordsEnding(text: string, length: number, between = /[^\p{L}\p{N}]+/u): string[] {
+  const words = text.normalize("NFKC").split(between).filter(Boolean);
   const taken: string[] = [];
   for (let index = words.length - 1, left = length; index >= 0 && left > 0; index--) {
     const word = words[index]!;
@@ -1401,6 +1819,84 @@ function wordsEnding(text: string, length: number): string[] {
     left -= word.length;
   }
   return taken.reverse();
+}
+
+/** A conversation's answers among its turns, as written. */
+const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
+  .flatMap((turn) => turn.parts).filter((part) => part.kind === "text").map((part) => part.text);
+
+/** Each candidate's turns as last parsed, so the matchers of one lookup parse a rollout's read once between them. */
+const parsedTurns = new WeakMap<object, { text: string; turns: ConversationTurn[] }>();
+function turnsOf(candidate: { path: string; text: string }): ConversationTurn[] {
+  const known = parsedTurns.get(candidate);
+  if (known !== undefined && known.text === candidate.text) return known.turns;
+  const turns = parseCodexTranscript(candidate.text, Infinity);
+  parsedTurns.set(candidate, { text: candidate.text, turns });
+  return turns;
+}
+
+/**
+ * The one conversation a footed turn on screen may belong to (footedTurnOwner): what its last finished turn was
+ * asked and ended on, as recorded, and whether another candidate's latest turn may have been asked the prompt
+ * shown (`askedElsewhere`; with `unread`, a read that shows no prompt at all counts as asked too).
+ */
+interface FootedTurn { path: string; asked: string; answer: string; askedElsewhere: (unread: boolean) => boolean }
+
+/**
+ * The answer Codex finished last with its footer below (footedAnswer) counts for one conversation only: the one
+ * candidate whose last finished turn was asked the prompt shown and ended on exactly that answer. This is that
+ * candidate as far as letters and digits tell, for the caller to compare exactly; null when none or several may
+ * be it, or when the one that may is not this folder's.
+ */
+function footedTurnOwner(footed: { text: string; prompts: readonly string[] }, candidates: { path: string; text: string }[], displays: readonly string[], footerOwners: ReadonlySet<string> | null,
+  /** whether a recorded answer may be the one shown, read loosely: its letters and digits those shown; the tail path's own reading for an answer with a code block */
+  fits: (answer: string) => boolean = (answer) => alnum(answer) === alnum(footed.text)): FootedTurn | null {
+  // None does while a candidate's answer ends in a footer-shaped line of its own, as nothing tells that line
+  // from Codex's: the terminal stands in, as it does whenever the pane's own conversation is not a candidate
+  if (candidates.some((candidate) => toldOf(candidate).footerEnded || finishedOf(candidate).some(endsInTurnFooter))) return null;
+  // A candidate whose last finished turn may be the one shown, read loosely (its prompt unread, or ending in
+  // the one shown, and its answer's letters and digits those shown: one Codex rendered its own way, a turn
+  // steered with more messages) counts too, so the one strict match is the only one that may be, or none is.
+  // (the prompt shown is any of its readings: a candidate asked one of them counts, as owner or against one)
+  const readings = footed.prompts.map(alnum);
+  if (readings.length === 0) return null;
+  const endsAsShown = (asked: string) => readings.some((reading) => asked.endsWith(reading));
+  const maybe = candidates.filter((candidate) => {
+    const last = lastTurnOf(candidate);
+    return last !== null && fits(last.answer) && (last.asked === null || endsAsShown(alnum(last.asked)));
+  });
+  // only a conversation of this folder (footerOwners: the store's rows for it) may own the footer; another
+  // candidate (one herdr reported, or a title named, of another folder) can only keep it from owning one
+  const owner = maybe.length === 1 && (footerOwners === null || footerOwners.has(maybe[0]!.path)) ? maybe[0]! : null;
+  const ownerLast = owner === null ? null : lastTurnOf(owner);
+  if (owner === null || ownerLast?.asked == null) return null;
+  // The footed answer, the same text or read through its rendering (markup, a table, a link Codex shows
+  // relative to the folder), counts only while no other candidate's latest turn was asked the prompt shown:
+  // another conversation may have recorded the answer another way that Codex renders as this text, and its
+  // turn may be unfinished or its finish cut from the read and still be the one on screen. Telling such
+  // renderings apart is not attempted: a same-prompt screen is left to the guarded matches of the caller. A prompt
+  // asked only before its latest turn does not count once that turn is read finished (its own prompt recorded
+  // last): that conversation's screen shows the later turn. While it may still be running, or its finish
+  // has no turn of its own, the screen may have been read before it began, and every prompt counts.
+  // `unread`: a read that shows no prompt at all counts as asked too, as it may have cut the one asked
+  const askedElsewhere = (unread: boolean) => candidates.some((candidate) => {
+    if (candidate.path === owner.path) return false;
+    const last = lastTurnOf(candidate);
+    if (last !== null && (last.asked === null || endsAsShown(alnum(last.asked)))) return true;
+    const prompts = askedOf(candidate);
+    const { users, lastAnswer } = toldOf(candidate);
+    // and, read whole, one whose read may have cut its prompt while its turn is unfinished and its last answer
+    // may be the one shown (rendered the same, too short to tell, or its anchor on screen as answerAnchor reads it)
+    if (prompts.length === 0 && users.length === 0) return unread || unfinishedOf(candidate) && [lastAnswer].some((answer) => {
+      if (answer === undefined) return false;
+      const found = answerAnchor(answer);
+      return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches(answer, footed.text);
+    });
+    // a prompt sent as several messages reads as its parts' run
+    if (last !== null && prompts.at(-1) === last.asked) return users.length > 0 && endsAsShown(users.join(""));
+    return prompts.some((asked) => endsAsShown(alnum(asked))) || users.some((_, at) => endsAsShown(users.slice(0, at + 1).join("")));
+  });
+  return { path: owner.path, asked: ownerLast.asked, answer: ownerLast.answer, askedElsewhere };
 }
 
 /** Shared app-server TUIs do not hold rollout descriptors. For read-only display,
@@ -1413,7 +1909,7 @@ function wordsEnding(text: string, length: number): string[] {
  * (loadedConversation), in place of their answers. `blocks`: the screen is shownAnswers', and an
  * answer counts only inside one of its blocks: Codex shows one answer as one block, so text that
  * runs across blocks is answers side by side, another conversation's. */
-export function matchCodexTranscript(screen: string, candidates: { path: string; text: string }[], scrutinized: ReadonlySet<string> = new Set(), said: ReadonlyMap<string, Said> = new Map(), blocks = false, footerOwners: ReadonlySet<string> | null = null): string | null {
+export function matchCodexTranscript(screen: string, candidates: { path: string; text: string }[], scrutinized: ReadonlySet<string> = new Set(), said: ReadonlyMap<string, Said> = new Map(), blocks = false, footerOwners: ReadonlySet<string> | null = null, renderedCompletion = true): string | null {
   const partsOf = (text: string) => {
     const lastHeader = text.lastIndexOf("OpenAI Codex (v");
     return blocks ? text.split(/\n(?=\u2022)/)
@@ -1425,9 +1921,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
   const wholeBlocks = answerParts.flatMap(shownBlocks);
   const renderedProgress = !blocks && screen.split("\n").some((line) => STATUS_ROW.test(line.trimEnd()));
-  const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
-    .flatMap((turn) => turn.parts).filter((part) => part.kind === "text").map((part) => part.text);
-  const parsed = candidates.map((candidate) => parseCodexTranscript(candidate.text, Infinity));
+  const parsed = candidates.map(turnsOf);
   // The footed answer, the same text or read through its rendering (markup, a table, a link Codex shows
   // relative to the folder), counts only while no other candidate's latest turn was asked the prompt shown:
   // another conversation may have recorded the answer another way that Codex renders as this text, and its
@@ -1440,11 +1934,13 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const askedElsewhere = (owner: string, foot: { prompt: string | null; text: string }, unread: boolean): boolean => {
     const prompt = foot.prompt;
     if (prompt === null) return false;
+    const folded = /\s+\+ \d+ (?:more )?lines? \(\^r to expand\)$/.test(prompt);
+    const shownPrompt = alnum(prompt.replace(/\s+\+ \d+ (?:more )?lines? \(\^r to expand\)$/, ""));
+    const asks = (text: string): boolean => folded ? alnum(text).startsWith(shownPrompt) : alnum(text).endsWith(shownPrompt);
     return candidates.some((candidate, index) => {
       if (candidate.path === owner) return false;
-      const shownPrompt = alnum(prompt);
       const last = lastFinishedTurn(candidate.text);
-      if (last !== null && (last.asked === null || alnum(last.asked).endsWith(shownPrompt))) return true;
+      if (last !== null && (last.asked === null || asks(last.asked))) return true;
       const prompts = askedPrompts(candidate.text);
       const users = parsed[index]!.filter((turn) => turn.role === "user").map((turn) => alnum(turn.parts.filter((part) => part.kind === "text")
         .map((part) => part.text).join("\n")));
@@ -1456,18 +1952,20 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
         return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches(answer, foot.text);
       });
       // a prompt sent as several messages reads as its parts' run
-      if (last !== null && prompts.at(-1) === last.asked) return users.length > 0 && users.join("").endsWith(shownPrompt);
-      return prompts.some((asked) => alnum(asked).endsWith(shownPrompt)) || users.some((_, at) => users.slice(0, at + 1).join("").endsWith(shownPrompt));
+      if (last !== null && prompts.at(-1) === last.asked) return users.length > 0 && asks(users.join(""));
+      return prompts.some(asks) || users.some((_, at) => asks(users.slice(0, at + 1).join("")));
     });
   };
   const completion = blocks ? null : completedCodexAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))), CODEX_TURN_FOOTER);
-  if (completion !== null && !candidates.some(({ text }) => finishedAnswerTexts(text).some(endsInTurnFooter))) {
+  if (renderedCompletion && completion !== null && !candidates.some(({ text }) => finishedAnswerTexts(text).some(endsInTurnFooter))) {
     const foot = completion;
     const tailLetters = Math.min(160, normalizeDisplay(foot.text).length);
     const completed = candidates.flatMap((candidate) => {
       const last = lastFinishedTurn(candidate.text);
       if (last === null) return [];
       const visible = withoutMemoryCitations(last.answer);
+      // Native tail matches use the caller's guarded last-turn path rather than creating a sticky binding.
+      if (footedTailTranscript(screen, candidates, footerOwners ?? new Set(candidates.map(({ path }) => path))) !== null) return [];
       const variants = [visible, ...codexMarkdownDisplays(visible, foot.cropped)];
       const matches = variants.filter((shown) => {
         const letters = normalizeDisplay(cutAtLinkTargets(shown).map((piece) => piece.text).join(""));
@@ -1484,26 +1982,11 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       && (only.rendered || foot.cropped || foot.prompt === null || (only.asked !== null && foot.prompt !== null && foot.prompt.startsWith(collapsed(only.asked))
       && /\+ \d+ (?:more )?lines? \(\^r to expand\)$/.test(foot.prompt)))) return only.path;
   }
-  // The answer Codex finished last with its footer below (footedAnswer) counts for one conversation only:
-  // the one candidate whose last finished turn was asked the prompt shown and ended on exactly that answer.
-  // None does while a candidate's answer ends in a footer-shaped line of its own, as nothing tells that line
-  // from Codex's: the terminal stands in, as it does whenever the pane's own conversation is not a candidate
   const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
-  // A candidate whose last finished turn may be the one shown, read loosely (its prompt unread, or ending in
-  // the one shown, and its answer's letters and digits those shown: one Codex rendered its own way, a turn
-  // steered with more messages) counts too, so the one strict match is the only one that may be, or none is.
-  const maybe = footed === null || parsed.some((turns) => answersOf(turns).some(endsInTurnFooter))
-    || candidates.some(({ text }) => finishedAnswerTexts(text).some(endsInTurnFooter)) ? null : candidates.filter(({ text }) => {
-    const last = lastFinishedTurn(text);
-    return last !== null && alnum(last.answer) === alnum(footed.text) && (last.asked === null || alnum(last.asked).endsWith(alnum(footed.prompt)));
-  });
-  // only a conversation of this folder (footerOwners: the store's rows for it) may own the footer; another
-  // candidate (one herdr reported, or a title named, of another folder) can only keep it from owning one
-  const owner = maybe?.length === 1 && (footerOwners === null || footerOwners.has(maybe[0]!.path)) ? maybe[0]! : null;
-  const ownerLast = owner === null ? null : lastFinishedTurn(owner.text);
+  const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
   // the same text binds while no other candidate records the prompt shown; a rendering only while no other's read may have cut it either
-  const footedOwner = owner !== null && footed !== null && ownerLast?.asked != null && collapsed(ownerLast.asked) === footed.prompt && !askedElsewhere(owner.path, footed, false)
-    && (collapsed(ownerLast.answer) === collapsed(footed.text) || !askedElsewhere(owner.path, footed, true) && completedAnswerMatches(ownerLast.answer, footed.text)) ? owner.path : null;
+  const footedOwner = turn !== null && footed!.prompts.includes(collapsed(turn.asked)) && !turn.askedElsewhere(false)
+    && (collapsed(turn.answer) === collapsed(footed!.text) || !turn.askedElsewhere(true) && completedAnswerMatches(turn.answer, footed!.text)) ? turn.path : null;
   // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
@@ -1828,7 +2311,8 @@ function displayedFirstExchange(screen: string, keepCompletionFooter = false): C
   }
   if (answerAt < 0) return null;
   const user = lines.slice(promptAt, answerAt).map((line, index) => index === 0 ? line.slice(1) : line).join("\n");
-  const nextPrompt = lines.findIndex((line, index) => index > answerAt && /^›(?:[ \t]|$)/.test(line));
+  // the next prompt sent, or the composer, which Codex marks "»" at Ultra reasoning effort (0.164 on)
+  const nextPrompt = lines.findIndex((line, index) => index > answerAt && /^[›»](?:[ \t]|$)/.test(line));
   const responseLines = lines.slice(answerAt, nextPrompt < 0 ? undefined : nextPrompt);
   // Codex's completed-turn footer is terminal chrome, after a blank line and before the composer.
   const footer = responseLines.findIndex((line, index) => index > 0 && responseLines[index - 1]!.trim() === ""
@@ -2642,9 +3126,22 @@ async function loadedConversation(screen: string, weighed: readonly string[], ho
 /**
  * The rollout each pane's Codex was last matched to on screen, the processes that were running it, and
  * when; `titled` when it was the conversation only the title offered, which then holds only while the
- * title still names it (the picker may have opened another since).
+ * title still names it (the picker may have opened another since). What a last turn alone ties (lastTurnConversation)
+ * is never among them: it is proven again on every lookup.
  */
 const boundRollouts = new Map<string, { processes: string; path: string; at: number; titled?: boolean }>();
+
+/**
+ * A screen as two reads of it are compared: the rows down to the composer (the last row Codex starts with "\u203a",
+ * holding any draft), whitespace removed. The rows under it are left out (the model row and the hint row, which the
+ * pane's width cuts), and so are line breaks and indents, which only the width moves.
+ */
+function shownScreen(screen: string): string {
+  const lines = screen.split("\n");
+  let composer = -1;
+  for (let at = lines.length - 1; at >= 0; at--) if (lines[at]!.startsWith("\u203a")) { composer = at; break; }
+  return (composer >= 0 ? lines.slice(0, composer + 1) : lines).join("").replace(/\s+/g, "");
+}
 
 /**
  * Threads begun in this cwd since `since` (seconds) that this pane's Codex may have moved
@@ -2701,7 +3198,7 @@ export async function paneCodexProcess(paneId: string): Promise<{ pid: number; a
 export async function codexProcessesOf(paneId: string, known?: ProcessInfo | null): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
   const processInfo = known !== undefined ? known ?? undefined : await paneProcessInfo(paneId);
   // herdr's schema allows `argv: null`; this reader has always read argv as absent or a list
-  // (the cast is the inline result type herdrRpc was given before the typed seam)
+  // (the cast preserves the inline result type used before the typed seam)
   const list = ((processInfo?.foreground_processes ?? []) as { pid: number; argv?: string[] }[])
     .map((foreground) => {
       if (foreground.argv?.length || process.platform !== "linux") return foreground;
@@ -2810,7 +3307,7 @@ async function claimedByOtherPanes(paneId: string, cwd: string, threads: string[
       const screen = await paneRead({ paneId: pane.pane_id, source: "recent", lines: 400, stripAnsi: true });
       const possible = [...new Map([...candidates, ...known, ...(theirsNow && !threads.includes(theirsNow) && !own.includes(theirsNow) ? tail(theirsNow) : [])]
         .map((candidate) => [candidate.path, candidate])).values()];
-      const shown = matchCodexTranscript(screen.text, possible);
+      const shown = matchCodexTranscript(screen.text, possible, new Set(), new Map(), false, null, false);
       if (shown === null || !threads.includes(shown)) continue;
       // and the thread's first message shows there too: typed in that pane, not only its answer
       // quoted or pasted there (a thread whose first message is gone from that screen stays unclaimed)
@@ -3104,7 +3601,7 @@ async function shortThreadFromProcess(
       if (screens.some((text) => matchingCodexExchanges(text, own, 1).length > 0)) return null;
       // A missing header is unknown, not evidence of a different conversation.
       if (displayedFirstExchange(peer.text) === null) {
-        const matched = matchCodexTranscript(peer.text, candidates);
+        const matched = matchCodexTranscript(peer.text, candidates, new Set(), new Map(), false, null, false);
         if (matched === null || matched === path) return null;
       }
     }
@@ -3296,6 +3793,176 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
 }
 
 /**
+ * codexHistoryTail, with the record it cuts at its start: the read drops a cut first line (readRange), and that
+ * line may be what tells, an answer or a tool's output longer than the read. `lead`: what the read's budget holds
+ * of it, as written in the file (the end of a record, no JSON by itself), "" when the read begins at a record.
+ */
+function historyTailWithLead(path: string, budget: number, home: string): { text: string; lead: string } {
+  const chunks: string[] = [];
+  let lead = "";
+  let remaining = budget;
+  for (const segment of [{ path, end: statSync(path).size }, ...liveChain(path, home)]) {
+    if (remaining <= 0) break;
+    const start = Math.max(0, segment.end - remaining);
+    // refused where a read bound the path to another file (openBound), as readRange is
+    const fd = openBound(segment.path);
+    let read: string;
+    try {
+      const buffer = Buffer.alloc(Math.max(0, segment.end - start));
+      read = buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, start)).toString("utf8");
+    } finally { closeSync(fd); }
+    const cut = start > 0 ? read.indexOf("\n") : -1;
+    if (start > 0) lead = cut < 0 ? read : read.slice(0, cut);
+    chunks.unshift(start > 0 ? (cut < 0 ? "" : read.slice(cut + 1)) : read);
+    remaining -= segment.end - start;
+  }
+  return { text: chunks.join("\n"), lead };
+}
+
+/** Whether a rollout fits the read and continues no earlier one, so that its read is all of it (as the short answers' `cut`). */
+function readWhole(path: string): boolean {
+  try { return Object.keys(record(rolloutHeader(path)?.history_base)).length === 0 && statSync(path).size <= 1024 * 1024; } catch { return false; }
+}
+
+/** A thread that was only started: read whole, it records no turn at all, so no pane shows a turn of it. */
+const onlyStarted = (candidate: { path: string; text: string }): boolean => turnless(candidate) && readWhole(candidate.path);
+
+/**
+ * What each pane's last lookup of a kind weighed (the screen, the processes and every read) and found: the same
+ * screen over the same reads gives the same answer, a tie or a refusal, without a scan. A lookup comes every 2 s
+ * while a pane's chat has no conversation and every 5 s after, and each scan reads every candidate
+ * (lastTurnConversation, withoutStartedThreads). No binding: one read that grew, one thread loaded or unloaded,
+ * and it is weighed again. A candidate's read is told by its length and hash; a rollout not read yet (the resumed
+ * one, a loaded one) by its inode, size and time of change.
+ */
+const lookupAnswers = new Map<string, { weighed: string; found: unknown }>();
+
+/**
+ * The conversations of other folders a pane may be running, beside its folder's candidates: the thread its command
+ * line resumed, and every one a Codex process of the store has loaded (loadedRollouts), the one a resume through
+ * the picker opened among them (#896). They only keep this folder's from winning by elimination. With the question
+ * a lookup then asks (`weighed`: what it asks (`asked`), the screen, the processes, the owners and every read as
+ * told above) and every rollout it weighs (`known`), for the pane's last read to be held to (stillAsWeighed). Null
+ * where the loaded threads cannot be read (Windows, more than 32 loaded, one of them with no rollout or an earlier
+ * one missing): the conversation shown may then be none of the candidates.
+ */
+async function conversationsBeside(asked: string, processes: string, screen: string, candidates: { path: string; text: string }[], resumed: string | null, owners: ReadonlySet<string>, home: string):
+  Promise<{ beside: string[]; weighed: string; known: ReadonlySet<string> } | null> {
+  const threads = await loadedRollouts(home);
+  if (threads === null) return null;
+  const folder = new Set(candidates.map((candidate) => candidate.path));
+  const beside = [...new Set([...(resumed === null ? [] : [resumed]), ...threads.keys()])].filter((path) => !folder.has(path));
+  const weighed = [asked, processes, `${screen.length}:${Bun.hash(screen)}`, [...owners].sort().join("\n"), ...candidates.map((candidate) => `${candidate.path}\n${stampOf(candidate)}`),
+    ...beside.map((path) => { const file = statSync(path); return `${path}\n${file.ino}:${file.size}:${file.mtimeMs}`; })].join("\0");
+  return { beside, weighed, known: new Set([...folder, ...beside]) };
+}
+
+/** The answer kept for a pane's lookup of a kind, when it asks the very same question; else what `weigh` finds, kept in its place. */
+function answerKept<Found>(kind: string, paneId: string, weighed: string, weigh: () => Found): Found {
+  const key = `${kind}\0${paneId}`;
+  const last = lookupAnswers.get(key);
+  if (last?.weighed === weighed) return last.found as Found;
+  const found = weigh();
+  lookupAnswers.delete(key);
+  lookupAnswers.set(key, { weighed, found });
+  if (lookupAnswers.size > 128) lookupAnswers.delete(lookupAnswers.keys().next().value!);
+  return found;
+}
+
+/**
+ * Whether what a lookup weighed is still all there is to weigh once it has its answer: the pane shows the same
+ * screen under the same processes, and Codex has no thread loaded that was not weighed (`known`). The loaded
+ * threads are read after the screen, so a pane may move on meanwhile; and a resume through the picker in that time
+ * loads a thread of another folder whose replay may be this very screen. Read in this order, the screen again and
+ * then the loaded threads again: a thread loaded before that last screen read is then among them. One unloaded
+ * meanwhile changes nothing: it was weighed.
+ */
+async function stillAsWeighed(paneId: string, processes: string, screen: string, home: string, known: ReadonlySet<string>): Promise<boolean> {
+  try {
+    const [now, running] = await Promise.all([paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true }), codexProcessesOf(paneId)]);
+    if (running.key !== processes || shownScreen(now.text) !== shownScreen(screen)) return false;
+    const threads = await loadedRollouts(home);
+    return threads !== null && [...threads.keys()].every((path) => known.has(path));
+  } catch { return false; }
+}
+
+/**
+ * The conversation the last finished turn on a pane's screen ties it to, where no long answer shown whole does
+ * (#3262): footedShortTranscript, then footedTailTranscript. Both prove less than a long answer, so both are also
+ * weighed against the conversations of other folders the pane may be running (conversationsBeside); where those
+ * cannot be read, neither binds. Nor does the end of a long answer beside a candidate that continues a rollout
+ * which was not found (a fork, a backtrack): it shows what its parent said, and its read holds none of it.
+ *
+ * Nothing found here is remembered as a binding: the screen is asked again on every lookup, so a pane that moved
+ * on (a resume in the same TUI makes no thread, and may even draw the same rows) is weighed against what the
+ * store holds then. Only the answer to the very same question is kept (lookupAnswers). With every rollout weighed
+ * (`known`), for the caller to hold the pane's last read to (stillAsWeighed).
+ */
+async function lastTurnConversation(paneId: string, processes: string, screen: string, candidates: { path: string; text: string }[], resumed: string | null, owners: ReadonlySet<string>, home: string):
+  Promise<{ found: string; known: ReadonlySet<string> } | null> {
+  // nothing to read unless the screen shows its last turn finished
+  const view = footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
+  if (idleTurnFooter(view.split("\n").map((line) => line.replace(/\r$/, ""))) === null
+    && completedCodexAnswer(screen, CODEX_TURN_FOOTER) === null) return null;
+  try {
+    const store = await conversationsBeside("last turn", processes, screen, candidates, resumed, owners, home);
+    if (store === null) return null;
+    const found = answerKept<string | null>("last turn", paneId, store.weighed, () => {
+      const wholeReads = new Map<string, boolean>();
+      const whole = (path: string): boolean => wholeReads.get(path) ?? (wholeReads.set(path, readWhole(path)), wholeReads.get(path)!);
+      const others = store.beside.map((path) => historyTailWithLead(path, 1024 * 1024, home));
+      const every = [...candidates, ...store.beside.map((path, at) => ({ path, text: others[at]!.text }))];
+      const short = footedShortTranscript(screen, every, owners, whole);
+      if (short !== null) return short;
+      // The record a read cut at its start tells only what a conversation said (saidAnywhere), so it is read where
+      // that is asked: for the end of a long answer, and only once the reads as they are leave one conversation.
+      // Each is weighed as a read of its own, so that the read it was cut from keeps what was found in it
+      const leads = () => [...candidates.flatMap((candidate) => whole(candidate.path) ? [] : [{ path: candidate.path, text: historyTailWithLead(candidate.path, 1024 * 1024, home).lead }]),
+        ...store.beside.map((path, at) => ({ path, text: others[at]!.lead }))].filter((lead) => lead.text !== "");
+      const completion = completedCodexAnswer(screen, CODEX_TURN_FOOTER);
+      const rendered = (completion?.prompt != null || completion?.cropped === false) && !every.some((candidate) => underWay(candidate, whole))
+        ? matchCodexTranscript(screen, every, new Set(), new Map(), false, owners) : null;
+      const drawn = completion?.text ?? "";
+      const anchor = alnum(drawn).slice(-160), bare = bareLetters(drawn).slice(-160);
+      const words = wordsEnding(withoutParens(drawn), anchor.length, /[^\p{L}]+/u);
+      const competing = rendered !== null && completion?.prompt === null
+        && (every.some((candidate) => candidate.path !== rendered && saidBy(candidate, anchor, bare, words))
+          || leads().some((lead) => lead.path !== rendered && saidInLead(lead.text, anchor, bare, words)));
+      const tail = footedTailTranscript(screen, every, owners, whole, leads) ?? (competing ? null : rendered);
+      return tail !== null && every.some((candidate) => candidate.path !== tail && Object.keys(record(rolloutHeader(candidate.path)?.history_base)).length > 0 && !chainComplete(candidate.path, home)) ? null : tail;
+    });
+    return found === null ? null : { found, known: store.known };
+  } catch { return null; }
+}
+
+/**
+ * matchCodexTranscript asked again without the threads that were only started (#3262 case 3): read whole, such a
+ * thread records no turn, so it cut no prompt and no pane shows a turn of it; left in, a second Codex started in
+ * the folder took the match from a pane showing an answer Codex renders its own way, for as long as it was asked
+ * nothing. What that second match finds must hold against the conversations of other folders the pane may be
+ * running as well (conversationsBeside): one of them asked the prompt shown may be the one on screen, and where
+ * they cannot be read the match is not taken. A thread of another folder that was only started is left out as this
+ * folder's are. With every rollout weighed, as lastTurnConversation; or `refused`, the conversation this folder's
+ * threads alone gave, where those of other folders leave the turn open: the caller then holds no binding to it.
+ */
+async function withoutStartedThreads(paneId: string, processes: string, screen: string, candidates: { path: string; text: string }[], scrutinized: ReadonlySet<string>, resumed: string | null, owners: ReadonlySet<string>, home: string):
+  Promise<{ found: string; known: ReadonlySet<string> } | { refused: string } | null> {
+  const begun = candidates.filter((candidate) => !onlyStarted(candidate));
+  if (begun.length === candidates.length) return null;
+  try {
+    const store = await conversationsBeside(`without started threads\n${[...scrutinized].sort().join("\n")}`, processes, screen, candidates, resumed, owners, home);
+    if (store === null) return null;
+    const { matched, held } = answerKept("without started threads", paneId, store.weighed, () => {
+      const matched = matchCodexTranscript(screen, begun, scrutinized, new Map(), false, owners, false);
+      if (matched === null || store.beside.length === 0) return { matched, held: true };
+      const others = store.beside.map((path) => ({ path, text: codexHistoryTail(path, 1024 * 1024, home) })).filter((other) => !onlyStarted(other));
+      return { matched, held: matchCodexTranscript(screen, [...begun, ...others], scrutinized, new Map(), false, owners, false) === matched };
+    });
+    return matched === null ? null : held ? { found: matched, known: store.known } : { refused: matched };
+  } catch { return null; }
+}
+
+/**
  * The rollout a pane's Codex writes, or null when nothing tells. `panes`: the session's
  * panes, when the caller has them (saves a snapshot, and closed panes' bindings go).
  *
@@ -3319,6 +3986,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   if (panes !== undefined) {
     const open = new Set(panes.map((pane) => pane.pane_id));
     for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
+    for (const key of [...lookupAnswers.keys()]) if (!open.has(key.slice(key.indexOf("\0") + 1))) lookupAnswers.delete(key);
   }
   const agent = await codexAgentInfo(paneId);
   const session = agent.agent_session;
@@ -3427,13 +4095,50 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   const candidates = paths.flatMap((path) => {
     try { return [{ path, text: codexHistoryTail(path, 1024 * 1024, home) }]; } catch { return []; }
   });
-  const matched = screen ? matchCodexTranscript(screen.text, candidates, new Set(titledElsewhere === null ? [] : [titledElsewhere]), new Map(), false, folderRollouts) : null;
+  const scrutinized = new Set(titledElsewhere === null ? [] : [titledElsewhere]);
+  let matched = screen ? matchCodexTranscript(screen.text, candidates, scrutinized, new Map(), false, folderRollouts, false) : null;
+  // a second Codex that only started in the folder raises no doubt about the turn a screen shows finished
+  // (withoutStartedThreads). Its match came after other reads than the pane's: the pane is held to it once more
+  if (matched === null && screen !== null) {
+    const retried = await withoutStartedThreads(paneId, processes, screen.text, candidates, scrutinized, resumedPath, folderRollouts, home);
+    if (retried !== null && "refused" in retried) {
+      // the turn shown may be a conversation's of another folder (a resume through the picker replays the very
+      // rows this pane was bound on): a binding to this folder's is to one the pane may have left
+      if (boundHere?.path === retried.refused) {
+        boundRollouts.delete(paneId);
+        boundHere = undefined;
+        boundNewer = [];
+      }
+    } else if (retried !== null) {
+      if (!await stillAsWeighed(paneId, processes, screen.text, home, retried.known)) return null;
+      matched = retried.found;
+    }
+  }
   if (matched !== null) {
     if (!rememberMatch) return matched;
     boundRollouts.delete(paneId);
     boundRollouts.set(paneId, { processes, path: matched, at: Date.now(), ...(matched === titledElsewhere ? { titled: true } : {}) });
     if (boundRollouts.size > 64) boundRollouts.delete(boundRollouts.keys().next().value!);
     return matched;
+  }
+  // An answer under 64 letters and digits ("확인", "ok") has no anchor for the match above; nor has one whose start
+  // scrolled off the screen, or one with a code block, whose fences Codex does not draw (#3262). The last finished
+  // turn on screen may still tell, on less (lastTurnConversation): so only against every conversation this pane may
+  // be running, each read (one left out of the 32, or whose rollout is gone, may be the one shown), and only one of
+  // this folder. Not for a nested pane, whose guard takes a substantial match alone, nor for a TUI of an app server
+  // elsewhere (--remote), whose conversation this store does not hold, nor while the command line resumed a thread
+  // the store cannot show (it may be the one on screen)
+  if (screen !== null && listed && candidates.length === paths.length && !agent.nestedTerminal && (resumed === null || resumedPath !== null)
+    && !codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) {
+    const tied = await lastTurnConversation(paneId, processes, screen.text, candidates, resumedPath, folderRollouts, home);
+    if (tied !== null) {
+      // the loaded threads were read since the screen was: a pane that moved on meanwhile is answered nothing
+      if (!await stillAsWeighed(paneId, processes, screen.text, home, tied.known)) return null;
+      // Never remembered as a binding, as short answers never were: the next lookup asks the screen again. A
+      // binding to another conversation is to the one this pane left
+      if (boundHere !== undefined && boundHere.path !== tied.found) boundRollouts.delete(paneId);
+      return tied.found;
+    }
   }
   // Nothing on screen tells: a long run of tool output pushed the last answer out of
   // the read, or nothing is answered yet. The same Codex process still writes the

@@ -147,12 +147,13 @@ if [ "$CACHE" = 1 ]; then
     CACHE=0
   fi
 fi
-# The client build cache (README "Build cache"): the jobs of a commit after the first restore its
+# The client build cache (README "Build cache"): the jobs of a run after the first restore its
 # dist/ instead of building it (scripts/build-cache.ts). Runners read it only; a job's build goes to its
-# slot's own outbox, and this launcher moves it in (build-cache-promote.sh) only for a trusted run.
+# slot's own outbox, and this launcher moves it in (build-cache-promote.sh) only for a trusted run,
+# under that run (entries/<run id>/<key>), where only that run's jobs read.
 BUILD_CACHE_ROOT=""
 BUILD_CACHE_OUTBOXES=""
-# which job of a commit builds it: a volume of its own in RAM, capped, so a job filling it fills nothing else
+# which job of a run builds it: a volume of its own in RAM, capped, so a job filling it fills nothing else
 BUILD_CACHE_LOCKS="${PREFIX}build-cache-locks"
 if [ -n "$BUILD_CACHE" ]; then
   case "$REPO" in
@@ -173,7 +174,9 @@ if [ -n "$BUILD_CACHE" ]; then
   esac
 fi
 
-# Set when each runner starts: its slot's outbox, emptied of what an earlier job left.
+# Set when each runner starts: its slot's outbox, emptied of what an earlier job left. Emptied
+# before the slot's next container exists: the promoter takes what is in the outbox while a
+# container is the slot's for that container's job's (build-cache-promote.sh).
 build_cache_args() {
   local outbox="$BUILD_CACHE_OUTBOXES/$1"
   BUILD_CACHE_ARGS=()
@@ -187,6 +190,13 @@ build_cache_args() {
     if [ -n "$(find "$outbox" -mindepth 1 -print -quit 2>/dev/null)" ]; then
       docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} --rm --network none --security-opt no-new-privileges --cap-drop ALL --user 1001:1001 \
         -v "$outbox:/outbox" --entrypoint sh "$IMAGE" -c 'chmod -R u+rwX /outbox 2>/dev/null; find /outbox -mindepth 1 -delete' </dev/null >/dev/null 2>&1 || true
+    fi
+    # A file that is still there would be read as this runner's own claim or build: the runner starts
+    # without the build cache, and its job builds. (A directory is no claim to the promoter, which
+    # also refuses a file older than the runner's container.)
+    if [ -n "$(find "$outbox" -mindepth 1 -maxdepth 1 ! -type d -print -quit 2>/dev/null)" ]; then
+      echo "[$1] its build cache outbox could not be emptied: starting it without the build cache" >&2
+      return 0
     fi
   fi
   mkdir -p "$outbox" && chmod 1777 "$outbox" || return 0

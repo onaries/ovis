@@ -13,7 +13,7 @@ import { type Client, connectionOf, presenceOf, relayClient, send, setMachineEve
 import { type AttachmentView, validGeometry } from "./terminals.ts";
 import type { TelemetryIngress, TelemetrySurface } from "../../shared/telemetry.ts";
 
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "codex-agent-queue", "codex-capacity-retry", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "terminal-insert", "agent-only", "input-receipt", "conversation-search", "conversation-watch-detached", "prompt-watch"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "codex-agent-queue", "codex-capacity-retry", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "terminal-insert", "agent-only", "input-receipt", "conversation-search", "conversation-watch-detached", "prompt-watch", "secret-prompts-2", "secret-prompts-3"];
 
 type Frame<K extends ClientMessage["type"]> = Extract<ClientMessage, { type: K }>;
 
@@ -29,6 +29,19 @@ export type SocketHandler = Omit<WebSocketHandler<SocketData>, "open" | "message
 
 /** The frames of the connection itself: its liveness, its watches and its role. */
 type ConnectionFrame = "ping" | "watch" | "unwatch" | "role" | "machine-events";
+
+const INVALID_WATCH = "pane_id must be a pane's id: a string of at most 256 characters that is not blank, holds no control character and does not begin with a hyphen";
+
+/**
+ * A `watch` or `unwatch` frame's pane, checked before anything is started for it. An id that is no string would be
+ * another Map key at every frame: a watch that no later frame replaces and no unwatch names. One that begins with a
+ * hyphen (blanks before it aside) would be read as an option by herdr's own command line, which is handed the id as
+ * it came (watch.ts). And an id is written to the server's log and sent back when its watch cannot start: no pane's
+ * id is longer than a few dozen characters, or holds a control character.
+ */
+function watchablePane(paneId: unknown): paneId is string {
+  return typeof paneId === "string" && paneId.length <= 256 && paneId.trim() !== "" && !paneId.trim().startsWith("-") && !/[\u0000-\u001f\u007f]/.test(paneId);
+}
 
 export function createSocket({ clients, present, stopped, admit, setRole, watchable, terminalHistory, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime, browserSnapshot, countVisit, drainOutput, frames }: {
   clients: Set<Client>;
@@ -79,6 +92,10 @@ export function createSocket({ clients, present, stopped, admit, setRole, watcha
       return;
     },
     watch(client: Client, message: Frame<"watch">): void {
+      if (!watchablePane(message.pane_id)) {
+        send(client, { type: "error", code: "invalid_watch", message: INVALID_WATCH });
+        return;
+      }
       const geometry = validGeometry(message.cols, message.rows);
       if (!geometry) {
         send(client, { type: "error", code: "invalid_geometry", message: "cols and rows must be integers in 1..1000" });
@@ -93,6 +110,10 @@ export function createSocket({ clients, present, stopped, admit, setRole, watcha
       return;
     },
     unwatch(client: Client, message: Frame<"unwatch">): void {
+      if (!watchablePane(message.pane_id)) {
+        send(client, { type: "error", code: "invalid_watch", message: INVALID_WATCH });
+        return;
+      }
       unwatchPane(client, message.pane_id);
       return;
     },
@@ -143,7 +164,7 @@ export function createSocket({ clients, present, stopped, admit, setRole, watcha
       // a folder OVIS_PASTE_DIR names lets the page read an upload's path whole through it (#2771); a
       // watch-only connection, which may list no folder, is not told where it is
       const pasteDir = client.data.readOnly ? undefined : pasteDirectoryForAll();
-      send(client, { type: "features", features, connection: client.data.connectionId, ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }), ...(pasteDir === undefined ? {} : { paste_dir: pasteDir }) });
+      send(client, { type: "features", features, connection: client.data.connectionId, server_time: Date.now(), ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }), ...(pasteDir === undefined ? {} : { paste_dir: pasteDir }) });
       const snapshot = clientSnapshot();
       countVisit(snapshot, { surface: client.data.surface, ingress: client.data.ingress });
       try {

@@ -236,7 +236,8 @@ const CODEX_MODEL_TAIL_LINES = 30;
 
 // Key names a list hint can display, including remapped keys. Restrict the key field so
 // ordinary words before a real footer cannot become a fictitious key name after joining lines.
-const CODEX_LIST_KEY_HINT = String.raw`(?:(?:ctrl|alt|shift|cmd|super)\+)*(?:enter|return|tab|space|esc|escape|backspace|delete|insert|home|end|pageup|pagedown|up|down|left|right|f\d{1,2}|[a-z0-9])`;
+// A chord's parts are joined by `+` in a footer (`alt+x`, Codex 0.167) and by `-` in its keymap and config (`ctrl-g`).
+const CODEX_LIST_KEY_HINT = String.raw`(?:(?:ctrl|alt|shift|cmd|super)[+-])*(?:enter|return|tab|space|esc|escape|backspace|delete|insert|home|end|pageup|pagedown|up|down|left|right|f\d{1,2}|[a-z0-9])`;
 
 const CODEX_MODEL_GUARD_HINT_RE = new RegExp(`^${CODEX_LIST_KEY_HINT}(?:select|default|apply|confirm)·(?:ssession·)?${CODEX_LIST_KEY_HINT}back$`, "i");
 
@@ -290,6 +291,79 @@ export function codexModelListWaits(screen: string): boolean {
     const { rows, first, last } = listRows(lines, shown[start]!.index, CODEX_MODEL_ROW_RE, null);
     const intervening = lines.slice(last + 1, shown[start]!.index).some((line) => cleanLine(line) && !isDivider(cleanLine(line)));
     if (rows.length > 0 && !intervening && codexModelHeader(lines, first, true) !== null) return true;
+  }
+  return false;
+}
+
+// One key as a footer of Codex's names it (CODEX_LIST_KEY_HINT), the arrows it draws as signs, the paging keys' short
+// names, `?`, or a Ctrl chord in caret form (`^c`); several keys that do one thing are joined by a slash (`←/→`).
+const CODEX_FOOTER_KEY = String.raw`(?:${CODEX_LIST_KEY_HINT}|[←→↑↓⏎↵?]|pgup|pgdn|\^[a-z])`;
+const CODEX_FOOTER_KEYS = String.raw`${CODEX_FOOTER_KEY}(?:/${CODEX_FOOTER_KEY})*`;
+// what stands between a footer's items: ` · `, a run of spaces (the agents view, /resume), or 0.162's ` or `
+const CODEX_FOOTER_GAP = String.raw`(?:\s+·\s+|\s{2,}|\s+or\s+)`;
+/**
+ * The item of a footer that names the key leaving the screen, whole: `esc back`, `esc cancel`, `esc exit`,
+ * `esc save/close`, `q close`, `^c exit`, 0.162's `esc to go back`. `? / esc close`, under the composer while its
+ * shortcuts are shown, is not one: that key is no item's start there, and the composer still takes what is typed.
+ */
+const CODEX_FOOTER_LEAVES_RE = new RegExp(
+  `(?:^|${CODEX_FOOTER_GAP})(?:press\\s+)?${CODEX_FOOTER_KEYS}\\s+(?:to\\s+)?(?:go\\s+)?(?:back|cancel|close|exit|dismiss|quit|save/close)(?=$|${CODEX_FOOTER_GAP})`, "i");
+/** How a footer's row begins: a key and what it does, or what to type (`Type to find`). A status line begins with its model. */
+const CODEX_FOOTER_STARTS_RE = new RegExp(`^(?:(?:press\\s+)?${CODEX_FOOTER_KEYS}\\s+\\S|type to\\b)`, "i");
+/** Codex's search through the prompts sent before (Ctrl+R): its field is the screen's last row, with no footer. */
+const CODEX_HISTORY_SEARCH_RE = /^(?:reverse|forward)-i-search:/;
+/**
+ * /keymap waiting for the key a shortcut is remapped to: `Press the new key now. Esc cancels.` ends the screen, a
+ * sentence where every other screen has a footer. The Enter after a paste would be taken as the new key.
+ */
+const CODEX_KEY_CAPTURE_RE = /(?:^|\s)esc cancels\.$/i;
+
+/** What a chat send to a Codex pane is refused with while one of those screens is open (`agent_blocked`). */
+export const CODEX_OWN_SCREEN_MESSAGE = "Codex has one of its own screens open in the terminal; close it there, then send";
+
+/** rows at the end of the screen a footer is looked for in: two rows of keys (/resume), or one a narrow pane wrapped */
+const CODEX_FOOTER_ROWS = 3;
+
+/**
+ * Whether one of Codex's own screens has the pane's input instead of its composer: a list (`/model` and its levels,
+ * `/permissions`, `/review`, `/theme`, `/resume`, `/experimental`, the folder question), a field (`/rename`, the
+ * transcript's Find, the search through earlier prompts), an editor (`/statusline`, `/keymap` and its view that waits
+ * for a new key), the agents view or a pager (`/diff`). herdr reports Codex at rest under each of them, so a chat message would be pasted there: a list
+ * drops the paste, and the Enter that follows takes the row under the cursor (seen on Codex 0.167: it changed the
+ * permission mode, answered the folder question, and under `enter default` would save a model for every new session).
+ *
+ * Each of them ends the screen with a footer of its keys that names the one leaving it (`enter select · esc back`,
+ * `space toggle · ←/→ reorder · enter save · esc cancel`, `? help  esc back  ↑/↓ move  enter open  n new`, `q close`
+ * under a pager's keys). The composer ends the screen with its status line and `← for agents · ? for shortcuts`,
+ * or with the status line alone over a draft, and names no such key. So the footer is looked for in the last rows
+ * of the screen, below the last row Codex marks `›` or `»` (a prompt, its composer, a list's cursor): an answer
+ * quoting a footer stands above the composer. A row counts when it begins as a footer does and holds that item
+ * whole, by itself or with the rows a narrow pane wrapped it onto, and nothing but rows of keys stands under it. The
+ * status line begins with its model, so a thread or a folder named like such an item is not one; a row that goes on
+ * from the one above it (cut at a `·`) is that row's end; and a line of a draft that reads like a footer has the
+ * status line under it.
+ */
+export function codexOwnScreenOpen(screen: string): boolean {
+  const rows = screen.replace(ANSI_RE, "").split(/\r?\n/).map((row) => row.trimEnd());
+  const filled = rows.map((row, at) => ({ text: row.trim(), at })).filter(({ text }) => text !== "");
+  if (filled.length === 0) return false;
+  if (CODEX_HISTORY_SEARCH_RE.test(filled.at(-1)!.text)) return true;
+  const marked = findLastIndex(rows, (row) => /^[›»](?:\s|$)/.test(row));
+  const tail = filled.filter(({ at }) => at > marked).slice(-CODEX_FOOTER_ROWS);
+  // the sentence a view ends with instead of a footer, as one row or wrapped onto two, the first of them no status
+  // line (which begins with the model and holds a `·`)
+  const ending = tail.slice(-2);
+  if (ending.some((_, from) => !ending[from]!.text.includes("·") && CODEX_KEY_CAPTURE_RE.test(ending.slice(from).map((row) => row.text).join(" ")))) return true;
+  const starts = tail.map(({ text }) => CODEX_FOOTER_STARTS_RE.test(text));
+  for (let first = 0; first < tail.length; first += 1) {
+    if (!starts[first] || /·$/.test(rows[tail[first]!.at - 1] ?? "")) continue;
+    // the row itself, then with the rows under it, joined as a pane wraps a row: at a space, or after a slash
+    for (let last = first; last < tail.length; last += 1) {
+      // a footer ends the screen: under it stand only more rows of keys (/resume has two)
+      if (!starts.slice(last + 1).every(Boolean)) continue;
+      const wrapped = tail.slice(first, last + 1).map((row) => row.text);
+      if (CODEX_FOOTER_LEAVES_RE.test(wrapped.join(" ")) || CODEX_FOOTER_LEAVES_RE.test(wrapped.join(""))) return true;
+    }
   }
   return false;
 }

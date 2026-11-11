@@ -363,6 +363,11 @@ export function requestRelayLink(options: { localOnly?: boolean } = {}): Promise
   return getJson<{ readonly url: string }>("/api/relay/link", { method: "POST", headers: { "x-herdr-update": "1", ...(options.localOnly ? { "x-ovis-local-only": "1" } : {}) } });
 }
 
+/** POST /api/relay/link/close: the owner stopped waiting, so this PC takes no more comparisons from its link. An older server has no such route (404). */
+export function closeRelayLink(): Promise<{ readonly ok: true }> {
+  return getJson<{ readonly ok: true }>("/api/relay/link/close", { method: "POST", headers: { "x-herdr-update": "1" } });
+}
+
 /** POST /api/relay/pairing: the owner's answer to a phone waiting with the same digits (`relay-pairings` events). */
 export async function decideRelayPairing(id: string, decision: "approve" | "decline", digits?: string): Promise<void> {
   const url = "/api/relay/pairing";
@@ -907,7 +912,8 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
 export interface HealthInfo {
   ok: boolean;
   herdr: HerdrIdentity;
-  web_ui?: { boot_id: string | null; revision: string | null };
+  /** `server_id`: this PC's relay ID, told to an authenticated browser where the PC has one; absent from an older server */
+  web_ui?: { boot_id: string | null; revision: string | null; server_id?: string };
   /** Absent only on a server that predates the token gate. */
   auth?: HealthAuth;
   /** authenticated only; absent from an older server */

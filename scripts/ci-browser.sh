@@ -169,6 +169,7 @@ run_script scripts/omp-codex-image-browser-qa.ts
 run_script scripts/grok-image-browser-qa.ts
 run_script scripts/copilot-image-browser-qa.ts
 run_script scripts/file-viewer-regression.ts
+run_script scripts/file-viewer-page-scripts-browser-qa.ts
 run_script scripts/text-file-edit-regression.ts
 run_script scripts/web-panel-mobile-regression.ts
 run_script scripts/palette-local-page-demo-regression.ts
@@ -263,6 +264,7 @@ run_script scripts/phone-worktree-sheet-regression.ts
 run_script scripts/preferences-sync-regression.ts
 run_script scripts/machine-dialog-regression.ts
 run_script scripts/machine-conflict-regression.ts
+run_script scripts/relay-pairing-prompt-regression.ts
 run_script scripts/machine-own-ovis-regression.ts
 run_script scripts/herdr-profiles-browser-qa.ts
 run_script scripts/relay-e2e-regression.ts

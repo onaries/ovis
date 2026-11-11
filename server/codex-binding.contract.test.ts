@@ -229,7 +229,7 @@ it("shows composer subagents when only the chat's short-exchange ownership proof
   }
 });
 
-it("binds rendered and cropped completed replies after a cold start, beside a newer thread, and retains the binding during tools", async () => {
+it("reads rendered and cropped completed replies beside an independent thread, retaining only a substantial working-answer binding during tools", async () => {
   const cwd = join(root, "rendered-completion");
   mkdirSync(cwd);
   const id = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd51";
@@ -239,14 +239,16 @@ it("binds rendered and cropped completed replies after a cold start, beside a ne
   const renderedEnding = ending.replace(/(.{1,65})\s+/g, "$1\n  ");
   const db = new Database(join(codexHome, "state_5.sqlite"));
   for (const [thread, text, created] of [[id, answer, 1], [peer, answers.other, Math.floor(Date.now() / 1000) - 2]] as const) {
+    const prompt = thread === id ? "Summarize the full migration request." : "Describe the independent peer task.";
     const path = join(codexHome, "sessions", `rollout-2026-11-01T00-00-00-${thread}.jsonl`);
     writeFileSync(path, [
       { type: "session_meta", payload: { id: thread, cwd } },
-      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Summarize the full migration request." }] } },
+      { type: "event_msg", payload: { type: "item_completed", turn_id: "finished", item: { type: "UserMessage", content: [{ type: "input_text", text: prompt }] } } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } },
       { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] } },
       { type: "event_msg", payload: { type: "task_complete", turn_id: "finished", last_agent_message: text } },
     ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
-    db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli', ?)").run(thread, path, cwd, created, created, "Summarize the full migration request.");
+    db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli', ?)").run(thread, path, cwd, created, created, prompt);
   }
   db.close();
   const screen = join(cwd, "screen.txt");
@@ -288,8 +290,13 @@ it("binds rendered and cropped completed replies after a cold start, beside a ne
         await flood(paneId);
         await floodedAway(paneId, fixture.ending);
         const afterTools = await read(paneId);
-        expect(lastAnswer(afterTools)).toBe(fixture.answer);
-        expect(afterTools.history_id).toBe(conversation.history_id);
+        if (fixture.working) {
+          expect(lastAnswer(afterTools)).toBe(fixture.answer);
+          expect(afterTools.history_id).toBe(conversation.history_id);
+        } else {
+          expect(afterTools.source).toBe("scrollback");
+          expect(lastAnswer(afterTools)).toBeNull();
+        }
       } finally {
         for (const workspace of owned) await workspaceClose(workspace);
       }

@@ -217,12 +217,9 @@ async function main(): Promise<void> {
     await page.getByRole("heading", { name: `Pair with ${offer.name}?` }).waitFor();
     assert.ok(!page.url().includes("#offer"), "the offer left the address before the question");
     await page.getByRole("button", { name: "Pair", exact: true }).click();
-    // a first pairing stops at Ready: nothing opens until Open PC (lib/relay/shell.tsx)
-    const ready = page.locator('[role=dialog][data-add-pc-phase="ready"]');
-    await ready.waitFor();
-    assert.equal(await page.locator(".app").count(), 0, "Ready is shown before the app");
-    await ready.getByRole("button", { name: "Open PC" }).click();
+    // an admitted pairing enters the app by itself, with no Ready checkpoint before it (lib/relay/shell.tsx)
     await inApp(page);
+    assert.equal(await page.locator('[role=dialog][data-add-pc-phase="ready"]').count(), 0, "no Ready checkpoint after a pairing");
   }
   /** The phone's saved record for a PC, or null. */
   const saved = (page: Page, serverId: string): Promise<{ device_id: string; extractable: boolean } | null> => page.evaluate(async (serverId) => {
@@ -272,9 +269,13 @@ async function main(): Promise<void> {
     note(`paired: ${deskScope}#offer=… -> confirm -> app; device ${deskDevice.device_id} enrolled via the relay, key not extractable`);
 
     await page.locator(`.workspace-group[data-workspace=${JSON.stringify(workspace.workspace.workspace_id)}] .workspace-select`).first().click();
-    const screen = page.locator(`.terminal-stack[data-pane-owner=${JSON.stringify(pane)}] .xterm-screen`);
+    const stack = page.locator(`.terminal-stack[data-pane-owner=${JSON.stringify(pane)}]`);
+    const screen = stack.locator(".xterm-screen");
     await screen.waitFor({ state: "attached" });
-    const live = async (): Promise<boolean> => await page.locator(".terminal-banner-warning").count() === 0 && (await terminalText(page, pane)).trim() !== "";
+    // this pane's banners only: the pane the app opened by itself at load (herdr's focused one, lib/useSelection.ts)
+    // stays mounted behind it with its own (components/PaneCanvas.tsx), and on the test session every script's
+    // server shares, another server may hold that pane's attach, which says nothing of this pane's
+    const live = async (): Promise<boolean> => await stack.locator(".terminal-banner-warning").count() === 0 && (await terminalText(page, pane)).trim() !== "";
     await frames(page, "the pane's terminal attached and drew its prompt", live);
     await screen.click();
     await page.keyboard.type("echo relay-ok");

@@ -1165,7 +1165,11 @@ export interface PromptAnswer {
  *  own window gives it. It is not an attach: no input, resize, ACK or input-ready. A tab out of use
  *  detaches and watches; it attaches again when the user is back. One watch per pane and connection;
  *  a second watch for the same pane starts it again at the new grid. watch-end: the view ended
- *  (unwatch does not answer one), and a pane the view could not start for gets one at once.
+ *  (unwatch does not answer one), and a pane the view could not start for gets one at once. At most
+ *  64 panes watched per connection: one more gets its watch-end at once, with no error. A view asked
+ *  for as another is given up starts once that one's process has ended. A `pane_id` that is no
+ *  string, is blank, begins with a hyphen (blanks before it aside), holds a control character or is
+ *  longer than 256 characters answers `invalid_watch`.
  */
 
 /** A connection's authority over the shared ptys: `interact` types and resizes, `observe` only watches. */
@@ -1338,8 +1342,13 @@ export interface ClientConnectionTrace {
  * `conversation-search`: GET /api/pane/conversation/search answers; without it the browser offers no conversation search.
  * `conversation-watch-detached` and `prompt-watch`: a client may follow a pane's conversation and prompt without
  * attaching it (the `conversation-watch` and `prompt-watch` frames).
+ * `secret-prompts-2`: a `secret` is taken at the prompts #3566 added (git over HTTPS, ssh-add, ssh-keygen, an IPv6
+ * host's password). `secret-prompts-3`: at every prompt shared/secret-prompt.ts reads now (an interactive ssh
+ * sign-in, sudo in any language, passwd, mysql, gpg, openssl too). A bridge answers `invalid_secret` at a prompt
+ * outside what it lists, so the browser types that secret as direct input instead (`input`, never kept), while
+ * its own screen still shows the prompt.
  */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "codex-capacity-retry" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert" | "agent-only" | "machine-events" | "terminal-history" | "input-receipt" | "conversation-search" | "conversation-watch-detached" | "prompt-watch";
+export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "codex-capacity-retry" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert" | "agent-only" | "machine-events" | "terminal-history" | "input-receipt" | "conversation-search" | "conversation-watch-detached" | "prompt-watch" | "secret-prompts-2" | "secret-prompts-3";
 
 export type ServerMessage =
   | { type: "machine-event"; event: MachineEvent }
@@ -1351,7 +1360,7 @@ export type ServerMessage =
    * when that herdr is the one it already knows. Older bridges never send it: their features come with the snapshot.
    * `paste_dir`: the absolute folder `OVIS_PASTE_DIR` sends this PC's uploads to, so the page reads an upload's
    * path whole through it (src/lib/pasteFolders.ts, #2771); absent when uploads go to each pane's `<cwd>/.ovis` */
-  | { type: "features"; features: ServerFeature[]; connection: string; herdr_lifetime?: string; paste_dir?: string }
+  | { type: "features"; features: ServerFeature[]; connection: string; herdr_lifetime?: string; paste_dir?: string; /** this PC's clock (ms) as it sent the frame: a page reckons the PC's times on its own clock from it */ server_time?: number }
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[]; connection?: string }
   /** raw PTY bytes: append to the terminal, never repaint over it. A mirrored pane (HerdrIdentity.terminal_mirror) sends whole screens the same way. */
@@ -1399,7 +1408,12 @@ export type ServerMessage =
   /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message.
    * `dismissed` removes an uncertain copy, never proves withdrawal or delivery. Existing clients
    * remove owned IDs for any explicit outcome; Edit restores only `discarded`. */
-  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: PendingRemoval[] }
+  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: PendingRemoval[]; /** exact IDs a closed connection's
+   * follow-ups the bridge holds untyped, replayed like a `resumed` receipt: a saved copy is held again for an explicit send.
+   * Its own field, as clients that predate it remove a copy for any `resumed` removal. */ held?: string[];
+  /** by held ID, how many ms the bridge still keeps that receipt: past it, the proof is gone and the copy is uncertain again */ held_ms?: Record<string, number>;
+  /** by held ID, when (this PC's clock, ms) the bridge's receipt ends: a page never holds the copy past it */ held_until?: Record<string, number>;
+  /** this PC's clock (ms) as it sent a frame with held IDs: their ends are reckoned on the page's clock from it */ server_time?: number }
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }
   /** agent-status push for ANY pane, attached or not (server-side status collector) */
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; finish_id?: number; finish_epoch?: string; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null; /** a pane's context, when the frame is about it (null: none reported now); it changes no status */ context?: PaneContext | null }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -392,7 +392,8 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       const mode = (path: string) => spawnSync("stat", ["-c", "%a", path], { encoding: "utf8" }).stdout.trim();
       const first = join(outboxes, `herdr-ci-${host}-1`);
       expect([mode(join(root, "entries")), mode(join(root, "used")), mode(first)]).toEqual(["755", "755", "1777"]);
-      expect(runRunner().calls).not.toContain("build-cache");
+      // what the launcher hands a runner for the cache, not the words: the temp directory's own name may hold them
+      expect(runRunner().calls).not.toMatch(/:\/build-cache|OVIS_BUILD_CACHE_|build-cache-locks/);
       // what an earlier job left in a directory of its outbox, the host user cannot delete: a container as the runners' user does
       mkdirSync(join(first, "junk"), { recursive: true });
       writeFileSync(join(first, "junk/blob"), "x");
@@ -400,6 +401,19 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       const again = runRunner({ stateHome, args: ["--build-cache", join(home, "shm")] });
       expect(again.calls.split("\n").filter((call) => call.includes(`-v ${first}:/outbox `) && call.includes("--user 1001:1001"))).toHaveLength(1);
       expect(again.calls.split("\n").filter((call) => call.includes(`--cap-add DAC_OVERRIDE --user 0:0 -v ${outboxes}/.taken:/taken `)).length).toBeGreaterThanOrEqual(1);
+      // an outbox that cannot be emptied (here: one this user may not write) still holds the earlier job's claim:
+      // its runner starts without the build cache, so nothing reads that claim as the new job's
+      writeFileSync(join(first, `${"a".repeat(64)}.claim`), "7 1\n");
+      chmodSync(first, 0o555);
+      try {
+        const kept = runRunner({ stateHome, args: ["--build-cache", join(home, "shm")] });
+        expect(kept.result.stderr).toContain("its build cache outbox could not be emptied: starting it without the build cache");
+        const started = kept.calls.split("\n").filter((call) => call.includes(`--name herdr-ci-${host}-1 `));
+        expect(started).toHaveLength(1);
+        expect(started[0]).not.toMatch(/:\/build-cache|OVIS_BUILD_CACHE_|build-cache-locks/);
+      } finally {
+        chmodSync(first, 0o1777);
+      }
       for (const mb of ["0", "00", "0000"]) expect(runRunner({ args: ["--build-cache", join(home, "shm"), "--build-cache-mb", mb] }).result.status).toBe(2);
       expect(runRunner({ args: ["--build-cache", join(home, "shm"), "--build-cache-writer", "a b"] }).result.status).toBe(2);
     } finally {
@@ -881,8 +895,21 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
   const key = "a".repeat(64);
   const slot = "herdr-ci-host-3";
 
-  /** A job's outbox holding one build, promoted against a GitHub that answers as `github` says. */
-  function promote(github: { event?: string; branch?: string; headRepo?: string; actor?: string; author?: string; prSha?: string; runner?: string; status?: string; fail?: boolean } = {}, build: "files" | "link" = "files", writer = "devswha", junkSlot: false | "claim" | "tar" = false, used = false, claim = "7 1\n", extraClaims = 0, ownManifest = false, later: string[] = [], slotHeldOffUntilNow = false, thenGithub?: typeof github) {
+  /**
+   * A job's outbox holding one build, promoted against a GitHub that answers as `github` says. The
+   * slot's container registered runner 31, and the run's job started on it ten seconds after the
+   * container did. `jobStarted` starts the job that many seconds after the container instead (a
+   * negative number: before it, as an earlier container's job), `runnerId` puts it on another
+   * runner, `registered` names the runner registered under the slot's name now (null: none), and
+   * `container` says what docker answers for the slot: nothing at all, one that never started, one
+   * that has stopped, one that started after the build was left in the outbox, or another
+   * container by the time GitHub has answered about the jobs. `older` has the system say that the
+   * claim, or the build, was last changed one millisecond before the container started. `linked`
+   * gives files a second name (a hard link): "marker" the claim and the build, as restore markers,
+   * which the promoter removes, in an outbox whose container started just after they were written;
+   * "claim" or "tar" that file alone, under a name nothing removes.
+   */
+  function promote(github: { event?: string; branch?: string; headRepo?: string; actor?: string; author?: string; prSha?: string; runner?: string; status?: string; fail?: boolean; runnerId?: number; jobStarted?: number; registered?: number | null; container?: "none" | "created" | "stopped" | "younger" | "changes"; older?: "claim" | "tar"; linked?: "marker" | "claim" | "tar" } = {}, build: "files" | "link" | "sealed" = "files", writer = "devswha", junkSlot: false | "claim" | "tar" = false, used = false, claim = "7 1\n", extraClaims = 0, ownManifest = false, later: string[] = [], slotHeldOffUntilNow = false, thenGithub?: typeof github) {
     const dir = mkdtempSync(join(tmpdir(), "herdr-build-cache-promote-test-"));
     try {
       const bin = join(dir, "bin");
@@ -896,7 +923,14 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
       writeFileSync(join(dist, "assets/a.js"), "a");
       if (build === "link") symlinkSync("/etc/hostname", join(dist, "leak"));
       if (ownManifest) writeFileSync(join(dist, ".manifest"), "the app's own");
+      // a directory nothing can be removed from as it is, beside a file nobody may read
+      if (build === "sealed") chmodSync(join(dist, "assets"), 0o555);
       spawnSync("tar", ["-cf", join(outbox, `${key}.tar`), "-C", dist, "."]);
+      if (build === "sealed") {
+        writeFileSync(join(dir, "secret"), "s");
+        spawnSync("tar", ["--mode=0000", "-rf", join(outbox, `${key}.tar`), "-C", dir, "./secret"]);
+        chmodSync(join(dist, "assets"), 0o755);
+      }
       writeFileSync(join(outbox, `${key}.claim`), claim);
       // more claims in the same outbox: a job flooding the launcher's GitHub quota
       for (let i = 0; i < extraClaims; i++) {
@@ -914,17 +948,38 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
         chmodSync(join(junk, "x"), 0o000);
         writeFileSync(join(outboxes, "herdr-ci-host-1", `${"b".repeat(64)}.claim`), "7 1\n");
       }
-      // a restore's use of an entry another run left, and a used marker that is a link
+      // a restore's use of an entry in another run's directory, and a used marker that is a link
       if (used) {
-        mkdirSync(join(root, "entries", "c".repeat(64)));
+        mkdirSync(join(root, "entries", "3", "c".repeat(64)), { recursive: true });
         writeFileSync(join(outbox, `used-${"c".repeat(64)}`), "");
         symlinkSync("/etc/hostname", join(outbox, `used-${"d".repeat(64)}`));
       }
       const sha = "5".repeat(40);
       const answer = (github: NonNullable<Parameters<typeof promote>[0]>) => {
       if (github.fail) writeFileSync(join(dir, "fail"), ""); else rmSync(join(dir, "fail"), { force: true });
+      // what docker names as the slot's container, and whether it is another once GitHub was asked about the jobs
+      // When the slot's container started. The build above was written just now: the fixed day is before
+      // it, an hour from now after it, and with "marker" it started 20 ms after the claim was written.
+      let started = Date.UTC(2026, 10, 10, 12, 0, 0) + 123;
+      if (github.container === "younger") started = Date.now() + 3_600_000;
+      if (github.linked === "marker") for (const [index, file] of [`${key}.claim`, `${key}.tar`].entries()) linkSync(join(outbox, file), join(outbox, `used-${String(index + 1).repeat(64)}`));
+      else if (github.linked) linkSync(join(outbox, `${key}.${github.linked}`), join(outbox, "spare"));
+      if (github.linked === "marker") {
+        started = Math.ceil(statSync(join(outbox, `${key}.claim`)).ctimeMs) + 20;
+        // the pass comes after that start: the system's time for a file is only as fine as its clock's tick
+        while (Date.now() < started + 20);
+      }
+      // as `docker container inspect -f '{{.Id}} {{.State.Running}} {{.State.StartedAt}}'` prints it
+      if (github.container === "none") rmSync(join(dir, "container"), { force: true });
+      else if (github.container === "created") writeFileSync(join(dir, "container"), "c1 false 0001-01-01T00:00:00Z\n");
+      else writeFileSync(join(dir, "container"), `c1 ${github.container !== "stopped"} ${new Date(started).toISOString()}\n`);
+      if (github.container === "changes") writeFileSync(join(dir, "next-container"), `c2 true ${new Date(started + 30_000).toISOString()}\n`); else rmSync(join(dir, "next-container"), { force: true });
+      if (github.older) writeFileSync(join(dir, "older"), `${github.older} ${((started - 1) / 1000).toFixed(3)}\n`); else rmSync(join(dir, "older"), { force: true });
+      const registered = github.registered === undefined ? 31 : github.registered;
+      const jobStarted = new Date(Math.floor(started / 1000) * 1000 + (github.jobStarted ?? 10) * 1000).toISOString().replace(/\.\d+Z$/, "Z");
       const answers: Record<string, unknown> = {
-        jobs: { jobs: [{ runner_name: github.runner ?? slot, status: github.status ?? "in_progress" }] },
+        jobs: { jobs: [{ runner_name: github.runner ?? slot, status: github.status ?? "in_progress", runner_id: github.runnerId ?? 31, started_at: jobStarted }] },
+        runners: { runners: [{ name: "herdr-ci-host-9", id: 9 }, ...(registered === null ? [] : [{ name: slot, id: registered }])] },
         run: { event: github.event ?? "pull_request", head_branch: github.branch ?? "feature", head_sha: sha, head_repository: { full_name: github.headRepo ?? "owner/repo" }, triggering_actor: { login: github.actor ?? "devswha" }, pull_requests: [{ number: 5 }] },
         pull: { user: { login: github.author ?? "devswha" }, head: { sha: github.prSha ?? sha } },
       };
@@ -936,7 +991,11 @@ echo "$2" >> "\${0%/bin/gh}/gh.log"
 # GitHub failing for a moment
 [ -e "\${0%/bin/gh}/fail" ] && exit 1
 case "$2" in
-  repos/owner/repo/actions/runs/7/attempts/[12]/jobs*) cat "\${0%/bin/gh}/jobs.json" ;;
+  repos/owner/repo/actions/runs/7/attempts/[12]/jobs*)
+    cat "\${0%/bin/gh}/jobs.json"
+    # the slot's job ended and its next container started while GitHub answered
+    if [ -e "\${0%/bin/gh}/next-container" ]; then mv "\${0%/bin/gh}/next-container" "\${0%/bin/gh}/container"; fi ;;
+  repos/owner/repo/actions/runners) cat "\${0%/bin/gh}/runners.json" ;;
   repos/owner/repo/actions/runs/7) cat "\${0%/bin/gh}/run.json" ;;
   repos/owner/repo/pulls/5) cat "\${0%/bin/gh}/pull.json" ;;
   repos/owner/repo) echo main ;;
@@ -945,6 +1004,21 @@ case "$2" in
 esac
 `);
       chmodSync(join(bin, "gh"), 0o755);
+      // docker container inspect <slot>: the slot's container, when it has one
+      writeFileSync(join(bin, "docker"), `#!/bin/sh
+[ "$1 $2" = "container inspect" ] && [ -f "\${0%/bin/docker}/container" ] || { echo "Error: No such container" >&2; exit 1; }
+cat "\${0%/bin/docker}/container"
+`);
+      chmodSync(join(bin, "docker"), 0o755);
+      // stat -c %.3Z <file>: when the file was last changed, which the test says for the claim or the build; the system's stat otherwise
+      writeFileSync(join(bin, "stat"), `#!/bin/sh
+if [ "$1 $2" = "-c %.3Z" ] && [ -f "\${0%/bin/stat}/older" ]; then
+  read -r which at < "\${0%/bin/stat}/older"
+  case "$3" in *."$which") echo "$at"; exit 0 ;; esac
+fi
+PATH="\${PATH#*:}" exec stat "$@"
+`);
+      chmodSync(join(bin, "stat"), 0o755);
       const pass = () => spawnSync("bash", [promoteScript, "owner/repo", root, outboxes, writer, "2048", ...(junkSlot ? ["herdr-ci-host-1"] : []), slot], { encoding: "utf8", env: { ...process.env, PATH: [bin, process.env.PATH].join(delimiter) } });
       const result = pass();
       // later passes, each after the job claimed again (the claim's run and attempt), each for another build
@@ -962,12 +1036,17 @@ esac
         }
         pass();
       });
-      const entry = join(root, "entries", key);
+      // an entry is filed under the run GitHub confirmed for the claim: 7 in every claim taken in here
+      const entry = join(root, "entries", "7", key);
+      const runs = readdirSync(join(root, "entries"));
       return {
         status: result.status,
         stderr: result.stderr,
         outbox: readdirSync(outbox),
-        entries: readdirSync(join(root, "entries")),
+        /** what entries/ holds itself: a directory per run with an entry */
+        runs,
+        /** every entry, as `<run id>/<key>` */
+        entries: runs.flatMap((run) => readdirSync(join(root, "entries", run)).map((name) => `${run}/${name}`)),
         manifest: existsSync(join(entry, ".manifest")) ? readFileSync(join(entry, ".manifest"), "utf8") : null,
         used: existsSync(join(root, "used")) ? readdirSync(join(root, "used")) : [],
         ghCalls: existsSync(join(dir, "gh.log")) ? readFileSync(join(dir, "gh.log"), "utf8").split("\n").filter(Boolean) : [],
@@ -984,7 +1063,7 @@ esac
   it("takes in the build of a pull request the writer opened and pushed, with the manifest readers check", () => {
     const run = promote();
     expect(run.status).toBe(0);
-    expect(run.entries).toEqual([key]);
+    expect(run.entries).toEqual([`7/${key}`]);
     expect(run.manifest).toBe(`${sha("a")}  ./assets/a.js\n${sha("<p>")}  ./index.html\n`);
     expect(run.outbox).toEqual([`judged-${key}`]);
   });
@@ -992,13 +1071,13 @@ esac
   it("goes on to the other slots past a slot whose outbox holds a directory named like a claim", () => {
     const run = promote({}, "files", "devswha", "claim");
     expect(run.status).toBe(0);
-    expect(run.entries).toEqual([key]);
+    expect(run.entries).toEqual([`7/${key}`]);
   });
 
   it("goes on taking in trusted builds past a tar this user cannot delete", () => {
     const run = promote({}, "files", "devswha", "tar");
     expect(run.status).toBe(0);
-    expect(run.entries).toEqual([key]);
+    expect(run.entries).toEqual([`7/${key}`]);
   });
 
   it("stamps an entry's use from a restore's marker in the host's own directory, and drops the marker", () => {
@@ -1017,7 +1096,7 @@ esac
 
   it("asks GitHub about a refused run once: its claims after that are refused without a call", () => {
     const run = promote({ author: "someone" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n", "7 1\n", "7 1\n"]);
-    expect(run.entries).toEqual([]);
+    expect(run.runs).toEqual([]);
     expect(run.callsBefore[0]).toBeGreaterThan(0);
     expect(run.ghCalls).toHaveLength(run.callsBefore[0]!);
     expect(run.outbox.filter((name) => !name.startsWith("judged-"))).toEqual([]);
@@ -1025,7 +1104,7 @@ esac
 
   it("holds off a slot whose claim was refused, whatever run its next claims name", () => {
     const run = promote({ author: "someone" }, "files", "devswha", false, false, "7 1\n", 0, false, ["8 1\n", "9 1\n", "7 2\n"]);
-    expect(run.entries).toEqual([]);
+    expect(run.runs).toEqual([]);
     expect(run.ghCalls).toHaveLength(run.callsBefore[0]!);
   });
 
@@ -1067,11 +1146,11 @@ esac
   });
 
   it("refuses a build holding a file named like the manifest", () => {
-    expect(promote({}, "files", "devswha", false, false, "7 1\n", 0, true).entries).toEqual([]);
+    expect(promote({}, "files", "devswha", false, false, "7 1\n", 0, true).runs).toEqual([]);
   });
 
   it("takes in the build of a push to the default branch", () => {
-    expect(promote({ event: "push", branch: "main", actor: "someone" }).entries).toEqual([key]);
+    expect(promote({ event: "push", branch: "main", actor: "someone" }).entries).toEqual([`7/${key}`]);
   });
 
   it("never takes in a build from a job it cannot trust, and deletes it", () => {
@@ -1091,8 +1170,95 @@ esac
     ];
     for (const run of refused) {
       expect(run.status).toBe(0);
-      expect(run.entries).toEqual([]);
+      // no entry, and no directory left for the run either
+      expect(run.runs).toEqual([]);
       expect(run.outbox).toEqual([`judged-${key}`]);
     }
+  });
+
+  it("takes in a build only while the container whose job wrote its claim is still the slot's", () => {
+    // the slot's job ended and its next container started while GitHub answered: its word is about that one's job
+    const moved = promote({ container: "changes" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
+    expect(moved.stderr).toContain("the container that built it is no longer the slot's");
+    expect(moved.callsBefore[0]).toBeGreaterThan(0);
+    // the next container's own claim is taken in: the slot was not held off
+    expect(moved.entries).toEqual([`7/${"0".padStart(64, "f")}`]);
+    // a slot without a running container: nothing GitHub says could be about the claim's job, so it is not asked
+    for (const container of ["none", "created", "stopped"] as const) {
+      const none = promote({ container });
+      expect(none.status).toBe(0);
+      expect(none.runs).toEqual([]);
+      expect(none.ghCalls).toEqual([]);
+      expect(none.outbox).toEqual([`judged-${key}`]);
+    }
+  });
+
+  it("refuses a build an earlier job left in the outbox, which the slot's container did not write", () => {
+    // the launcher could not empty the outbox before it started this container: the claim names a run this container's job is of
+    const left = promote({ container: "younger" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
+    expect(left.stderr).toContain("written before the slot's container started");
+    // GitHub was not asked about it, and the slot is not held off: the container's own build, written after it started, is taken in
+    expect(left.callsBefore[0]).toBe(0);
+    expect(left.entries).toEqual([`7/${"0".padStart(64, "f")}`]);
+    expect(left.outbox.sort()).toEqual([`judged-${"0".padStart(64, "f")}`, `judged-${key}`].sort());
+    // by the claim's time and by the build's, each to the millisecond (the container started at 12:00:00.123)
+    for (const older of ["claim", "tar"] as const) {
+      const one = promote({ older });
+      expect(one.stderr).toContain("written before the slot's container started");
+      expect(one.runs).toEqual([]);
+      expect(one.ghCalls).toEqual([]);
+    }
+  });
+
+  it("is not told a leftover is new by a second name of it: removing one changes the file's time", () => {
+    // the earlier job gave its claim and its build a second name each, as restore markers, which the promoter removes
+    const marked = promote({ linked: "marker" });
+    expect(marked.status).toBe(0);
+    expect(marked.runs).toEqual([]);
+    expect(marked.ghCalls).toEqual([]);
+    expect(marked.outbox).toEqual([`judged-${key}`]);
+    // and a claim or a build with a second name is not taken at all, whenever it was written
+    for (const linked of ["claim", "tar"] as const) {
+      const spare = promote({ linked });
+      expect(spare.runs).toEqual([]);
+      expect(spare.ghCalls).toEqual([]);
+      expect(spare.outbox.sort()).toEqual([`judged-${key}`, "spare"]);
+    }
+  });
+
+  it("refuses a claim naming the run of a killed container's job, which GitHub still lists as running on the runner the next container took over", () => {
+    // the container before was killed 13.5 minutes ago with its job running; this one registered over its
+    // runner and kept the id (config.sh --replace), so the name, the status and the runner all fit
+    const dead = promote({ jobStarted: -810 }, "files", "devswha", false, false, "7 1\n", 0, false, ["8 1\n"]);
+    expect(dead.stderr).toContain("started before the slot's container did");
+    expect(dead.runs).toEqual([]);
+    // the claim is at fault, so its slot is held off: the next claim costs no call
+    expect(dead.callsBefore[0]).toBe(1);
+    expect(dead.ghCalls).toHaveLength(1);
+    // to the second: run.sh waits two before a slot's next container, so a job even one second older than
+    // this container is the one before's, and one that started in the container's own second is its own
+    expect(promote({ jobStarted: -2 }).runs).toEqual([]);
+    expect(promote({ jobStarted: -1 }).runs).toEqual([]);
+    expect(promote({ jobStarted: 0 }).entries).toEqual([`7/${key}`]);
+  });
+
+  it("refuses a claim naming a run whose job under the slot's name is on another runner than the one registered now", () => {
+    // a job of an earlier registration, which GitHub still lists as running
+    const stale = promote({ runnerId: 30 }, "files", "devswha", false, false, "7 1\n", 0, false, ["8 1\n"]);
+    expect(stale.runs).toEqual([]);
+    // the claim is at fault, so its slot is held off: the next claim costs no call
+    expect(stale.callsBefore[0]).toBe(2);
+    expect(stale.ghCalls).toHaveLength(2);
+    // no runner under the name any more (the job ended while GitHub was asked): refused, and the slot is not held off
+    const ended = promote({ registered: null }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
+    expect(ended.stderr).toContain("no runner is registered as");
+    expect(ended.entries).toEqual([`7/${"0".padStart(64, "f")}`]);
+  });
+
+  it("leaves nothing in the cache of a refused build whose directories cannot be emptied as they are", () => {
+    const run = promote({}, "sealed");
+    expect(run.status).toBe(0);
+    expect(run.runs).toEqual([]);
+    expect(run.outbox).toEqual([`judged-${key}`]);
   });
 });
