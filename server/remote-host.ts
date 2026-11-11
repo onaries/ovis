@@ -406,7 +406,9 @@ export const windowsHost: RemoteHost = {
       `set "OVIS_HERDR_BIN=${cmdValue(herdrPath)}"`,
       `set "HERDR_WEB_HERDR_BIN=${cmdValue(herdrPath)}"`,
       `cd /d "${cmdValue(inspection.home)}" || exit /b 1`,
-      `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\remote-entry.ts`)}" >> "${cmdValue(`${inspection.registryDir}\\${files.log}`)}" 2>&1`,
+      // the log beside this launcher (%~dp0, the folder it was started in): the registry's resolved folder, never the
+      // legacy path, whose migration junction cmd.exe refuses to traverse when an SSH session started it
+      `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\remote-entry.ts`)}" >> "%~dp0${cmdValue(files.log)}" 2>&1`,
     ];
     await ssh.runPowerShell([
       "$ErrorActionPreference = 'Stop'",

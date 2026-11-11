@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,7 +16,19 @@ import { attachableIdentity, sidecarAvailable } from "./pty/sidecar.ts";
  * `port` is on 127.0.0.1, the only address the app's SSH tunnel goes to (`loopbackRelay`).
  */
 export interface BridgeDescriptor { managed_remote?: boolean; port: number; token: string; pid: number; generation?: string; birth?: ProcessBirth; socket_path: string; bridge_protocol: number; bundle_version: string }
-export function bridgeRegistry(): string { return join(homedir(), ".config/herdr-web-ui/bridges"); }
+/**
+ * The bridges' folder. On Windows, Ovis's state migration leaves a junction at the legacy folder (to
+ * `.config\\ovis`), and a process an SSH session started may not traverse it ("untrusted mount point"):
+ * the junction's target is used, read without going through it (#3633).
+ */
+export function bridgeRegistry(): string {
+  const legacy = join(homedir(), ".config", "herdr-web-ui");
+  if (process.platform !== "win32") return join(legacy, "bridges");
+  let junction = false;
+  // no legacy folder yet: the bridge makes it, as before
+  try { junction = lstatSync(legacy).isSymbolicLink(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return join(junction ? resolve(dirname(legacy), readlinkSync(legacy)) : legacy, "bridges");
+}
 export function socketPath(): string {
   const path = resolve(herdrSocketPath());
   try { return realpathSync(path); } catch { return path; }
