@@ -37,6 +37,7 @@ import type { CspWatch } from "./csp-violations.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-ui-")));
 const workspaces: string[] = [];
@@ -2284,9 +2285,9 @@ try {
   mobilePage.on("pageerror", (error) => errors.push(error.message));
   await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await mobilePage.locator(".conn-live").waitFor();
-  const tapHighlight = await mobilePage.locator(".view-switch button").first().evaluate((node) => getComputedStyle(node).getPropertyValue("-webkit-tap-highlight-color"));
+  const tapHighlight = await mobilePage.locator(".app-header .lens-toggle").evaluate((node) => getComputedStyle(node).getPropertyValue("-webkit-tap-highlight-color"));
   assert.equal(tapHighlight, "rgba(0, 0, 0, 0)", "native tap overlays do not obscure selection");
-  await mobilePage.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+  await openLens(mobilePage, "chat");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).fill("mobile draft");
   await mobilePage.locator(".chat-terminal-fallback").waitFor();
   assert.equal(await mobilePage.locator(".chat-terminal-fallback").getAttribute("open"), null, "missing native history is labeled, not presented as broken chat");
@@ -2349,10 +2350,10 @@ try {
   await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: a picked pane may not take the keyboard
   assert.equal(await typing(mobilePage), false, "a pane picked on a phone does not take the keyboard");
-  await mobilePage.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+  await openLens(mobilePage, "terminal");
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: switching the lens may not take the keyboard
   assert.equal(await typing(mobilePage), false, "nor does switching its lens");
-  await mobilePage.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+  await openLens(mobilePage, "chat");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).tap();
   await until(() => typing(mobilePage), "a tap on the message box takes the keyboard");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
@@ -2416,7 +2417,7 @@ try {
   }));
   await touchPage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await touchPage.locator(".conn-live").waitFor();
-  await touchPage.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
+  await openLens(touchPage, "terminal");
   await touchPage.locator("[data-direct-typing]").waitFor();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0, "a phone starts in direct typing");
   assert.equal(await touchPage.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false), false,

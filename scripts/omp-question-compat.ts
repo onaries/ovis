@@ -199,12 +199,13 @@ process.on("SIGTERM", () => { app.stop(); process.exit(0); });
     if (index === 0) await browser(cli, browserEnv, ["screenshot", join(out, "desktop.png")]);
     if (index === 3) {
       await browser(cli, browserEnv, ["set", "viewport", String(cases[1]!.viewport[0]), "1400"]);
-      await browser(cli, browserEnv, ["click", ".view-switch button:nth-child(2)"]);
+      // a 390px phone's one lens button goes to the terminal, and back below
+      await browser(cli, browserEnv, ["click", ".app-header .lens-toggle"]);
       const nativeRows = await waitForTerminalRows(cli, browserEnv, 30_000);
       assert.ok(nativeRows > 24, `tall native terminal should expose more than 24 rows (got ${nativeRows})`);
       const nativeLayout = await waitForNativeLayout(herdr!, TEST_SESSION, paneId, 76, fixture.question, [...fixture.options.map((option) => option.label), "Other (type your own)"], 30_000);
       evidence.native_wrap_pty = { attached_columns: nativeLayout.columns, attached_rows: nativeRows, browser_viewport: [390, 1400] };
-      await browser(cli, browserEnv, ["click", ".view-switch button:nth-child(1)"]);
+      await browser(cli, browserEnv, ["click", ".app-header .lens-toggle"]);
       await browser(cli, browserEnv, ["set", "viewport", String(cases[1]!.viewport[0]), String(cases[1]!.viewport[1])]);
       const drawerOpen = JSON.parse(await browser(cli, browserEnv, ["eval", "document.querySelector('.drawer-toggle')?.getAttribute('aria-expanded') === 'true'"])) as boolean;
       if (drawerOpen) await browser(cli, browserEnv, ["click", "button[aria-label='Close workspace list']"]);

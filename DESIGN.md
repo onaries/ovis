@@ -1087,8 +1087,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   track with the open lens on a raised thumb that slides to it in 180ms (`--ease-out`; no motion
   under reduced motion), each lens `aria-pressed`. The chat's label is in the rounded face beside
   its bubble, the terminal's in `--font-mono` beside its prompt glyph, so the two read as
-  different places. A phone draws the two glyphs alone in a bordered control, each a
+  different places. From `641px` to `768px` it draws the two glyphs alone in a bordered control, each a
   `--touch-target-header` wide. Mod+Shift+J switches too.
+- A phone (`<=640px`, the sheets' width) draws no track: one outlined `--touch-target-header` icon
+  button (`.lens-toggle`, `components/LensToggle.tsx`) shows the lens a press opens, the prompt glyph
+  over the chat and the bubble over the terminal, and is named for it ("Switch to terminal", "Switch
+  to chat", the palette item's words). It runs the shortcut's and the palette's switch, so a terminal
+  peek over the chat reads as the terminal and a press ends it. A Windows PC's live terminal that is
+  not there yet is said in its name ("· soon") and title. It follows the lens button a split half
+  already carries, and the Codex and Claude apps' phone headers, which keep a title and a few icon
+  buttons and no segmented control; the owner found the two-option track cluttered there.
 - From `769px` with a fine pointer (a touch screen keeps the room for its key bar) the pane column ends in a 28px status bar (`.status-bar`, after the Herdr app's
   workspace status line) on `--bg-panel` under a `--divider` rule: the PC › workspace (› folder)
   and the branch at its start, the session's worked time; at its end View only on a watching
@@ -2623,8 +2631,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the Codex app keeps its files in a right sidebar beside the conversation; the button is then a
   toggle (`aria-pressed`). A file docking from it takes its place and closing the file shows the
   list again; the panel keeps the docked viewer's hairline column, resize edge and compact header.
-- At `<=768px` the drawer toggle and More are `--touch-target-header` squares. The lens buttons
-  are not: they keep the switch's track and inset, as the segmented control entry describes.
+- At `<=768px` the drawer toggle and More are `--touch-target-header` squares, and so is a phone's
+  lens button. Between `641px` and `768px` the lens buttons are not: they keep the switch's track and
+  inset, as the segmented control entry describes.
+- A phone's header counts no sessions either: no running or finished marks beside More (they read as
+  clutter there; the drawer's rows say each session's state), only More's waiting dot below.
 - Connection is one quiet chip, drawn only while the bridge is not live: a pulsing dot plus the
   written state - connecting until this page's first connection to the PC's socket, reconnecting
   after a drop, disconnected once output stopped. Below `900px` it keeps only its dot; the word stays as

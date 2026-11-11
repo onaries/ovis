@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 // An empty chat's greeting, on the unmodified app over the demo's fixture transport: a workspace
 // the demo creates starts with a conversation of no turns. All files and HTTP traffic stay in
@@ -66,7 +67,7 @@ const select = async (page: Page, pane: string): Promise<void> => {
   await row.waitFor({ state: "attached" });
   await row.evaluate((node: HTMLElement) => node.click());
   await page.locator(`.pane-select[title^="${pane} —"][aria-current="true"]`).first().waitFor({ state: "attached" });
-  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+  await openLens(page, "chat");
   await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
 };
 

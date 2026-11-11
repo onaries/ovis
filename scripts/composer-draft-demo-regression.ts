@@ -8,6 +8,7 @@ import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
 import { MAX_COMPOSER_CHARS } from "../src/lib/compose.ts";
 import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
+import { openLens } from "./header-lens.ts";
 
 // The draft in the message box, on the demo app as scripts/composer-fit-harness.ts patches it: an
 // upload that fails, the agent's suggestion and skill completion, and the box's size, wrapping and
@@ -294,8 +295,8 @@ try {
           return { text: paragraph.textContent!, offset: paragraph.getBoundingClientRect().top - view.top, gap: node.scrollHeight - node.clientHeight - node.scrollTop };
         });
         assert.ok(reading.gap > 48, "the reader is away from the end before changing lenses");
-        await page.locator(".view-switch .is-terminal").click();
-        await page.locator(".view-switch .is-chat").click();
+        await openLens(page, "terminal");
+        await openLens(page, "chat");
         await page.waitForFunction((saved) => {
           const node = document.querySelector(".chat-view");
           if (!node) return false;
@@ -308,15 +309,15 @@ try {
         // Leave in the same task: the list's deferred scroll cannot update memory first.
         await page.evaluate(() => {
           document.querySelector<HTMLButtonElement>('button[title="Jump to latest"]')!.click();
-          document.querySelector<HTMLButtonElement>('.view-switch .is-terminal')!.click();
+          document.querySelector<HTMLButtonElement>('.view-switch .is-terminal, .lens-toggle[data-view="chat"]')!.click();
         });
-        await page.locator(".view-switch .is-chat").click();
+        await openLens(page, "chat");
         await page.waitForFunction(() => {
           const node = document.querySelector(".chat-view")!;
           return node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
         }, undefined, { timeout: 5_000 });
-        await page.locator(".view-switch .is-terminal").click();
-        await page.locator(".view-switch .is-chat").click();
+        await openLens(page, "terminal");
+        await openLens(page, "chat");
         await page.waitForFunction(() => {
           const node = document.querySelector(".chat-view")!;
           return node.scrollHeight - node.clientHeight - node.scrollTop <= 1;

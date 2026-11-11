@@ -8,6 +8,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { caseRun, type ColorScheme, type SkillMenuCase } from "./skill-menu-case.ts";
+import { openLens } from "./header-lens.ts";
 
 // Usage: bun scripts/agent-skill-menu-demo-regression.ts [case …]
 //
@@ -123,7 +124,7 @@ try {
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(url);
       await page.locator(".conn-live").waitFor({ state: "attached" });
-      if (await page.locator(".terminal-stack.is-chat").count() === 0) await page.getByTitle(/^Chat transcript \(.+\)$/).click();
+      if (await page.locator(".terminal-stack.is-chat").count() === 0) await openLens(page, "chat");
       await page.locator(".terminal-stack.is-chat").waitFor();
       await page.locator(".chat-turn-user").first().waitFor();
       await appFaces(page);

@@ -25,6 +25,7 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 const repo = join(import.meta.dir, "..");
 const app = mkdtempSync(join(tmpdir(), "herdr-new-session-skills-"));
@@ -42,7 +43,7 @@ const submits = (page: Page) => page.evaluate(() => (window as unknown as QaWind
 async function openChat(page: Page, url: string): Promise<void> {
   await page.goto(url);
   await page.locator(".conn-live").waitFor({ state: "attached" });
-  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
+  await openLens(page, "chat");
   await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
 }
 

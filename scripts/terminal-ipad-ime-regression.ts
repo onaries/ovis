@@ -4,6 +4,7 @@ import { EventEmitter, once } from "node:events";
 import { mkdirSync } from "node:fs";
 import type { Browser } from "playwright-core";
 import { shownRows } from "./shown-rows.ts";
+import { openLens } from "./header-lens.ts";
 
 /**
  * iPadOS 27 Safari with a Magic Keyboard sends each jamo as a printable keydown (its own keyCode,
@@ -277,7 +278,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
         await page.waitForFunction((shown) => [...document.querySelector(shown)?.querySelectorAll("span") ?? []].some((span) => span.textContent?.includes("Caret replay passed")), shownRows());
         for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
           await page.setViewportSize(viewport);
-          await page.locator('.view-switch button[title^="Live terminal"]').click();
+          await openLens(page, "terminal");
           await page.waitForFunction(() => {
             const terminal = document.querySelector(".terminal-host");
             return terminal && terminal.getBoundingClientRect().width > Math.min(innerWidth - 40, 600);

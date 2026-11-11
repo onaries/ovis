@@ -6,8 +6,6 @@
 export const PALETTE_ZH: Record<string, string> = {
   "Move tab to {workspace}": "将标签页移动到 {workspace}",
   "Enable notifications": "开启通知",
-  "Switch to terminal": "切换到终端",
-  "Switch to chat": "切换到聊天",
   "Toggle theme": "切换主题",
   "Search panes and actions…": "搜索窗格和命令…",
   "Close command palette": "关闭窗格和命令搜索",

@@ -135,12 +135,13 @@ async function capture(page: Page, width: string, state: string): Promise<void> 
   if (evidence) await page.screenshot({ path: join(evidence, `tap-targets-${width.replace(" ", "-")}-${state}.png`), animations: "disabled", style: STILL });
 }
 
-const VIEW: Target[] = [
+// a phone's one lens button (components/LensToggle.tsx); wider, the switch's two lenses
+const view = (phone: boolean): Target[] => phone ? [{ name: "the lens button", selector: ".app-header .lens-toggle" }] : [
   { name: "the Chat lens", selector: ".app-header .view-switch > button:first-child" },
   { name: "the Terminal lens", selector: ".app-header .view-switch > button:nth-child(2)" },
 ];
-const CHAT: Target[] = [
-  ...VIEW,
+const chatTargets = (phone: boolean): Target[] => [
+  ...view(phone),
   { name: "Attach", selector: ".composer-controls-left .composer-attach", neighbour: true },
   { name: "the mic", selector: ".composer-controls-left .voice-mic" },
   { name: "the plan chip", selector: ".composer-controls-left .bg-tasks-toggle" },
@@ -324,7 +325,7 @@ async function scenario(browser: Browser, server: { port: number }, width: numbe
     assert.ok((await page.evaluate(() => (window as unknown as { tapTargetsHeld: number[] }).tapTargetsHeld)).includes(4500), `${label}: the demo's turn completion was held, so the plan chip stays at work`);
     await settle(page);
     await capture(page, label, "chat");
-    failures.push(...check(await measure(page, CHAT, phone), `${label} chat`));
+    failures.push(...check(await measure(page, chatTargets(phone), phone), `${label} chat`));
 
     await tap(".composer-controls-left .voice-mic");
     await page.locator('.composer .voice-pill.is-open[data-state="recording"]').waitFor();
@@ -349,7 +350,7 @@ async function scenario(browser: Browser, server: { port: number }, width: numbe
       await page.locator(".terminal-input .terminal-input-mic .voice-mic").waitFor();
       await settle(page);
       await capture(page, label, "terminal-line");
-      failures.push(...check(await measure(page, [...VIEW, ...LINE], phone), `${label} terminal line`));
+      failures.push(...check(await measure(page, [...view(phone), ...LINE], phone), `${label} terminal line`));
     }
     assert.deepEqual(errors, [], `${width}: no page errors`);
   } finally { await context.close(); }
