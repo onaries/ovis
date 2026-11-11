@@ -50,6 +50,16 @@ export interface EventsSubscribeParams {
   terminal?: string | null;
 }
 
+export interface ExecResult {
+  code?: number | null;
+  ms: number;
+  signal?: number | null;
+  stderr: string;
+  stdout: string;
+  timed_out: boolean;
+  truncated: boolean;
+}
+
 export interface FirstMessage {
   reason?: string | null;
   sent: boolean;
@@ -98,6 +108,16 @@ export interface ListResult {
   hidden_finished: number;
   machines: MachineView[];
   terminals: Terminal[];
+}
+
+export interface MachineExecParams {
+  argv?: string[];
+  cwd?: string | null;
+  env?: Record<string, string>;
+  input?: string | null;
+  line?: string | null;
+  on?: string | null;
+  timeout?: number | null;
 }
 
 export type MachineListParams = Record<string, never>;
@@ -336,6 +356,7 @@ export interface HcMethods {
   "doc.set": { params: DocSetParams; result: DocSetResult };
   "events.subscribe": { params: EventsSubscribeParams; result: SubscribeResult };
   "hello": { params: HelloParams; result: HelloResult };
+  "machine.exec": { params: MachineExecParams; result: ExecResult };
   "machine.list": { params: MachineListParams; result: MachineListResult };
   "server.status": { params: ServerStatusParams; result: StatusResult };
   "terminal.attach": { params: TerminalAttachParams; result: AttachResult };

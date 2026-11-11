@@ -82,6 +82,23 @@ it("reads the environment the core's holder has, which starts its shells", async
   expect(read).toEqual([11, 10, 10]);
 });
 
+it("asks a macOS core with no holder yet for the environment it runs programs in", async () => {
+  // regression: on a core an agent started with `server start`, the first terminal got the agent's NO_COLOR=1 (no holder to read)
+  const calls: string[] = [];
+  const printed = (stdout: string, more: Record<string, unknown> = {}) => ({
+    call: async (method: string, params: { argv?: string[] }) => {
+      calls.push(method === "machine.exec" ? `${method} ${params.argv?.join(" ")}` : method);
+      return method === "server.status" ? { pid: 10, holder: null, holders: [] } : { code: 0, timed_out: false, truncated: false, stdout: Buffer.from(stdout).toString("base64"), ...more };
+    },
+  }) as never;
+  const core = printed("PATH=/usr/bin:/core/tools\0NO_COLOR=1\0MULTI=a\nb=c\0");
+  expect(await coreEnvironment(core, async () => { throw new Error("no pid is read"); }, "darwin")).toEqual({ PATH: "/usr/bin:/core/tools", NO_COLOR: "1", MULTI: "a\nb=c" });
+  expect(calls).toEqual(["server.status", "machine.exec /usr/bin/env -0"]);
+  expect(await terminalEnvFor(core, { PATH: "/login" }, { PATH: "/starter" }, (hc) => coreEnvironment(hc, async () => null, "darwin"))()).toEqual({ PATH: "/login:/usr/bin:/core/tools", NO_COLOR: "" });
+  // a run that failed or was cut short says nothing about the core
+  for (const failed of [{ code: 1 }, { timed_out: true }, { truncated: true }]) expect(await coreEnvironment(printed("NO_COLOR=1\0", failed), async () => null, "darwin")).toBeNull();
+});
+
 it("fits each terminal to the core as it is then, so a core restarted with another environment is read again", async () => {
   // regression: the first core's environment was kept for the adapter's life, also when that first read failed
   const answers: (Record<string, string> | null)[] = [null, { NO_COLOR: "1" }, {}];

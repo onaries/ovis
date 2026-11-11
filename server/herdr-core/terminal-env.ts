@@ -92,23 +92,41 @@ export function forCore(terminal: Env, core: SourceEnv): Env {
  * The environment the core `hc` reaches hands its terminals: that of its current holder, which
  * starts their shells (live-verified, hc 0.1.17: on macOS the core itself is a launchd job with
  * launchd's environment, its holder has the starter's), else of the core on Linux, where it has
- * the starter's too; null where this PC does not tell it (a macOS core with no terminal yet, so no
- * holder: the caller goes by the environment that starts the core).
+ * the starter's too. A macOS core with no terminal yet has no holder, and its own process has
+ * launchd's: there the core is asked to run `env` (coreExecEnv). Null where none of that answers
+ * (the caller then goes by the environment that starts the core).
  */
 export async function coreEnvironment(hc: Pick<HcConnection, "call">, read: (pid: number) => Promise<Env | null> = processEnv, platform: NodeJS.Platform = process.platform): Promise<Env | null> {
   try {
     const status = await hc.call("server.status", {});
     // only the current holder: one an update left draining has the old core's starter's environment
     const pid = status.holder?.pid ?? status.holders.find((holder) => holder.current)?.pid ?? (platform === "darwin" ? null : status.pid);
-    return pid === null ? null : await read(pid);
+    return pid === null ? await coreExecEnv(hc) : await read(pid);
   } catch { return null; }
+}
+
+/**
+ * The environment the core runs its programs in, printed by `env` it runs without a terminal
+ * (`machine.exec`, which starts no holder). Live-verified, hc 0.1.17 on macOS: on a core an agent
+ * started with `server start` it prints the agent's NO_COLOR=1, which the core's own process does
+ * not show; it does not show TERM or COLORTERM, which Ovis sets for every terminal anyway.
+ */
+async function coreExecEnv(hc: Pick<HcConnection, "call">): Promise<Env | null> {
+  const ran = await hc.call("machine.exec", { argv: ["/usr/bin/env", "-0"], timeout: 5 });
+  if (ran.code !== 0 || ran.timed_out || ran.truncated) return null;
+  return envBlock(Buffer.from(ran.stdout, "base64").toString("utf8"));
+}
+
+/** NUL-separated NAME=value entries, as /proc/<pid>/environ and `env -0` give them. */
+function envBlock(text: string): Env {
+  return Object.fromEntries(text.split("\0").filter((entry) => entry.includes("=")).map((entry) => [entry.slice(0, entry.indexOf("=")), entry.slice(entry.indexOf("=") + 1)]));
 }
 
 /** A process's environment as it was started (this user's processes only): Linux's /proc, macOS's `ps -E`; else null. */
 export async function processEnv(pid: number, platform: NodeJS.Platform = process.platform): Promise<Env | null> {
   if (platform === "linux") {
     try {
-      return Object.fromEntries(readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter((entry) => entry.includes("=")).map((entry) => [entry.slice(0, entry.indexOf("=")), entry.slice(entry.indexOf("=") + 1)]));
+      return envBlock(readFileSync(`/proc/${pid}/environ`, "utf8"));
     } catch { return null; }
   }
   if (platform !== "darwin") return null;
