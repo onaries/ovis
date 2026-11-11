@@ -47,16 +47,27 @@ pool_labels='["self-hosted","linux","x64","self-hosted-ovis"]'
 # hosted whenever a few runs start at once
 light_job_names='["Detect changes","herdr-core live contract","Integration and browser","Pull request title","bundle-windows"]'
 
+# One Actions API read, asked again up to twice when it fails: a single 502 would otherwise send
+# the whole run hosted, where it depends on the Ubuntu mirror the self-hosted image does not need.
+# Only a whole answer is printed: pages a failed attempt got before failing would be counted twice.
+api() {
+  local attempt out
+  for attempt in 1 2 3; do
+    if out=$(gh api --paginate "$1"); then printf '%s\n' "$out"; return 0; fi
+  done
+  return 1
+}
+
 # Prints how many unfinished jobs of queued or running workflow runs could take one of those
 # runners, stopping once the count passes $1 (one API call per run adds up while many runs wait);
-# fails when the API does.
+# fails when the API does three times in a row.
 busy_jobs() {
   local limit="$1" ids id jobs n total=0
   ids=$(for status in in_progress queued; do
-    gh api --paginate "repos/$REPOSITORY/actions/runs?status=$status&per_page=100" | jq '.workflow_runs[].id' || exit 1
+    api "repos/$REPOSITORY/actions/runs?status=$status&per_page=100" | jq '.workflow_runs[].id' || exit 1
   done) || return 1
   for id in $ids; do
-    jobs=$(gh api --paginate "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100") || return 1
+    jobs=$(api "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100") || return 1
     n=$(jq -s -e --argjson pool "$pool_labels" --argjson light "$light_job_names" '[.[].jobs[] | select(.status != "completed" and (.name as $name | $light | index($name)) == null)
       | [.labels[] | ascii_downcase] | select(index("self-hosted") != null and all(.[]; . as $x | $pool | index($x) != null))]
       | length' <<<"$jobs") || return 1

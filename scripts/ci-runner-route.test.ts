@@ -20,7 +20,8 @@ afterAll(() => {
 });
 
 // A fake `gh` that answers the Actions API from the JSON files in $FAKE_GH and logs each call; a
-// missing file makes it fail like an API error.
+// missing file makes it fail like an API error, and a `fail-<file>` beside one makes the next call
+// for it print part of its answer and then fail, as a 502 on a later page does.
 const bin = tempDir();
 writeFileSync(join(bin, "gh"), `#!/bin/sh
 echo "$*" >> "$FAKE_GH/calls"
@@ -31,6 +32,7 @@ case "$3" in
   *status=queued*) f=queued ;;
   *) exit 1 ;;
 esac
+if [ -f "$FAKE_GH/fail-$f" ]; then rm "$FAKE_GH/fail-$f"; cat "$FAKE_GH/$f.json"; echo "gh: Server Error (HTTP 502)" >&2; exit 1; fi
 cat "$FAKE_GH/$f.json"
 `);
 chmodSync(join(bin, "gh"), 0o755);
@@ -159,6 +161,13 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
       const broken = actions({ in_progress: { 1: running(1) } });
       rmSync(join(broken, "jobs-1.json"));
       expect(routed({ ...pr, FAKE_GH: broken })).toBe("ubuntu-24.04");
+    });
+
+    it("asks again when one read fails, and counts what it then reads once", () => {
+      // 12 running of 16 leave room for the run's 4 jobs; each part counted twice would leave none
+      const flaky = actions({ in_progress: { 1: running(6) }, queued: { 2: running(6) } });
+      for (const file of ["in_progress", "jobs-1", "jobs-2"]) writeFileSync(join(flaky, `fail-${file}`), "");
+      expect(routed({ ...pr, SELF_HOSTED_CAPACITY: "16", FAKE_GH: flaky })).toEqual(JSON.parse('["self-hosted","self-hosted-ovis"]'));
     });
 
     it("never asks the API for a fork, a configured label set or the hosted override", () => {
