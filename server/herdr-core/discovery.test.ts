@@ -194,16 +194,36 @@ it.skipIf(process.platform !== "linux" || setfacl === null)("without getfacl, tr
   expect(ownedByUser(bin, ownGroup, false, noGetfacl())).toBe(true);
 });
 
-it.skipIf(process.platform !== "linux")("checks with the platform it is given: none on Windows", async () => {
+it.skipIf(process.platform !== "linux")("on Windows runs only an hc inside the user's profile, never one a folder like C:\\tools holds", async () => {
   const { root } = scratch();
+  const home = join(root, "home");
+  const outside = join(root, "tools");
   const marker = join(root, "ran");
-  planted(join(root, "open"), 0o755, marker);
-  writeFileSync(join(root, "open", "hc.exe"), readFileSync(join(root, "open", "hc")), { mode: 0o755 });
-  chmodSync(join(root, "open"), 0o777);
-  try {
-    // a Windows look reads no modes, so this PC's 0777 folder is not refused for it
-    expect((await findHc({ env: { PATH: join(root, "open") }, home: root, platform: "win32", loginShellPath: async () => null, usualDirs: [] }))?.version).toBe("0.1.99");
-  } finally { chmodSync(join(root, "open"), 0o755); }
+  planted(outside, 0o755, marker);
+  writeFileSync(join(outside, "hc.exe"), readFileSync(join(outside, "hc")), { mode: 0o755 });
+  const win = (PATH: string) => findHc({ env: { PATH }, home, platform: "win32", loginShellPath: async () => null, usualDirs: [] });
+  mkdirSync(home, { mode: 0o755 });
+  expect(await win(outside)).toBeNull();
+  expect(existsSync(marker)).toBe(false);
+  // a link inside the profile to that folder is followed out of it
+  symlinkSync(outside, join(home, "tools"));
+  expect(await win(join(home, "tools"))).toBeNull();
+  expect(existsSync(marker)).toBe(false);
+  // one in the profile (scoop's shims, cargo) is run, after a refused one on the PATH
+  planted(join(home, "scoop"), 0o755, join(root, "ran-home"));
+  writeFileSync(join(home, "scoop", "hc.exe"), readFileSync(join(home, "scoop", "hc")), { mode: 0o755 });
+  expect((await win([outside, join(home, "scoop")].join(";")))?.version).toBe("0.1.99");
+  expect(existsSync(marker)).toBe(false);
+  // a link outside the profile into it is refused too: whoever may write there could repoint it after the check
+  symlinkSync(join(home, "scoop"), join(root, "tools-link"));
+  expect(await win(join(root, "tools-link"))).toBeNull();
+  // a bare OVIS_HC_BIN is looked for in every PATH folder: one refused outside leaves the next
+  const bare = await findHc({ env: { PATH: [outside, join(home, "scoop")].join(";"), OVIS_HC_BIN: "hc" }, home, platform: "win32", loginShellPath: async () => null, usualDirs: [] });
+  expect(bare?.bin).toBe(join(home, "scoop", "hc.exe"));
+  expect(existsSync(marker)).toBe(false);
+  // a HOME the environment sets is not the profile: with no USERPROFILE the OS's answer is
+  expect(await findHc({ env: { PATH: outside, HOME: outside }, platform: "win32", loginShellPath: async () => null, usualDirs: [] })).toBeNull();
+  expect(existsSync(marker)).toBe(false);
 });
 
 it.skipIf(!unix)("says which entry a refused candidate fails on, and which rule", () => {

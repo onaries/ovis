@@ -186,7 +186,7 @@ export async function startRuntime(stateDir: string, find: (onRefused?: (bin: st
     const core = await find((bin, reason) => { refused.push(`${bin}: ${reason}`); });
     if (core === null) {
       // the message is what the server logs as it gives up: each refused hc is named there, once
-      const passedOver = refused.length === 0 ? "" : ` Passed over as another account could change them: ${refused.join("; ")}. Make the folder yours alone (\`chmod g-w <folder>\`) or set OVIS_HC_BIN to the hc you trust.`;
+      const passedOver = refused.length === 0 ? "" : ` Passed over as another account could change them: ${refused.join("; ")}. ${unix ? "Make the folder yours alone (`chmod g-w <folder>`)" : "Keep hc inside your profile folder"} or set OVIS_HC_BIN to the hc you trust.`;
       throw new NoHerdrCoreError(`no herdr-core found: no OVIS_HC_BIN, nor herdr-core or hc in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, mise, Nix, cargo, the PATH or the login shell's PATH, answered \`--version\` with \`hc …\` (one in a folder another account can change is not run). Install herdr-core (https://herdr.dev/core) or set OVIS_HC_BIN to its full path.${passedOver}`);
     }
     found = core.bin;
