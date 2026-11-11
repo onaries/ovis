@@ -111,13 +111,17 @@ interface Job {
   readonly conclusion: string | null;
 }
 
-/** Whether a job that passed says one of its scripts needed a second run (the lane's warning annotation). */
-async function flaggedFlaky(repo: string, job: Job): Promise<boolean> {
+/**
+ * Whether a job that passed says one of its scripts needed a second run (the lane's warning annotation); "unread"
+ * when a server error keeps its annotations from us, so its log is read instead and the job counts as unread if that
+ * log cannot say either.
+ */
+async function flaggedFlaky(repo: string, job: Job): Promise<boolean | "unread"> {
   let text: string;
   try { text = await gh(["api", `repos/${repo}/check-runs/${job.id}/annotations?per_page=100`, "--paginate", "--slurp"]); }
   catch (error) {
     // annotations a server error keeps from us: its log is read instead, which says it as well
-    if (error instanceof GhError && /HTTP 5\d\d\b/.test(error.message)) return true;
+    if (error instanceof GhError && /HTTP 5\d\d\b/.test(error.message)) return "unread";
     throw error;
   }
   const pages: { title: string | null }[][] = JSON.parse(text);
@@ -163,7 +167,8 @@ async function main(): Promise<void> {
   });
   let allowEscapes = true;
   const observations = await pooled(groups.flat(), async ({ run, job }) => {
-    if (job.conclusion === "success" && !(await flaggedFlaky(repo, job))) {
+    const flagged = job.conclusion === "success" ? await flaggedFlaky(repo, job) : true;
+    if (flagged === false) {
       stats.jobsClean++;
       return [];
     }
@@ -180,12 +185,14 @@ async function main(): Promise<void> {
     } catch (error) {
       // gone (404, 410), or a server error that outlasted gh()'s retries: this job is left out and counted, the scan goes on
       if (!(error instanceof GhError) || !/HTTP (404|410|5\d\d)\b/.test(error.message)) throw error;
-      if (/HTTP 5\d\d\b/.test(error.message)) stats.logsUnread++;
+      // a passed job whose annotations were not read either could not be looked at at all: unread, not skipped
+      if (/HTTP 5\d\d\b/.test(error.message) || flagged === "unread") stats.logsUnread++;
       else stats.jobsSkipped++;
       return [];
     }
     if (!log.trim()) {
-      stats.jobsSkipped++;
+      if (flagged === "unread") stats.logsUnread++;
+      else stats.jobsSkipped++;
       return [];
     }
     stats.logsRead++;
@@ -199,7 +206,10 @@ async function main(): Promise<void> {
     return;
   }
   console.log(`${stats.runs} CI runs since ${since}; browser jobs: ${stats.jobs}, of which ${stats.jobsClean} passed with no second run, ${stats.logsRead} had their log read and ${stats.jobsSkipped} were skipped (running, skipped or without a log).`);
-  if (stats.jobs === 0) { console.log("Nothing was read."); return; }
+  if (stats.jobs === 0) {
+    console.log(stats.runsUnread > 0 ? `Nothing was read: ${stats.runsUnread} run attempts' job lists answered a server error.` : "Nothing was read.");
+    return;
+  }
   const unread = stats.runsUnread + stats.logsUnread;
   if (unread > 0) console.log(`Not read for a server error: ${stats.runsUnread} run attempts' job lists and ${stats.logsUnread} job logs.`);
   if (rows.length === 0) {
