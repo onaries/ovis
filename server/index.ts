@@ -7,6 +7,7 @@ import { ClientConnectionLog } from "./client-connection-log.ts";
 import { RequestLog } from "./request-log.ts";
 import { RelayReceiptIds } from "./machine-relay.ts";
 import { randomBytes, randomUUID } from "node:crypto";
+import { MAX_IMAGE_BODY_BYTES } from "./paste.ts";
 import { OrderSequence } from "./order-sequence.ts";
 import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { accessSync, constants, readFileSync, rmSync, statSync } from "node:fs";
@@ -99,12 +100,12 @@ const DRAFT_CLEAR_POLL_MS = 50;
 
 
 /**
- * What Bun.serve admits before a route runs (64 MiB). The ~55.9 MB body of a 40 MiB file is under it,
- * so the attachment route answers it with its JSON reason. The browser refuses a file over
+ * What Bun.serve admits before a route runs: the attachment body's bound plus room for the route
+ * to reject an oversized file with its JSON reason. The browser refuses a file over
  * MAX_ATTACHMENT_BYTES before it uploads (src/lib/api.ts), so only a non-browser client that sends
  * more than this can still see Bun's own empty 413.
  */
-const BUN_BODY_CEILING = 64 * 1024 * 1024;
+const BUN_BODY_CEILING = MAX_IMAGE_BODY_BYTES + 1024 * 1024;
 
 /** herdr-core installed for the move to it, offered once a look for hc found none and herdr-core has a build for this PC. */
 export function herdrCoreInstaller(): HcInstaller {

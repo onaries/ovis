@@ -8,6 +8,7 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
+import { MAX_IMAGE_BODY_BYTES } from "./paste.ts";
 import { AgentDetector, catalogLocator } from "./agent-catalog-detect.ts";
 import * as appModule from "./index.ts";
 import * as herdrClient from "./herdr/client.ts";
@@ -2957,16 +2958,17 @@ describe("POST /api/pane/image", () => {
     }
   });
 
-  it("stores a 20 MiB file whole (regression: 413 while the ceiling was 8 MiB)", async () => {
-    const bytes = Buffer.alloc(20 * 1024 * 1024, 7);
+  it("stores a 100 MiB attachment whole", async () => {
+    const bytes = Buffer.alloc(100 * 1024 * 1024, 7);
     const res = await post({ pane_id: qaPaneId, content_type: "application/zip", data_base64: bytes.toString("base64"), name: "big.zip" });
     expect(res.status).toBe(200);
     const { path } = (await res.json()) as { path: string };
     expect(statSync(path).size).toBe(bytes.byteLength);
+    expect(readFileSync(path).equals(bytes)).toBe(true);
   });
 
-  it("rejects a 40 MiB file (a 55.9 MB body, under Bun's 64 MiB cap) with 413 and the JSON reason (control)", async () => {
-    const oversized = Buffer.alloc(40 * 1024 * 1024, 1).toString("base64");
+  it("rejects a 101 MiB attachment with 413 and the JSON reason", async () => {
+    const oversized = Buffer.alloc(101 * 1024 * 1024, 1).toString("base64");
     const res = await post({ pane_id: qaPaneId, content_type: "image/png", data_base64: oversized });
     expect(res.status).toBe(413);
     const body = (await res.json()) as { error: { code: string; message: string } };
@@ -2980,7 +2982,7 @@ describe("POST /api/pane/image", () => {
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (sent === 0) controller.enqueue(new TextEncoder().encode(`{"pane_id":"${qaPaneId}","content_type":"application/zip","data_base64":"`));
-        if (sent++ < 60) controller.enqueue(chunk);
+        if (sent++ < Math.ceil(MAX_IMAGE_BODY_BYTES / chunk.byteLength) + 1) controller.enqueue(chunk);
         else controller.close();
       },
     });
@@ -2994,12 +2996,12 @@ describe("POST /api/pane/image", () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("image_too_large");
   });
 
-  it("passes a 20 MiB upload through a PC proxy route (regression: the remote refused it above 8 MiB)", async () => {
+  it("passes a 100 MiB attachment through a PC proxy route", async () => {
     const manager = {
       endpoint: () => ({ url: base(), token: "" }),
       trackTerminal: () => () => undefined,
     } as unknown as MachineManager;
-    const bytes = Buffer.alloc(20 * 1024 * 1024, 9);
+    const bytes = Buffer.alloc(100 * 1024 * 1024, 9);
     const res = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/pane/image", {
       method: "POST",
       headers: { "content-type": "application/json", "x-herdr-machine": "1" },

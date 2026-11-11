@@ -92,17 +92,16 @@ it("refuses a file over the attachment limit before any of it is sent, and sends
   expect(refused).toMatchObject({ fileName: "site.zip", size: MAX_ATTACHMENT_BYTES + 1 });
   expect(requests).toEqual([]);
 
-  const atLimit = new File([new Uint8Array(MAX_ATTACHMENT_BYTES)], "site.zip", { type: "application/zip" });
+  const atLimit = new File([new Uint8Array(100 * 1024 * 1024)], "site.zip", { type: "application/zip" });
   expect(await uploadPaneImage("p1", atLimit)).toBe("/work/.ovis/site.zip");
   expect(requests).toEqual(["/api/pane/image"]);
 });
 
-it("refuses a 40 MiB file in the browser with the 32 MB limit named, before upload (regression: 8 MB limit on main)", async () => {
+it("refuses a 101 MiB file in the browser with the 100 MB limit named before upload", async () => {
   globalThis.fetch = (async (): Promise<Response> => { throw new Error("must not upload"); }) as unknown as typeof fetch;
-  const refused = await uploadPaneImage("p1", new File([new Uint8Array(40 * 1024 * 1024)], "big.zip", { type: "application/zip" })).catch((error: unknown) => error);
+  const refused = await uploadPaneImage("p1", new File([new Uint8Array(101 * 1024 * 1024)], "big.zip", { type: "application/zip" })).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(AttachmentTooLargeError);
-  expect((refused as Error).message).toContain("32 MB");
-  expect(MAX_ATTACHMENT_BYTES).toBe(32 * 1024 * 1024);
+  expect((refused as Error).message).toContain("100 MB");
 });
 
 it("posts the full safe telemetry snapshot and current notice version", async () => {
