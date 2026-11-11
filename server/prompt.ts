@@ -1476,7 +1476,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // answer in time proves nothing, and offers none.
       const parseSuggestion = Object.hasOwn(SUGGESTION_PARSERS, agent) ? SUGGESTION_PARSERS[agent]! : null;
       const scrolled = agent !== "claude" && (read.pane.scroll?.offset_from_bottom ?? 0) > 0;
-      const box = prompt === null && parseSuggestion !== null && !scrolled && (status === "idle" || status === "done")
+      // herdr-core (hc) does not know gjc, so a gjc pane there has no status: its box is read all the same, as
+      // gjc draws its suggestion only in the empty box after a turn, never while it works (release QA 8a)
+      const resting = status === "idle" || status === "done" || (agent === "gjc" && status === "unknown");
+      const box = prompt === null && parseSuggestion !== null && !scrolled && resting
         ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
           .then((read) => read.text, () => null)
         : null;

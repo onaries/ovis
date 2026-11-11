@@ -3195,6 +3195,16 @@ describe("gjc's and omp's suggestion on a prompt poll", () => {
     }, "stall");
   }, 6_000);
 
+  test("gjc with no status (herdr-core does not know it): its suggestion still; omp with none: not read", async () => {
+    await suggestingHerdr("gjc", "unknown", 0, async () => {
+      expect(await poll()).toEqual({ prompt: null, suggestion: "open the PR", restored: null });
+    });
+    await suggestingHerdr("omp", "unknown", 0, async (reads) => {
+      expect(await poll()).toEqual({ prompt: null, suggestion: null, restored: null });
+      expect(reads).not.toContain("ansi");
+    });
+  });
+
   for (const agent of ["gjc", "omp"]) {
     test(`${agent}: the grey words in its empty box, and never a restored send`, async () => {
       for (const offset of [0, null]) {
