@@ -173,6 +173,8 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
         return screen && screen.getBoundingClientRect().width <= innerWidth;
       });
       await resizedMetrics;
+      // the reflow at the phone's width can leave the view off the end: the touch starts from the end
+      await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       const mobile = await screen.boundingBox();
       assert.ok(mobile);
       const cdp = await context.newCDPSession(page);
@@ -193,9 +195,14 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       assert.equal(readFileSync(log, "utf8"), "", "touch sends no mouse reports to the question");
       await page.screenshot({ path: join(evidence, "after-omo-mobile.png") });
       await cdp.detach();
+      // back to the desktop size: herdr reflows the history at the new width, which moves the view's place in it,
+      // so the wheels that bring it back to the end go once that size has reached herdr, not alongside it
+      const desktopMetrics = page.waitForResponse(async response => response.url().includes("/pane/scroll?")
+        && (await response.json()).scroll?.viewport_rows === after.viewport_rows);
       await page.setViewportSize({ width: 1280, height: 800 });
+      await desktopMetrics;
       console.log("PASS speed-two line wheels, maximum/bottom clamps, and phone touch history");
-      await lineWheel(1, 0, 4);
+      await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       // Closing the native question updates the existing once-attached wheel handler via its ref.
       settledPane = pane;
       appendFileSync(fixture.transcript, JSON.stringify({ type: "custom", customType: "ask-user:settlement",
@@ -203,6 +210,9 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       await Promise.race([settled.promise, new Promise<never>((_resolve, reject) => {
         AbortSignal.timeout(10000).addEventListener("abort", () => reject(new Error("question settlement status did not arrive")), { once: true });
       })]);
+      // the frame is heard before the page has drawn it: the wheel decides by what the pane was last drawn with
+      // (PaneTerminal's wheelStateRef), so it goes once the tab's own mark shows the question settled
+      await page.locator('.tab-strip-item.is-active .tab-strip-dot[data-status="working"]').waitFor();
       const backToApp = waitOutput(pane, "WHEEL_RECEIVED");
       const desktop = await screen.boundingBox();
       assert.ok(desktop);
