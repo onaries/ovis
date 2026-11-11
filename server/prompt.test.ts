@@ -6745,11 +6745,12 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
-  test("answers a question of Codex's collapsed queue, and opens no queue for a request given up", async () => {
+  test("answers Codex's collapsed queue using remapped shortcuts, and opens no queue for a request given up", async () => {
+    const [openKey, closeKey, openHint, closeHint] = ["shift+left", "shift+right", "shift+←", "shift+→"];
     // the conversation's earlier answer on screen ties the pane to its rollout (herdr's report alone does not)
     const said = "The training data is split by date, so the evaluation never sees a later example.";
-    const collapsed = `\n\u2022 ${said}\n` + "\n• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  GPT-6-Sol xhigh · ~/lab · Context 97% left\n";
-    const open = (at: number) => `\n• Queued follow-up inputs\n  1 of 2\n  Which split?\n  ${at === 0 ? "›" : " "} 1. train\n  ${at === 1 ? "›" : " "} 2. test\n  ${at === 2 ? "›" : " "} 3. Other\n  enter submit   ctrl+] skip   alt+↓ main prompt\n`;
+    const collapsed = `\n\u2022 ${said}\n\n• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    ${openHint} to answer\n› Ask Codex to do anything\n  GPT-6-Sol xhigh · ~/lab · Context 97% left\n`;
+    const open = (at: number) => `\n• Queued follow-up inputs\n  1 of 2\n  Which split?\n  ${at === 0 ? "›" : " "} 1. train\n  ${at === 1 ? "›" : " "} 2. test\n  ${at === 2 ? "›" : " "} 3. Other\n  enter submit   ctrl+] skip   ${closeHint} main prompt\n`;
     const item = (payload: unknown) => `${JSON.stringify({ type: "response_item", payload })}\n`;
     const ask = (call: string, count = 1) => item({ type: "function_call", name: "request_user_input_async", call_id: call, arguments: JSON.stringify({ questions: Array.from({ length: count }, () => ({ title: "Which split?", options: ["train", "test"] })) }) });
     await withPane("codex", "working", collapsed, async (pane) => {
@@ -6783,7 +6784,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       expect((await card(home))!.id).toBe(queued.id);
       let at = 0;
       pane.onSent = (sent) => {
-        if (sent === "alt+up") pane.screen = open(0);
+        if (sent === openKey) pane.screen = open(0);
         if (sent === "down") {
           at += 1;
           // the rollout catches up under the answer: another call asking the same thing
@@ -6795,7 +6796,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       // neither the twin nor the rollout's news under the answer is a reason to refuse: the
       // question on the screen is the card's
       expect(await answer(queued.id, { option_index: 1 }, { codexHome: home })).toEqual({ status: 200, code: undefined });
-      expect(pane.sent).toEqual(["alt+up", "down", "enter"]);
+      expect(pane.sent).toEqual([openKey, "down", "enter"]);
 
       // The queue opens on another question than the card's, and the alt+↓ that closes it
       // again is pressed with its reply lost; another client has the queue open after that.
@@ -6804,10 +6805,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       pane.screen = collapsed;
       const later = (await card(home))!;
       const other = open(0).replace("Which split?", "Which metric?");
-      pane.replyLostOn = "alt+down";
-      pane.onSent = (sent) => { pane.screen = sent === "alt+up" || sent === "alt+down" ? other : pane.screen; };
+      pane.replyLostOn = closeKey;
+      pane.onSent = (sent) => { pane.screen = sent === openKey || sent === closeKey ? other : pane.screen; };
       expect((await answer(later.id, { option_index: 0 }, { codexHome: home })).status).not.toBe(200);
-      expect(pane.sent).toEqual(["alt+up", "alt+down"]);
+      expect(pane.sent).toEqual([openKey, closeKey]);
     });
   });
 

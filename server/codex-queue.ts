@@ -6,6 +6,16 @@ import { sameText } from "./dialogs/omo.ts";
 
 const CODEX_QUEUE_COUNT_RE = /^\?\s*(\d+)\s+questions?\b/;
 
+export function codexQueueShortcut(screen: string, action: "answer" | "main prompt"): string | null {
+  const hint = action === "answer" ? "to answer" : "(?:to )?main prompt";
+  const pattern = new RegExp(`(?:^|\\s)(\\S+)\\s+${hint}(?=\\s|$)`, "gi");
+  const shortcut = [...screen.replace(ANSI_RE, "").matchAll(pattern)].at(-1)?.[1];
+  const match = shortcut?.match(/^((?:(?:ctrl|alt|shift)\+)+)([↑↓←→])$/i);
+  if (!match) return null;
+  const arrow = { "↑": "up", "↓": "down", "←": "left", "→": "right" }[match[2]!];
+  return arrow ? `${match[1]!.toLowerCase()}${arrow}` : null;
+}
+
 export function codexQueuedMessagePreviews(screen: string): string[] {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const header = findLastIndex(lines, (line) => CODEX_QUEUE_HEADER_RE.test(cleanLine(line)));

@@ -37,7 +37,7 @@ import { draftKept, nativeStepTarget, navigateNativeSteps } from "./dialogs/step
 import { gjcCustomEditorMatches, parseFallbackPrompt } from "./dialogs/fallback.ts";
 import { sgrRuns, SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
 import { OMO_FORM_RE, omoAskOf, omoAsksFor } from "./omo-questions.ts";
-import { codexQueuedMessagePreviews, codexQueuedPrompt, queuedQuestionCount, type QueueFront } from "./codex-queue.ts";
+import { codexQueuedMessagePreviews, codexQueuedPrompt, codexQueueShortcut, queuedQuestionCount, type QueueFront } from "./codex-queue.ts";
 import { OpenCodePromptState } from "./opencode-prompt.ts";
 export { removedInvisible } from "./dialogs/claude.ts";
 export { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
@@ -1320,7 +1320,8 @@ async function closeQueue(paneId: string, answered: string): Promise<void> {
       // the question just answered, a moment ago; still there after 600ms, it is its twin
       // (Codex takes the Enter at once, and questions may repeat a title and options)
       if (shown.id === answered && Date.now() - since < 600) continue;
-      await paneSendKeys(paneId, [KEY.closeQueue]);
+      const key = codexQueueShortcut(screen, "main prompt");
+      if (key) await paneSendKeys(paneId, [key]);
       return;
     }
     if (queuedQuestionCount(screen) > 0 || shown === null) return;
@@ -1336,10 +1337,12 @@ async function closeQueue(paneId: string, answered: string): Promise<void> {
 async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp: () => boolean = () => false, opens: (open: boolean) => void = () => undefined): Promise<InteractivePrompt | null> {
   // the key only once the screen still shows the questions' count, nothing of the user's queued,
   // and while somebody still waits for the answer (asked after the read, which takes its time)
-  if (queuedQuestionCount(await liveScreen(paneId)) === 0 || givenUp()) return null;
+  const screen = await liveScreen(paneId);
+  const key = codexQueueShortcut(screen, "answer");
+  if (queuedQuestionCount(screen) === 0 || !key || givenUp()) return null;
   // told before the key goes: it may be pressed and its reply still be lost
   opens(true);
-  await paneSendKeys(paneId, [KEY.openQueue]);
+  await paneSendKeys(paneId, [key]);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await Bun.sleep(100);
     const opened = parsePrompt("codex", await liveScreen(paneId));
@@ -1363,7 +1366,8 @@ async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp:
 /** Closes Codex's queue if a question shows open in it. */
 async function closeOpenQuestion(paneId: string): Promise<void> {
   const screen = await liveScreen(paneId);
-  if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
+  const key = codexQueueShortcut(screen, "main prompt");
+  if (key && parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [key]);
 }
 
 /** How long an answer waits for the menu to show the cursor on its row, before it is refused. */

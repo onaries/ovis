@@ -1,6 +1,21 @@
 import { expect, it } from "bun:test";
 import { codexQueueInputEmpty } from "./prompt.ts";
-import { codexQueuedMessagePreviews } from "./codex-queue.ts";
+import { codexQueuedMessagePreviews, codexQueueShortcut } from "./codex-queue.ts";
+
+it.each([
+  { open: "alt+↑", close: "alt+↓", openKey: "alt+up", closeKey: "alt+down" },
+  { open: "shift+←", close: "shift+→", openKey: "shift+left", closeKey: "shift+right" },
+])("reads Codex's advertised $open queue shortcuts", ({ open, close, openKey, closeKey }) => {
+  expect(codexQueueShortcut(`old alt+↑ to answer\n  \x1b[2m${open} to answer\x1b[0m\n› Ask Codex to do anything`, "answer")).toBe(openKey);
+  expect(codexQueueShortcut(`enter submit   ctrl+] skip   ${close} main prompt\n`, "main prompt")).toBe(closeKey);
+});
+
+it("does not guess a queue shortcut from an absent or unsupported hint", () => {
+  expect(codexQueueShortcut("? 1 question\n› Ask Codex to do anything", "answer")).toBeNull();
+  expect(codexQueueShortcut("unknown to answer", "answer")).toBeNull();
+  expect(codexQueueShortcut("old alt+↑ to answer\nunknown to answer", "answer")).toBeNull();
+  expect(codexQueueShortcut("enter submit   ctrl+] skip", "main prompt")).toBeNull();
+});
 
 const screen = (input: string) => `• Working (2s • esc to interrupt)\n${input}\n  GPT-6.1-Sol high · /workspace\n  ? for shortcuts\n`;
 
