@@ -2022,7 +2022,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (New workspace only, not Files) opens one name field under the bar: Enter makes the folder inside
   the one shown and opens it, so Directory follows; Escape or leaving it empty closes the field
   without closing the dialog, and a refusal (taken name, invalid name, no permission) shows as an
-  inline alert under the field.
+  inline alert under the field. The name field requests the phone keyboard's **Done** action
+  (`enterKeyHint="done"`) rather than its inferred **Next**; moving focus alone makes nothing.
+  Unlike Paseo's separate New directory step, this keeps Ovis's existing inline Enter flow without
+  another control or step; no code is borrowed.
 - Recent folders appear as neutral `.btn` chips with `--radius-pill` and `--space-2` gaps: the
   three most recent, on one row that never wraps. Each shows the folder basename with ellipsis
   and the full path in its tooltip and accessible name. Clicking puts the folder in Directory and

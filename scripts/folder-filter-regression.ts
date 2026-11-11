@@ -136,7 +136,20 @@ export async function checkNewFolder(page: Page, dialog: Locator, createRequests
   const field = dialog.getByRole("textbox", { name: "New folder name" });
   await button.click();
   await field.waitFor();
+  assert.equal(await field.getAttribute("enterkeyhint"), "done", "the soft keyboard is asked to complete the name instead of advancing to the workspace label");
   assert.equal(await field.evaluate((input) => input === document.activeElement), true, "the name field takes focus");
+  await field.fill("ime-name");
+  const composition = await field.evaluate((input) => [
+    { key: "Enter", isComposing: true },
+    { key: "Enter", keyCode: 229 },
+    { key: "Escape", isComposing: true },
+  ].map((init) => input.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }))));
+  assert.deepEqual(composition, [true, true, true], "folder naming preserves IME candidate keys");
+  assert.equal(await field.inputValue(), "ime-name", "IME keys leave the pending name intact");
+  await directory.focus();
+  assert.equal(await directory.inputValue(), before, "moving focus does not make a folder");
+  assert.equal(await field.inputValue(), "ime-name", "moving focus keeps a non-empty name");
+  assert.equal(createRequests(), 0, "IME keys and focus changes start no workspace");
   await field.press("Escape");
   await field.waitFor({ state: "detached" });
   assert.equal(await dialog.isVisible(), true, "Escape closes the field, not the dialog");
