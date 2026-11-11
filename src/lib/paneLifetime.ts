@@ -23,17 +23,23 @@ export interface UnsentText { id: string; machine_id: string; pane_id: string; p
 
 /** text typed into a pane's prompt card and not sent (components/ChatView.tsx): JSON with the prompt it answers, its `text` the words */
 export const CARD_TEXT_PREFIX = "ovis:card-text:";
+/**
+ * comments on a pane's replies (lib/replyComments.ts): the user's own words, kept for recovery as the message the
+ * next send would have carried, each quote then its comment (#3259); the reply they quote goes with its herdr
+ */
+export const REPLY_COMMENTS_PREFIX = "ovis:reply-comments:";
+/** how a stored comment list reads as text, set by lib/replyComments.ts (which imports this module); until then the list is kept as stored */
+let commentsText: (raw: string | null) => string | null = (raw) => raw;
+export function readReplyCommentsWith(read: (raw: string | null) => string): void { commentsText = read; }
 const KINDS: readonly (readonly [string, UnsentKind])[] = [
   ["ovis:composer-draft:", "message"], ["ovis:terminal-line:", "line"], ["ovis:terminal-draft:", "held"],
   // messages held for a pane, or not confirmed (lib/pendingMessages.ts, and the older lib/messageQueue.ts)
   ["ovis:pending:", "pending"], ["ovis:queue:", "pending"],
-  // a card's text goes back into the message box, as a draft does
-  [CARD_TEXT_PREFIX, "message"],
+  // a card's text goes back into the message box, as a draft does, and so do reply comments
+  [CARD_TEXT_PREFIX, "message"], [REPLY_COMMENTS_PREFIX, "message"],
 ];
 const LEASE_PREFIX = "ovis:composer-sending:";
 const VIEW_PREFIX = "ovis:view:";
-/** comments on a pane's replies (lib/replyComments.ts): no text of the user's own to recover, they go with the herdr whose replies they quote */
-export const REPLY_COMMENTS_PREFIX = "ovis:reply-comments:";
 /** a message box's agent-only mark (lib/composerDraft.ts), which goes with its draft */
 const AGENT_ONLY_PREFIX = "ovis:composer-agent-only:";
 const RECORD_PREFIX = "ovis:pane-lifetime:";
@@ -48,7 +54,7 @@ export function paneStateKey(key: string): { machineId: string; paneId: string; 
   const lease = key.startsWith(LEASE_PREFIX);
   const rest = lease ? key.slice(LEASE_PREFIX.length) : key;
   const draft = KINDS.find(([prefix]) => rest.startsWith(prefix));
-  const prefix = draft?.[0] ?? (lease ? null : [VIEW_PREFIX, REPLY_COMMENTS_PREFIX, AGENT_ONLY_PREFIX].find((other) => rest.startsWith(other)) ?? null);
+  const prefix = draft?.[0] ?? (lease ? null : [VIEW_PREFIX, AGENT_ONLY_PREFIX].find((other) => rest.startsWith(other)) ?? null);
   if (prefix === null) return null;
   const owner = rest.slice(prefix.length);
   const kind = lease || !draft ? null : draft[1];
@@ -76,8 +82,9 @@ function parseUnsent(id: string, raw: string | null): UnsentText | null {
   } catch { return null; }
 }
 
-/** A stored pane-state value's text: a card's record holds its words with the prompt they answer. */
+/** A stored pane-state value's text: a card's record holds its words with the prompt they answer, a comment list its comments. */
 function storedText(key: string, value: string | null): string | null {
+  if (key.startsWith(REPLY_COMMENTS_PREFIX)) return commentsText(value);
   if (value === null || !key.startsWith(CARD_TEXT_PREFIX)) return value;
   try {
     const card: unknown = JSON.parse(value);

@@ -4,6 +4,7 @@ import type { HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { ComposerDraftStore } from "./composerDraft.ts";
 import { PaneLifetimes, UNSENT_UNDO_WINDOW_MS, type UndoTimers } from "./paneLifetime.ts";
 import { PendingMessageStore } from "./pendingMessages.ts";
+import { messageWithComments } from "./replyComments.ts";
 
 class MemoryStorage implements Storage {
   readonly data = new Map<string, string>();
@@ -57,6 +58,32 @@ const page = (storage: Storage, timers: UndoTimers = fakeClock().timers): PaneLi
 const DRAFT = "ovis:composer-draft:w1:p1";
 
 describe("pane state per herdr lifetime", () => {
+  it("keeps a pane's reply comments for Recover unsent text when herdr is replaced, as the message they would have gone with (#3259)", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = new PaneLifetimes(() => storage, () => 1_000, () => `id-${++ids}`);
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    lifetimes.paneStorage.setItem("ovis:composer-draft:w1:p1", "please look at these");
+    lifetimes.paneStorage.setItem("ovis:reply-comments:w1:p1", JSON.stringify([{ id: "c1", quote: "the retry loop", comment: "this should back off" }, { id: "c2", quote: "line 2", comment: "and this" }]));
+    lifetimes.observe([pc("local", "herdr-b")], title);
+    expect(storage.getItem("ovis:reply-comments:w1:p1")).toBeNull();
+    // the comments as the next send would have carried them, each quote then its comment, beside the draft
+    const comments = [{ id: "c1", quote: "the retry loop", comment: "this should back off" }, { id: "c2", quote: "line 2", comment: "and this" }];
+    expect(lifetimes.unsent().map(({ kind, text }) => ({ kind, text }))).toEqual(expect.arrayContaining([
+      { kind: "message", text: "please look at these" },
+      { kind: "message", text: messageWithComments(comments, "") },
+    ]));
+    expect(lifetimes.unsent()).toHaveLength(2);
+  });
+
+  it("keeps nothing for a pane with no reply comments, or a list that holds none", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = new PaneLifetimes(() => storage, () => 1_000, () => `id-${++ids}`);
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    lifetimes.paneStorage.setItem("ovis:reply-comments:w1:p1", "[]");
+    lifetimes.observe([pc("local", "herdr-b")], title);
+    expect(lifetimes.unsent()).toEqual([]);
+  });
+
   it("keeps a pane's state across server restarts on one herdr, and leaves a replaced herdr's text to recovery", () => {
     const storage = new MemoryStorage();
     const first = page(storage);

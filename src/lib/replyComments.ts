@@ -1,5 +1,5 @@
 import { isSendLeaseKey, SEND_LEASE_MS, sendLease } from "./composerDraft.ts";
-import { paneLifetimes, REPLY_COMMENTS_PREFIX } from "./paneLifetime.ts";
+import { paneLifetimes, readReplyCommentsWith, REPLY_COMMENTS_PREFIX } from "./paneLifetime.ts";
 
 /**
  * Comments on parts of an agent's replies (#511): the text a reader selected in one reply and what
@@ -7,8 +7,9 @@ import { paneLifetimes, REPLY_COMMENTS_PREFIX } from "./paneLifetime.ts";
  * composer sends, which carries them first, each as a quote and then the comment.
  *
  * Stored under `ovis:reply-comments:<paneStorageId>` through the pane-state storage
- * (lib/paneLifetime.ts), like the message draft: a herdr that replaced the pane's takes them with
- * its panes, since the reply they quote is gone with it.
+ * (lib/paneLifetime.ts), like the message draft: a herdr that replaced the pane's takes them off the
+ * pane, since the reply they quote is gone with it, and their words go to Recover unsent text as the
+ * message they would have gone with (#3259).
  */
 export interface ReplyComment {
   id: string;
@@ -181,6 +182,7 @@ export class ReplyCommentStore {
 
 export const replyComments = new ReplyCommentStore();
 paneLifetimes.onRetire(() => replyComments.refresh());
+readReplyCommentsWith(storedCommentsText);
 if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
   // a send's lease ending frees the comments held for it (#2356)
   if (event.key === null || event.key.startsWith(REPLY_COMMENTS_PREFIX) || isSendLeaseKey(event.key)) replyComments.refresh();
@@ -209,6 +211,12 @@ export function messageWithComments(comments: readonly ReplyComment[], text: str
   const parts = comments.map((item) => `${quoteBlock(item.quote)}\n${item.comment.trim()}`);
   if (text.trim() !== "") parts.push(text);
   return parts.join("\n\n");
+}
+
+/** A stored list's comments as the next send would have carried them (messageWithComments), "" for none: what recovery keeps (#3259). */
+export function storedCommentsText(raw: string | null): string {
+  const list = parse(raw);
+  return list.length > 0 ? messageWithComments(list, "") : "";
 }
 
 /**
