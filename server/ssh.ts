@@ -55,6 +55,24 @@ export interface SshClient {
 }
 
 /**
+ * A line ssh -v writes that is not ssh's word on what went wrong: its debug lines, and the few it writes
+ * unprefixed (its version banner, "Authenticated to", and the transfer totals it writes at exit).
+ */
+export function sshVerboseLine(line: string): boolean {
+  return /^(?:debug\d: |OpenSSH_|Authenticated to |Transferred: sent |Bytes per second: )/u.test(line);
+}
+
+/**
+ * Whether this ssh says on a pipe that a direct-mode forward is bound. Windows' own OpenSSH writes none
+ * of its -v lines to a pipe (checked on Windows 11 with 9.5p2: a file or a console gets them, a pipe
+ * nothing), so with it forward() takes the first listener on the port, as before. Git for Windows' ssh,
+ * and OpenSSH elsewhere, say it on a pipe. Wrong here, every Windows connect without Git waits 25 s.
+ */
+export function forwardSaysReady(client: { git?: boolean }, platform: NodeJS.Platform = process.platform): boolean {
+  return client.git === true || platform !== "win32";
+}
+
+/**
  * Which OpenSSH runs. `OVIS_SSH` names an ssh, with the sftp and ssh-keygen beside it. Windows
  * otherwise takes Git for Windows' build (installing Ovis there requires Git): the OpenSSH that
  * ships with Windows, started by a server that has no console, never exits once a remote command
@@ -446,10 +464,7 @@ export class SshConnection {
     if (CONFIG_FORWARD.test(await this.exec([this.client.ssh, "-G", ...this.options(false), this.target.destination]))) {
       throw new Error(`The SSH config for ${this.target.destination} sets LocalForward, RemoteForward or DynamicForward, which the web UI on Windows cannot switch off. Use a host alias without them.`);
     }
-    // Windows' own OpenSSH writes none of its -v lines to a pipe (checked on Windows 11 with 9.5p2: a file
-    // or a console gets them, a pipe nothing), so with it the forward is still taken from the first
-    // listener on the port, as before. Git for Windows' ssh, and OpenSSH elsewhere, say it on a pipe.
-    const told = this.client.git === true || !WINDOWS;
+    const told = forwardSaysReady(this.client);
     const proc = Bun.spawn([...this.direct(undefined, false), ...(told ? ["-v"] : []), "-N", "-T", "-o", "ExitOnForwardFailure=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination], { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: this.askEnv() });
     this.tunnels.add(proc);
     void proc.exited.then(() => {
@@ -491,7 +506,7 @@ export class SshConnection {
         const lines = (partial + decoder.decode(chunk, { stream: true })).split("\n");
         partial = lines.pop()!.slice(-4096);
         for (const line of lines) {
-          if (!/^debug\d: /u.test(line)) said = (said + line.replace(/\r$/, "") + "\n").slice(-8192);
+          if (!sshVerboseLine(line)) said = (said + line.replace(/\r$/, "") + "\n").slice(-8192);
           else if (line.includes(own)) named = true;
           else if (named && line.includes("Entering interactive session.")) ready.resolve();
         }

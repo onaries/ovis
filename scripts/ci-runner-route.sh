@@ -50,11 +50,28 @@ light_job_names='["Detect changes","herdr-core live contract","Integration and b
 # One Actions API read, asked again up to twice when it fails: a single 502 would otherwise send
 # the whole run hosted, where it depends on the Ubuntu mirror the self-hosted image does not need.
 # Only a whole answer is printed: pages a failed attempt got before failing would be counted twice.
+# A refusal (HTTP 4xx: the token or the path) would answer the same again, so only a server error or
+# no answer is asked again. All reads together have API_BUDGET seconds from the script's start, so the
+# hosted fallback is printed well inside Detect changes' five minutes; each attempt is bounded by a
+# minute or what is left, with timeout or gtimeout where there is one (stock macOS has neither: there
+# an attempt is unbounded, and only the shared budget stops further ones).
+API_BUDGET=240
+bound=""
+if command -v timeout >/dev/null 2>&1; then bound=timeout
+elif command -v gtimeout >/dev/null 2>&1; then bound=gtimeout
+fi
 api() {
-  local attempt out
-  for attempt in 1 2 3; do
-    if out=$(gh api --paginate "$1"); then printf '%s\n' "$out"; return 0; fi
+  local out errors left
+  errors=$(mktemp)
+  for _ in 1 2 3; do
+    left=$((API_BUDGET - SECONDS))
+    if [ "$left" -le 0 ]; then break; fi
+    if [ "$left" -gt 60 ]; then left=60; fi
+    if out=$(${bound:+$bound "$left"} gh api --paginate "$1" 2>"$errors"); then rm -f "$errors"; printf '%s\n' "$out"; return 0; fi
+    cat "$errors" >&2
+    if grep -q 'HTTP 4[0-9][0-9]' "$errors"; then break; fi
   done
+  rm -f "$errors"
   return 1
 }
 

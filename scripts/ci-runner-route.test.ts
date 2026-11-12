@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,8 @@ afterAll(() => {
 
 // A fake `gh` that answers the Actions API from the JSON files in $FAKE_GH and logs each call; a
 // missing file makes it fail like an API error, and a `fail-<file>` beside one makes the next call
-// for it print part of its answer and then fail, as a 502 on a later page does.
+// for it print part of its answer and then fail, as a 502 on a later page does; a `refuse-<file>`
+// makes every call for it fail as the API's refusal (HTTP 404) does.
 const bin = tempDir();
 writeFileSync(join(bin, "gh"), `#!/bin/sh
 echo "$*" >> "$FAKE_GH/calls"
@@ -32,6 +33,7 @@ case "$3" in
   *status=queued*) f=queued ;;
   *) exit 1 ;;
 esac
+if [ -f "$FAKE_GH/refuse-$f" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$FAKE_GH/fail-$f" ]; then rm "$FAKE_GH/fail-$f"; cat "$FAKE_GH/$f.json"; echo "gh: Server Error (HTTP 502)" >&2; exit 1; fi
 cat "$FAKE_GH/$f.json"
 `);
@@ -168,6 +170,14 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
       const flaky = actions({ in_progress: { 1: running(6) }, queued: { 2: running(6) } });
       for (const file of ["in_progress", "jobs-1", "jobs-2"]) writeFileSync(join(flaky, `fail-${file}`), "");
       expect(routed({ ...pr, SELF_HOSTED_CAPACITY: "16", FAKE_GH: flaky })).toEqual(JSON.parse('["self-hosted","self-hosted-ovis"]'));
+    });
+
+    it("does not ask again what the API refused", () => {
+      const refused = actions({ in_progress: { 1: running(1) } });
+      writeFileSync(join(refused, "refuse-jobs-1"), "");
+      expect(routed({ ...pr, FAKE_GH: refused })).toBe("ubuntu-24.04");
+      const calls = readFileSync(join(refused, "calls"), "utf8").trim().split("\n");
+      expect(calls.filter((call) => call.includes("/runs/1/jobs"))).toHaveLength(1);
     });
 
     it("never asks the API for a fork, a configured label set or the hosted override", () => {

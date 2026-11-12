@@ -115,7 +115,9 @@ console.log("fixture ready");`);
   const followUp = log.getByText("Follow-up answer.", { exact: true });
   const newMessages = page.locator(`.pane-frame[data-layout-pane="${pane}"]`).getByRole("button", { name: "New messages" });
   await followUp.or(newMessages).first().waitFor();
-  if (await newMessages.isVisible()) await newMessages.click();
+  // looked up and clicked in one step in the page: the list settling at its end in between unmounts the
+  // button, and a locator click would wait on a button that is gone
+  await page.evaluate((pane) => document.querySelector<HTMLButtonElement>(`.pane-frame[data-layout-pane="${pane}"] .chat-new-messages`)?.click(), pane);
   await followUp.waitFor();
   appendFileSync(transcript, event("user.message", { content: "Finish task" })
     + event("assistant.message", { toolRequests: [{ toolCallId: "finish-call", name: "task_complete",

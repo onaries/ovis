@@ -1681,10 +1681,37 @@ const JOB_PROCESSES = 256;
  * process below it (JOB_DEPTH levels, JOB_PROCESSES processes, each once), and each one's state and command line.
  * Ctrl+Z stops the job's whole process group, so the agent itself is stopped even when a launcher (`npx opencode`,
  * `sh -c 'opencode; …'`) is the shell's child. `pid`, when known, is the agent process the pane was verified with:
- * only it counts, not another stopped copy of the agent. Without /proc (macOS), or a process gone meanwhile,
- * nothing is found.
+ * only it counts, not another stopped copy of the agent, and it is followed up its parents to the shell instead, so
+ * a shell with more processes than the walk reads still finds it. Without /proc (macOS), or a process gone
+ * meanwhile, nothing is found.
  */
 export async function stoppedAgentJob(shellPid: number, agent: string, { pid = null, proc = "/proc" }: { pid?: number | null; proc?: string } = {}): Promise<boolean> {
+  /** `pid (comm) state ppid …`: the command name may itself hold ") ", the fields follow its last one */
+  const stat = async (process: string): Promise<{ name: string; state: string; parent: string } | null> => {
+    const text = await readFile(`${proc}/${process}/stat`, "utf8").catch(() => "");
+    const open = text.indexOf("(");
+    const close = text.lastIndexOf(")");
+    if (open < 0 || close < open) return null;
+    const [state = "", parent = ""] = text.slice(close + 2).split(" ");
+    return { name: text.slice(open + 1, close), state, parent };
+  };
+  const isAgent = async (process: string, name: string): Promise<boolean> => {
+    const argv = (await readFile(`${proc}/${process}/cmdline`, "utf8").catch(() => "")).split("\0").filter(Boolean);
+    // its process name too, which herdr labels the pane by: a script named after the agent runs under its shell
+    return programName(name) === agent || agentProcesses([{ argv, name }], agent).length > 0;
+  };
+  if (pid !== null) {
+    const own = await stat(String(pid));
+    if (own?.state !== "T" || !await isAgent(String(pid), own.name)) return false;
+    let parent = own.parent;
+    for (let depth = 0; depth < JOB_DEPTH; depth++) {
+      if (parent === String(shellPid)) return true;
+      const next = await stat(parent);
+      if (next === null || next.parent === parent) return false;
+      parent = next.parent;
+    }
+    return false;
+  }
   const seen = new Set([String(shellPid)]);
   let level = [String(shellPid)];
   for (let depth = 0; depth < JOB_DEPTH && level.length > 0; depth++) {
@@ -1696,16 +1723,8 @@ export async function stoppedAgentJob(shellPid: number, agent: string, { pid = n
         if (seen.has(child) || seen.size > JOB_PROCESSES) continue;
         seen.add(child);
         next.push(child);
-        if (pid !== null && child !== String(pid)) continue;
-        const stat = await readFile(`${proc}/${child}/stat`, "utf8").catch(() => "");
-        // `pid (comm) state …`: the command name may itself hold ") ", the state follows its last one
-        const open = stat.indexOf("(");
-        const close = stat.lastIndexOf(")");
-        if (open < 0 || close < open || stat[close + 2] !== "T") continue;
-        const name = stat.slice(open + 1, close);
-        const argv = (await readFile(`${proc}/${child}/cmdline`, "utf8").catch(() => "")).split("\0").filter(Boolean);
-        // its process name too, which herdr labels the pane by: a script named after the agent runs under its shell
-        if (programName(name) === agent || agentProcesses([{ argv, name }], agent).length > 0) return true;
+        const found = await stat(child);
+        if (found?.state === "T" && await isAgent(child, found.name)) return true;
       }
     }
     level = next;

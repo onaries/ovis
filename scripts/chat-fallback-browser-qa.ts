@@ -13,6 +13,13 @@ import type {} from "./chat-fallback-fixture.tsx";
 import { parseInteractivePrompt } from "../server/prompt.ts";
 import { parseOmpTranscript } from "../server/transcript-records.ts";
 import piNavigation from "../server/fixtures/pi-ask-navigation.json";
+/** `until`, or a failure naming `what` after 10 s: a callback the chat never makes fails the script, not the runner's timeout */
+const bounded = async (what: string, until: Promise<unknown>): Promise<void> => {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([until, new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error(what)), 10_000); })]);
+  } finally { clearTimeout(deadline); }
+};
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -373,7 +380,7 @@ try {
   // a response is in before the chat has handled it, and only then does it set the next poll: the
   // clock moves on once the chat forwarded that read's metadata, in the same task that sets it
   const forwarded = () => polling.evaluate(() => window.chatFallbackQA.forwarded());
-  const handled = (before: number) => polling.evaluate((before) => window.chatFallbackQA.until(() => window.chatFallbackQA.forwarded() > before), before);
+  const handled = (before: number) => bounded("the chat never handled the poll's read", polling.evaluate((before) => window.chatFallbackQA.until(() => window.chatFallbackQA.forwarded() > before), before));
   await polling.clock.runFor(2000);
   assert.equal(pollingReads, codexReads, "non-Copilot terminal fallback keeps its 10s backstop");
   const codexBackstop = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
@@ -426,7 +433,7 @@ try {
     await failed;
     // the response is in before the chat has handled it: the backstop is set once the failure ends
     // the wait (setWaiting), in the same effects that stop listening to the terminal
-    await paused.evaluate(() => window.chatFallbackQA.until(() => !window.chatFallbackQA.listening()));
+    await bounded("the chat never stopped listening to the terminal after the failed read", paused.evaluate(() => window.chatFallbackQA.until(() => !window.chatFallbackQA.listening())));
     copilotWaiting = true; lookupTimeout = false;
     const afterFailure = reads;
     const retried = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation", { timeout: 5000 })

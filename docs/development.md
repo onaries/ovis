@@ -750,9 +750,10 @@ on `main`, or on manual dispatches from `main`. A completed CI run only builds a
 succeeded for a push from this repository; PR runs and forks cannot publish. It builds that CI run's
 head SHA without running validation again. Manual dispatches run reusable CI validation and the site
 build in parallel against the dispatch SHA, and deployment requires both to succeed.
-Deployments are serialized. Immediately before deploying,
-the workflow checks that the validated SHA is still the latest `main` commit; it fails closed if it is
-stale or that check cannot be completed. This does not change the separate Release workflow.
+Deployments are serialized. A `current` job, with no environment, first checks that the validated SHA
+is still the latest `main` commit: when `main` has moved on, the run deploys nothing, records no
+deployment and ends green with a notice. The deploy job checks again immediately before deploying and
+fails if `main` moved on in between; both fail closed when the check cannot be completed. This does not change the separate Release workflow.
 The standalone `main` CI supplies that validation. Its push runs share one concurrency group: the
 running one finishes, and a newer push cancels the one still waiting, so a burst of merges runs
 main's checks at most twice and the newest run covers the merges in between. The Website workflow
