@@ -9,6 +9,8 @@ import { chromePath } from "./chrome-path.ts";
 
 // The existing compact title names its pane's full context without adding a second h1.
 // A desktop split uses this title too; an ordinary desktop uses its tab strip instead.
+// The title's agent mark sits on the header's centre line, and from 769px so do the buttons of
+// the sidebar's own top row beside it, which reaches over the header's bottom hairline.
 const app = mkdtempSync(join(tmpdir(), "ovis-header-context-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 try {
@@ -58,8 +60,22 @@ try {
               assert.equal(await title.textContent(), pane.title, "visible text is unchanged");
               assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, "the copy lane's hidden h1 stays the only first-level heading");
               assert.equal(await page.locator("h1.visually-hidden").textContent(), pane.title);
+              await page.locator(".context-title .agent-mark svg").waitFor();
+              const centres = await page.locator("header.app-header").evaluate((header) => {
+                const box = header.getBoundingClientRect();
+                const style = getComputedStyle(header);
+                const line = (box.top + parseFloat(style.paddingTop) + box.bottom - parseFloat(style.borderBottomWidth)) / 2;
+                return [...header.querySelectorAll(".context-title .agent-mark svg, .header-side .icon-button")]
+                  .filter((element) => element.getClientRects().length > 0)
+                  .map((element) => {
+                    const drawn = element.getBoundingClientRect();
+                    return { control: element.closest(".agent-mark") ? "agent mark" : element.getAttribute("aria-label"), offset: Math.round((drawn.top + drawn.height / 2 - line) * 100) / 100 };
+                  });
+              });
+              if (width === 1440) assert.ok(centres.some(({ control }) => control === "Hide workspace list"), `${label}: the sidebar's top row is in the header`);
+              assert.deepEqual(centres.filter(({ offset }) => Math.abs(offset) > 0.25), [], `${label}: the agent's mark and the sidebar's top row are centred on the header's line`);
               assert.deepEqual(errors, []);
-              console.log(`PASS ${label}: full accessible context and one unchanged h1`);
+              console.log(`PASS ${label}: full accessible context and one unchanged h1; the mark and the sidebar's top row on the header's line`);
             } finally { await page.close(); }
           }
         } finally { await context.close(); }
