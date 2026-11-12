@@ -161,7 +161,7 @@ export function claudeInputDraft(live: string, colors: string | null): boolean {
   const afterPill = withoutIdePill(box.plain[0]!.slice(1));
   if ([afterPill, ...box.plain.slice(1)].join("\n").replace(/\u00a0/g, " ").trim() === "") return false;
   // a paste or an image Claude folded into a placeholder is content, however it is colored
-  if (/\[(?:Pasted text #\d+|Image #\d+)/.test(box.plain.join(" "))) return true;
+  if (foldedPlaceholder(box.plain.join(" "))) return true;
   if (colors === null) return true;
   const shown = claudeInputBox(colors);
   if (shown === null || shown === "clipped" || shown.plain.join("\n") !== box.plain.join("\n")) return true;
@@ -211,7 +211,7 @@ export function claudeClearableDraft(live: string, colors: string | null): strin
   if (colors === null || !claudeInputDraft(live, colors)) return null;
   const box = claudeInputBox(live);
   if (box === null || box === "clipped" || box.plain.length !== 1 || !box.plain[0]!.startsWith("❯")) return null;
-  if (/\[(?:Pasted text #\d+|Image #\d+)/.test(box.plain[0]!)) return null;
+  if (foldedPlaceholder(box.plain[0]!)) return null;
   // plain rows trim their right edge for screen parsing. Match the raw row instead: a
   // trailing space, or another space after Claude's one separator, belongs to the user.
   const rowText = (row: string): string => row.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "");
@@ -237,6 +237,26 @@ export function claudeInputBoxContent(live: string): string | null {
   const box = claudeInputBox(live);
   if (box === null || box === "clipped") return null;
   return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
+}
+
+/**
+ * Whether box text holds a paste or an image Claude Code folded into a placeholder (`[Pasted text #1 +12 lines]`,
+ * `[Image #1]`). Any run of spaces or row breaks counts as one space: Claude wraps its box at the pane's width,
+ * also inside a placeholder.
+ */
+export function foldedPlaceholder(text: string): boolean {
+  return /\[(?:Pasted text #\d+|Image #\d+)/.test(text.replace(/\s+/g, " "));
+}
+
+/**
+ * The box a refusal may offer to send anyway over, and a send anyway may go over (claudeInputBoxContent),
+ * or null where it may not: a paste or an image Claude Code folded into a placeholder (`[Pasted text #1 +12
+ * lines]`, `[Image #1]`) hides what it holds, so the user cannot see what the Enter would send along
+ * with the message (#3563).
+ */
+export function claudeSendAnywayBox(live: string): string | null {
+  const content = claudeInputBoxContent(live);
+  return content === null || foldedPlaceholder(content) ? null : content;
 }
 
 /**
@@ -273,7 +293,7 @@ export function claudeRestoredDraft(live: string, colors: string | null, sent: s
   if (sent === null || sent.trim() === "" || colors === null || !claudeInputDraft(live, colors)) return null;
   const box = claudeInputBox(live);
   if (box === null || box === "clipped" || !box.plain[0]?.startsWith("❯")) return null;
-  if (/\[(?:Pasted text #\d+|Image #\d+)/.test(box.plain.join(" "))) return null;
+  if (foldedPlaceholder(box.plain.join(" "))) return null;
   // each row's own words exactly (the box's U+00A0 as a space), its marker, indentation and padding
   // aside; where the terminal wrapped, a word split in two joins with nothing between, and a wrap
   // between words with one space or line break. Any other change to the spaces is the user's edit.

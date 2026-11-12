@@ -17,7 +17,7 @@ import type { CommandSend } from "../outcome.ts";
 import { processStartedAt } from "../process-start.ts";
 import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
-import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
+import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, claudeSendAnywayBox, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
 import { registry } from "../dialogs/registry.ts";
 import { codexOwnScreenOpen, CODEX_OWN_SCREEN_MESSAGE } from "../dialogs/codex.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "../dialogs/claude.ts";
@@ -32,7 +32,7 @@ const HERMES_INPUT_DRAFT_MESSAGE = "Hermes' input in the terminal is not empty (
 
 /**
  * input_draft, naming the one-row draft the chat may offer to clear (claudeClearableDraft), or none.
- * `box`: the input box as read, whole (claudeInputBoxContent; the client is shown it cut), which a refusal naming no draft shows so the
+ * `box`: the input box as read, whole (claudeSendAnywayBox; the client is shown it cut), which a refusal naming no draft shows so the
  * user may send anyway; null where the refusal offers nothing (after a clear began).
  */
 export class InputDraftError extends HerdrError {
@@ -302,7 +302,7 @@ export async function claudeBoxReads(paneId: string): Promise<[string, string | 
     if (historyEndShowsLive(colors, colorsAfter, [before, live])) return [live, colors];
     // the screen moved across the reads (typed, a dialog, a resize): no box is proven empty, so none is sent over
     if (claudeRewindOpen(stripVTControlCharacters(colorsAfter))) throw new HerdrError("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
-    throw new ClaudeBoxMovedError(null, undefined, claudeInputBoxContent(live));
+    throw new ClaudeBoxMovedError(null, undefined, claudeSendAnywayBox(live));
   }
   const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
   const scrollAfter = await paneScrollInfo(paneId);
@@ -330,7 +330,7 @@ export async function freeClaudeBox(paneId: string, working: boolean, authorize:
   const [live, colors] = await claudeBoxReads(paneId);
   if (!claudeInputDraft(live, colors)) return;
   if (working || automatic || claudeRestoredDraft(live, colors, lastChatSubmitted(paneId)) === null) {
-    throw new InputDraftError(claudeClearableDraft(live, colors), undefined, claudeInputBoxContent(live));
+    throw new InputDraftError(claudeClearableDraft(live, colors), undefined, claudeSendAnywayBox(live));
   }
   if (deadline - Date.now() < RESTORED_CLEAR_RESERVE_MS) throw new HerdrError("submit_timeout", "Too little time was left to clear Claude Code's input box and send; nothing was typed");
   // the read proved the box holds the copy: a lone Esc on an EMPTY box would open Claude's
@@ -455,8 +455,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           const reads = await claudeBoxReads(paneId);
           beforeScreen = reads[0];
           inTime();
-          const box = claudeInputBoxContent(reads[0]);
-          // a box that cannot be read whole cannot be compared: it is refused, and offers no send anyway
+          const box = claudeSendAnywayBox(reads[0]);
+          // a box that cannot be read whole cannot be compared, nor one hiding a folded paste: it is refused, and offers no send anyway
           if (claudeInputDraft(...reads) && (box === null || box !== confirmation!.box)) throw new InputDraftError(claudeClearableDraft(...reads), identity ?? undefined, box);
           // the reads waited on herdr: the pane may hold another Claude by now, checked again right before the write
           const now = pendingIdentity(await paneGet(paneId));
@@ -507,7 +507,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           if (claudeInputDraft(...reads)) {
             // only the draft the user was shown goes, never what has since replaced it
             const draft = claudeClearableDraft(...reads);
-            if (clearDraft === undefined || draft !== clearDraft) throw new InputDraftError(draft, identity ?? undefined, clearDraft === undefined ? claudeInputBoxContent(reads[0]) : null);
+            if (clearDraft === undefined || draft !== clearDraft) throw new InputDraftError(draft, identity ?? undefined, clearDraft === undefined ? claudeSendAnywayBox(reads[0]) : null);
             const reserve = DRAFT_CLEAR_WAIT_MS + 500;
             inTime(reserve);
             // A confirmation names the earlier draft, not text typed while it was inspected.
