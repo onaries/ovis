@@ -31,13 +31,13 @@
   <a href="https://ovis.sh/demo/"><img src="docs/media/readme/desktop-and-phone.webp" width="830" alt="デスクトップのブラウザーとスマートフォンで見た Ovis。デスクトップには、ワークスペースとエージェントの一覧の横に Claude Code との会話がチャットとして表示されています。スマートフォンには、git push origin feat/export-guard を実行してよいかを尋ねる Codex の Allow command? カードが、Yes、Yes and don't ask again for git push、No の選択肢とともに表示されています。"></a>
 </p>
 
-Ovis は、エージェントが作業しているコンピューター上で動き、スマートフォンやどのブラウザーからでもそこに接続できます。[herdr](https://github.com/herdrdev/herdr) を基盤としており、herdr や [Herdr アプリ](https://herdr.dev/download/)で見ているのと同じ、実際に動いているターミナルを表示するので、両方を一緒に使えます。[それぞれの関係 →](docs/guide.md#how-ovis-fits-with-herdr)
+Ovis は、エージェントが作業しているコンピューター上で動き、スマートフォンやどのブラウザーからでもそこに接続できます。[herdr](https://github.com/herdrdev/herdr) を基盤としており、herdr や [Herdr アプリ](https://herdr.dev/download/)で見ているのと同じ、実際に動いているターミナルを表示できるので、両方を一緒に使えます。[それぞれの関係 →](docs/guide.md#how-ovis-fits-with-herdr)
 
 <a id="install"></a>
 
 ## インストール
 
-**デスクトップアプリ：** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg)（[Intel](https://ovis.sh/Ovis-mac-x64.dmg)）· [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb)（[すべてのビルド](docs/guide.md#the-desktop-app)）。ほかに何も要りません。
+**デスクトップアプリ：** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg)（[Intel](https://ovis.sh/Ovis-mac-x64.dmg)）· [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb)（[すべてのビルド](docs/guide.md#the-desktop-app)）。ほかに何も要りません。ターミナルは、このアプリが独自に起動したものだけが表示されます。herdr や Herdr アプリですでに使っているターミナルを見るには、デスクトップアプリではなく下のコマンドでインストールしてください。
 
 **herdr や Herdr アプリを使っている場合：** コマンド 1 行で Ovis を一緒に入れられます。Linux か macOS で：
 
@@ -51,7 +51,7 @@ Windows では PowerShell で：
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**スマートフォンで：** コンピューターで **設定 → デバイスと PC → 接続を追加 → Ovis リレー** を開いてスイッチをオンにし、表示される QR コードをスマートフォンで読み取ります。コンピューターが Ovis アカウントに入っている場合は、QR コードの代わりにスマートフォンでのサインインを求められます。[iPhone・Android アプリ](https://ovis.sh/ja/beta/)はベータ版です。[スマートフォンの設定 →](docs/guide.md#on-your-phone)
+**スマートフォンで：** コンピューターで **設定 → デバイスと PC → 接続を追加 → Ovis リレー** を開いてスイッチをオンにし、**QR コードを表示する** を押して、表示された QR コードをスマートフォンで読み取ります。コンピューターが Ovis アカウントに入っている場合は、QR コードの代わりにスマートフォンでのサインインを求められます。[iPhone・Android アプリ](https://ovis.sh/ja/beta/)はベータ版です。[スマートフォンの設定 →](docs/guide.md#on-your-phone)
 
 ## 機能
 

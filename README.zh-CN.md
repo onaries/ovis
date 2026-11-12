@@ -31,13 +31,13 @@
   <a href="https://ovis.sh/demo/"><img src="docs/media/readme/desktop-and-phone.webp" width="830" alt="桌面浏览器和手机上的 Ovis。桌面上，工作区和智能体列表旁边是以聊天形式显示的 Claude Code 对话。手机上，Codex 通过 Allow command? 卡片询问是否运行 git push origin feat/export-guard，选项为 Yes、Yes and don't ask again for git push 和 No。"></a>
 </p>
 
-Ovis 运行在智能体所在的那台电脑上，手机或任意浏览器都可以连接到它。它基于 [herdr](https://github.com/herdrdev/herdr) 构建，显示的就是你在 herdr 或 [Herdr 应用](https://herdr.dev/download/)里看到的同一批实时终端，所以两者可以同时使用。[它们之间的关系 →](docs/guide.md#how-ovis-fits-with-herdr)
+Ovis 运行在智能体所在的那台电脑上，手机或任意浏览器都可以连接到它。它基于 [herdr](https://github.com/herdrdev/herdr) 构建，能显示你在 herdr 或 [Herdr 应用](https://herdr.dev/download/)里看到的同一批实时终端，所以两者可以同时使用。[它们之间的关系 →](docs/guide.md#how-ovis-fits-with-herdr)
 
 <a id="install"></a>
 
 ## 安装
 
-**桌面应用：** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg)（[Intel](https://ovis.sh/Ovis-mac-x64.dmg)）· [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb)（[全部版本](docs/guide.md#the-desktop-app)）。无需安装其他东西。
+**桌面应用：** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg)（[Intel](https://ovis.sh/Ovis-mac-x64.dmg)）· [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb)（[全部版本](docs/guide.md#the-desktop-app)）。无需安装其他东西。它只显示自己启动的终端；想看到 herdr 或 Herdr 应用里已有的终端，请改用下面的命令安装。
 
 **已经在用 herdr 或 Herdr 应用：** 一条命令即可把 Ovis 装在它旁边。在 Linux 或 macOS 上运行：
 
@@ -51,7 +51,7 @@ curl -fsSL https://ovis.sh/install.sh | sh
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**在手机上：** 在电脑上打开 **设置 → 设备和电脑 → 添加连接 → Ovis 中继**，开启开关，再用手机扫描显示的二维码。如果电脑已经在某个 Ovis 账户中，这里会改为提示在手机上登录。[iPhone 和 Android 应用](https://ovis.sh/zh/beta/)处于公测阶段。[手机设置 →](docs/guide.md#on-your-phone)
+**在手机上：** 在电脑上打开 **设置 → 设备和电脑 → 添加连接 → Ovis 中继**，开启开关，点击 **显示这个二维码**，再用手机扫描。如果电脑已经在某个 Ovis 账户中，这里会改为提示在手机上登录。[iPhone 和 Android 应用](https://ovis.sh/zh/beta/)处于公测阶段。[手机设置 →](docs/guide.md#on-your-phone)
 
 ## 功能
 

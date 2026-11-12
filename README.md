@@ -31,11 +31,11 @@
   <a href="https://ovis.sh/demo/"><img src="docs/media/readme/desktop-and-phone.webp" width="830" alt="Ovis in a desktop browser and on a phone. The desktop shows a sidebar of workspaces and agents beside a Claude Code conversation read as a chat. The phone shows a Codex pane asking Allow command? for git push origin feat/export-guard, with Yes, Yes and don't ask again for git push, and No as the choices."></a>
 </p>
 
-Ovis runs on the computer where your agents work, and your phone or any browser connects to it. It is built on [herdr](https://github.com/herdrdev/herdr) and shows the same live terminals as herdr and the [Herdr app](https://herdr.dev/download/), so they work side by side. [How they fit together →](docs/guide.md#how-ovis-fits-with-herdr)
+Ovis runs on the computer where your agents work, and your phone or any browser connects to it. It is built on [herdr](https://github.com/herdrdev/herdr) and can show the same live terminals as herdr and the [Herdr app](https://herdr.dev/download/), so they work side by side. [How they fit together →](docs/guide.md#how-ovis-fits-with-herdr)
 
 ## Install
 
-**Desktop app:** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg) ([Intel](https://ovis.sh/Ovis-mac-x64.dmg)) · [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb) ([all builds](docs/guide.md#the-desktop-app)). It needs nothing else.
+**Desktop app:** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg) ([Intel](https://ovis.sh/Ovis-mac-x64.dmg)) · [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb) ([all builds](docs/guide.md#the-desktop-app)). It needs nothing else, and its terminals are its own: to see the ones you already have in herdr or the Herdr app, install with the command below instead.
 
 **With herdr or the Herdr app:** one command sets Ovis up beside it. On Linux or macOS:
 
@@ -49,7 +49,7 @@ On Windows, in PowerShell:
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on and scan the QR code it shows. A computer in an Ovis account asks the phone to sign in instead. The [iPhone and Android apps](https://ovis.sh/beta/) are in beta. [Phone setup →](docs/guide.md#on-your-phone)
+**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on, choose **Show the QR code** and scan it. A computer in an Ovis account asks the phone to sign in instead. The [iPhone and Android apps](https://ovis.sh/beta/) are in beta. [Phone setup →](docs/guide.md#on-your-phone)
 
 ## Features
 

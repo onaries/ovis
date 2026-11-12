@@ -31,13 +31,13 @@
   <a href="https://ovis.sh/demo/"><img src="docs/media/readme/desktop-and-phone.webp" width="830" alt="데스크톱 브라우저와 휴대폰에서 본 Ovis. 데스크톱에는 워크스페이스와 에이전트 목록 옆에 Claude Code와의 대화가 채팅으로 보이고, 휴대폰에는 Codex가 git push origin feat/export-guard를 실행해도 되는지 묻는 Allow command? 카드가 Yes, Yes and don't ask again for git push, No 선택지와 함께 보입니다."></a>
 </p>
 
-Ovis는 에이전트가 돌아가는 바로 그 컴퓨터에서 실행되고, 휴대폰이나 어느 브라우저에서든 그 컴퓨터에 접속합니다. [herdr](https://github.com/herdrdev/herdr) 위에서 만들었고, herdr나 [Herdr 앱](https://herdr.dev/download/)에서 보는, 지금 돌아가는 바로 그 터미널을 보여 주므로 함께 쓰면 됩니다. [서로 어떻게 맞물리는지 →](docs/guide.md#how-ovis-fits-with-herdr)
+Ovis는 에이전트가 돌아가는 바로 그 컴퓨터에서 실행되고, 휴대폰이나 어느 브라우저에서든 그 컴퓨터에 접속합니다. [herdr](https://github.com/herdrdev/herdr) 위에서 만들었고, herdr나 [Herdr 앱](https://herdr.dev/download/)에서 보는, 지금 돌아가는 바로 그 터미널을 보여 줄 수 있어 함께 쓰면 됩니다. [서로 어떻게 맞물리는지 →](docs/guide.md#how-ovis-fits-with-herdr)
 
 <a id="install"></a>
 
 ## 설치
 
-**데스크톱 앱:** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg) ([Intel](https://ovis.sh/Ovis-mac-x64.dmg)) · [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb) ([모든 빌드](docs/guide.md#the-desktop-app)). 따로 설치할 것이 없습니다.
+**데스크톱 앱:** [Mac](https://ovis.sh/Ovis-mac-arm64.dmg) ([Intel](https://ovis.sh/Ovis-mac-x64.dmg)) · [Windows](https://ovis.sh/Ovis-win-x64.exe) · [Linux](https://ovis.sh/Ovis-linux-x64.deb) ([모든 빌드](docs/guide.md#the-desktop-app)). 따로 설치할 것이 없습니다. 터미널은 이 앱이 직접 띄운 것만 보입니다. herdr나 Herdr 앱에서 쓰던 터미널을 보려면 데스크톱 앱 대신 아래 명령으로 설치하세요.
 
 **herdr나 Herdr 앱을 쓰고 있다면:** 명령 한 줄로 Ovis를 함께 설치합니다. Linux나 macOS에서:
 
@@ -51,7 +51,7 @@ Windows에서는 PowerShell에서:
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**휴대폰에서:** 컴퓨터에서 **설정 → 기기와 PC → 연결 추가 → Ovis 릴레이**를 열어 스위치를 켜고, 나오는 QR 코드를 휴대폰으로 찍으세요. 컴퓨터가 Ovis 계정에 들어 있으면 QR 코드 대신 휴대폰에서 로그인하라고 안내합니다. [iPhone·Android 앱](https://ovis.sh/ko/beta/)은 베타입니다. [휴대폰 설정 →](docs/guide.md#on-your-phone)
+**휴대폰에서:** 컴퓨터에서 **설정 → 기기와 PC → 연결 추가 → Ovis 릴레이**를 열어 스위치를 켜고 **QR 코드 표시**를 누른 다음, 나온 QR 코드를 휴대폰으로 찍으세요. 컴퓨터가 Ovis 계정에 들어 있으면 QR 코드 대신 휴대폰에서 로그인하라고 안내합니다. [iPhone·Android 앱](https://ovis.sh/ko/beta/)은 베타입니다. [휴대폰 설정 →](docs/guide.md#on-your-phone)
 
 ## 기능
 
