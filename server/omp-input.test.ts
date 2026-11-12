@@ -129,6 +129,11 @@ describe("omp's predicted next prompt", () => {
     // a claude-shape row whose `❯ ` is drawn in the prediction's own color reads past it: blanked whole, that row
     // would read as pi's (#3643)
     expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}\u001b[38;5;244mopen the PR${RESET}`, rule, status))).toBe("open the PR");
+    // and its empty composer's right-aligned hint is no prediction, nor read from the `❯ ` on. omp draws the hint's
+    // key (⇧⇥) in its accent; here all of it is in the dim, the case where only the `❯ ` reading could take it
+    expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}${" ".repeat(80)}\u001b[38;5;244mShift+Tab effort${RESET}`, rule, status))).toBeNull();
+    // a pi prediction starting like another shape's gutter is offered whole: blanked, no shape's empty row is left
+    for (const cap of ["+ ", "▐ ", "▎ ", "╰─ "]) expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}${cap}check the diff${RESET}`, rule, status)), cap).toBe(`${cap}check the diff`);
     // the box's IME-safe gutter, drawn in its border color, is still no part of the prediction
     expect(parseOmpSuggestion(screen(`${fg(61, 66, 74)}╭─ π > GPT-6.1 Sol ${"─".repeat(90)}╮${RESET}`, `${fg(61, 66, 74)}│ ${RESET}${DARK_DIM}open the PR${RESET}`, `${fg(61, 66, 74)}╰${"─".repeat(116)}╯${RESET}`))).toBe("open the PR");
   });
