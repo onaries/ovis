@@ -104,6 +104,8 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Sidebar filter": "侧边栏筛选",
   "Show the sidebar on hover": "悬停时显示侧边栏",
   "On this device, while the sidebar is hidden, resting the mouse on its button shows it over the pane until the mouse leaves. Click the button to keep it open.": "在此设备上隐藏侧边栏时，将鼠标停在侧边栏按钮上，会在窗格上方显示侧边栏，直到鼠标移开。点击按钮可保持打开。",
+  "Agent inbox on a phone": "手机上先显示 Agent 列表",
+  "On this device, a phone-width window that opens with no pane in its address shows the list of agents, the ones that need you first; from a pane, the header's Back opens it. A tap opens the agent's chat, and Back returns to the list.": "在此设备上，地址中未指定窗格而打开的手机宽度窗口会显示 Agent 列表，需要你回应的排在最前。在窗格中，页眉的返回按钮会打开列表。点按一行会打开该 Agent 的聊天，返回则回到列表。",
   "Name tabs from the first message": "用第一条消息命名标签页",
   "A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.": "只有编号的标签页会显示发给它的第一条消息中的几个词，在所有浏览器中生效。你起的标签页名称会保留，herdr 自己的标签页名称不会改变。只保存这几个词，存于此服务器，直到标签页关闭；关闭此设置会将其删除。",
   "Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.": "在此设备的侧边栏列表上方显示筛选框。关闭时，可从命令面板的“筛选工作区和代理”打开。",

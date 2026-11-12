@@ -146,6 +146,7 @@ const BASE: Record<string, string> = {
   "Connecting to Ovis…": "Ovis に接続しています…",
   "Close workspace list": "ワークスペース一覧を閉じる",
   "Open workspace list": "ワークスペース一覧を開く",
+  "Back to agents": "エージェント一覧へ戻る",
   "Show workspace list": "ワークスペース一覧を表示",
   "Workspace list": "ワークスペース一覧",
   "Hide workspace list": "ワークスペース一覧を非表示",

@@ -1,7 +1,7 @@
 /**
  * Japanese for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx.
+ * components/SidebarSplit.tsx, components/AgentInbox.tsx.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_JA: Record<string, string> = {
@@ -34,6 +34,10 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Loading agents…": "エージェントを読み込み中…",
   "Herdr workspaces": "herdr ワークスペース",
   "No agents running": "実行中のエージェントはありません",
+  "Search agents": "エージェントを検索",
+  "Clear search": "検索を消去",
+  "Filter agents by state": "状態でエージェントを絞り込む",
+  "No agents match": "一致するエージェントはありません",
   "Expand worktrees of {name}": "{name} のワークツリーを展開",
   "Collapse worktrees of {name}": "{name} のワークツリーを折りたたむ",
   "Agents: {names}": "エージェント: {names}",

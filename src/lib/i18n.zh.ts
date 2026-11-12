@@ -148,6 +148,7 @@ const BASE: Record<string, string> = {
   "Connecting to Ovis…": "正在连接 Ovis…",
   "Close workspace list": "关闭工作区列表",
   "Open workspace list": "打开工作区列表",
+  "Back to agents": "返回 Agent 列表",
   "Show workspace list": "显示工作区列表",
   "Workspace list": "工作区列表",
   "Hide workspace list": "隐藏工作区列表",

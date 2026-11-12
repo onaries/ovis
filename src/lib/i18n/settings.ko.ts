@@ -104,6 +104,8 @@ export const SETTINGS_KO: Record<string, string> = {
   "Sidebar filter": "사이드바 필터",
   "Show the sidebar on hover": "마우스를 올리면 사이드바 보기",
   "On this device, while the sidebar is hidden, resting the mouse on its button shows it over the pane until the mouse leaves. Click the button to keep it open.": "이 기기에서 사이드바를 숨겼을 때 사이드바 버튼에 마우스를 올려 두면, 마우스가 벗어날 때까지 사이드바가 패널 위에 나타납니다. 계속 열어 두려면 버튼을 누르세요.",
+  "Agent inbox on a phone": "폰에서 에이전트 목록 먼저",
+  "On this device, a phone-width window that opens with no pane in its address shows the list of agents, the ones that need you first; from a pane, the header's Back opens it. A tap opens the agent's chat, and Back returns to the list.": "이 기기에서 주소에 패널이 없는 채로 열린 폰 너비 창은 에이전트 목록을 보여 줍니다. 응답이 필요한 에이전트가 맨 위에 옵니다. 패널에서는 헤더의 뒤로 버튼이 목록을 엽니다. 줄을 누르면 그 에이전트의 채팅이 열리고, 뒤로 가기로 목록에 돌아옵니다.",
   "Name tabs from the first message": "첫 메시지로 탭 이름 짓기",
   "A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.": "번호로만 불리는 탭에 그 탭으로 보낸 첫 메시지의 몇 단어를 보여 줍니다. 모든 브라우저에 적용됩니다. 직접 지은 탭 이름은 그대로 두고, herdr의 탭 이름은 바꾸지 않습니다. 그 몇 단어만 탭이 닫힐 때까지 이 서버에 보관하며, 끄면 삭제됩니다.",
   "Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.": "이 기기에서 사이드바 목록 위에 필터 입력란을 보여 줍니다. 끄면 명령 팔레트의 워크스페이스와 에이전트 필터로 엽니다.",

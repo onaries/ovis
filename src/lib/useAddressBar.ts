@@ -1,9 +1,10 @@
 import { type Dispatch, type RefObject, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import type { HerdrPane, HerdrWorkspace } from "../../shared/protocol.ts";
-import type { Machine } from "../../shared/machines.ts";
+import { LOCAL_MACHINE, type Machine } from "../../shared/machines.ts";
 import type { PaneView } from "./actions.ts";
-import { isNavigation, linkSearch, NAV_KEY, readLink, resolveLink, slugOf, type AppLink, type LinkNote } from "./deepLink.ts";
+import { fileFromLink, isNavigation, linkSearch, NAV_KEY, readLink, resolveLink, slugOf, type AppLink, type LinkNote } from "./deepLink.ts";
 import { withoutFile } from "./historyKeys.ts";
+import { INBOX_FROM_KEY, type useInbox } from "./useInbox.ts";
 import { pageAddress, pageSearch } from "./pageQuery.ts";
 import type { SelectionMark } from "./selectionMark.ts";
 import { settingsEntry, settingsSteppedOff } from "./settingsHistory.ts";
@@ -26,10 +27,15 @@ export function popUnread(dispatching: Event | undefined, read: Event | null): b
 /**
  * Keeps the address and the history in step with the selection (lib/deepLink.ts): a move between
  * panes is an entry, Back and Forward select the entry's pane, and a file open over a pane is left
- * behind, or kept for Back and shown again on return (#3179), when another pane is selected.
+ * behind, or kept for Back and shown again on return (#3179), when another pane is selected. A
+ * phone's agent list (lib/useInbox.ts) is the place that names no pane: leaving it for a pane is an
+ * entry marked as such, and Back or Forward onto a place with no pane shows it again.
  */
-export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef }: {
+export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef }: {
+  inbox: Pick<ReturnType<typeof useInbox>, "shown" | "enabled" | "show" | "leave">;
   newSessionOpen: boolean;
+  /** the PC the New workspace dialog is for: the list's sheet of PCs opens it for one not selected */
+  newSessionMachineId: string;
   selectedPane: HerdrPane | null;
   selectedPaneId: string | null;
   selectedWorkspace: HerdrWorkspace | null;
@@ -75,8 +81,16 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
   // Back or Forward landed somewhere other than its entry said: that place is written over the entry
   const poppedTo = useRef(false);
   const newSessionOpenRef = useRef(newSessionOpen); newSessionOpenRef.current = newSessionOpen;
-  const linkWorkspaceId = selectedPane?.workspace_id ?? (selectedPaneId === null ? null : undefined);
-  const linkSlug = slugOf(selectedWorkspace?.label) || null;
+  const inboxRef = useRef(inbox); inboxRef.current = inbox;
+  const { shown: inboxShown, enabled: inboxEnabled } = inbox;
+  // the list's address is the app's own start: no pane, workspace, view or file (the PC only while
+  // the New workspace dialog is open over it, as that dialog is for one PC). It names no PC: the list
+  // is every shown PC's, so a PC picked in the drawer over it is not one a reload has to keep
+  const linkPaneId = inboxShown ? null : selectedPaneId;
+  const linkWorkspaceId = inboxShown ? null : selectedPane?.workspace_id ?? (selectedPaneId === null ? null : undefined);
+  const linkSlug = inboxShown ? null : slugOf(selectedWorkspace?.label) || null;
+  // the last place written was the list (a phone that opens on it counts as one): leaving it for a pane is an entry
+  const listWritten = useRef(inboxShown);
   const linkFile = viewing && viewing.machineId === selectedMachineId && (viewing.paneId === null || viewing.paneId === selectedPaneId) ? viewing.path : null;
   // the file is its pane's (its paths are read from the pane's folder): another pane or PC
   // selected leaves it behind, and the move takes the file's entry over (below), so Back returns
@@ -125,23 +139,38 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
   // a tab that closed takes its remembered file with it, so a later pane with its id never shows it
   useEffect(() => { forgetLeftFiles(paneLive); }, [machines, forgetLeftFiles, paneLive]);
   useEffect(() => {
-    if (locked !== false || machines.length === 0 || snapshot === null || linkWorkspaceId === undefined || !linkLanded) return;
+    if (locked !== false || machines.length === 0 || snapshot === null || !linkLanded) return;
+    if (linkWorkspaceId === undefined) {
+      // the pane New workspace made from the list is not listed yet and the dialog has closed: the list's
+      // entry it was open on says the list's place again, so Back from the new pane does not open it again
+      const written = writtenLink.current;
+      if (listWritten.current && !newSessionOpen && written?.create && !popUnread(window.event, readPop.current)) {
+        const link: AppLink = { ...written, create: null, machine: LOCAL_MACHINE };
+        writtenLink.current = link;
+        const search = linkSearch(link, pageSearch());
+        if (search !== pageSearch()) window.history.replaceState(window.history.state, "", pageAddress(window.location.pathname, search, window.location.hash));
+      }
+      return;
+    }
     // A popped entry's PC can land before its fallback pane. Keep Forward until that pane is known.
     // An offline PC never picks one, so its entry is written as it stands.
-    if (poppedTo.current && selectedPaneId === null && snapshot.panes.length > 0 && selectedMachine?.state === "connected") return;
+    if (!inboxShown && poppedTo.current && selectedPaneId === null && snapshot.panes.length > 0 && selectedMachine?.state === "connected") return;
     // a file shown again by a popped entry, before its pane is selected: the place is written once it lands
     if (fileLanding) return;
     // the entry Back or Forward landed on is the handler's to read first: the place is written once it has
     if (popUnread(window.event, readPop.current)) { heldWrite.current = true; return; }
     heldWrite.current = false;
     const link: AppLink = {
-      machine: selectedMachineId, workspace: linkWorkspaceId, workspaceSlug: linkSlug, pane: selectedPaneId, view: selectedPaneId ? view : null, file: linkFile,
+      // the list's place names no PC (above); the dialog opened over it names its own PC, which the list may not have selected
+      machine: inboxShown ? (newSessionOpen ? newSessionMachineId : LOCAL_MACHINE) : selectedMachineId, workspace: linkWorkspaceId, workspaceSlug: linkSlug, pane: linkPaneId, view: linkPaneId ? view : null, file: inboxShown ? null : linkFile,
       settings: settingsOpen ? settingsPage : null, section: settingsOpen && settingsPage === settingsLinkPage ? settingsLinkSection : null,
       sidebar: wideScreen && sidebarCollapsed ? "hidden" : null,
       create: newSessionOpen ? { kind: newTab ? "tab" : "workspace", cwd: newFields?.cwd ?? null, name: newFields?.name ?? null, agent: newFields?.agent ?? null } : null,
     };
     const previous = writtenLink.current;
     writtenLink.current = link;
+    const leftInbox = listWritten.current && !inboxShown;
+    listWritten.current = inboxShown;
     const search = linkSearch(link, pageSearch());
     const popped = poppedTo.current;
     poppedTo.current = false;
@@ -151,14 +180,19 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
     // Back and Forward land where the address already says: nothing to write
     if (search === pageSearch()) return;
     const url = pageAddress(window.location.pathname, search, window.location.hash);
-    if (previous !== null && !popped && !autoSelected && !settingsOpen && !newSessionOpen && isNavigation(previous, link)) {
+    // a pane opened from the list is a move whatever was picked before it; a window widened past a
+    // phone's leaves the list without one
+    const moved = leftInbox ? inboxEnabled && link.pane !== null : previous !== null && !autoSelected && isNavigation(previous, link);
+    if (!popped && !settingsOpen && !newSessionOpen && moved) {
+      const state = leftInbox ? { [NAV_KEY]: true, [INBOX_FROM_KEY]: true } : { [NAV_KEY]: true };
       // a move that leaves the open file behind takes the file's entry: no entry is left between
-      if (fileLeft && !kept) window.history.replaceState({ [NAV_KEY]: true }, "", url);
-      else window.history.pushState({ [NAV_KEY]: true }, "", url);
+      // leaving the list is never that: the list's own entry stays under the pane
+      if (fileLeft && !kept && !leftInbox) window.history.replaceState(state, "", url);
+      else window.history.pushState(state, "", url);
       // a file left on the pane moved to opens over the move's entry, as its own (#3179)
       if (selectedPaneId !== null) restoreFileRef.current(selectedMachineId, selectedPaneId);
     } else window.history.replaceState(kept && !popped ? withoutFile(window.history.state) : window.history.state, "", url);
-  }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected, released]);
+  }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newSessionMachineId, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected, released, inboxShown, inboxEnabled]);
   useEffect(() => {
     shownSelection.current = { machineId: selectedMachineId, paneId: selectedPaneId };
   }, [selectedMachineId, selectedPaneId]);
@@ -191,7 +225,15 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
       // opened with the page does, settled against its roster or answered with a note once they are
       if (machinesRef.current.length === 0) {
         // an entry that asks for nothing drops a creation the page or an earlier entry left waiting
-        if (!link.pane && !link.workspace && !link.create) { pendingCreate.current = null; return; }
+        // an absolute file with no pane is not the list's place, as at a cold start (lib/agentInbox.ts inboxStartsOpen): the list gives way to it
+        if (!link.pane && !link.workspace && !link.create) {
+          pendingCreate.current = null;
+          // the list it leaves is written over the entry, not pushed
+          if (fileFromLink(link) !== null) { if (inboxRef.current.shown) { inboxRef.current.leave(); poppedTo.current = true; } }
+          else if (inboxRef.current.enabled) inboxRef.current.show();
+          return;
+        }
+        if (link.pane || link.workspace) inboxRef.current.leave();
         if (!link.create) setNewSessionOpen(false);
         pendingCreate.current = link.create ?? null;
         selectTargetRef.current(link.machine, link.pane, link.view ?? undefined);
@@ -218,12 +260,20 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
         if (pane === null) {
           // the dialog opens over the pane already shown on its PC; another PC's fallback pane is picked
           if (link.create && selectionRef.current.machineId !== link.machine) { poppedTo.current = true; popMoving.current = true; selectTargetRef.current(link.machine, null); }
+          // a place with no pane is the list's, on a phone that has it; an absolute file with no pane is not (above)
+          if (fileFromLink(link) !== null) { if (inboxRef.current.shown) { inboxRef.current.leave(); poppedTo.current = true; } }
+          else if (inboxRef.current.enabled) inboxRef.current.show();
           return;
         }
+        // the list covered the pane: the entry's pane is shown and written over the entry, not pushed
+        const fromInbox = inboxRef.current.shown;
+        inboxRef.current.leave();
+        if (fromInbox) poppedTo.current = true;
         const current = selectionRef.current;
         // the entry's lens is drawn over the pane's own, as a tapped notification's is. Where it
         // lands is written over the entry, so Forward keeps the entries after it
         if (current.machineId !== link.machine || current.paneId !== pane) { poppedTo.current = true; popMoving.current = true; selectTargetRef.current(link.machine, pane, link.pane === pane ? link.view ?? undefined : undefined); return; }
+        if (fromInbox) return;
       }
       // the same pane, or no PC to go to: the entry landed on may still say what is no longer shown
       // (the address a link to Settings opened the page with, under the dialog's own entries), so it says it now

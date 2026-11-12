@@ -144,6 +144,7 @@ const BASE: Record<string, string> = {
   "Connecting to Ovis…": "Ovis에 연결하는 중…",
   "Close workspace list": "워크스페이스 목록 닫기",
   "Open workspace list": "워크스페이스 목록 열기",
+  "Back to agents": "에이전트 목록으로",
   "Show workspace list": "워크스페이스 목록 보이기",
   "Workspace list": "워크스페이스 목록",
   "Hide workspace list": "워크스페이스 목록 숨기기",

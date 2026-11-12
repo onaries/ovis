@@ -110,6 +110,10 @@ export function useWaitingRosters(shown: readonly Machine[], selected: Machine |
 /** The header's controls drawn over the open drawer, its top row: the toggle that closes it and New workspace's +. */
 const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle, .app-header .new-workspace-button")];
 
+/** The header's first button a closed drawer gives the focus back to: the drawer toggle, else Back to agents drawn in its place (App.tsx). */
+export const drawerReturnButton = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>(".app-header .drawer-toggle") ?? document.querySelector<HTMLElement>(".app-header .inbox-back");
+
 /**
  * A phone's open drawer is a dialog over the pane (App.tsx gives it the role): Tab goes round its own controls
  * and the header's toggle and + drawn over it (its top row), the pane column is inert under it, and the focus
@@ -135,7 +139,7 @@ export function useDrawerDialog(open: boolean, setOpen: (open: boolean) => void,
     if (open || !wasOpen.current) return;
     const active = document.activeElement;
     const lost = active === null || active === document.body || (surface.current?.contains(active) ?? false);
-    const back = opener.current?.closest(".app-header") != null ? opener.current : escaped.current || lost ? document.querySelector<HTMLElement>(".app-header .drawer-toggle") : null;
+    const back = opener.current?.closest(".app-header") != null ? opener.current : escaped.current || lost ? drawerReturnButton() : null;
     opener.current = null;
     escaped.current = false;
     wasOpen.current = false;

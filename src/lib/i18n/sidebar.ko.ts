@@ -1,7 +1,7 @@
 /**
  * Korean for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx.
+ * components/SidebarSplit.tsx, components/AgentInbox.tsx.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_KO: Record<string, string> = {
@@ -34,6 +34,10 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Loading agents…": "에이전트 불러오는 중…",
   "Herdr workspaces": "herdr 워크스페이스",
   "No agents running": "실행 중인 에이전트가 없습니다",
+  "Search agents": "에이전트 검색",
+  "Clear search": "검색어 지우기",
+  "Filter agents by state": "상태로 에이전트 거르기",
+  "No agents match": "맞는 에이전트가 없습니다",
   "Expand worktrees of {name}": "{name}의 워크트리 펼치기",
   "Collapse worktrees of {name}": "{name}의 워크트리 접기",
   "Agents: {names}": "에이전트: {names}",

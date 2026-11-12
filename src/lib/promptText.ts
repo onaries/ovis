@@ -109,7 +109,7 @@ export function polledPrompt(current: InteractivePrompt | null, next: Interactiv
 }
 
 /** At most `limit` UTF-16 units of `text`, never ending on half of a character (a lone high surrogate). */
-function capped(text: string, limit: number): string {
+export function capped(text: string, limit: number): string {
   const cut = text.slice(0, limit);
   const last = cut.charCodeAt(cut.length - 1);
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
