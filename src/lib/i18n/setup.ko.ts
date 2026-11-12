@@ -22,6 +22,7 @@ export const SETUP_KO: Record<string, string> = {
   "Show details": "자세히 보기",
   "Agents you can install": "설치할 수 있는 에이전트",
   "No other agents to install here.": "여기 더 설치할 에이전트가 없어요.",
+  "An agent your shell's startup file (.zshrc) puts on PATH may be missing here: Ovis could not read that PATH. Check again reads it once more.": "셸 시작 파일(.zshrc)이 PATH에 넣는 에이전트가 여기 없을 수 있어요. Ovis가 그 PATH를 읽지 못했습니다. 다시 확인을 누르면 한 번 더 읽어요.",
   "None on this PC yet.": "이 PC에는 아직 없어요.",
   "Ovis cannot tell which agents this PC has. Install them from a terminal on it.": "Ovis는 이 PC에 어떤 에이전트가 있는지 알 수 없어요. 이 PC의 터미널에서 설치하세요.",
   "Ovis needs {version} or later.": "Ovis에는 {version} 이상이 필요해요.",

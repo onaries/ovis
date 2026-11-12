@@ -349,7 +349,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const local = machineId === "local";
 
   // the PC's catalog: each Check again, and each install that finished, reads it again
-  const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[] } | null>(null);
+  const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[]; pathProblem: string | null } | null>(null);
   const [catalogError, setCatalogError] = useState<UserError | null>(null);
   const [reads, setReads] = useState(0);
   // a read under way: Check again says so and takes no second press until it lands (G-113)
@@ -361,8 +361,9 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
     const abort = new AbortController();
     setCatalogError(null);
     setChecking(true);
-    fetchAgentCatalog(machineId, abort.signal).then(
-      (answer) => setCatalog({ machineId, agents: answer.agents }),
+    // every read after the first (Check again, a finished install) has the PC read its shells' PATH again
+    fetchAgentCatalog(machineId, abort.signal, reads > 0).then(
+      (answer) => setCatalog({ machineId, agents: answer.agents, pathProblem: answer.path_problem ?? null }),
       (reason: unknown) => {
         if (abort.signal.aborted) return;
         // a PC on an Ovis from before the catalog answers 404 for it
@@ -439,6 +440,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
           <button type="button" ref={checkAgain} className="btn btn-ghost agents-check-again" aria-disabled={checking || undefined} aria-busy={checking || undefined} onClick={() => { if (!checking) setReads((count) => count + 1); }}><RotateCw aria-hidden="true" />{t(checking ? "Checking…" : "Check again")}</button>
         </SectionHead>
         {/* a failed read, the first or a Check again: the rows the last good one gave stay, with the error beside them */}
+        {catalog !== null && catalog.machineId === machineId && catalog.pathProblem !== null && <p className="settings-hint agents-note" role="status">{t("An agent your shell's startup file (.zshrc) puts on PATH may be missing here: Ovis could not read that PATH. Check again reads it once more.")}<br /><code>{catalog.pathProblem}</code></p>}
         {catalogError !== null && <p className="settings-hint agents-note" role="alert">{catalogError.message}{catalogError.detail !== null && <><br /><code>{catalogError.detail}</code></>}</p>}
         {agents === null ? catalogError === null && <div className="settings-card"><p className="settings-item settings-hint" role="status">{t("Loading…")}</p></div>
           : page === null ? null

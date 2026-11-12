@@ -374,8 +374,8 @@ export function createServer(
     if (path === null) return null;
     try { return { path, mark: String(statSync(path).mtimeMs) }; } catch { return null; }
   };
-  const herdrKinds = new InstalledLookup({ onPath: (binary) => agentDetector.onPath(binary), inInstallFolder: installFolder, refresh: () => agentDetector.refreshPath() });
-  const shellKinds = new InstalledLookup({ onPath: (kind) => shellAgents.executable(kind), inInstallFolder: installFolder, refresh: () => shellAgents.refresh() });
+  const herdrKinds = new InstalledLookup({ onPath: (binary) => agentDetector.onPath(binary), inInstallFolder: installFolder, refresh: (interactive) => agentDetector.refreshPath(interactive) });
+  const shellKinds = new InstalledLookup({ onPath: (kind) => shellAgents.executable(kind), inInstallFolder: installFolder, refresh: (interactive) => shellAgents.refresh(interactive) });
   const agentOffered = async (kind: string): Promise<boolean> => {
     const entry = AGENT_CATALOG.find((candidate) => candidate.id === kind);
     // a program it needs to run (DeepSeek Harness's dsh behind dsh-tui) missing: not offered, as the catalog says

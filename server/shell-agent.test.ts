@@ -2,10 +2,11 @@ import { afterEach, expect, it, jest, mock, spyOn } from "bun:test";
 import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import * as client from "./herdr/client.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
-import { loginPathProbe, paneShell, parseLoginPath, powershellNativeArgs, shellAgentExecutable, ShellAgentLocator, shellCommandLine, startShellAgent, type LoginPathProbe, type LoginPathResult } from "./shell-agent.ts";
+import { catalogLocator } from "./agent-catalog-detect.ts";
+import { agentPathProbe, loginPathProbe, paneShell, parseLoginPath, powershellNativeArgs, shellAgentExecutable, ShellAgentLocator, shellCommandLine, startShellAgent, type LoginPathProbe, type LoginPathResult } from "./shell-agent.ts";
 import { descendantArgv, descendantProcesses, parseProcessTable, windowsArgv, windowsProcessTable } from "./windows-processes.ts";
 
 it("tells a pane's shell from the program herdr reports in front", () => {
@@ -201,6 +202,131 @@ it("reads the login PATH between its markers, whatever the profile prints around
   expect(parseLoginPath("/a:/b\n")).toBeNull();
   expect(parseLoginPath("__OVIS_LOGIN_PATH__\n/a\nno end\n")).toBeNull();
   expect(parseLoginPath("__OVIS_LOGIN_PATH__\n\n__OVIS_LOGIN_PATH_END__\n")).toBeNull();
+});
+
+/**
+ * A login shell that also takes `-i`, as zsh does: `-l` sets the login PATH, `-i` runs `rc` (a
+ * .zshrc) and puts gjc's folder in front of it. Only gjc's folder is `rcBin`, so only `-i` finds it.
+ */
+function rcFixture(rc = ":") {
+  const f = fixture();
+  const rcBin = join(f.root, "rc bin");
+  mkdirSync(rcBin);
+  const gjc = join(rcBin, "gjc");
+  writeFileSync(gjc, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  unlinkSync(f.gjc);
+  const shell = join(f.root, "interactive-shell");
+  writeFileSync(shell, [
+    "#!/bin/sh",
+    "PATH=/usr/bin:/bin",
+    'while :; do case "$1" in -l) PATH="' + f.loginBin + ':$PATH"; shift;; -i) ' + rc + '; PATH="' + rcBin + ':$PATH"; shift;; *) break;; esac; done',
+    "export PATH",
+    '[ "$1" = "-c" ] && exec /bin/sh -c "$2"',
+    "exit 64",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  return { ...f, rcBin, gjc, shell };
+}
+
+it("finds an agent a pane's interactive shell puts on PATH (zsh's .zshrc), and keeps the login PATH where that shell gives none", async () => {
+  const f = rcFixture();
+  // the login shell alone misses it: what hid Claude Code from the desktop app's agent list on a Mac
+  expect(await new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe: loginPathProbe({ shell: f.shell, env: f.env }) }).executable("gjc")).toBeNull();
+  expect(await once(agentPathProbe({ shell: f.shell, env: f.env }))).toEqual({ path: `${f.rcBin}:${f.loginBin}:/usr/bin:/bin` });
+  expect(await new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe: agentPathProbe({ shell: f.shell, env: f.env }) }).executable("gjc")).toBe(f.gjc);
+  // a shell whose interactive run fails still answers with its login PATH
+  const plain = fixture();
+  expect(await once(agentPathProbe({ shell: plain.shell, env: plain.env }))).toEqual({ path: `${plain.loginBin}:/usr/bin:/bin` });
+  // and one that fails both ways says why
+  const failing = fixture("exit 3");
+  const failed = await once(agentPathProbe({ shell: failing.shell, env: failing.env }));
+  expect(failed.path).toBeNull();
+  expect(failed.path === null && failed.reason).toContain("exit 3");
+});
+
+it("runs the interactive shell once until asked to read it again, with the marker a profile can skip on", async () => {
+  // each run of .zshrc leaves a line with the marker's value
+  const f = rcFixture('echo "x$OVIS_PATH_PROBE" >> "$HOME/rc-runs"');
+  const runs = () => existsSync(join(f.home, "rc-runs")) ? readFileSync(join(f.home, "rc-runs"), "utf8").split("\n").filter(Boolean) : [];
+  const probe = agentPathProbe({ shell: f.shell, env: f.env, rereadGapMs: 0 });
+  await Promise.all([once(probe), once(probe)]);
+  expect(await once(probe)).toEqual({ path: `${f.rcBin}:${f.loginBin}:/usr/bin:/bin` });
+  expect(runs()).toEqual(["x1"]);
+  probe.reread();
+  await once(probe);
+  expect(runs()).toEqual(["x1", "x1"]);
+  // a locator's own refresh reads it again; its ttl-driven runs do not
+  let clock = 0;
+  const locator = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe, now: () => clock });
+  await locator.executable("gjc");
+  clock += 120_000;
+  await locator.executable("omo");
+  expect(runs()).toHaveLength(2);
+  await locator.refresh(false);
+  expect(runs()).toHaveLength(2);
+  await locator.refresh();
+  expect(runs()).toHaveLength(3);
+  // so does the catalog's
+  const locate = catalogLocator({ probe, servicePath: () => "/nonexistent" });
+  expect(await locate("gjc")).toBe(f.gjc);
+  expect(runs()).toHaveLength(3);
+  await locate.refresh?.();
+  expect(runs()).toHaveLength(4);
+});
+
+it("an interactive shell that outruns its time leaves the login PATH, is not run again for the next lookups, and says why, once", async () => {
+  const f = rcFixture('echo x >> "$HOME/rc-runs"; sleep 30');
+  const runs = () => readFileSync(join(f.home, "rc-runs"), "utf8").split("\n").filter(Boolean).length;
+  const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const probe = agentPathProbe({ shell: f.shell, env: f.env, timeoutMs: 300 });
+    expect(await once(probe)).toEqual({ path: `${f.loginBin}:/usr/bin:/bin` });
+    expect(probe.problem()).toContain("timed out after 300 ms");
+    // kept: the next lookups do not run (and wait on) it again, and it is logged once
+    expect(await once(probe)).toEqual({ path: `${f.loginBin}:/usr/bin:/bin` });
+    expect(await once(probe)).toEqual({ path: `${f.loginBin}:/usr/bin:/bin` });
+    expect(runs()).toBe(1);
+    expect(warn.mock.calls.filter(([line]) => String(line).includes("interactive shell PATH not read"))).toHaveLength(1);
+    // the catalog tells it
+    expect(catalogLocator({ probe, servicePath: () => "/nonexistent" }).problem?.()).toContain("timed out");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+it("a reread asked for while a run is out gets a run that starts after it, and rereads within the gap share one", async () => {
+  // the .zshrc puts gjc's folder on PATH only once `added` exists, and each run says it ran
+  const f = rcFixture('echo x >> "$HOME/rc-runs"; [ -e "$HOME/added" ] || return 0 2>/dev/null || exit 0');
+  const runs = () => readFileSync(join(f.home, "rc-runs"), "utf8").split("\n").filter(Boolean).length;
+  const probe = agentPathProbe({ shell: f.shell, env: f.env, rereadGapMs: 0 });
+  const first = once(probe);
+  // the folder is added while that run is out (it may have read .zshrc already): the reread's run follows it
+  writeFileSync(join(f.home, "added"), "");
+  probe.reread();
+  const second = once(probe);
+  await first;
+  expect((await second).path).toBe(`${f.rcBin}:${f.loginBin}:/usr/bin:/bin`);
+  expect(runs()).toBe(2);
+  // rereads asked for before the gap since the last run ends share one run, which waits for it
+  const gapped = agentPathProbe({ shell: f.shell, env: f.env, rereadGapMs: 300 });
+  await once(gapped);
+  for (let i = 0; i < 5; i++) gapped.reread();
+  const asked = [once(gapped), once(gapped)];
+  gapped.reread();
+  asked.push(once(gapped));
+  await Promise.all(asked);
+  expect(runs()).toBe(4);
+});
+
+it("never takes a relative PATH entry a .zshrc adds, which would make the server's folder an agent's", async () => {
+  // `./node_modules/.bin` is a common .zshrc line: here the same folder written relative to this process's
+  const f = rcFixture();
+  const relativeBin = relative(process.cwd(), f.rcBin);
+  const shell = join(f.root, "relative-shell");
+  writeFileSync(shell, `#!/bin/sh\nPATH='${relativeBin}:${f.loginBin}:/usr/bin:/bin'; export PATH\n[ "$1" = "-l" ] && shift\n[ "$1" = "-c" ] && exec /bin/sh -c "$2"\nexit 64\n`, { mode: 0o755 });
+  const locator = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe: loginPathProbe({ shell, env: f.env }) });
+  expect(await locator.executable("gjc")).toBeNull();
+  expect(await catalogLocator({ probe: loginPathProbe({ shell, env: f.env }), servicePath: () => "/nonexistent" })("gjc")).toBeNull();
 });
 
 it("service miss resolves the same executable for offer and start", async () => {

@@ -11,8 +11,8 @@ export interface PathLookup {
   onPath(binary: string): Promise<string | null>;
   /** the binary in its installer's folder; `mark` changes with each install (its file's mtime) */
   inInstallFolder(binary: string): { path: string; mark: string } | null;
-  /** reads the login shell's PATH again, after any read already out */
-  refresh(): Promise<void>;
+  /** reads the login shell's PATH again, after any read already out; `interactive`: the interactive shell's too */
+  refresh(interactive: boolean): Promise<void>;
 }
 
 /** How long an install still missing from the PATH waits before the PATH is read again for it. */
@@ -43,7 +43,8 @@ export class InstalledLookup {
       return (await this.#lookup.onPath(binary)) !== null;
     }
     const entry: { running: Promise<void> | null; at: number } = { running: null, at: 0 };
-    entry.running = this.#lookup.refresh().catch(() => undefined).finally(() => { entry.running = null; entry.at = this.#now(); });
+    // the interactive shell (which runs the user's .zshrc) is asked again for a new install only, not on each retry
+    entry.running = this.#lookup.refresh(last === undefined).catch(() => undefined).finally(() => { entry.running = null; entry.at = this.#now(); });
     this.#refreshes.set(install, entry);
     await entry.running;
     return (await this.#lookup.onPath(binary)) !== null;

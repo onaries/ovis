@@ -6,6 +6,8 @@ import { join } from "node:path";
 
 import { AGENT_CATALOG, catalogPlatform, type AgentCatalogResponse } from "../shared/agent-catalog.ts";
 import { AgentDetector, catalogLocator, runVersion } from "./agent-catalog-detect.ts";
+import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
+import type { LoginPathProbe } from "./shell-agent.ts";
 import { createServer } from "./index.ts";
 import * as runtime from "./herdr-core/runtime.ts";
 import { handleMachineRequest } from "./machine-api.ts";
@@ -104,6 +106,27 @@ describe("GET /api/agent-catalog", () => {
     const direct = await (await fetch(url("/api/agent-catalog"), { headers: bearer(BROWSER_TOKEN) })).json();
     expect(await response.json()).toEqual(direct);
   });
+});
+
+it("says why the interactive shell's PATH was not read, and has Check again read it afresh", async () => {
+  let rereads = 0;
+  let problem: string | null = "/bin/zsh -l timed out after 2000 ms";
+  const probe: LoginPathProbe = Object.assign(async () => ({ path: "/nonexistent" }), { reread: () => { rereads += 1; problem = null; }, problem: () => problem });
+  const home = mkdtempSync(join(tmpdir(), "ovis-catalog-problem-"));
+  try {
+    const detector = new AgentDetector({ locate: catalogLocator({ probe, servicePath: () => "/nonexistent" }), home, env: {} });
+    const read = async (query: string, readOnly = false) => (await (await handleAgentCatalogRequest(new Request(`http://ovis/api/agent-catalog${query}`), "/api/agent-catalog", detector, "linux", readOnly))!.json()) as AgentCatalogResponse;
+    expect((await read("")).path_problem).toBe("/bin/zsh -l timed out after 2000 ms");
+    expect(rereads).toBe(0);
+    // a watching device reads it as kept: it never has the user's shell run again
+    expect((await read("?recheck=1", true)).path_problem).toBe("/bin/zsh -l timed out after 2000 ms");
+    expect(rereads).toBe(0);
+    const again = await read("?recheck=1");
+    expect(rereads).toBe(1);
+    expect("path_problem" in again).toBe(false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 it("serves the first agent catalog GET from the startup warm cache without another version read", async () => {

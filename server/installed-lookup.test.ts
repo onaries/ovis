@@ -8,11 +8,12 @@ function fake() {
   let next = new Set<string>();
   let path = new Set<string>();
   let refreshes = 0;
+  const asked: boolean[] = [];
   let held: ReturnType<typeof Promise.withResolvers<void>> | null = null;
   const lookup: PathLookup = {
     onPath: async (binary) => path.has(binary) ? `/home/u/.local/bin/${binary}` : null,
     inInstallFolder: (binary) => folder.has(binary) ? { path: `/home/u/.local/bin/${binary}`, mark: "1" } : null,
-    refresh: async () => { refreshes += 1; if (held !== null) await held.promise; path = new Set(next); },
+    refresh: async (interactive) => { refreshes += 1; asked.push(interactive); if (held !== null) await held.promise; path = new Set(next); },
   };
   return {
     lookup,
@@ -21,6 +22,8 @@ function fake() {
     profiled: (binary: string) => { next.add(binary); },
     hold: () => { held = Promise.withResolvers<void>(); return held; },
     refreshes: () => refreshes,
+    /** whether each refresh asked the interactive shell (its .zshrc) again too */
+    asked: () => asked,
   };
 }
 
@@ -54,6 +57,17 @@ describe("InstalledLookup", () => {
     gate.resolve();
     expect(await Promise.all([first, second])).toEqual([true, true]);
     expect(f.refreshes()).toBe(1);
+  });
+
+  it("asks the interactive shell again for a new install only, never on a retry", async () => {
+    let now = 0;
+    const f = fake();
+    const installed = new InstalledLookup(f.lookup, () => now);
+    f.installed("claude", false);
+    expect(await installed.has("claude")).toBe(false);
+    now += RETRY_MS;
+    expect(await installed.has("claude")).toBe(false);
+    expect(f.asked()).toEqual([true, false]);
   });
 
   it("reads the PATH again, at most every RETRY_MS, while the install is still missing from it (the installer edits the profile after its binary)", async () => {

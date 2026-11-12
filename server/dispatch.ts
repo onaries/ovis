@@ -785,7 +785,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
 
   const installResponse = await agentInstaller.handle(request, pathname);
   if (installResponse) return installResponse;
-  const catalogResponse = await handleAgentCatalogRequest(request, pathname, agentDetector);
+  const catalogResponse = await handleAgentCatalogRequest(request, pathname, agentDetector, undefined, readOnly);
   if (catalogResponse) return catalogResponse;
 
   const integrationsResponse = await handleIntegrationsRequest(request, pathname);

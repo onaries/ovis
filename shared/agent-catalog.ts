@@ -151,6 +151,11 @@ export interface AgentCatalogResponse {
   /** null: a platform the catalog has no commands for */
   platform: CatalogPlatform | null;
   agents: AgentCatalogRow[];
+  /**
+   * why this PC's interactive shell PATH (zsh's .zshrc) could not be read: an agent only it puts on
+   * PATH reads as not installed. Absent when it was read, and from an older server.
+   */
+  path_problem?: string;
 }
 
 /** One entry as a PC on `platform` answers it, with what that PC found (server/agent-catalog-routes.ts, the demo). */
