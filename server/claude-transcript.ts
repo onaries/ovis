@@ -422,6 +422,8 @@ export interface TranscriptEntry {
   uuid?: string;
   parentUuid?: string | null;
   isMeta?: boolean;
+  /** an answer Claude Code wrote for a request the API refused (a rate limit, an overloaded model): its text is the error */
+  isApiErrorMessage?: boolean;
   isCompactSummary?: boolean;
   origin?: unknown;
   permissionMode?: unknown;
@@ -779,7 +781,9 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         if (typeof block !== "object" || block === null) continue;
         const b = block as { type?: string; text?: unknown; thinking?: unknown; name?: unknown; input?: unknown };
         if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
-          turn.parts.push({ kind: "text", text: b.text, ...(state.completed ? { phase: "final_answer" as const } : {}) });
+          // the API refused the request: the failed request every reader shows, in Claude Code's own words, never an answer
+          turn.parts.push(entry.isApiErrorMessage === true ? { kind: "text", text: b.text, failed: true }
+            : { kind: "text", text: b.text, ...(state.completed ? { phase: "final_answer" as const } : {}) });
         } else if (b.type === "thinking") {
           const thinking = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "";
           // the terminal prints an "updates" entry's thinking as narration between the tools, so it
