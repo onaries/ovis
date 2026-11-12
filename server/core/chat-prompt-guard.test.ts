@@ -11,6 +11,8 @@ const pane: HerdrPane = { pane_id: "chat-guard", workspace_id: "w", tab_id: "t",
 beforeEach(() => {
   spyOn(client, "paneGet").mockResolvedValue(pane);
   spyOn(client, "paneProcessInfo").mockResolvedValue(undefined);
+  // pi's box, read before the send (composer.ts freeAgentInput): empty
+  spyOn(client, "paneRead").mockResolvedValue({ text: "" } as Awaited<ReturnType<typeof client.paneRead>>);
 });
 
 const submitter = () => createSubmitText({

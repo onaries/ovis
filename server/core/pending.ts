@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeBackslash, closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, OMP_REPORT_POLL_MS, OMP_STARTUP_MS, ompStartingUntil, pendingFault, pendingIdentity, pendingText, submitFraming, untilOmpReported } from "./composer.ts";
+import { closeBackslash, closeMention, type createSubmitText, freeAgentInput, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, OMP_REPORT_POLL_MS, OMP_STARTUP_MS, ompStartingUntil, pendingFault, pendingIdentity, pendingText, submitFraming, untilOmpReported } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -776,6 +776,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (context.identity.agent === "claude") await freeClaudeBox(paneId, context.working, () => authorizePending(owner, paneId, lease), arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS), automatic || queued)
         .catch((error: unknown) => { throw error instanceof InputDraftError ? new InputDraftError(error.draft, context.identity, error.box) : error; });
       else if (context.identity.agent === "hermes") context.screen = await freeHermesInput(paneId, context.identity);
+      // any other agent's box, where its recorded shape shows typed text (freeAgentInput)
+      else await freeAgentInput(paneId, context.identity.agent, context.identity);
       // OpenCode v2 attaches a skill only through its autocomplete, never from a paste. A first message
       // goes before any Chat read the pane's catalog: the cold send's catalog (bounded reads, within the
       // catalog budget, at the pane's own version) is openCodeSkillsToType's, as for any other send

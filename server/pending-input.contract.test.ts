@@ -1231,13 +1231,14 @@ describe("connection-owned pending input", () => {
 
   // #511: Send now types a held message only as the immediate path would: never past Codex's collapsed queue for an agent alone
   it("refuses Send now of a held agent-only message while Codex's collapsed queue blocks it, typing nothing", async () => {
-    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  gpt-6.1 default · /workspace\n";
+    // Codex draws its placeholder dim: no typed text in its composer (composer.ts freeAgentInput)
+    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› \u001b[2mAsk Codex to do anything\u001b[0m\n  gpt-6.1 default · /workspace\n";
     for (const agentOnly of [true, false]) {
       const f = await setup(`hold-collapsed-${agentOnly}`, "codex");
       f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "> backup.txt\nkeep it", payload: "unused\r", delivery: "hold", ...(agentOnly ? { agent_only: true } : {}) });
       const answer = await f.socket.result(1);
       expect(answer).toMatchObject({ ok: true, pending: { request_id: 1, state: "held" } });
-      await f.showScreen(queueScreen); await f.state("blocked");
+      await f.showScreen(queueScreen, "  gpt-6.1 default · /workspace\n"); await f.state("blocked");
       f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: answer.pending.id, action: "steer" });
       if (agentOnly) {
         expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "agent_blocked" });
@@ -1253,9 +1254,10 @@ describe("connection-owned pending input", () => {
   // #511: a queued message for an agent alone waits through a turn that ends behind Codex's collapsed queue, and a
   // resend of its saved copy that names no flag is still for an agent alone (the server's record says so)
   it("keeps a queued agent-only message out of a collapsed Codex queue, its resend agent-only too", async () => {
-    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  gpt-6.1 default · /workspace\n";
+    // Codex draws its placeholder dim: no typed text in its composer (composer.ts freeAgentInput)
+    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› \u001b[2mAsk Codex to do anything\u001b[0m\n  gpt-6.1 default · /workspace\n";
     const f = await setup("queue-collapsed", "codex");
-    await f.showScreen(queueScreen);
+    await f.showScreen(queueScreen, "  gpt-6.1 default · /workspace\n");
     f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "> backup.txt\nkeep it", payload: "unused\r", delivery: "queue", agent_only: true });
     const answer = await f.socket.result(1);
     expect(answer).toMatchObject({ ok: true, pending: { request_id: 1, state: "queued" } });
@@ -1481,6 +1483,25 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe("");
     // the draft sent or cleared in the terminal, Send now delivers the message
     await f.showScreen(`  \u273b Cooked for 1s\n${rule}\n\u276f \u001b[2mrun the tests\u001b[0m\n${rule}\n  ${footer} \n`, `${footer} `);
+    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+    expect(await f.socket.action(10)).toMatchObject({ ok: true });
+    await f.removed(message.id);
+    await f.waitBytes(`${paste("queued message")}\r`);
+  }, 30_000);
+
+  it("holds a queued message rather than pasting it over text typed in Codex's composer (freeAgentInput)", async () => {
+    const footer = "  GPT-6.1-Sol default \u00b7 ~/project";
+    const f = await setup("codex-draft", "codex");
+    // Codex draws its footer in colour: the box check takes colours as its evidence, never a colourless read
+    await f.showScreen(`\u203a half a thought typed in the terminal\n\n\u001b[2m${footer}\u001b[0m\n`, footer);
+    const message = await f.queue(1, "queued message");
+    await f.state("idle");
+    const held = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+      && frame.messages.some((item: PendingMessage) => item.id === message.id && item.state === "held"));
+    expect(held.messages.find((item: PendingMessage) => item.id === message.id).error.code).toBe("input_draft");
+    expect(f.bytes()).toBe("");
+    // the draft sent or cleared in the terminal (Codex's placeholder is dim), Send now delivers the message
+    await f.showScreen(`\u203a \u001b[2mAsk Codex to do anything\u001b[0m\n\n${footer} \n`, `${footer} `);
     f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
     expect(await f.socket.action(10)).toMatchObject({ ok: true });
     await f.removed(message.id);

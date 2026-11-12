@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrError } from "../herdr/client.ts";
@@ -150,6 +150,18 @@ it("sends into a Claude-labelled omo pane without Claude's draft refusal, and st
   expect(refused).toBeInstanceOf(HerdrError);
   expect((refused as HerdrError).code).toBe("input_draft");
   expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
+});
+
+it("refuses a send to a pi-labelled omo pane over text typed in OmO's box, typing nothing, and sends over its empty box", async () => {
+  const recorded = (file: string): string => readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/omo", file), "utf8");
+  screens["w:p1"] = recorded("draft-typed-119.ansi");
+  panes["w:p1"] = { agent: "pi", process: [await heldOmo()] };
+  const refused = await submitter()("w:p1", "hello", "hello", Date.now()).catch((error: unknown) => error);
+  expect((refused as HerdrError).code).toBe("input_draft");
+  expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
+  screens["w:p1"] = recorded("draft-empty-119.ansi");
+  await submitter()("w:p1", "hello", "hello", Date.now());
+  expect(calls.some((call) => call.method === "agent.prompt" && call.params.text === "hello")).toBeTrue();
 });
 
 it("pastes a multiline message into an unlabelled omo pane as one bracketed paste, and leaves another shell's bare", async () => {

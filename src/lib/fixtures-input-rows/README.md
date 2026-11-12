@@ -27,6 +27,16 @@ Screens opened to list the account's own sessions, usage, MCP servers or status 
 gjc `/sessions` open, Devin `/status` and `/mcp`, agy `/resume` and `/usage`) are not here. The
 scratch folder paths under the temporary directory are kept.
 
+## `pi/draft-*`, `omo/draft-*`: the chat send's draft check
+
+Recorded 2026-11-12 in an isolated herdr session (herdr 0.9.5, 119 columns by 40 rows) for the chat send's
+check of text typed into an agent's own box (`shared/input-row.ts` `typedDraft`), read by
+`src/lib/inputRow.test.ts` and `server/core/agent-input-send.test.ts`. pi 1.4.0 (no model signed in) and OmO
+5.1.69 ran in a scratch folder with `PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 SENPI_OMO_LOCAL_UPDATE=0`, so neither
+looked for an update. Each screen is `herdr pane read --source visible --format ansi`:
+`draft-empty` at rest, `draft-typed` with `leftover draft` typed into the box, `draft-slash` with `/mo` typed and
+the command list open. Redacted: the shell's user name and host read `tester0` and `host000`, at their width.
+
 ## `codex-0.167.0/`: Codex's own screens, as the bridge reads them
 
 Recorded 2026-11-11 in an isolated herdr session (herdr 0.9.5) for the bridge's rule that no chat

@@ -100,7 +100,9 @@ it("does not preview an unchanged pi screen after immediate delivery without a s
   });
   await submitter()(target.pane_id, "/myext", "/myext", now);
   expect(delivered).toHaveBeenCalledTimes(1);
-  expect(screen).not.toHaveBeenCalled();
+  // no screen baseline after the send: only pi's box was read, before it (composer.ts freeAgentInput)
+  const sentAt = delivered.mock.invocationCallOrder[0]!;
+  expect(screen.mock.invocationCallOrder.filter((order) => order > sentAt)).toEqual([]);
   now++;
   const url = new URL(`http://localhost/api/pane/prompt?pane_id=${target.pane_id}`);
   const shown = await (await handlePromptRequest(new Request(url), url))?.json() as PanePromptResponse;
@@ -141,6 +143,8 @@ it("does not rewrite /model when the resolved pane agent is OmO", async () => {
   spyOn(client, "paneGet").mockResolvedValue(target);
   spyOn(client, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [{ pid: process.pid, argv: ["omo"], cwd: dir }] } } as never);
   spyOn(omo, "omoProcessIdentity").mockReturnValue({ agentDir, heldIds: ["session-1"], custom: true, held: true });
+  // OmO's box, read before the send (composer.ts freeAgentInput): empty
+  spyOn(client, "paneRead").mockResolvedValue({ text: "" } as Awaited<ReturnType<typeof client.paneRead>>);
   const deliver = spyOn(client, "agentPrompt").mockResolvedValue();
   try {
     await submitter()(target.pane_id, "/model", "/model", Date.now());
@@ -168,8 +172,9 @@ for (const dependency of ["process-info", "transcript", "catalog", "snapshot"] a
       if (dependency === "process-info") processInfo.mockImplementation(async () => { disrupt(); return roots; });
       if (dependency === "transcript") transcript.mockImplementation(async () => { disrupt(); return null; });
       if (dependency === "catalog") catalog.mockImplementation(() => { disrupt(); return []; });
+      // the outcome's screen reads after delivery, not the reads of the agent's box before it (composer.ts freeAgentInput)
       if (dependency === "snapshot") snapshot.mockImplementation(async () => {
-        disrupt(); return screen;
+        if (delivered.mock.calls.length > 0) disrupt(); return screen;
       });
       const result = await submitter()(pane.pane_id, "/myext", "/myext", now).then(() => "delivered", (error: unknown) => error);
       expect(result).toBe("delivered");

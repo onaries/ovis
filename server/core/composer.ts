@@ -25,10 +25,13 @@ import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
 import { herdrSkillAttachIo, type SkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
 import { userHome } from "../user-home.ts";
+import { inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
 
 const HERMES_INPUT_DRAFT_MESSAGE = "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message";
+
+const AGENT_INPUT_DRAFT_MESSAGE = "The agent's input box in the terminal holds typed text; send or clear it there, then send this message";
 
 /**
  * input_draft, naming the one-row draft the chat may offer to clear (claudeClearableDraft), or none.
@@ -263,6 +266,43 @@ export async function freeHermesInput(paneId: string, identity?: PendingIdentity
   }
   return live;
 }
+
+/**
+ * Any other agent's input box whose recorded shape reports typed text (shared/input-row.ts typedDraft), refused
+ * with input_draft only when it shows text a person typed: the paste would join it and the Enter send both
+ * (#3627). Unlike Claude's and Hermes' checks, a box this read cannot make out is sent to as before, so a
+ * misreading never refuses every send to an agent. Claude and Hermes keep their own checks.
+ *
+ * herdr gives colours for the viewport alone, which any client may have scrolled into the history, so the
+ * viewport is read first and the live screen last: the colours count only when their text is the live
+ * screen's, and a read without any colour (NO_COLOR, a plain herdr-core read) proves nothing either.
+ * `codexScreens`: the live read is also the one Codex's own screens are refused on (freeCodexInput), so a
+ * dialog that opens between two checks is not pasted into. Text typed after the live read joins the
+ * message: herdr cannot compare and write in one step.
+ */
+export async function freeAgentInput(paneId: string, agent: string | null, identity?: PendingIdentity, codexScreens = false): Promise<void> {
+  if (!readsTypedDraft(agent)) return;
+  // reads that disagree (text typed or redrawn between them) are read again; a viewport that stays apart from the
+  // live screen (scrolled into the history) proves nothing, and the send goes as before
+  for (let round = 0; round < AGENT_BOX_READS; round++) {
+    const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
+    const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+    if (codexScreens && codexOwnScreenOpen(live)) throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
+    if (!colors.includes("\u001b[")) return;
+    if (screenText(colors) !== screenText(live)) continue;
+    const screen = screenFromAnsi(colors);
+    // herdr labels an OmO `pi`: OmO's box where it is drawn is the typing agent's, with no process read to tell them apart
+    const typing = agent === "pi" && inputRowState("omo", screen) !== "gone" ? "omo" : agent;
+    if (typedDraft(typing, screen)) throw new InputDraftError(null, identity, null, AGENT_INPUT_DRAFT_MESSAGE);
+    return;
+  }
+}
+
+/** How many times freeAgentInput reads the viewport and the live screen for a pair that agrees. */
+const AGENT_BOX_READS = 3;
+
+/** A screen read's rows as plain text, each row's and the screen's right edge trimmed. */
+const screenText = (text: string): string => stripVTControlCharacters(text).split(/\r?\n/).map((line) => line.trimEnd()).join("\n").trimEnd();
 
 /**
  * Codex's screen as every chat send reads it last, right before herdr is written to. herdr reports Codex at rest
@@ -654,7 +694,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           }
         }
         // the last read before herdr is written to: one of Codex's own screens gets no paste and no Enter
-        if (agent === "codex") await freeCodexInput(paneId);
+        // and what a person typed into the agent's own box, which the paste would join (Claude's and Hermes' were read
+        // above): for Codex both on the same last read
+        if (pane && !claude && !hermes && readsTypedDraft(agent)) {
+          await freeAgentInput(paneId, agent, identity ?? undefined, agent === "codex");
+          inTime();
+        } else if (agent === "codex") await freeCodexInput(paneId);
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();

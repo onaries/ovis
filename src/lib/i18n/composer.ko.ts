@@ -85,6 +85,7 @@ export const COMPOSER_KO: Record<string, string> = {
   "Not sent: this view only watches the pane.": "보내지 않음: 이 화면은 패널을 보기만 합니다.",
   "Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.": "보내지 않음: 터미널의 Claude Code 입력란이 비어 있지 않습니다. 그곳에서 보내거나 지운 뒤 이 메시지를 보내세요.",
   "Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 Hermes 입력칸이 비어 있지 않습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
+  "Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 에이전트 입력칸에 입력한 글자가 있습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
   "Not sent: Claude Code's input box in the terminal already holds “{draft}”.": "보내지 않음: 터미널의 Claude Code 입력란에 이미 입력된 내용이 있습니다(“{draft}”).",
   "Clear it and send": "지우고 보내기",
   "Send it": "그대로 보내기",
