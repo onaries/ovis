@@ -34,6 +34,8 @@ import { RUNTIME_MOVE_JA } from "./i18n/runtime-move.ja.ts";
 const BASE: Record<string, string> = {
   "Input": "入力",
   "Cache hit rate": "キャッシュヒット率",
+  "Cache": "キャッシュ",
+  "Input including cache": "キャッシュを含む入力",
   "Output": "出力",
   "Send to agent": "エージェントへ送信",
   "Agent waiting on background work": "エージェントがバックグラウンドの作業を待っています",

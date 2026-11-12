@@ -29,13 +29,16 @@ try {
       await page.goto(`http://127.0.0.1:${server.port}`);
       const usage = page.locator(".chat-turn-usage");
       await usage.waitFor();
-      assert.match(await usage.innerText(), /입력/);
-      assert.match(await usage.innerText(), /출력/);
+      assert.match(await usage.innerText(), /↑25.0k/);
+      assert.match(await usage.innerText(), /↓3.7k/);
       assert.match(await usage.innerText(), /75%/);
       await page.locator(".chat-turn").hover();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       const boxes = await usage.locator(":scope > span").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()));
       assert.ok(boxes.every(box => box.left >= 0 && box.right <= width));
+      const time = await page.locator(".chat-agent-meta time").boundingBox();
+      const tokens = await usage.boundingBox();
+      assert.ok(time && tokens && tokens.x >= time.x + time.width + 3, "usage stays one space clear of the time");
       if (evidence) await page.screenshot({ path: join(evidence, `${width}-${theme}.png`) });
       console.log(`PASS ${width}px ${theme}: input, output and 75% cache hit rate, without overflow`);
     } finally { await context.close(); }

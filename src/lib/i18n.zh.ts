@@ -36,6 +36,8 @@ import { RUNTIME_MOVE_ZH } from "./i18n/runtime-move.zh.ts";
 const BASE: Record<string, string> = {
   "Input": "输入",
   "Cache hit rate": "缓存命中率",
+  "Cache": "缓存",
+  "Input including cache": "含缓存的输入",
   "Output": "输出",
   "Send to agent": "发送给代理",
   "Agent waiting on background work": "Agent 正在等待后台工作",

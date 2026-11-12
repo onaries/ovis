@@ -46,9 +46,10 @@ agent's display label is not repeated as a kind, while distinct plugin informati
 
 OmO answer usage follows OpenCode's compact request-cost metadata pattern, adapted to the
 existing copy/time footer rather than adding a panel. The answer remains primary; input,
-output and cache hit rate are quiet, wrapping metadata after its time. Input includes uncached
-input, cache reads and cache writes. The hit rate is summed cache reads divided by summed
-input for the answer's own model requests; background-task tokens are separate. Missing
+output and cache hit rate are quiet, wrapping metadata after its time. The visible up/down
+counters match OmO's uncached input and output, using compact k/m notation. Input including
+cache reads and writes stays in the input tooltip. The hit rate is summed cache reads divided
+by summed total input for the answer's own model requests; background-task tokens are separate. Missing
 usage is omitted, and zero input has no hit rate. Exact token counts remain in the labels
 and tooltips while the visible counts use compact notation. The footer wraps on phones.
 

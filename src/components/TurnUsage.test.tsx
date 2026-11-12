@@ -10,12 +10,22 @@ afterEach(() => {
   else Reflect.deleteProperty(navigator, "languages");
 });
 
-test("answer usage includes cached input and weights cache hits by input tokens", () => {
+test("visible input excludes cache while the hit rate uses all input tokens", () => {
   const markup = renderToStaticMarkup(<SettingsProvider><TurnUsage usage={{ input: 100, output: 25, cache_read: 300, cache_write: 100 }} /></SettingsProvider>);
-  expect(markup).toContain(': 500"');
+  expect(markup).toContain('aria-label="Input: 100"');
+  expect(markup).toContain("↑100");
+  expect(markup).toContain("↓25");
+  expect(markup).toContain("Input including cache: 500");
   expect(markup).toContain(': 25"');
   expect(markup).toContain("60%");
   expect(markup).toContain("300 / 500");
+});
+
+test("OmO compact counters keep uncached 4.0k input apart from millions of cache reads", () => {
+  const markup = renderToStaticMarkup(<SettingsProvider><TurnUsage usage={{ input: 4023, output: 2370, cache_read: 4357632, cache_write: 0 }} /></SettingsProvider>);
+  expect(markup).toContain("↑4.0k");
+  expect(markup).toContain("↓2.4k");
+  expect(markup).toContain("99.9%");
 });
 
 test("missing usage stays hidden and zero input has no invented hit rate", () => {
