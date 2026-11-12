@@ -15,7 +15,7 @@ import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
 import { t, type Vars } from "./i18n.ts";
 import type { ActiveTrigger } from "./mentions.ts";
-import { NO_AGENT_MESSAGE, submitNotTyped } from "../../shared/submit-outcome.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, NO_AGENT_MESSAGE, submitNotTyped } from "../../shared/submit-outcome.ts";
 export { submitNotTyped } from "../../shared/submit-outcome.ts";
 
 /** This cap keeps one composer message inside a single WS frame. */
@@ -165,8 +165,9 @@ export function submitNote(code: string, message: string, agent?: string | null)
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");
   if (code === "input_draft" && agent === "hermes") return t("Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.");
-  // any other agent's box, refused only over text typed there (server/core/composer.ts freeAgentInput)
-  if (code === "input_draft" && agent != null && agent !== "claude") return t("Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.");
+  // any other agent's box, refused only over text typed there (server/core/composer.ts freeAgentInput); its message
+  // names it also where the pane is labelled Claude Code (an OmO with its Claude SDK child)
+  if (code === "input_draft" && (message === AGENT_INPUT_DRAFT_MESSAGE || (agent != null && agent !== "claude"))) return t("Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.");
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "rewind_dialog_open") return t("Not sent: Claude Code's rewind dialog is open in the terminal. Finish or close it there (Esc), then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");

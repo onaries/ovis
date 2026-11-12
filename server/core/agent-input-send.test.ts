@@ -85,6 +85,7 @@ it.each([
   ["pi", ["pi"], "pi/draft-typed-119.ansi"],
   ["codex", ["codex"], "codex-0.167.0/composer-ultra-draft-100.ansi"],
   ["codex", ["codex"], "codex/mention-closed-120.ansi"],
+  ...["gjc", "muse", "qwen", "cline", "dsh-tui"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-typed-119.ansi`]),
 ])("refuses an immediate send to %s over text typed in its input box (%s), typing nothing", async (agent, argv, screen) => {
   pane = { agent, argv };
   screens.visible = recorded(screen);
@@ -97,6 +98,7 @@ it.each([
   // pi's autocomplete pushes its box up past the footer: the box is not made out, so the send goes as before
   ["pi", ["pi"], "pi/draft-slash-119.ansi"],
   ["codex", ["codex"], "codex-0.167.0/composer-ultra-empty-100.ansi"],
+  ...["gjc", "muse", "qwen", "cline", "dsh-tui"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-empty-119.ansi`]),
   // an agent without a recorded box is not read at all
   ["letta", ["letta"], "pi/draft-typed-119.ansi"],
 ])("sends to %s when its box shows no typed text (%s)", async (agent, argv, screen) => {

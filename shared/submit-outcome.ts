@@ -1,6 +1,9 @@
 /** The server refused the message before any of it reached the pane: nothing was typed.
  * Unknown failures are ambiguous on both sides of a held-copy resend. */
 /** The bridge's `agent_not_ready` message when no agent is in front of the pane at all (#511); the same code also says an agent's input state is unknown. */
+/** An input_draft refusal over typed text in an agent's box other than Claude Code's or Hermes' (server/core/composer.ts freeAgentInput). */
+export const AGENT_INPUT_DRAFT_MESSAGE = "The agent's input box in the terminal holds typed text; send or clear it there, then send this message";
+
 export const NO_AGENT_MESSAGE = "No agent is in front of this pane now; nothing was typed";
 
 /**

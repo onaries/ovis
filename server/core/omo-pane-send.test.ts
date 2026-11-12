@@ -144,10 +144,17 @@ it("sends into a Claude-labelled omo pane without Claude's draft refusal, and st
   panes["w:p2"] = { agent: "claude", process: [{ pid: 2147483646, argv: ["/usr/bin/claude"], cwd: root }] };
   await submitter()("w:p1", "hello", "hello", Date.now());
   expect(calls.some((call) => call.method === "agent.prompt" && call.params.text === "hello")).toBeTrue();
-  expect(calls.some((call) => call.method === "pane.read")).toBeFalse();
   calls.length = 0;
   const refused = await submitter()("w:p2", "hello", "hello", Date.now()).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(HerdrError);
+  expect((refused as HerdrError).code).toBe("input_draft");
+  expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
+});
+
+it("refuses a send to a Claude-labelled omo pane over text typed in OmO's box, typing nothing", async () => {
+  screens["w:p1"] = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/omo/draft-typed-119.ansi"), "utf8");
+  panes["w:p1"] = { agent: "claude", process: [await heldOmo()] };
+  const refused = await submitter()("w:p1", "hello", "hello", Date.now()).catch((error: unknown) => error);
   expect((refused as HerdrError).code).toBe("input_draft");
   expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
 });

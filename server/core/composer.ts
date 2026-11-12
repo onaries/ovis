@@ -8,7 +8,7 @@ import { withoutTrailingBreaks } from "../../shared/launch-rules.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { displayWidth, secretPrompt } from "../../shared/secret-prompt.ts";
-import { NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
@@ -25,13 +25,12 @@ import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
 import { herdrSkillAttachIo, type SkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
 import { userHome } from "../user-home.ts";
-import { inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
+import { drawsColour, inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
 
 const HERMES_INPUT_DRAFT_MESSAGE = "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message";
 
-const AGENT_INPUT_DRAFT_MESSAGE = "The agent's input box in the terminal holds typed text; send or clear it there, then send this message";
 
 /**
  * input_draft, naming the one-row draft the chat may offer to clear (claudeClearableDraft), or none.
@@ -288,7 +287,7 @@ export async function freeAgentInput(paneId: string, agent: string | null, ident
     const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
     const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
     if (codexScreens && codexOwnScreenOpen(live)) throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
-    if (!colors.includes("\u001b[")) return;
+    if (!drawsColour(colors)) return;
     if (screenText(colors) !== screenText(live)) continue;
     const screen = screenFromAnsi(colors);
     // herdr labels an OmO `pi`: OmO's box where it is drawn is the typing agent's, with no process read to tell them apart
@@ -522,7 +521,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             throw new HerdrError("pending_target_changed", "The refused message's Claude terminal or session changed; nothing was sent");
           }
         }
-        const claudeRoots = await paneRootsAs(pane, "claude");
+        // read once for a pane herdr labels claude: Claude Code's own roots, or an OmO's (its Claude SDK child) for its box check below
+        const labelledClaude = pane && resolveAgent(pane).agent === "claude" ? await paneProcessRoots(pane.pane_id, "claude") : null;
+        const claudeRoots = labelledClaude && resolveAgent(pane!, typingRoots(labelledClaude)).agent === "claude" ? labelledClaude : null;
         const claude = claudeRoots !== null;
         seen = claudeRoots?.processes;
         // the process lookup waited on herdr: the device may have lost its access meanwhile
@@ -713,8 +714,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         // the last read before herdr is written to: one of Codex's own screens gets no paste and no Enter
         // and what a person typed into the agent's own box, which the paste would join (Claude's and Hermes' were read
         // above): for Codex both on the same last read
-        if (pane && !claude && !hermes && readsTypedDraft(agent)) {
-          await freeAgentInput(paneId, agent, identity ?? undefined, agent === "codex");
+        // an OmO herdr labels `claude` (its Claude SDK child) is found by the process holding its session, as for what is typed
+        const boxAgent = pane && labelledClaude && !claude ? resolveAgent(pane, typingRoots(labelledClaude)).agent : agent;
+        if (pane && !claude && !hermes && readsTypedDraft(boxAgent)) {
+          await freeAgentInput(paneId, boxAgent, identity ?? undefined, boxAgent === "codex");
           inTime();
         } else if (agent === "codex") await freeCodexInput(paneId);
         // and a picker of its own that has an agent's input while herdr reports it at rest (agents no reader knows)

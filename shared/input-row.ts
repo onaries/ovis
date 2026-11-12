@@ -36,6 +36,8 @@ export interface ScreenCell {
   inverse: boolean;
   /** drawn in the terminal's default foreground: a placeholder colour is not */
   fgDefault: boolean;
+  /** the foreground colour as its SGR parameters (`2;204;211;219`, `5;244`), where a read gives it (screenFromAnsi) */
+  fg?: string;
 }
 
 export interface ScreenRow {
@@ -203,9 +205,11 @@ export const piInputRow: InputRowRecognizer = (screen, typed) => {
   if (upper === undefined) return "gone";
   const inner = Array.from({ length: lower - upper - 1 }, (_, offset) => text(upper + 1 + offset));
   if (inner.length === 1 && inner[0]!.trim() === "") return "ready";
-  // the draft check (`typed` given) also takes rows typed with leading spaces (an indented snippet); the peek
-  // reads such rows as a dialog's, and keeps doing so
-  if (inner.length > 0 && inner.length <= 6 && (typed !== undefined || inner.every((row) => !row.startsWith("  ")))
+  // the draft check (`typed` given) also takes rows typed with leading spaces (an indented snippet), which the peek
+  // reads as a dialog's, and keeps doing so; only a dialog's search field (`> `) over its select cursor (`→ `) is none
+  const dialog = inner.some((row) => /^\s*→ /.test(row)) && inner.some((row) => /^\s*>(?: |$)/.test(row));
+  if (inner.length > 0 && inner.length <= 6
+    && (typed === undefined ? inner.every((row) => !row.startsWith("  ")) : !dialog)
     && inner.some((row) => row.trim() !== "") && !inner.some((row) => row.trim() === ">")) {
     for (let index = upper + 1; index < lower; index++) typed?.push(...screen.rows[index]!.cells);
     return "draft";
@@ -249,7 +253,7 @@ export const omoInputRow: InputRowRecognizer = (screen, typed) => {
  * (`Type your message…`, cut short at 40 columns), which gjc draws in its placeholder colour where
  * typed text takes the default one. Panels take the box's place; autocomplete draws under it.
  */
-export const gjcInputRow: InputRowRecognizer = (screen) => {
+export const gjcInputRow: InputRowRecognizer = (screen, typed) => {
   const rows = filled(screen);
   const text = (index: number): string => screen.rows[index]!.text;
   for (let position = rows.length - 1; position >= 2; position--) {
@@ -263,6 +267,7 @@ export const gjcInputRow: InputRowRecognizer = (screen) => {
     const placeholder = body.startsWith("Type your message") && cells.every((cell) => !cell.fgDefault);
     const after = rows.slice(position + 2);
     if (body === "" || placeholder) return after.length === 0 ? "ready" : "covered";
+    typed?.push(...cells);
     return "draft";
   }
   return "gone";
@@ -399,8 +404,67 @@ export function inputRowState(agent: string | null | undefined, screen: ScreenSn
   return RECOGNIZERS[agent!]!(screen);
 }
 
+// ---- boxes read only for the chat send's draft check (the terminal peek does not read them) --------
+// Recorded 2026-11-12 in the agent lab (src/lib/fixtures-input-rows/README.md): empty, typed into, and with
+// their command list open. Each reports only the box's row, and only when the box is drawn whole.
+
+/** how many rows a draft may wrap onto under the box's first row before the box is taken as not made out */
+const BOX_MAX_ROWS = 8;
+
+/**
+ * The box's rows: `mark` at the start of its first (after any indent), the row `above` it a border, and its
+ * draft's wrapped rows down to the row `below` matched as the other border, at most BOX_MAX_ROWS of them.
+ */
+function boxRow(screen: ScreenSnapshot, mark: RegExp, above: RegExp, below: RegExp, typed: ScreenCell[] | undefined): InputRowState {
+  const rows = filled(screen);
+  const text = (index: number): string => screen.rows[index]!.text;
+  for (let position = rows.length - 1; position >= 1; position--) {
+    const index = rows[position]!;
+    const found = mark.exec(text(index));
+    if (!found) continue;
+    if (!above.test(text(rows[position - 1]!))) return "gone";
+    const end = rows.slice(position + 1, position + 1 + BOX_MAX_ROWS).findIndex((row) => below.test(text(row)));
+    if (end < 0) return "gone";
+    const cells = [cellsFrom(screen.rows[index]!, Array.from(found[0]).length), ...rows.slice(position + 1, position + 1 + end).map((row) => screen.rows[row]!.cells)]
+      .flat().filter((cell) => cell.char !== "│");
+    if (cells.every(blank)) return "ready";
+    typed?.push(...cells);
+    return "draft";
+  }
+  return "gone";
+}
+
+const FULL_RULE = /^\s*─{10,}\s*$/;
+
+/** Muse Code 1.4.14: `❯ ` between two full-width rules, the folder and model under them; no placeholder. */
+const museInputRow: InputRowRecognizer = (screen, typed) => boxRow(screen, /^❯ ?/, FULL_RULE, FULL_RULE, typed);
+
+/** Qwen Code 0.27.2: `> ` between two full-width rules, its placeholder grey behind a drawn cursor. */
+const qwenInputRow: InputRowRecognizer = (screen, typed) => boxRow(screen, /^> /, FULL_RULE, FULL_RULE, typed);
+
+/** cline 3.0.74: an indented `❯ ` between two rules of its own width, its placeholder grey. */
+const clineInputRow: InputRowRecognizer = (screen, typed) => boxRow(screen, /^\s*❯ /, FULL_RULE, FULL_RULE, typed);
+
+/** dsh-tui 0.19.0: `│ ❯ ` in a rounded box, its placeholder grey. */
+const dshTuiInputRow: InputRowRecognizer = (screen, typed) => boxRow(screen, /^\s*│ ❯ /, /^\s*╭─+╮$/, /^\s*╰─+╯$/, typed);
+
+/** Every box the draft check reads, by herdr's agent name: the peek's and the ones above. */
+const DRAFT_RECOGNIZERS: Readonly<Record<string, InputRowRecognizer>> = {
+  ...RECOGNIZERS, muse: museInputRow, qwen: qwenInputRow, cline: clineInputRow, "dsh-tui": dshTuiInputRow,
+};
+
 /** The agents whose recognizer reports the cells of its box: only their box can refuse a send (typedDraft). */
-const REPORTS_TYPED: ReadonlySet<string> = new Set(["codex", "pi", "omo"]);
+const REPORTS_TYPED: ReadonlySet<string> = new Set(["codex", "pi", "omo", "gjc", "muse", "qwen", "cline", "dsh-tui"]);
+
+/**
+ * The colours an agent draws typed text in where it does not use the terminal's own (as recorded, default
+ * theme): text in any other colour is its placeholder or a suggestion, or a theme not recorded, and counts
+ * as no evidence.
+ */
+const TYPED_COLOURS: Readonly<Record<string, readonly string[]>> = {
+  muse: ["2;204;211;219"],
+  cline: ["2;237;241;242"],
+};
 
 /** Whether a send to `agent` is worth a read of its box: typedDraft can answer true only for these. */
 export function readsTypedDraft(agent: string | null | undefined): boolean {
@@ -418,8 +482,21 @@ export function readsTypedDraft(agent: string | null | undefined): boolean {
 export function typedDraft(agent: string | null | undefined, screen: ScreenSnapshot): boolean {
   if (!readsTypedDraft(agent)) return false;
   const typed: ScreenCell[] = [];
-  if (RECOGNIZERS[agent!]!(screen, typed) !== "draft") return false;
-  return typed.some((cell) => !blank(cell) && cell.fgDefault && !cell.dim && !cell.italic && !cell.inverse);
+  if (DRAFT_RECOGNIZERS[agent!]!(screen, typed) !== "draft") return false;
+  const colours = TYPED_COLOURS[agent!] ?? [];
+  return typed.some((cell) => !blank(cell) && !cell.dim && !cell.italic && !cell.inverse
+    && (cell.fgDefault || (cell.fg !== undefined && colours.includes(cell.fg))));
+}
+
+/** Whether a screen read carries any colour or text style (SGR 2, 3, 7, a foreground or background colour): without one nothing is told from a placeholder. */
+export function drawsColour(text: string): boolean {
+  for (const match of text.matchAll(/\u001b\[([0-9;:]*)m/g)) {
+    for (const parameter of (match[1] || "0").split(";")) {
+      const code = Number(parameter.split(":")[0] || 0);
+      if ([2, 3, 7].includes(code) || (code >= 30 && code <= 38) || (code >= 40 && code <= 48) || (code >= 90 && code <= 97) || (code >= 100 && code <= 107)) return true;
+    }
+  }
+  return false;
 }
 
 const ESCAPE = /\u001b(?:\[([0-?]*)[ -/]*([@-~])|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
@@ -441,8 +518,9 @@ export function screenFromAnsi(text: string): ScreenSnapshot {
   const rows = text.split("\n").map((line): ScreenRow => {
     const cells: ScreenCell[] = [];
     let dim = false, italic = false, inverse = false, fgDefault = true;
+    let fg: string | undefined;
     const draw = (piece: string): void => {
-      for (const char of characters(piece.replace(/\r/g, ""))) cells.push({ char, dim, italic, inverse, fgDefault });
+      for (const char of characters(piece.replace(/\r/g, ""))) cells.push({ char, dim, italic, inverse, fgDefault, ...(fg === undefined ? {} : { fg }) });
     };
     let offset = 0;
     for (const match of line.matchAll(ESCAPE)) {
@@ -455,17 +533,21 @@ export function screenFromAnsi(text: string): ScreenSnapshot {
         // a colour in colon form (`38:2::r:g:b`) is one parameter
         const head = Number(code.split(":")[0] || 0);
         if (head === 38 || head === 48 || head === 58) {
-          if (head === 38) fgDefault = false;
-          if (!code.includes(":")) index += codes[index + 1] === "5" ? 2 : codes[index + 1] === "2" ? 4 : 0;
-        } else if (head === 0) { dim = false; italic = false; inverse = false; fgDefault = true; }
+          const span = code.includes(":") ? 0 : codes[index + 1] === "5" ? 2 : codes[index + 1] === "2" ? 4 : 0;
+          if (head === 38) {
+            fgDefault = false;
+            fg = code.includes(":") ? code.split(":").slice(1).filter(Boolean).join(";") : codes.slice(index + 1, index + 1 + span).join(";");
+          }
+          index += span;
+        } else if (head === 0) { dim = false; italic = false; inverse = false; fgDefault = true; fg = undefined; }
         else if (head === 2) dim = true;
         else if (head === 22) dim = false;
         else if (head === 3) italic = true;
         else if (head === 23) italic = false;
         else if (head === 7) inverse = true;
         else if (head === 27) inverse = false;
-        else if (head === 39) fgDefault = true;
-        else if ((head >= 30 && head <= 37) || (head >= 90 && head <= 97)) fgDefault = false;
+        else if (head === 39) { fgDefault = true; fg = undefined; }
+        else if ((head >= 30 && head <= 37) || (head >= 90 && head <= 97)) { fgDefault = false; fg = String(head); }
       }
     }
     draw(line.slice(offset));

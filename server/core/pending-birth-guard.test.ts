@@ -29,6 +29,9 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   /** how many more messages are queued behind the first */ behind?: number }) {
   spyOn(pi, "piTranscriptPath").mockResolvedValue(null);
   if (mode === "claude") { spyOn(claude, "claudeForegroundSession").mockResolvedValue("session-a"); spyOn(composer, "freeClaudeBox").mockResolvedValue(undefined as never); }
+  // the skill mode's pane runs gjc, whose box the send now reads first (composer.ts freeAgentInput): these tests count the
+  // skill key's own screen reads, so that check is left out here (agent-input-send.test.ts covers it)
+  if (mode === "skill") spyOn(composer, "freeAgentInput").mockResolvedValue(undefined);
   if (mode === "skill") { spyOn(prompt, "prepareCommandSend").mockReturnValue({} as never); spyOn(prompt, "bindCommandProcess").mockImplementation(() => {}); spyOn(opencode, "startOpenCodeWatch").mockReturnValue(null); }
   const shown: Pane = { birth: 1_000 as number | null, screen, foreground: [{ pid: 41001, name: "gjc", argv: ["gjc"] }] };
   spyOn(processStart, "processStartedAtAsync").mockImplementation(async () => shown.birth);
@@ -117,6 +120,12 @@ const listed = (): Array<[string, string | undefined, string | undefined]> => to
 type Mode = "gjc" | "claude" | "pi" | "codex" | "codex-queued" | "devin-queued" | "skill" | "missing";
 /** `onScreenRead`: as a read of the live screen is answered, after its text was taken */
 interface Pane { birth: number | null; screen: string; foreground: Array<{ pid: number; name: string; argv: string[] }>; onProcessRead?: () => void; onScreenRead?: () => void }
+
+it("holds a queued message rather than pasting it over text typed in GJC's box (composer.ts freeAgentInput)", async () => {
+  const typedBox = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/gjc/draft-typed-119.ansi"), "utf8");
+  expect(await drain({ screen: typedBox })).toEqual([]);
+  expect(listed()[0]?.slice(0, 2)).toEqual(["held", "input_draft"]);
+});
 
 it("types nothing into another process that took the agent's PID before the paste", async () => {
   expect(await drain({ after: (pane) => { pane.birth = 5_000; } })).toEqual([]);
