@@ -40,7 +40,7 @@ public class PCStoreTest {
     private String serve(int status, String location, byte[] bytes) throws IOException {
         String head = "HTTP/1.1 " + status + " Test\r\n" + (location == null ? "" : "Location: " + location + "\r\n")
             + "Content-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n";
-        return listen(out -> {
+        return listen((line, out) -> {
             out.write(head.getBytes(StandardCharsets.UTF_8));
             out.write(bytes);
         });
@@ -48,7 +48,7 @@ public class PCStoreTest {
 
     /** A server that answers 200 and then sends its headers, or its body, one byte at a time, never finishing. */
     private String serveSlowly(boolean headers) throws IOException {
-        return listen(out -> {
+        return listen((line, out) -> {
             String head = headers ? "HTTP/1.1 200 Test\r\nX-Slow: " : "HTTP/1.1 200 Test\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n";
             out.write(head.getBytes(StandardCharsets.UTF_8));
             try {
@@ -64,7 +64,7 @@ public class PCStoreTest {
     }
 
     private interface Answer {
-        void write(OutputStream out) throws IOException;
+        void write(String requestLine, OutputStream out) throws IOException;
     }
 
     private String listen(Answer answer) throws IOException {
@@ -74,10 +74,11 @@ public class PCStoreTest {
             while (!server.isClosed()) {
                 try (Socket socket = server.accept()) {
                     BufferedReader request = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-                    requestLines.add(request.readLine());
+                    String first = request.readLine();
+                    requestLines.add(first);
                     for (String line = request.readLine(); line != null && !line.isEmpty(); line = request.readLine()) { }
                     OutputStream out = socket.getOutputStream();
-                    answer.write(out);
+                    answer.write(first, out);
                     out.flush();
                 } catch (IOException closed) {
                     if (server.isClosed()) return;
@@ -100,9 +101,110 @@ public class PCStoreTest {
         return PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, new ArrayList<>());
     }
 
+    /** A server answering a GET of /api/health with `health` (200, or 404 when null) and any other path with `page`. */
+    private String servePaths(String health, String page) throws IOException {
+        return listen((line, out) -> {
+            boolean asksHealth = line != null && line.startsWith("GET /api/health");
+            String body = asksHealth ? health : page;
+            byte[] bytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
+            out.write(("HTTP/1.1 " + (body == null ? "404" : "200") + " Test\r\nContent-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write(bytes);
+        });
+    }
+
+    private static PCStore.Check check(String url) {
+        return PCStore.check(url, null, PCStore.ANSWER_SECONDS * 1000L);
+    }
+
     @After
     public void stop() throws IOException {
         for (ServerSocket server : servers) server.close();
+    }
+
+    @Test
+    public void anOvisServerOfAnyVersionOrTheHostedAppIsOvis() throws IOException {
+        assertEquals("ovis", check(serve(200, null, OVIS) + "/?pair=123456").kind);
+        // before bridge_protocol (0.1): ok, herdr and auth
+        assertEquals("ovis", check(serve(200, null, "{\"ok\":true,\"herdr\":{\"version\":\"0.4\"},\"auth\":{\"required\":false,\"authenticated\":true}}") + "/").kind);
+        // app.ovis.sh answers every path with its page
+        String shell = "<!doctype html><html><head><meta name=\"ovis-shell\" content=\"relay\" /></head></html>";
+        assertEquals("ovis", check(serve(200, null, shell) + "/").kind);
+        // a copy behind Caddy answers /api/health with 404 and its scope with the page
+        requestLines.clear();
+        String copy = servePaths(null, shell);
+        assertEquals("ovis", check(copy + "/s/0123456789abcdef0123456789abcdef/#offer=abc").kind);
+        assertEquals(java.util.Arrays.asList("GET /api/health?scope=bridge HTTP/1.1", "GET /s/0123456789abcdef0123456789abcdef/ HTTP/1.1"), requestLines);
+    }
+
+    @Test
+    public void anotherWebServerIsNotOvisAndItsPageIsAskedWithoutThePairingCode() throws IOException {
+        requestLines.clear();
+        PCStore.Check page = check(servePaths("<!doctype html><title>Router</title>", "<!doctype html><title>Router</title>") + "/?pair=123456");
+        assertEquals("not-ovis", page.kind);
+        assertNull(page.detail);
+        assertEquals(java.util.Arrays.asList("GET /api/health?scope=bridge HTTP/1.1", "GET / HTTP/1.1"), requestLines);
+        PCStore.Check missing = check(servePaths(null, "<!doctype html><title>Dev server</title>") + "/");
+        assertEquals("not-ovis", missing.kind);
+        assertEquals("HTTP 404", missing.detail);
+        assertEquals("not-ovis", check(serve(200, null, "{\"ok\":true}") + "/").kind);
+    }
+
+    @Test
+    public void anAnswerThatDoesNotTellIsLeftToTheWebView() throws IOException {
+        // Ovis stopped behind tailscale serve (502), a proxy or WAF that turns the probe away, a rate limit
+        for (int status : new int[] {401, 403, 429, 500, 502, 503}) {
+            PCStore.Check found = check(serve(status, null, "") + "/");
+            assertEquals(status + "", "unsure", found.kind);
+            assertEquals("HTTP " + status, found.detail);
+            assertTrue(found.opens());
+        }
+        // no /api/health and no page either: the WebView shows that HTTP error itself
+        assertEquals("unsure", check(servePaths(null, null) + "/").kind);
+    }
+
+    @Test
+    public void aConnectionThatFailsAtOnceIsRefusedUnlessTheHostCannotBeReached() {
+        long later = System.nanoTime() + 60_000_000_000L;
+        // Android's HttpURLConnection, for a closed port: no errno in the message, no cause
+        assertEquals("refused", PCStore.failureKind(new java.net.ConnectException("Failed to connect to /192.168.0.10:7317"), later));
+        // a PC that is off on the same network
+        IOException off = new java.net.ConnectException("Failed to connect to /192.168.0.11:7317");
+        off.initCause(new java.net.NoRouteToHostException("connect failed: EHOSTUNREACH (No route to host)"));
+        assertEquals("no-answer", PCStore.failureKind(off, later));
+        assertEquals("no-answer", PCStore.failureKind(new java.net.ConnectException("connect failed: ENETUNREACH (Network is unreachable)"), later));
+        assertEquals("timeout", PCStore.failureKind(new java.net.SocketTimeoutException("timeout"), later));
+        assertEquals("unknown-host", PCStore.failureKind(new java.net.UnknownHostException("my-pc"), later));
+    }
+
+    @Test
+    public void onlyTheLatestOpenNotCancelledGoesOn() {
+        PCStore.Openings openings = new PCStore.Openings();
+        int first = openings.start();
+        int second = openings.start();
+        assertFalse(openings.current(first));
+        assertTrue(openings.current(second));
+        openings.cancel();
+        assertFalse(openings.current(second));
+        assertTrue(openings.current(openings.start()));
+    }
+
+    @Test
+    public void aRedirectIsLeftToTheWebView() throws IOException {
+        PCStore.Check signIn = check(serve(302, "https://team.cloudflareaccess.com/login", "") + "/");
+        assertEquals("in-front", signIn.kind);
+        assertTrue(signIn.opens());
+    }
+
+    @Test
+    public void saysWhyNoAnswerCame() throws IOException {
+        ServerSocket closed = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+        int port = closed.getLocalPort();
+        closed.close();
+        assertEquals("refused", check("http://127.0.0.1:" + port + "/").kind);
+        assertEquals("unknown-host", check("http://no-such-pc.invalid:7317/").kind);
+        PCStore.Check slow = PCStore.check(serveSlowly(true) + "/", null, 300);
+        assertEquals("timeout", slow.kind);
+        assertFalse(slow.opens());
     }
 
     @Test

@@ -7,8 +7,18 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -33,6 +43,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -78,6 +89,18 @@ public class MainActivity extends BridgeActivity {
 
     /** The page's theme-color the system bars took, put back after a configuration change. */
     private Integer barColor;
+
+    /** Covers the WebView, blank until the PC answers: which PC is opening, and Change PC (showOpening). */
+    private View openingView;
+
+    /** Gives up on a PC that has not answered in ANSWER_SECONDS, where Chromium alone waits about two minutes. */
+    private final Handler answerTimer = new Handler(Looper.getMainLooper());
+
+    /** Whether the app gave up on the first page: the load it dropped may still report its end. */
+    private boolean gaveUp;
+
+    /** Whether a page of the PC has been checked for being Ovis (PCStore.check) in this activity. */
+    private boolean checked;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -147,6 +170,7 @@ public class MainActivity extends BridgeActivity {
                             state.put("last", last == null ? "" : last);
                             state.put("name", last == null ? "" : PCStore.names(this).optString(last, ""));
                             state.put("failure", PCStore.failure == null ? "" : PCStore.failure);
+                            state.put("kind", PCStore.failureKind == null ? "" : PCStore.failureKind);
                             replyProxy.postMessage(state.toString());
                         } else if ("retry".equals(asked)) {
                             retry();
@@ -246,8 +270,10 @@ public class MainActivity extends BridgeActivity {
                     @Override
                     public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                         if (request.isForMainFrame()) {
+                            // the load dropped at the time limit, which the error page already explains
+                            if (gaveUp && !pageShown) return;
                             pageFailed = true;
-                            PCStore.failure = String.valueOf(error.getDescription());
+                            PCStore.fail(String.valueOf(error.getDescription()), null);
                         }
                         super.onReceivedError(view, request, error);
                     }
@@ -259,7 +285,7 @@ public class MainActivity extends BridgeActivity {
                         if (request.isForMainFrame()) {
                             pageFailed = true;
                             String reason = response.getReasonPhrase();
-                            PCStore.failure = "HTTP " + response.getStatusCode() + (reason == null || reason.isEmpty() ? "" : " " + reason);
+                            PCStore.fail("HTTP " + response.getStatusCode() + (reason == null || reason.isEmpty() ? "" : " " + reason), null);
                         }
                         super.onReceivedHttpError(view, request, response);
                     }
@@ -274,8 +300,10 @@ public class MainActivity extends BridgeActivity {
 
                     @Override
                     public void onPageCommitVisible(WebView webView, String url) {
-                        // the main frame's first page is on screen, before its pictures or scripts finish
+                        // the main frame's first page is on screen, before its pictures or scripts finish:
+                        // the PC's, a sign-in's or the error page
                         pageShown = true;
+                        hideOpening();
                     }
 
                     @Override
@@ -284,16 +312,134 @@ public class MainActivity extends BridgeActivity {
                         // only a page of this very PC (its scheme, host and port, and its scope for a relay PC) counts
                         String url = webView.getUrl();
                         if (pageFailed || url == null || !PCStore.belongs(url, pc)) return;
-                        // the PC's page is up: a pairing link has done its work, and the PC is one worth keeping
+                        // the PC's page is up: a pairing link has done its work
                         signingIn = false;
                         PCStore.pendingStart = null;
-                        PCStore.failure = null;
+                        PCStore.fail(null, null);
                         PCStore.redirects = 0;
-                        PCStore.remember(MainActivity.this, pc);
+                        keepIfOvis(pc, url);
                     }
                 }
             );
+            showOpening(pc);
         }
+    }
+
+    /**
+     * Keeps the PC `pc`, whose page `url` has loaded, unless it is not Ovis: a web server that is not
+     * Ovis would otherwise be saved and opened at every start, with no Change PC and Back closing the
+     * app. That page gives way to the error page, which has Change PC, and the PC is not kept (one
+     * kept before stays in the list until forgotten). Only an answer that shows it is not Ovis (its
+     * page loads, its /api/health is not Ovis's) counts: a PC that could not be asked, or answered
+     * the question with 403 or 502, is kept as before, also when the activity ended meanwhile. A relay PC (a scope on the hosted app) is the hosted
+     * app's, which the connect screen checked (relayLink in app/web/shell.js).
+     */
+    private void keepIfOvis(String pc, String url) {
+        if (PCStore.scoped(pc)) {
+            PCStore.remember(this, pc);
+            return;
+        }
+        // once per activity: the PC's later pages are the same server
+        if (checked) return;
+        checked = true;
+        String cookies = CookieManager.getInstance().getCookie(url);
+        android.content.Context app = getApplicationContext();
+        long since = PCStore.forgetCount();
+        new Thread(() -> {
+            PCStore.Check found = PCStore.check(url, cookies, PCStore.ANSWER_SECONDS * 1000L);
+            if (!found.kind.equals("not-ovis")) {
+                // the check may outlive this activity: a PC forgotten meanwhile stays forgotten
+                PCStore.rememberUnlessForgotten(app, pc, since);
+                return;
+            }
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                PCStore.fail(found.detail == null ? "It answered, but not as Ovis." : "It answered " + found.detail + ", not as Ovis.", "not-ovis");
+                bridge.getWebView().loadUrl(bridge.getErrorUrl());
+            });
+        }, "ovis-check").start();
+    }
+
+    private static boolean korean() {
+        return "ko".equals(Locale.getDefault().getLanguage());
+    }
+
+    /**
+     * Covers the WebView until the PC answers (onPageCommitVisible), as the iOS app's cover does: which
+     * PC is opening, and Change PC, so an address that does not answer never leaves a blank screen.
+     * After ANSWER_SECONDS the app stops waiting and the error page says so, with Try again.
+     */
+    private void showOpening(String pc) {
+        String origin = PCStore.origin(pc);
+        String label = PCStore.names(this).optString(pc, "");
+        if (label.isEmpty()) label = origin == null ? pc : Uri.parse(origin).getAuthority();
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(24 * density);
+
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#f0a830")));
+        TextView text = new TextView(this);
+        text.setText(korean() ? label + " 여는 중…" : "Opening " + label + "…");
+        text.setTextColor(Color.parseColor("#d8d0c3"));
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        text.setGravity(Gravity.CENTER);
+        text.setPadding(0, pad / 2, 0, pad);
+        Button change = new Button(this);
+        change.setText(korean() ? "PC 바꾸기" : "Change PC");
+        change.setAllCaps(false);
+        change.setTextColor(Color.parseColor("#f2ebdf"));
+        change.setBackgroundColor(Color.parseColor("#181613"));
+        change.setPadding(pad, pad / 2, pad, pad / 2);
+        change.setOnClickListener(v -> changePc());
+
+        LinearLayout stack = new LinearLayout(this);
+        stack.setOrientation(LinearLayout.VERTICAL);
+        stack.setGravity(Gravity.CENTER);
+        stack.setPadding(pad, pad, pad, pad);
+        stack.addView(spinner);
+        stack.addView(text);
+        stack.addView(change);
+        FrameLayout cover = new FrameLayout(this);
+        cover.setBackgroundColor(Color.parseColor("#12100e"));
+        // taps stop here, not on the blank WebView under it
+        cover.setClickable(true);
+        cover.addView(stack, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        addContentView(cover, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        openingView = cover;
+        answerTimer.postDelayed(() -> {
+            if (openingView == null || isFinishing() || isDestroyed()) return;
+            gaveUp = true;
+            String host = origin == null ? pc : Uri.parse(origin).getAuthority();
+            PCStore.fail(host + " did not answer within " + PCStore.ANSWER_SECONDS + " seconds.", "timeout");
+            bridge.getWebView().stopLoading();
+            bridge.getWebView().loadUrl(bridge.getErrorUrl());
+        }, answerDelay());
+    }
+
+    /**
+     * How long the cover waits: what is left of the limit the connect screen's check started
+     * (PCStore.answerBy), at least PAGE_FLOOR_MS, or ANSWER_SECONDS for an open that started here (a
+     * saved PC at launch, Try again, a redirect to Ovis). The limit is taken once.
+     */
+    private static long answerDelay() {
+        long by = PCStore.answerBy;
+        PCStore.answerBy = 0;
+        if (by == 0) return PCStore.ANSWER_SECONDS * 1000L;
+        return Math.max(PCStore.PAGE_FLOOR_MS, by - android.os.SystemClock.elapsedRealtime());
+    }
+
+    private void hideOpening() {
+        answerTimer.removeCallbacksAndMessages(null);
+        if (openingView == null) return;
+        ((ViewGroup) openingView.getParent()).removeView(openingView);
+        openingView = null;
+    }
+
+    @Override
+    public void onDestroy() {
+        answerTimer.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     /**
@@ -407,12 +553,13 @@ public class MainActivity extends BridgeActivity {
             String ovis = tooMany ? null : PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, path);
             String insecure = tooMany ? null : PCStore.refusedHop(from, target, ovis, path);
             runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
+                // after the time limit the error page has the screen: a late answer changes nothing
+                if (isFinishing() || isDestroyed() || gaveUp) return;
                 if (tooMany) {
-                    PCStore.failure = "Too many redirects";
+                    PCStore.fail("Too many redirects", null);
                     bridge.getWebView().loadUrl(bridge.getErrorUrl());
                 } else if (insecure != null) {
-                    PCStore.failure = "It redirected over plain http to " + insecure + ", which the app does not follow on its own." + (ovis == null ? "" : " If " + ovis + " is your PC, open it itself.");
+                    PCStore.fail("It redirected over plain http to " + insecure + ", which the app does not follow on its own." + (ovis == null ? "" : " If " + ovis + " is your PC, open it itself."), null);
                     bridge.getWebView().loadUrl(bridge.getErrorUrl());
                 } else if (ovis != null) {
                     PCStore.redirects++;
@@ -421,7 +568,7 @@ public class MainActivity extends BridgeActivity {
                 } else if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                     // without it Capacitor's bridge is a JavaScript interface every page can call
                     String place = PCStore.origin(target);
-                    PCStore.failure = "It redirected to " + place + ", which did not answer as Ovis. If that is your PC, open " + place + " itself.";
+                    PCStore.fail("It redirected to " + place + ", which did not answer as Ovis. If that is your PC, open " + place + " itself.", null);
                     bridge.getWebView().loadUrl(bridge.getErrorUrl());
                 } else {
                     signingIn = true;
@@ -442,7 +589,7 @@ public class MainActivity extends BridgeActivity {
         String insecure = PCStore.refusedHop(signInAt, url, null, null);
         if (insecure == null) return false;
         signingIn = false;
-        PCStore.failure = "The sign-in went over plain http to " + insecure + ", which the app does not follow on its own.";
+        PCStore.fail("The sign-in went over plain http to " + insecure + ", which the app does not follow on its own.", null);
         runOnUiThread(() -> bridge.getWebView().loadUrl(bridge.getErrorUrl()));
         return true;
     }
@@ -472,7 +619,7 @@ public class MainActivity extends BridgeActivity {
         String scope = PCStore.appScope(link);
         if (!PCStore.saved(this).contains(scope)) return false;
         PCStore.open(this, scope, link);
-        PCStore.failure = null;
+        PCStore.fail(null, null);
         PCStore.redirects = 0;
         return true;
     }
@@ -495,7 +642,7 @@ public class MainActivity extends BridgeActivity {
 
     /** Opens the current PC again from its first page. */
     void retry() {
-        PCStore.failure = null;
+        PCStore.fail(null, null);
         PCStore.redirects = 0;
         reopen();
     }

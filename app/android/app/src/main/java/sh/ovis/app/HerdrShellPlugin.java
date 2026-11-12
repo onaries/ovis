@@ -13,6 +13,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  */
 @CapacitorPlugin(name = "HerdrShell")
 public class HerdrShellPlugin extends Plugin {
+    /** Opens still being checked: one cancelled, replaced or outlived by its activity does nothing when its check comes back. */
+    private final PCStore.Openings openings = new PCStore.Openings();
     @PluginMethod
     public void getState(PluginCall call) {
         JSObject state = new JSObject();
@@ -24,13 +26,17 @@ public class HerdrShellPlugin extends Plugin {
         state.put("current", current == null ? "" : current);
         state.put("last", last == null ? "" : last);
         state.put("failure", PCStore.failure == null ? "" : PCStore.failure);
+        state.put("kind", PCStore.failureKind == null ? "" : PCStore.failureKind);
         call.resolve(state);
     }
 
     /**
      * url: an http or https address, the first page (a pairing link's code or a relay pairing offer's
      * fragment included). Its origin is remembered, or `scope` for a PC opened through the Ovis relay
-     * (`https://app.ovis.sh/s/<server_id>/`, labelled `name`).
+     * (`https://app.ovis.sh/s/<server_id>/`, labelled `name`). With `check`, an address typed, scanned
+     * or picked from the list is first asked whether it is Ovis (PCStore.check), for at most
+     * ANSWER_SECONDS: when it is not, or does not answer, the call is refused with the check's kind as
+     * its code and its detail as its message, and the connect screen stays.
      */
     @PluginMethod
     public void open(PluginCall call) {
@@ -49,12 +55,66 @@ public class HerdrShellPlugin extends Plugin {
             }
         }
         String name = call.getString("name");
-        if (name != null && !name.isEmpty()) PCStore.setName(getContext(), key, name.length() > 64 ? name.substring(0, 64) : name);
-        PCStore.open(getContext(), key, text);
-        PCStore.failure = null;
-        PCStore.redirects = 0;
+        int mine = openings.start();
+        if (!Boolean.TRUE.equals(call.getBoolean("check", false))) {
+            openChecked(call, key, text, name, mine, 0);
+            return;
+        }
+        String pc = key;
+        String cookies = android.webkit.CookieManager.getInstance().getCookie(PCStore.origin(text));
+        // one limit from Open to the PC's first page: the cover gets what the check left (PCStore.answerBy)
+        long answerBy = android.os.SystemClock.elapsedRealtime() + PCStore.ANSWER_SECONDS * 1000L;
+        new Thread(() -> {
+            PCStore.Check found = PCStore.check(text, cookies, PCStore.ANSWER_SECONDS * 1000L);
+            if (found.opens()) openChecked(call, pc, text, name, mine, answerBy);
+            else call.reject(found.detail == null ? found.kind : found.detail, found.kind);
+        }, "ovis-check").start();
+    }
+
+    /**
+     * Opens the PC `key`, unless another open or a cancelOpen came after this one (`mine`), with the
+     * first page due by `answerBy` (0: ANSWER_SECONDS from the new activity). Any thread.
+     */
+    private void openChecked(PluginCall call, String key, String text, String name, int mine, long answerBy) {
+        synchronized (openings) {
+            android.app.Activity activity = getActivity();
+            if (!openings.current(mine) || activity == null || activity.isFinishing() || activity.isDestroyed()) {
+                call.reject("Cancelled", "cancelled");
+                return;
+            }
+            if (name != null && !name.isEmpty()) PCStore.setName(getContext(), key, name.length() > 64 ? name.substring(0, 64) : name);
+            PCStore.open(getContext(), key, text);
+            PCStore.fail(null, null);
+            PCStore.redirects = 0;
+            PCStore.answerBy = answerBy;
+        }
         call.resolve();
-        reopen();
+        // a Cancel that lands before the switch still wins: the connect screen stays, opening nothing at the next start
+        android.app.Activity activity = getActivity();
+        activity.runOnUiThread(() -> {
+            synchronized (openings) {
+                if (!openings.current(mine)) {
+                    PCStore.setCurrent(getContext(), null);
+                    PCStore.answerBy = 0;
+                    return;
+                }
+            }
+            ((MainActivity) activity).reopen();
+        });
+    }
+
+    /** The connect screen's Cancel: an open still being checked does not go on. */
+    @PluginMethod
+    public void cancelOpen(PluginCall call) {
+        openings.cancel();
+        call.resolve();
+    }
+
+    /** The connect screen is gone (Back, or the system ended it): an open still being checked does not start the app again. */
+    @Override
+    protected void handleOnDestroy() {
+        openings.cancel();
+        super.handleOnDestroy();
     }
 
     /**
@@ -92,7 +152,7 @@ public class HerdrShellPlugin extends Plugin {
     /** Opens the current PC again from its first page. */
     @PluginMethod
     public void retry(PluginCall call) {
-        PCStore.failure = null;
+        PCStore.fail(null, null);
         PCStore.redirects = 0;
         call.resolve();
         reopen();

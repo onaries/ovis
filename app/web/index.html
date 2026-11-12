@@ -18,6 +18,13 @@
       <input id="address" name="address" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://my-pc.tailnet.ts.net" autocomplete="url">
       <p class="hint"><span data-ko="https 주소(PC에서 ">An https address (</span><code>tailscale serve</code><span data-ko=")가 일반 http 주소보다 앱에서 더 빨리 열립니다."> on the PC) opens faster in the app than a plain http one.</span></p>
       <p class="error" id="error" role="alert"></p>
+      <!-- the status text stays in the page, empty until an open starts: a live region that appears
+           with its text is not announced (connect.js showStatus) -->
+      <div class="status">
+        <span class="spinner" id="spinner" aria-hidden="true" hidden></span>
+        <span id="status-text" role="status"></span>
+        <button type="button" id="cancel" data-ko="취소" hidden>Cancel</button>
+      </div>
       <div class="row">
         <button type="submit" class="primary" id="open" data-ko="열기">Open</button>
         <button type="button" id="scan" data-ko="QR 코드 스캔">Scan QR code</button>
