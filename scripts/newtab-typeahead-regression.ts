@@ -56,10 +56,14 @@ function watch(page: Page): { sent: Sent[]; ready: Set<string>; heard: { count: 
     qa.sentByPage = 0;
     const send = WebSocket.prototype.send;
     WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-      if (typeof data === "string") {
+      // only a frame that leaves is counted: a send on a socket still connecting throws, and one on a closing or closed
+      // socket is dropped, and neither ever reaches the browser's frame events the check counts against
+      const open = this.readyState === WebSocket.OPEN;
+      const result = send.call(this, data);
+      if (open && typeof data === "string") {
         try { const type = (JSON.parse(data) as { type?: string }).type; if (type === "input" || type === "keys") qa.sentByPage += 1; } catch { /* not JSON */ }
       }
-      return send.call(this, data);
+      return result;
     };
   });
   page.on("websocket", (socket) => {
