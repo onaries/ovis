@@ -154,7 +154,11 @@ try {
             await page.getByRole("menu", { name: "최근 폴더", exact: true }).getByRole("menuitem").and(page.locator(`[title="${path}"]`)).click();
           };
           const submit = dialog.locator('button[type="submit"]');
-          assert.deepEqual(await offered(), ["/older/one", other, project], "folders only seen in panes come behind the one kept");
+          // folders only seen in panes go behind the one kept, in the order their panes were first seen
+          // (src/lib/recent-directories.ts): either pane's folder can be seen first, so they are compared as a set
+          const first = await offered();
+          assert.equal(first[0], "/older/one", "the folder kept comes first");
+          assert.deepEqual([...first.slice(1)].sort(), [other, project].sort(), "folders only seen in panes come behind the one kept");
           assert.equal(new Set(await chips.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().top))).size, 1, "recent folders stay on one row");
           // a phone swipes the row sideways; a wider screen has room for it
           if (width === 390) assert.equal(await dialog.locator(".new-session-folder-chips").evaluate((node) => getComputedStyle(node).overflowX), "auto");
