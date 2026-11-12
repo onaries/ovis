@@ -119,6 +119,33 @@ export interface AdapterOptions {
 
 /** The sessions a terminal named that it keeps as candidates, the newest last. */
 const NAMED_SESSIONS = 32;
+/**
+ * A terminal's named OpenCode sessions, space separated, kept on it through a restart of Ovis (docs/herdr-core-layout.md):
+ * all of its candidates, about 1 KB at most, since the pane may still show any of them, not only the newest.
+ */
+export const OPENCODE_SESSIONS_LABEL = "ovis.opencode";
+
+/**
+ * Writes a terminal's named OpenCode sessions to its label when they change from what it holds, one
+ * terminal's writes in order. A write that fails is tried again on the next change. Once stopped, a
+ * write still queued is dropped rather than open a new line to hc after the server closed it.
+ */
+export function sessionLabeler(hc: Pick<HcConnection, "call">): { label: (address: string, kept: string, named: readonly string[]) => void; forget: (address: string) => void; stop: () => void } {
+  const written = new Map<string, string>();
+  const queue = new Map<string, Promise<void>>();
+  let stopped = false;
+  const label = (address: string, kept: string, named: readonly string[]) => {
+    const value = named.join(" ");
+    if (stopped || value === (written.get(address) ?? kept)) return;
+    written.set(address, value);
+    const run = (queue.get(address) ?? Promise.resolve())
+      .then(async () => { if (!stopped) await hc.call("terminal.label", { terminal: address, labels: { [OPENCODE_SESSIONS_LABEL]: value } }); })
+      .then(() => {}, () => { if (written.get(address) === value) written.delete(address); });
+    queue.set(address, run);
+    void run.then(() => { if (queue.get(address) === run) queue.delete(address); });
+  };
+  return { label, forget: (address) => written.delete(address), stop: () => { stopped = true; } };
+}
 
 export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string, observeSeen?: SeenObserver, options: AdapterOptions = {}): Promise<HerdrCoreAdapter> {
   if (existsSync(socketPath)) {
@@ -141,24 +168,39 @@ export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string
     return firstTurns.get(terminal.address)!;
   };
   // the OpenCode sessions each terminal named while they were pending (snapshot.ts `opencodeRecords`),
-  // in every snapshot and status event, so a turn that ended between two snapshots is still one
+  // in every snapshot and status event, so a turn that ended between two snapshots is still one. A
+  // terminal first seen running OpenCode starts from the sessions its `ovis.opencode` label kept, so
+  // one that rests through a restart of Ovis still shows its session; an empty entry is a terminal
+  // seen without OpenCode, whose label is cleared and never read again.
   const sessions = new Map<string, string[]>();
-  const noteSession = (address: string, status: HcStatus | null | undefined, records: unknown): readonly string[] => {
-    if (agentOfStatus(status) !== "opencode") { sessions.delete(address); return []; }
+  const sessionLabels = sessionLabeler(hc);
+  const noteSession = (address: string, status: HcStatus | null | undefined, records: unknown, labels: Readonly<Record<string, string>> | undefined): readonly string[] => {
+    const kept = labels?.[OPENCODE_SESSIONS_LABEL] ?? "";
+    if (agentOfStatus(status) !== "opencode") {
+      sessions.set(address, []);
+      sessionLabels.label(address, kept, []);
+      return [];
+    }
     const pending = opencodeRecords(records);
-    const named = [...(sessions.get(address) ?? []).filter((id) => !pending.includes(id)), ...pending].slice(-NAMED_SESSIONS);
+    const before = sessions.get(address) ?? kept.split(" ").filter((id) => id !== "");
+    const named = [...before.filter((id) => !pending.includes(id)), ...pending].slice(-NAMED_SESSIONS);
     sessions.set(address, named);
+    sessionLabels.label(address, kept, named);
     return named;
   };
   // the sessions a terminal named and those whose title it shows, decided in agent-identity.ts `paneSession`
   const sessionOf: SessionOf = (terminal) => {
-    const named = noteSession(terminal.address, terminal.status, terminal.records);
+    const named = noteSession(terminal.address, terminal.status, terminal.records, terminal.labels);
     const titled = named.length === 0 || !terminal.title || !options.opencodeTitled ? [] : options.opencodeTitled(terminal.title);
     return paneSession(agentOfStatus(terminal.status), { named, titled });
   };
   const forgetTurns = (live: ReadonlySet<string>) => {
     for (const address of firstTurns.keys()) if (!live.has(address)) firstTurns.delete(address);
-    for (const address of sessions.keys()) if (!live.has(address)) sessions.delete(address);
+    for (const address of sessions.keys()) {
+      if (live.has(address)) continue;
+      sessions.delete(address);
+      sessionLabels.forget(address);
+    }
   };
   const answers = createAnswers(hc, firstTurn, forgetTurns, options, sessionOf);
   const listener = Bun.listen<ConnectionState>({
@@ -201,6 +243,7 @@ export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string
   return {
     socketPath,
     stop: () => {
+      sessionLabels.stop();
       listener.stop(true);
       rmSync(socketPath, { force: true });
     },
@@ -1268,7 +1311,7 @@ function labelsOf(labels: unknown): Record<string, string> {
  * the status collector reopens it and reads what it missed from a fresh snapshot.
  */
 /** What an event says of a terminal's OpenCode session (startHerdrCoreAdapter `noteSession`), so a turn too short for any read is still remembered. */
-type SessionNote = (address: string, status: HcStatus | null | undefined, records: unknown) => unknown;
+type SessionNote = (address: string, status: HcStatus | null | undefined, records: unknown, labels: Readonly<Record<string, string>> | undefined) => unknown;
 
 async function subscribe(hc: HcConnection, socket: Socket<ConnectionState>, request: Request, firstTurn: FirstTurn, host: CoreHost, observeSeen?: SeenObserver, noteSession?: SessionNote): Promise<void> {
   const subscriptions = Array.isArray(request.params["subscriptions"]) ? request.params["subscriptions"].filter(isRecord) : [];
@@ -1318,7 +1361,7 @@ async function subscribe(hc: HcConnection, socket: Socket<ConnectionState>, requ
     const turn = typeof record["turn"] === "number" ? record["turn"] : 0;
     const labels = labelsOf(record["labels"]);
     const first = firstTurn({ address: record["address"], turn });
-    noteSession?.(record["address"], status, record["records"]);
+    noteSession?.(record["address"], status, record["records"], labels);
     known.set(record["address"], { status, front: foregroundOf(record["foreground"]), cwd: typeof record["cwd"] === "string" ? record["cwd"] : undefined, argv: Array.isArray(record["argv"]) && record["argv"].every((word) => typeof word === "string") ? record["argv"] : undefined, pid: typeof record["pid"] === "number" ? record["pid"] : null, title: typeof record["title"] === "string" ? record["title"] : null, turn, first, labels, shown: shownStatusOf(status, turn, labels, first) });
     observeSeen?.(record["address"], turn, labels);
   };
@@ -1352,7 +1395,7 @@ async function subscribe(hc: HcConnection, socket: Socket<ConnectionState>, requ
         reported.set(paneId, facts);
         if (facts !== before) lifecycle("pane.updated", "pane_updated", paneId);
         const status = statusOf(report);
-        noteSession?.(paneId, status, event.data?.["records"]);
+        noteSession?.(paneId, status, event.data?.["records"], known.get(paneId)?.labels);
         const entry = known.get(paneId);
         if (!entry) {
           if (statusPanes.has(paneId)) tell(paneId, status, agentStatusOf(status));
