@@ -4,6 +4,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
+import { agentPickerOwnsScreen } from "./dialogs/fallback.ts";
 import { handlePromptRequest, parseFallbackPrompt } from "./prompt.ts";
 
 /** A herdr holding one pane whose screen the test sets; every key the answer route sends is kept. */
@@ -179,5 +180,68 @@ test("sends nothing for an answer given up during the read before its key", asyn
     pane.onRead = () => { if (++reads === 2) given.abort(); };
     expect(await answer(prompt.id, { option_index: labels(prompt).indexOf("Enter") }, given.signal)).toEqual({ status: 409, code: "prompt_changed" });
     expect(pane.sent).toEqual([]);
+  });
+});
+
+// A picker of the agent's own that herdr reports at rest under (Devin's and Copilot's folder trust at start): the chat
+// shows its card, and a chat message is refused rather than picking the row under the cursor (core/composer.ts).
+test.each([
+  ["devin-3000.12.43-trust", true],
+  ["copilot-1.0.109-trust-logo-a", true],
+  ["agy-1.5.6-trust", true],
+  ["devin-3000.12.43-composer", false],
+  ["copilot-1.0.109-composer", false],
+  ["grok-1.0.77-composer", false],
+])("tells an agent's own picker from its composer (%s)", (name, picker) => {
+  expect(agentPickerOwnsScreen(recorded(name))).toBe(picker);
+});
+
+// a narrow pane wraps the key hint onto a second row: neither row alone both moves and chooses
+test.each(["↑↓ sel", "↑↓ select ·", "↑↓ select · "])("tells Devin's folder trust with its key hint wrapped after %p", (head) => {
+  const lines = recorded("devin-3000.12.43-trust").split("\n");
+  const at = lines.findIndex((line) => line.includes("↑↓ select"));
+  const hint = lines[at]!;
+  const cut = hint.indexOf(head) + head.length;
+  lines.splice(at, 1, hint.slice(0, cut), hint.slice(cut));
+  expect(agentPickerOwnsScreen(lines.join("\n"))).toBe(true);
+});
+
+test("tells a picker whose worded key hint wraps inside a word", () => {
+  const screen = recorded("devin-3000.12.43-trust").replace(/ ↑↓ select .*/, " up/down to move · en\nter to select");
+  expect(agentPickerOwnsScreen(screen)).toBe(true);
+});
+
+test("offers and answers Devin's folder trust while herdr reports Devin at rest", async () => {
+  await withPane("devin", "idle", recorded("devin-3000.12.43-trust"), async (pane) => {
+    const prompt = (await card())!;
+    expect(prompt.fallback).toBe(true);
+    expect(prompt.question).toBe("\u2731 Do you trust the authors of this directory?");
+    expect(await answer(prompt.id, { option_index: labels(prompt).indexOf("Enter") })).toEqual({ status: 200, code: undefined });
+    expect(pane.sent).toEqual(["enter"]);
+  });
+});
+
+test.each([
+  ["devin", "idle", recorded("devin-3000.12.43-composer")],
+  // a reader knows Claude's screens: a picker-shaped screen of its at rest is left to that reader
+  ["claude", "idle", recorded("devin-3000.12.43-trust")],
+])("offers no card for %s at rest without a picker of its own", async (agent, status, screen) => {
+  await withPane(agent, status, screen, async () => {
+    expect(await card()).toBeNull();
+  });
+});
+
+// Copilot 1.0.109 draws its numbered menus in a box (`│ ❯ 1. Yes │`): read through the box, each row is an option
+// answered by its number, as Copilot takes it (answered live: "1" ran the command)
+test.each([
+  ["copilot-1.0.109-run-command", "Do you want to run this command?", ["Yes", "No, and tell Copilot what to do differently (Esc to stop)"]],
+  ["copilot-1.0.109-trust-logo-a", "Do you trust the files in this folder?", ["Yes", "Yes, and remember this folder for future sessions", "No (Esc)"]],
+])("offers each row of Copilot's boxed menu (%s)", async (name, question, rows) => {
+  await withPane("copilot", "blocked", recorded(name), async (pane) => {
+    const prompt = (await card())!;
+    expect(prompt.question).toBe(question);
+    expect(labels(prompt)).toEqual([...rows, "Enter", "Esc"]);
+    expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
+    expect(pane.sent).toEqual(["text:1"]);
   });
 });

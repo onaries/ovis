@@ -18,7 +18,7 @@ import { processStartedAt } from "../process-start.ts";
 import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
 import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, claudeSendAnywayBox, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
-import { registry } from "../dialogs/registry.ts";
+import { agentPickerWaits, registry, SCREEN_READ_AGENTS } from "../dialogs/registry.ts";
 import { codexOwnScreenOpen, CODEX_OWN_SCREEN_MESSAGE } from "../dialogs/codex.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "../dialogs/claude.ts";
 import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
@@ -318,6 +318,21 @@ export async function freeCodexInput(paneId: string): Promise<void> {
   }
 }
 
+/** The refusal of a chat send over a picker of the agent's own (agentPickerWaits): the chat's card answers it. */
+export const AGENT_PICKER_MESSAGE = "The agent is waiting for an answer to its own menu; answer the card above, then send";
+
+/**
+ * An agent no reader knows, as every chat send reads it last, right before herdr is written to. herdr reports such an
+ * agent at rest under a picker of its own (Devin's and Copilot's folder trust at start), so agent.prompt would paste
+ * the message there and its Enter would pick the row under the cursor ("Yes, trust"), losing the message. While one
+ * is on screen the send is refused, as over Codex's own screens, and the message stays where it was written.
+ */
+export async function freeAgentPicker(paneId: string, agent: string): Promise<void> {
+  if (agentPickerWaits(agent, (await paneRead({ paneId, source: "detection", format: "text" })).text)) {
+    throw new HerdrError("agent_blocked", AGENT_PICKER_MESSAGE);
+  }
+}
+
 /**
  * Claude Code's input box as every chat send reads it first, before anything is typed. herdr reports
  * Claude Code idle with its rewind dialog up, which shows no input box: on a Summarize row the message
@@ -441,6 +456,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
     let sentText = text;
     let command: ReturnType<typeof prepareCommandSend>;
     let beforeScreen: string | undefined;
+    // an agent no reader knows whose screen was read for a picker of its own before agent.prompt (freeAgentPicker)
+    let pickerAgent: string | undefined;
     // herdr's foreground answer read before this send, which the outcome's process binding uses again
     let seen: ProcessInfo | undefined;
     // the send-time screen's history row, once the read alongside delivery confirms it; `noted`: the send it goes on
@@ -700,6 +717,11 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           await freeAgentInput(paneId, agent, identity ?? undefined, agent === "codex");
           inTime();
         } else if (agent === "codex") await freeCodexInput(paneId);
+        // and a picker of its own that has an agent's input while herdr reports it at rest (agents no reader knows)
+        if (agent && !SCREEN_READ_AGENTS.has(agent)) {
+          pickerAgent = agent;
+          await freeAgentPicker(paneId, agent);
+        }
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();
@@ -743,6 +765,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       // lines: several of them are shaped here as the same block typed into the mirror is. herdr is
       // asked only for such a block, so a one-line message never waits on it.
       const shaped = await mirrorInput(closeMention(payload), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
+      // agent.prompt was refused, and its picker may have come up since the read before it: read once more, last
+      if (pickerAgent !== undefined) await freeAgentPicker(paneId, pickerAgent);
       inTime();
       await paneSendText(paneId, shaped, undefined, mayType).catch(refusal);
       // fixed wait: a TUI busy with the paste takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)

@@ -69,7 +69,7 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
     }
   });
 
-  const agent = mode === "skill" || mode === "missing" ? "gjc" : mode === "codex-queued" ? "codex" : mode;
+  const agent = mode === "skill" || mode === "missing" ? "gjc" : mode === "codex-queued" ? "codex" : mode === "devin-queued" ? "devin" : mode;
   const pane = { pane_id: "p", terminal_id: "p", workspace_id: "w", tab_id: "t", agent, agent_status: "working", cwd: "/tmp", focused: false, revision: 0 } as HerdrPane;
   const frames: ServerMessage[] = [];
   told = frames;
@@ -114,7 +114,7 @@ let told: ServerMessage[] = [];
 const listed = (): Array<[string, string | undefined, string | undefined]> => told.flatMap((frame) => frame.type === "pending-messages" ? [frame.messages] : []).at(-1)
   ?.map((message) => [message.state, message.error?.code, message.error?.message]) ?? [];
 /** `codex-queued`: a message queued to a Codex pane and drained once it is idle (`codex` is a held one's Send now) */
-type Mode = "gjc" | "claude" | "pi" | "codex" | "codex-queued" | "skill" | "missing";
+type Mode = "gjc" | "claude" | "pi" | "codex" | "codex-queued" | "devin-queued" | "skill" | "missing";
 /** `onScreenRead`: as a read of the live screen is answered, after its text was taken */
 interface Pane { birth: number | null; screen: string; foreground: Array<{ pid: number; name: string; argv: string[] }>; onProcessRead?: () => void; onScreenRead?: () => void }
 
@@ -249,6 +249,26 @@ it("refuses to queue a message while one of Codex's own screens is up, as with a
 it("types no queued message into a screen of Codex's own that opens during the last checks before the paste, and holds it", async () => {
   expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, after: (pane) => { pane.screen = CODEX_OWN_SCREENS["/rename's field"]; } })).toEqual([]);
   expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+// Devin's folder trust (Devin 3000.12.43), which herdr reports as Devin at rest: a paste and its Enter would pick "Yes, trust"
+const DEVIN_TRUST = readFileSync(join(import.meta.dir, "../fixtures/devin-3000.12.43-trust.txt"), "utf8");
+const DEVIN_COMPOSER = readFileSync(join(import.meta.dir, "../fixtures/devin-3000.12.43-composer.txt"), "utf8");
+const HELD_FOR_PICKER: ReturnType<typeof listed> = [["held", "agent_blocked", composer.AGENT_PICKER_MESSAGE]];
+
+it("pastes a queued message into Devin's composer and sends it", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER })).toEqual(["paste", "Enter"]);
+});
+
+it("types no queued message into Devin's folder trust when the turn ends with it up, and holds the message with that reason", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER, beforeDrain: (pane) => { pane.screen = DEVIN_TRUST; },
+    afterDrain: async (pane, turn) => { pane.screen = DEVIN_COMPOSER; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_PICKER);
+});
+
+it("types no queued message into Devin's folder trust that comes up during the last checks before the paste", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER, after: (pane) => { pane.screen = DEVIN_TRUST; } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_PICKER);
 });
 
 it("still checks the process a queued Codex message was for after that screen read: another one at its PID gets nothing", async () => {

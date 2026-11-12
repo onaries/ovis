@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeBackslash, closeMention, type createSubmitText, freeAgentInput, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, OMP_REPORT_POLL_MS, OMP_STARTUP_MS, ompStartingUntil, pendingFault, pendingIdentity, pendingText, submitFraming, untilOmpReported } from "./composer.ts";
+import { AGENT_PICKER_MESSAGE, closeBackslash, closeMention, type createSubmitText, freeAgentInput, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, OMP_REPORT_POLL_MS, OMP_STARTUP_MS, ompStartingUntil, pendingFault, pendingIdentity, pendingText, submitFraming, untilOmpReported } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -26,7 +26,7 @@ import { typingGuards } from "../input-guard.ts";
 import { claudeForegroundSession, isClaudeProcess } from "../claude-store.ts";
 import { HerdrError, paneGet, paneProcessInfo, paneRead, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { bindCommandProcess, claudeHeldIsGrey, codexQuestionsCollapsed, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, piRunsCommand, piListsTemplate, prepareCommandSend, shownInputBox } from "../prompt.ts";
-import { registry } from "../dialogs/registry.ts";
+import { agentPickerWaits, registry } from "../dialogs/registry.ts";
 import { codexOwnScreenOpen, CODEX_OWN_SCREEN_MESSAGE } from "../dialogs/codex.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import { PendingInputs, samePendingIdentity, type PendingIdentity, type PendingRecord } from "../pending-input.ts";
@@ -66,8 +66,14 @@ type SubmitReply = { ok: boolean; pending?: PendingMessage; sending_at?: string;
  * status event comes next, which may be the end of a turn the user started since.
  */
 class CodexOwnScreenRefusal extends HerdrError {
-  constructor() { super("agent_blocked", CODEX_OWN_SCREEN_MESSAGE); }
+  constructor(message = CODEX_OWN_SCREEN_MESSAGE) { super("agent_blocked", message); }
 }
+/**
+ * A picker of the agent's own that has the input of an agent no reader knows (registry agentPickerWaits: Devin's or
+ * Copilot's folder trust). herdr reports the agent at rest under it and says nothing when it is answered, so a queued
+ * message refused for it is held as one refused for Codex's own screens is.
+ */
+const agentPickerRefusal = (): HerdrError => new CodexOwnScreenRefusal(AGENT_PICKER_MESSAGE);
 /** Codex's question whether to trust the folder it was started in, by its card's title (0.167, and as older versions asked it). */
 const CODEX_FOLDER_QUESTION_RE = /^(?:Trust this folder\?|Do you trust the contents)/i;
 /**
@@ -640,6 +646,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     // read as pendingContext reads it: a prompt Codex asks that came up meanwhile is a waiting menu, not a screen the user opened
     const own = pinned?.agent === "codex" ? codexScreenRefusal(screen, parseInteractivePrompt("codex", screen, null, true, [], null), "unknown") : null;
     if (own !== null) throw own;
+    if (pinned?.agent && agentPickerWaits(pinned.agent, screen)) throw agentPickerRefusal();
     await sameStart(pinned);
   }
   async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false, agentOnly = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined; held: { pid: number; started: number | null } | null; collapsed: boolean; agentInFront: boolean }> {
@@ -683,6 +690,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     // herdr does report, nothing is typed into it (codexScreenRefusal says as which of the two it is refused)
     const own = current.agent === "codex" ? codexScreenRefusal(screen, waits ? prompt : null, pane.agent_status === "blocked" ? "blocked" : "rest") : null;
     if (own !== null) throw own;
+    // a picker of an agent no reader knows has the input while herdr reports the agent at rest: nothing is typed into it
+    if (current.agent && pane.agent_status !== "blocked" && agentPickerWaits(current.agent, screen)) throw agentPickerRefusal();
     if (current.agent && (waits || registry.waits(current.agent, screen) || (pane.agent_status === "blocked" && !collapsed))) {
       throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
     }

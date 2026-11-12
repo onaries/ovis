@@ -121,7 +121,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   const steady = steadyReader(agent, shown.map((index) => cleanLine(lines[index]!)));
   // GJC's exact selector first: a label of its that starts with a number is still moved to, never typed
   const selectionMenu = fallbackGjcSelectionMenu(agent, lines, shown);
-  const menu = selectionMenu ? null : fallbackMenu(lines, shown);
+  const menu = selectionMenu ? null : fallbackMenu(lines.map(unboxed), shown);
   if (menu) {
     const above = shown.filter((index) => index < menu.start).map((index) => cleanLine(lines[index]!));
     const question = [...above].reverse().find((line) => ASKED_RE.test(line)) ?? above.at(-1);
@@ -331,6 +331,45 @@ function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[
   const selectedIndex = rows.findIndex((row) => row.selected);
   if (rows.length < 2 || selectedIndex < 0 || rows.filter((row) => row.selected).length !== 1) return null;
   return { start, rows, selectedIndex };
+}
+
+/** a picker's key hint: a way to move ("↑↓", "↑/↓", "up/down") and a way to choose with Enter ("↵ confirm", "enter to select") */
+const PICKER_MOVE_RE = /↑\s*\/?\s*↓|\bup\/down\b/i;
+const PICKER_CHOOSE_RE = /[↵⏎]|\benter\b/i;
+
+/** a picker's row under its cursor: a marker, then the row's words ("❭ 1 Yes, trust", "❯ 1. Yes", "> Yes, I trust this folder") */
+const PICKER_CURSOR_ROW_RE = /^[❯›>❭]\s*\S/;
+
+/**
+ * Whether a picker of the agent's own owns its input: a key hint that moves and chooses with Enter among the screen's
+ * last two lines, and a row under a cursor marker in the few lines above it. Agents no reader knows draw their folder
+ * trust this way at start (Devin 2026.7, Copilot 1.0.109, Antigravity 1.5.6), and herdr reports them at rest under it,
+ * so a chat message's paste and Enter would pick the row under the cursor ("Yes, trust") and the message would be lost.
+ * A narrow pane wraps the hint onto a second row, so two rows joined (where the wrap fell inside a word or not) count too.
+ */
+export function agentPickerOwnsScreen(screen: string): boolean {
+  const shown = screen.replace(ANSI_RE, "").split(/\r?\n/).filter((line) => cleanLine(line) && !isDivider(line)).map(cleanLine);
+  const isHint = (line: string): boolean => PICKER_MOVE_RE.test(line) && PICKER_CHOOSE_RE.test(line);
+  // where the hint starts: one row of the last two, or two rows wrapped, ending on the last row or the one before it
+  const starts = [shown.length - 2, shown.length - 1].filter((start) => start >= 0 && isHint(shown[start]!));
+  for (const start of [shown.length - 2, shown.length - 3]) {
+    const [head, tail] = [shown[start], shown[start + 1]];
+    if (start >= 0 && head !== undefined && tail !== undefined && (isHint(`${head} ${tail}`) || isHint(`${head}${tail}`))) starts.push(start);
+  }
+  return starts.some((end) => shown.slice(Math.max(0, end - 8), end).some((line) => PICKER_CURSOR_ROW_RE.test(line)));
+}
+
+/**
+ * A line with the side borders of the boxes it is drawn in taken off, the indentation inside kept ("│   2. No  │" is
+ * "  2. No"): a numbered menu Copilot draws in a box (its folder trust, its command and edit approvals) reads as the
+ * same menu drawn bare, its rows' numbers and the lines they wrap onto where they are.
+ */
+function unboxed(line: string): string {
+  for (let inner = line; ;) {
+    const box = inner.match(/^(\s*)│ ?(.*?)\s*│\s*$/);
+    if (!box) return inner;
+    inner = `${box[1]}${box[2]}`;
+  }
 }
 
 /** The same framed question must still own the inline Other editor before any text is sent. */

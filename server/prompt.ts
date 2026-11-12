@@ -19,7 +19,7 @@ import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http
 import { claudePlanFile } from "./claude-plan.ts";
 import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
-import { registry } from "./dialogs/registry.ts";
+import { agentPickerWaits, registry, SCREEN_READ_AGENTS } from "./dialogs/registry.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, type PromptDraft, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, own, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
 import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
@@ -743,8 +743,12 @@ async function fallbackCard(paneId: string, agent: string, status: string | unde
   // show immediately; only an unrecognized screen waits for this bounded settling window.
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   // a pi pane gets no generic card (readKnownPrompt says so through suppressFallback)
-  if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) return null;
+  if (known.prompt !== null || known.suppressFallback || !agent || settling) return null;
+  // herdr reports some agents at rest under a picker of their own (their folder trust at start): read only for agents
+  // no reader knows, the one pass that may show the card while herdr says no answer is waited for
+  if (status !== "blocked" && SCREEN_READ_AGENTS.has(agent)) return null;
   const screen = known.screen ?? await liveScreen(paneId);
+  if (status !== "blocked" && !agentPickerWaits(agent, screen)) return null;
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
   // (registry.waits); Claude's own input box (a `❯` or bash `!` row between the last two rules)
@@ -1101,7 +1105,7 @@ async function readKnownPrompt(
     return { prompt: publicPrompt(parsed) };
   }
 
-  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", "letta", ""].includes(agent)) return { prompt: null };
+  if (!SCREEN_READ_AGENTS.has(agent)) return { prompt: null };
   const piTranscript = agent === "pi" ? await piTranscriptPath(paneId).catch(() => null) : null;
   // pi-ask's ask_user form, as the web UI's pi extension reports it: answered through pi-ask, never keys
   if (piTranscript && "path" in piTranscript) {
