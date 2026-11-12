@@ -32,9 +32,11 @@ commenting the sentence it gives.
   [.github/actions/setup-ci/action.yml](.github/actions/setup-ci/action.yml).
 
 ```bash
+git clone https://github.com/devswha/ovis.git
+cd ovis
 bun install
 bun run server   # API + WebSocket on :7317
-bun run dev      # Vite on :5173, proxies /api and /ws
+bun run dev      # Vite on :5173, proxies /api and /ws; run it in a second terminal
 ```
 
 Neither command updates itself; only `bun run start` and the plugin run the updater.
