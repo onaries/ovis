@@ -20,10 +20,12 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.webkit.CookieManager;
+import android.webkit.WebBackForwardList;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -102,6 +104,25 @@ public class MainActivity extends BridgeActivity {
     /** Whether a page of the PC has been checked for being Ovis (PCStore.check) in this activity. */
     private boolean checked;
 
+    /**
+     * Takes Back for the page while the entry behind the one shown is a page of the same place
+     * (syncBack): the page closes what is open, or shows the pane before. While it is off, Back is
+     * the system's: it leaves the app, and draws its own way out (predictive back).
+     */
+    private final OnBackPressedCallback pageBack = new OnBackPressedCallback(false) {
+        @Override
+        public void handleOnBackPressed() {
+            WebView view = bridge.getWebView();
+            if (view.canGoBack()) {
+                view.goBack();
+                return;
+            }
+            // the page stepped off that entry itself a moment ago: this Back is the system's after all
+            setEnabled(false);
+            getOnBackPressedDispatcher().onBackPressed();
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(HerdrShellPlugin.class);
@@ -146,6 +167,20 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         keepClearOfNavigationButtons();
         String appOrigin = bridge.getScheme() + "://" + bridge.getHost();
+        getOnBackPressedDispatcher().addCallback(this, pageBack);
+        if (host == null) {
+            // before a PC is chosen the pages are the app's own: Back closes what the demo has open,
+            // and goes from the demo to the connect screen
+            bridge.setWebViewClient(
+                new BridgeWebViewClient(bridge) {
+                    @Override
+                    public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                        super.doUpdateVisitedHistory(view, url, isReload);
+                        syncBack(appOrigin);
+                    }
+                }
+            );
+        }
         followThemeColor(host == null ? Collections.singleton(appOrigin) : new HashSet<>(Arrays.asList(appOrigin, origin)));
         if (host != null) {
             // CapacitorCookies is off (not in the plugins configuration), yet its load() still adds a
@@ -239,6 +274,14 @@ public class MainActivity extends BridgeActivity {
                             return true;
                         }
                         return super.shouldOverrideUrlLoading(view, request);
+                    }
+
+                    // every entry the page adds or leaves (a sheet's, a pane's) comes through here,
+                    // as a page load does
+                    @Override
+                    public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                        super.doUpdateVisitedHistory(view, url, isReload);
+                        syncBack(pc);
                     }
 
                     // WebView does not ask shouldOverrideUrlLoading about a form's POST: a sign-in form
@@ -440,6 +483,20 @@ public class MainActivity extends BridgeActivity {
     public void onDestroy() {
         answerTimer.removeCallbacksAndMessages(null);
         super.onDestroy();
+    }
+
+    /**
+     * Gives Back to the page or to the system, by where the WebView's history stands: the page's while
+     * the page shown and the entry behind it are pages of `place`, the PC or the app's own origin
+     * (PCStore.pageTakesBack). Told before the next Back, so the system knows which way out to draw.
+     */
+    private void syncBack(String place) {
+        WebView view = bridge.getWebView();
+        WebBackForwardList entries = view.copyBackForwardList();
+        int at = entries.getCurrentIndex();
+        String here = at < 0 ? null : entries.getItemAtIndex(at).getUrl();
+        String before = at < 1 ? null : entries.getItemAtIndex(at - 1).getUrl();
+        pageBack.setEnabled(view.canGoBack() && PCStore.pageTakesBack(here, before, place));
     }
 
     /**

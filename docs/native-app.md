@@ -402,6 +402,17 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   so a PC saved before that check (or one whose port another server took) never traps the app.
 - `onPause` flushes WebView cookies. Without it, a pairing made a moment before the app was
   swiped away was lost: the next start asked for pairing again.
+- Back goes to the page first. The page keeps a history entry for everything open over it (a
+  sheet, a dialog, a menu, the workspace list: `src/lib/sheetHistory.ts`) and for each pane it
+  moved to, so `MainActivity` keeps an `OnBackPressedCallback` on while the WebView's history has
+  an entry of the same place behind the page shown (the PC's pages, or the app's own before a PC
+  is chosen: `PCStore.pageTakesBack`, told again on every `doUpdateVisitedHistory`), and its Back
+  is `goBack()`: the page closes what is open, or shows the pane before, and the demo goes back to
+  the connect screen. With no such entry (the first page with nothing open, a sign-in in front of
+  the PC, `error.html`) the callback is off and Back is the system's: it leaves the app, with
+  Android's own predictive-back animation, and no second press is asked for. Before this every
+  Back left the app, whatever was open. The iOS app has no Back: the edge swipe is the page's (it
+  opens the workspace list), and WKWebView's back-forward swipe stays off.
 - `HerdrShellPlugin` and `PCStore` (SharedPreferences) mirror the iOS plugin and store. As on
   iOS, a pairing link stays in memory until a PC page loads.
 - Capacitor injects its bridge only into the PC's origin, so `error.html`, served from the app

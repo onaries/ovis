@@ -460,6 +460,28 @@ public class PCStoreTest {
     }
 
     @Test
+    public void backIsThePagesOnlyOverAnotherPageOfTheSamePlace() {
+        String pc = "https://pc.tail1234.ts.net";
+        // a sheet's or a pane's entry over a page of the PC
+        assertTrue(PCStore.pageTakesBack(pc + "/?pane=w1%3Ap2", pc + "/?pane=w1%3Ap1", pc));
+        // the PC's first page: nothing behind it, or the sign-in that led to it
+        assertFalse(PCStore.pageTakesBack(pc + "/", null, pc));
+        assertFalse(PCStore.pageTakesBack(pc + "/", "https://login.example.com/authorize", pc));
+        // a sign-in in front of the PC, and the app's error page over a PC that did not answer
+        assertFalse(PCStore.pageTakesBack("https://login.example.com/step2", "https://login.example.com/authorize", pc));
+        assertFalse(PCStore.pageTakesBack("https://localhost/error.html", pc + "/", pc));
+        // another port on the PC's host is another place
+        assertFalse(PCStore.pageTakesBack(pc + "/", "https://pc.tail1234.ts.net:8443/", pc));
+        // a relay PC, within its scope only
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        assertTrue(PCStore.pageTakesBack(scope + "?pane=a", scope, scope));
+        assertFalse(PCStore.pageTakesBack(scope, "https://app.ovis.sh/", scope));
+        // before a PC is chosen, the app's own pages: the demo over the connect screen
+        assertTrue(PCStore.pageTakesBack("https://localhost/demo/index.html", "https://localhost/", "https://localhost"));
+        assertFalse(PCStore.pageTakesBack("https://localhost/", null, "https://localhost"));
+    }
+
+    @Test
     public void anotherPortOnThePcsHostIsAnotherOrigin() {
         String pc = "https://pc.example.ts.net";
         assertTrue(PCStore.sameOrigin(pc + "/files?x=1#top", pc));

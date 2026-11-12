@@ -268,6 +268,17 @@ final class PCStore {
     }
 
     /**
+     * Whether Back is the page's to take: the page shown (`here`) is a page of `place` (a PC's key,
+     * or the app's own origin before one is chosen), and so is the entry behind it (`before`), where
+     * the page keeps what Back returns to: the state under a sheet or a dialog, the pane before. The
+     * first page of the place, a sign-in in front of a PC and the app's error page over a PC that
+     * did not answer have no such entry: there Back leaves the app.
+     */
+    static boolean pageTakesBack(String here, String before, String place) {
+        return here != null && before != null && belongs(here, place) && belongs(before, place);
+    }
+
+    /**
      * `path` (percent-encoded, as a URL carries it) when a browser loads it as written, else null: no
      * `.` or `..` segment, plain or percent-encoded (once or twice), no encoded `/` and no `\`, which a
      * browser reads as `/`. A page within a scope never needs any of them.
