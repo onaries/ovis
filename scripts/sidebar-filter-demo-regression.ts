@@ -220,6 +220,20 @@ async function waitWorkspaceIds(page: Page, predicate: string): Promise<void> {
 }
 
 interface Scene { phone: boolean; theme: Theme; language: Language }
+/**
+ * The demo ends the api pane's turn 4.5 s after each load (site/demo/transport.ts): its status reaches the Laptop's row
+ * alone (the build PC's copy stays working) and the Laptop's row then leaves for the resting part, behind the build
+ * PC's. Every roster a step compares with another is taken after that, never across it.
+ */
+async function turnEnded(page: Page): Promise<void> {
+  await page.waitForFunction((api) => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".agents-sidebar .agent-item")];
+    const laptop = rows.findIndex((row) => row.dataset["machine"] === "local" && row.dataset["pane"] === api && row.querySelector('[data-status="done"]') !== null);
+    const build = rows.findIndex((row) => row.dataset["machine"] === "build" && row.dataset["pane"] === api);
+    return laptop >= 0 && build >= 0 && build < laptop;
+  }, panes.api);
+}
+
 async function newPage(browser: Browser, scene: Scene, search: string, stored: Record<string, string> = {}): Promise<{ context: BrowserContext; page: Page; errors: string[] }> {
   const context = await browser.newContext(scene.phone
     ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, locale: scene.language === "ko" ? "ko-KR" : "en-US", colorScheme: scene.theme }
@@ -237,6 +251,7 @@ async function newPage(browser: Browser, scene: Scene, search: string, stored: R
   if (scene.phone) await openDrawer(page, scene.language);
   await agentRows(page).first().waitFor({ state: "attached" });
   await page.waitForFunction(() => document.querySelectorAll(".machine-list .machine-group").length >= 2);
+  await turnEnded(page);
   await page.evaluate(() => document.fonts.ready);
   return { context, page, errors };
 }
@@ -447,9 +462,6 @@ async function happyPath(browser: Browser, scene: Scene): Promise<void> {
   const pins = JSON.stringify([`local:workspace:w1H`, `build:${panes.omp}`]);
   const { context, page, errors } = await newPage(browser, scene, `pane=${encodeURIComponent(WEB)}`, { "ovis:sidebar-agent-pins": pins });
   try {
-    // the demo ends the api pane's turn a few seconds after load (site/demo/transport.ts) and the Agents list reorders
-    // when it does: the roster every later step is compared with is the one after that, the Laptop's row done
-    await page.locator(`.agents-sidebar .agent-item[data-machine="local"][data-pane="${panes.api}"] [data-status="done"]`).waitFor({ state: "attached", timeout: 15_000 });
     const before = await rosterView(page);
     const storageBefore = await storageView(page);
     assert.equal(before.groups.map((group) => group.name).join(","), "Laptop,Build PC", `${name}: two connected PCs`);
@@ -586,6 +598,7 @@ async function selectedNonMatch(browser: Browser, scene: Scene): Promise<void> {
     if (scene.phone) await openDrawer(page, scene.language);
     await agentRows(page).first().waitFor({ state: "attached" });
     await page.waitForFunction(() => document.querySelectorAll(".machine-list .machine-group").length >= 2);
+    await turnEnded(page);
     assert.equal(await filterInput(page).inputValue(), "", `${name}: a reload starts with an empty filter`);
     assert.equal(await page.locator(".sidebar-filter-empty").count(), 0, `${name}: nothing says no match after a reload`);
     assert.deepEqual(await rosterView(page), before, `${name}: the roster is back after a reload`);
