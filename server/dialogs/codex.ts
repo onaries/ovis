@@ -294,6 +294,21 @@ const CODEX_HISTORY_SEARCH_RE = /^(?:reverse|forward)-i-search:/;
  * sentence where every other screen has a footer. The Enter after a paste would be taken as the new key.
  */
 const CODEX_KEY_CAPTURE_RE = /(?:^|\s)esc cancels\.$/i;
+/**
+ * The transcript's prompt browser: Esc in the transcript pager, which Ctrl+T opens with `[tui] fullscreen_transcript =
+ * false` (by default Ctrl+T leaves the composer). Its footer is the screen's last row and begins with a word, not a
+ * key, and Codex shortens it to one row as the pane narrows (0.167.0 to 0.167.2): `Browsing transcript · ↑↓/jk scroll ·
+ * ←→/hl prompts · ^t details · ↵ rewind · esc back` at 90 columns, `Browsing · ↑↓/jk ←→/hl · ↵ rewind · esc` at 50,
+ * `Browsing · esc back` at 30 and `Browsing · esc` at 20. There h, j, k and l move through the prompts, and Enter
+ * rewinds the conversation to the one picked.
+ */
+const CODEX_TRANSCRIPT_RE = /^Browsing(?: transcript)? · (?:.+ · )?esc(?: back)?$/;
+/**
+ * Narrower, the label alone: Codex keeps the first of those forms that fits its footer, the pane less two columns, and
+ * from 15 columns down only `Browsing` does (under 10 nothing does, and no footer is drawn). The word ends the screen
+ * as its footer only there: a screen with a wider row does not read it as one.
+ */
+const CODEX_TRANSCRIPT_LABEL_COLUMNS = 15;
 
 /** What a chat send to a Codex pane is refused with while one of those screens is open (`agent_blocked`). */
 export const CODEX_OWN_SCREEN_MESSAGE = "Codex has one of its own screens open in the terminal; close it there, then send";
@@ -324,7 +339,14 @@ export function codexOwnScreenOpen(screen: string): boolean {
   const rows = screen.replace(ANSI_RE, "").split(/\r?\n/).map((row) => row.trimEnd());
   const filled = rows.map((row, at) => ({ text: row.trim(), at })).filter(({ text }) => text !== "");
   if (filled.length === 0) return false;
-  if (CODEX_HISTORY_SEARCH_RE.test(filled.at(-1)!.text)) return true;
+  const end = filled.at(-1)!;
+  if (CODEX_HISTORY_SEARCH_RE.test(end.text)) return true;
+  const browsing = CODEX_TRANSCRIPT_RE.test(end.text) || (end.text === "Browsing" && rows.every((row) => Bun.stringWidth(row) <= CODEX_TRANSCRIPT_LABEL_COLUMNS));
+  // not the end of a status line that a narrow pane cut at a `·`, where a thread or a folder may be named like that
+  // footer: such an end is indented as the status line is. The transcript's footer begins its row, whatever the
+  // transcript's last line ends with, and under the composer (Codex's `prompt_navigation` snapshot) the status line
+  // stands whole over it
+  if (browsing && !(/^\s/.test(rows[end.at]!) && /·$/.test(rows[end.at - 1] ?? ""))) return true;
   const marked = findLastIndex(rows, (row) => /^[›»](?:\s|$)/.test(row));
   const tail = filled.filter(({ at }) => at > marked).slice(-CODEX_FOOTER_ROWS);
   // the sentence a view ends with instead of a footer, as one row or wrapped onto two, the first of them no status
