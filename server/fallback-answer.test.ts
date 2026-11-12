@@ -7,7 +7,7 @@ import type { InteractivePrompt } from "../shared/protocol.ts";
 import { handlePromptRequest, parseFallbackPrompt } from "./prompt.ts";
 
 /** A herdr holding one pane whose screen the test sets; every key the answer route sends is kept. */
-interface Pane { agent: string; screen: string; sent: string[] }
+interface Pane { agent: string; screen: string; sent: string[]; /** called as each screen read arrives, before its text is taken */ onRead?: () => void }
 
 async function withPane(agent: string, status: string, screen: string, run: (pane: Pane) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-fallback-answer-"));
@@ -25,7 +25,7 @@ async function withPane(agent: string, status: string, screen: string, run: (pan
       const request = JSON.parse(input.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string } };
       const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
       if (request.method === "session.snapshot") return answer({ snapshot: { panes: [{ pane_id: "p_1", agent: pane.agent, agent_status: status }], layouts: [] } });
-      if (request.method === "pane.read") return answer({ read: { text: pane.screen } });
+      if (request.method === "pane.read") { pane.onRead?.(); return answer({ read: { text: pane.screen } }); }
       if (request.method === "pane.process_info") return answer({ process_info: { foreground_processes: [] } });
       if (request.method === "pane.get") return answer({ pane: { pane_id: "p_1" } });
       if (request.method === "agent.get") return answer({ agent: {} });
@@ -51,9 +51,9 @@ async function card(): Promise<InteractivePrompt | null> {
   return ((await (await handlePromptRequest(new Request(url), url, {}))!.json()) as { prompt: InteractivePrompt | null }).prompt;
 }
 
-async function answer(promptId: string, choice: { option_index: number }): Promise<{ status: number; code?: string }> {
+async function answer(promptId: string, choice: { option_index: number }, signal?: AbortSignal): Promise<{ status: number; code?: string }> {
   const url = new URL("http://127.0.0.1/api/pane/prompt/answer");
-  const response = (await handlePromptRequest(new Request(url, { method: "POST", body: JSON.stringify({ pane_id: "p_1", prompt_id: promptId, ...choice }) }), url, {}))!;
+  const response = (await handlePromptRequest(new Request(url, { method: "POST", signal, body: JSON.stringify({ pane_id: "p_1", prompt_id: promptId, ...choice }) }), url, {}))!;
   const body = await response.json() as { error?: { code: string } };
   return { status: response.status, code: body.error?.code };
 }
@@ -153,3 +153,31 @@ test.each(SWAPPED_MARKS.flatMap(([shape, before, after]) => ["copilot", "claude"
       expect(pane.sent).toEqual([]);
     });
   });
+
+// The read right before the key, not only the answer's first read, must still show the card: the screen changes after
+// the answer has read it, between that read and the key (merge-pass review of #3730)
+test("refuses the key when the question changed after the answer's first read", async () => {
+  const screen = recorded("copilot-1.0.109-ask-32s");
+  await withPane("copilot", "blocked", screen, async (pane) => {
+    const prompt = (await card())!;
+    let reads = 0;
+    // the answer's first read draws the card as shown; every read after it shows another question
+    pane.onRead = () => { if (++reads === 2) pane.screen = screen.replace("Which color?", "Which size?"); };
+    expect(await answer(prompt.id, { option_index: labels(prompt).indexOf("Enter") })).toEqual({ status: 409, code: "prompt_changed" });
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(pane.sent).toEqual([]);
+  });
+});
+
+test("sends nothing for an answer given up during the read before its key", async () => {
+  const screen = recorded("copilot-1.0.109-ask-32s");
+  await withPane("copilot", "blocked", screen, async (pane) => {
+    const prompt = (await card())!;
+    const given = new AbortController();
+    let reads = 0;
+    // the screen stays the card's; the request is given up while the read before the key is answered
+    pane.onRead = () => { if (++reads === 2) given.abort(); };
+    expect(await answer(prompt.id, { option_index: labels(prompt).indexOf("Enter") }, given.signal)).toEqual({ status: 409, code: "prompt_changed" });
+    expect(pane.sent).toEqual([]);
+  });
+});

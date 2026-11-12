@@ -1566,7 +1566,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         const settled = read?.settled ? parsedByPublicPrompt.get(read.settled) ?? null : null;
         // an agent no reader knows (Grok, Copilot, Antigravity, Devin...) gets no screen from readKnownPrompt: a card
         // checked on the screen alone reads it here, as fallbackCard drew it, or it would be compared with nothing
-        const readsLive = read?.screen === undefined && screenOnly && parsedPrompt?.responder.startsWith("fallback") === true;
+        // a stale read (an OpenCode lookup overtaken) has no screen either, and authorizes nothing
+        const readsLive = read?.screen === undefined && read?.stale !== true && screenOnly && parsedPrompt?.responder.startsWith("fallback") === true;
         const screen = read?.screen ?? (read && readsLive
           ? await Promise.race([liveScreen(body.pane_id).catch(() => null), Bun.sleep(Math.max(0, readUntil - Date.now())).then(() => null)])
           : null);
