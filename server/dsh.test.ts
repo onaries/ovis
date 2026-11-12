@@ -312,10 +312,25 @@ linuxTest("does not show a new empty chat for a lock-free dsh that started befor
   expect(error).not.toBeInstanceOf(ConversationNotStarted);
 });
 
-test("shows a turn that failed before any reply, as dsh records a provider error", () => {
+test("shows a turn that failed before any reply with the error dsh recorded, as a failed request", () => {
   const p = projectDsh(log(event("user/message", message("hello"), 0), event("turn/end", { turn: 1, reason: { kind: "error", error: { message: "429: rate limited" } } }, 1)), "inode");
   expect(p.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
-  expect(p.turns[1]!.parts).toEqual([{ kind: "notice", text: expect.stringMatching(/\berror\b/) }]);
+  expect(p.turns[1]!.parts).toEqual([{ kind: "text", text: "Error: 429: rate limited", failed: true }]);
+});
+
+test("shows the error a recorded dsh-tui turn ended on (a provider with no balance), not a background result", async () => {
+  // dsh-tui 0.19.0 with dsh-core 0.2.2-rc.1, its DeepSeek route at no balance, as recorded (system prompts and tool lists left out)
+  const text = await Bun.file(join(import.meta.dir, "fixtures", "dsh-tui-0.19.0-dsh-0.2.2-rc.1-error.jsonl")).text();
+  const turns = projectDsh(text, "inode").turns;
+  const sent = turns.findIndex((turn) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text === "Reply with exactly: SHOULD-FAIL"));
+  expect(turns[sent + 1]?.parts).toEqual([{ kind: "text", failed: true, text: "Error: Insufficient Balance (request_id: ef4dff0b-9860-485e-bf1e-2adc49608099)" }]);
+  // the turns after it read as before
+  expect(turns[sent + 2]?.role).toBe("user");
+});
+
+test("names a turn stopped by the user as such, not as a background result", () => {
+  const p = projectDsh(log(event("user/message", message("hello"), 0), event("assistant/message", { message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }, 1), event("turn/end", { turn: 1, reason: { kind: "aborted" } }, 2)), "inode");
+  expect(p.turns[1]!.parts.at(-1)).toEqual({ kind: "notice", source: "dsh-turn-end", text: "Turn ended: aborted" });
 });
 
 linuxTest("treats a dsh that started in the same clock tick as this server as unproven, not new", async () => {
