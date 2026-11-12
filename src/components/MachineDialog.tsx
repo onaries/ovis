@@ -6,6 +6,7 @@ import { answerMachineSetup, fetchMachineSetup, startMachineSetup } from "../lib
 import { hostKeyFingerprints } from "../lib/hostKey.ts";
 import { sshOutputParts } from "../lib/sshOutput.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { machineErrorText } from "../lib/userError.ts";
 import { BridgeUpdateProgress, OwnOvisAddress, ownOvisAction } from "./MachineSidebar.tsx";
 import "./Machines.css";
@@ -27,6 +28,9 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
   const [job, setJob] = useState<SetupJob | null>(null);
   const mounted = useRef(true);
   const jobRef = useRef(job); jobRef.current = job;
+  // Back closes the dialog as its Escape does (the dialog's cancel), where the browser does not send it one
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  usePhoneSheetBack(() => { closeRef.current(); });
   // the identity the form shows now: an answer sent for another one never offers its choices here
   const identityRef = useRef(""); identityRef.current = [destination.trim(), port, session].join("\0");
   // the password lives in its field alone (src/AGENTS.md): read once on submit, then cleared, never in state

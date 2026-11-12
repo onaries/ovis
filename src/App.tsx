@@ -772,6 +772,9 @@ export function App() {
   // only once the shell is drawn: a drawer a link opens behind the access gate takes its focus when it mounts
   const drawerModal = locked === false && drawerOpen && !wideScreen;
   const { ref: drawerRef } = useDrawerDialog(drawerModal, setDrawerOpen, [peekSidebarRef]);
+  // Back closes the drawer, as it closes a sheet, and leaves the pane where it is. It stays up under a row's ⋯
+  // menu opened over it: that menu's close, or a Back, comes back to the drawer
+  usePhoneSheetBack(() => setDrawerOpen(false), drawerModal, true);
   // a phone (the sheets' width) draws no tab row: the header's title lists the tabs (TabStrip's sheet),
   // as the Codex and Claude apps title a thread and list the others from it
   const { tabsInHeader, sheet: tabSheet, toggle: toggleTabSheet, close: closeTabSheet } = useTabSheet(selectedPane !== null && !guideShown && !inbox.shown ? JSON.stringify([selectedMachineId, selectedPane.workspace_id]) : null);

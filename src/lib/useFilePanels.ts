@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { openPresentation, type FilePresentation } from "./filePresentation.ts";
+import { sheetStep } from "./historyKeys.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 import { useFocusReturn } from "./useFocusTrap.ts";
 import { useFileViewer } from "./useFileViewer.ts";
@@ -94,7 +95,8 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
         releaseDiff();
         openFile(preview);
       }, { once: true });
-      window.history.go(-2);
+      // the panels' own step, as backUnderCurrentEntry's is
+      window.history.go(-2 - (sheetStep.goingBack(window.history.state) ? 1 : 0));
     } else if (next === "panel" && filePanelAvailable && viewing !== null && webPage !== null && holdsEntry()) {
       // A popup file over the report's entry docks in the report's place: like the collapse above,
       // step back past both entries (the Back closes the report) and push the docked file from their

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { DEFAULT_SETTINGS } from "./settings.ts";
-import { FILE_PREVIEW_KEY } from "./historyKeys.ts";
+import { FILE_PREVIEW_KEY, sheetStep } from "./historyKeys.ts";
 import { useFilePanels } from "./useFilePanels.ts";
 
 const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -213,4 +213,42 @@ it("on: keeps the files of the ten panes left last", async () => {
   expect(panels.viewing).toBeNull();
   await moveTo("p10", true);
   expect(panels.viewing).toEqual(fileOn("p10"));
+});
+
+it("does not show again a file whose entry the file list goes onto to take for its own", async () => {
+  // Given a file the user's Back closed: its entry lies ahead, still naming the file.
+  await mount(false);
+  await act(async () => { panels.openFile(fileOn("p1")); });
+  await act(async () => { window.history.go(-1); });
+  expect(panels.viewing).toBeNull();
+  expect(fileOf(entries[1])).toEqual(fileOn("p1"));
+
+  // When the file list, in front again, goes onto that entry (lib/sheetHistory.ts says so for the event).
+  const answering = sheetStep.taking;
+  sheetStep.taking = () => true;
+  try { await act(async () => { window.history.go(1); }); } finally { sheetStep.taking = answering; }
+
+  // Then the file stays closed; a Forward of the user's onto a file's entry still shows it.
+  expect(panels.viewing).toBeNull();
+  await act(async () => { window.history.go(-1); });
+  await act(async () => { window.history.go(1); });
+  expect(panels.viewing).toEqual(fileOn("p1"));
+});
+
+it("does not show again a diff whose entry the file list goes onto to take for its own", async () => {
+  // Given a diff the user's Back closed: its entry lies ahead, still naming the diff.
+  await mount(false);
+  const diff = { machineId: "local", paneId: "p1", directory: "/r", path: "b.md", oldPath: null, scope: "workspace" as const, base: null, head: null, comparison: null };
+  await act(async () => { panels.openDiff(diff); });
+  expect(panels.diffViewing).toEqual(diff);
+  await act(async () => { window.history.go(-1); });
+  expect(panels.diffViewing).toBeNull();
+
+  // When the file list goes onto that entry.
+  const answering = sheetStep.taking;
+  sheetStep.taking = () => true;
+  try { await act(async () => { window.history.go(1); }); } finally { sheetStep.taking = answering; }
+
+  // Then the diff stays closed.
+  expect(panels.diffViewing).toBeNull();
 });

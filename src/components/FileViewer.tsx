@@ -35,6 +35,7 @@ import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
 import { outlineOf } from "../lib/markdownOutline.ts";
 import { hasPreview, type TextViewMode } from "../lib/textPreview.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useSettings } from "../lib/settings.ts";
 import { readFilePreviewText, SOURCE_PREVIEW_LINES, type FilePreviewText } from "../lib/filePreviewText.ts";
 import { readerHref } from "../lib/fileReader.ts";
@@ -190,6 +191,8 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
   // a phone's one-row header keeps new tab, raw and download in a "More" menu of its own
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  // Back closes the menu, as Escape does, and the next one the file (its own entry, lib/useFileViewer.ts)
+  usePhoneSheetBack(() => setMoreOpen(false), moreOpen);
   // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
   // (docked beside the pane, the rest of the page stays reachable: no trap)
   // the popup opens with the focus on its content, not its first button: Space then plays a video or

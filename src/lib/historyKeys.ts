@@ -65,8 +65,23 @@ export function withoutWebPanel(state: Record<string, unknown>): Record<string, 
 export const sheetStep: {
   lands: (event: Event) => boolean;
   /**
-   * Takes over the step back of a closed sheet whose entry `state` is, when that step has not run
-   * yet: whoever goes back from there steps over the sheet's entry too. sheetHistory answers it.
+   * Tells the sheets that the caller is about to go back by itself from the entry `state` is
+   * (Settings, a file, a diff or a web page closing by its own controls): no Back of the user's,
+   * so it closes no sheet and ends nothing a tap allowed. True when that entry is a sheet's own,
+   * made over the caller's, and the caller steps over it too: a closed sheet's, whose own step
+   * back has not run yet and is dropped, or the entry of a sheet that is up (Add PC, opened as
+   * Settings closed, over the sheet that closed with it), made again where the caller lands.
+   * sheetHistory answers it.
    */
-  takeLeaving: (state: unknown) => boolean;
-} = { lands: () => false, takeLeaving: () => false };
+  goingBack: (state: unknown) => boolean;
+  /** Tells the sheets that the step announced with goingBack did not happen (the browser dropped the traversal): the next Back is the user's. */
+  dropped: () => void;
+  /**
+   * Whether a popstate lands on the entry the user's Back left a moment ago, which a sheet that
+   * came back in front is taking for its own (the file list, once Back closed the file opened from
+   * it): the entry still holds what the file or the diff wrote, is rewritten as the sheet's, and is
+   * nothing to show again. The file viewer and the diff viewer ask; sheetHistory answers, whichever
+   * hears the event first.
+   */
+  taking: (event: Event) => boolean;
+} = { lands: () => false, goingBack: () => false, dropped: () => {}, taking: () => false };

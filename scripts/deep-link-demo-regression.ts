@@ -676,6 +676,10 @@ try {
         await palette.waitFor();
         await page.keyboard.press("Escape");
         await palette.waitFor({ state: "detached" });
+        // the palette's Escape is the palette's alone: Files stays up under it on a phone too, and closes by its own
+        assert.equal(await files.count(), 1, "Files stays up under the palette that closed over it");
+        await page.keyboard.press("Escape");
+        await files.waitFor({ state: "detached" });
         await page.locator(".header-more-button").tap();
         await more.waitFor();
         await search.tap();

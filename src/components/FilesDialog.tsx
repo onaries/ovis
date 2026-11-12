@@ -54,8 +54,9 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
   const [prVisited, setPrVisited] = useState(false);
   const [docsVisited, setDocsVisited] = useState(false);
   useSheetSwipe(surface, docked ? null : onClose);
-  // a file opened from the list is drawn over it with an entry of its own: Back closes the file first
-  usePhoneSheetBack(onClose, !viewing && !docked);
+  // a file opened from the list is drawn over it with an entry of its own: Back closes the file first,
+  // and the list, in front again with that Back, takes the entry it left
+  usePhoneSheetBack(onClose, !viewing && !docked, false, true);
   // the listener stays put across renders: an earlier listener of the same key that re-renders the app (the split
   // guide Escape puts away) would otherwise swap it out mid-dispatch, and a listener removed then never runs (#2631)
   const onKey = useEffectEvent((event: KeyboardEvent): void => {

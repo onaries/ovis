@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { sheetEntryLeft } from "./sheets-settled.ts";
 import { shownRows } from "./shown-rows.ts";
 import { keyBarItemLabel } from "../src/lib/keyBar.ts";
 
@@ -512,6 +513,8 @@ try {
         const closePalette = async (): Promise<void> => {
           await page.keyboard.press("Escape");
           await palette.waitFor({ state: "hidden", timeout: 5_000 });
+          // a screen worked by touch: the palette held a history entry, and a reload asked for before the history is off it is dropped
+          await sheetEntryLeft(page);
         };
         const modifierLabel = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl");
         const expectSidebarHint = async (action: Locator, key: string): Promise<void> => {

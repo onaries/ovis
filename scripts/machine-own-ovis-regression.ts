@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { chromium } from "playwright-core";
 import type { Machine, RemoteOvis } from "../shared/machines.ts";
 import { chromePath } from "./chrome-path.ts";
+import { sheetEntryLeft } from "./sheets-settled.ts";
 
 // A built client with a fictional PC and an in-memory API; no SSH and no user session.
 // A PC whose own Ovis is older than this app: the card offers "Update this PC's Ovis to vX" when that
@@ -91,6 +92,9 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: `${shots}/failed-mobile.png` });
   await page.setViewportSize({ width: 1280, height: 900 });
+  // the drawer, opened at the phone's width, held a history entry: widened, it steps off it, and a
+  // reload asked for before that step lands is dropped (net::ERR_ABORTED)
+  await sheetEntryLeft(page);
 
   // it cannot: why, and its address to copy, with no link that may not open from here
   roster = [local, refused(null)];
@@ -176,6 +180,8 @@ try {
   // the Ovis chosen for it is gone and nothing else runs there: that is a failure, told as one on the card, its dot and
   // the line under the header alike; only a fresh choice reads as a question
   await page.setViewportSize({ width: 1280, height: 900 });
+  // widened with the drawer open, as above: the reload waits for the drawer's entry to be left
+  await sheetEntryLeft(page);
   roster = [local, { ...offered, action_required: "choose_herdr", remote_ovis: null, target: { ...offered.target!, own_ovis: "/home/qa/.config/ovis/herdr-core.sock" },
     error: "Start Ovis on that PC, or start a new herdr here", found_ovis: [], found_herdr_sessions: [] }];
   await page.reload();

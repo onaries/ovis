@@ -140,6 +140,9 @@ function PairQrDialog({ state, onCodeStart, onCodeSubmit, onCodeMatch, onCancel,
 /** A completed pairing owns its transport until Open PC or Cancel, including in continued scope. */
 export function ReadyCheckpoint({ open, cancel, state, retry }: { readonly open: () => void; readonly cancel: () => void; readonly state?: Extract<RelayShellState, { kind: "ready" }>; readonly retry?: () => void }) {
   const t = useT(), title = useId(), surface = useFocusTrap<HTMLDivElement>(true);
+  // Back cancels, as Escape does
+  const latestCancel = useRef(cancel); latestCancel.current = cancel;
+  usePhoneSheetBack(() => { latestCancel.current(); });
   useEffect(() => {
     const escape = (event: KeyboardEvent): void => { if (event.key === "Escape") { event.preventDefault(); cancel(); } };
     window.addEventListener("keydown", escape);

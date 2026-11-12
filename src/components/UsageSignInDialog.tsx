@@ -15,6 +15,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { followedOutcome, type SignInOutcome } from "../lib/signInOutcome.ts";
 import { PROVIDER_NAME } from "../lib/usage.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import "./UsageAccountDialog.css";
 
@@ -166,6 +167,9 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
     return () => { window.removeEventListener("pagehide", leaving); leaving(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const close = (): void => { void stopFollowing().catch(() => undefined); onClose(); };
+  // Back stops the sign-in and closes the dialog, as Escape does, not Settings under it
+  const closeRef = useRef(close); closeRef.current = close;
+  usePhoneSheetBack(() => { closeRef.current(); });
   // Open terminal: the private sign-in stops and the same one starts in a terminal tab, which any device that
   // reads this PC's terminals can see; the user chose it
   const toTerminal = (): void => {

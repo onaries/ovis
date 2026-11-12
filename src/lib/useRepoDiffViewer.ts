@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { WEB_PANEL_BELOW_KEY, webPagesBelow } from "./historyKeys.ts";
+import { WEB_PANEL_BELOW_KEY, sheetStep, webPagesBelow } from "./historyKeys.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 import { diffTargetFromState, diffTargetState, type RepoDiffTarget } from "./repoDiff.ts";
 
@@ -14,6 +14,8 @@ export function useRepoDiffViewer() {
 
   useEffect(() => {
     const onPop = (event: PopStateEvent): void => {
+      // the entry Back closed the diff off, gone onto again by the file list that takes it: no diff to show again
+      if (sheetStep.taking(event)) return;
       closing.current = false;
       setViewing(diffTargetFromState(event.state));
     };
