@@ -424,7 +424,7 @@ const storeUnchanged = (opened: ReturnType<typeof openCodexStore> | undefined): 
 
 export const defaultCodexHome = (): string => process.env["CODEX_HOME"] || join(homedir(), ".codex");
 
-/** What processCodexHome found, by pid and argv, and when (PROCESS_HOME_TTL_MS). */
+/** The environment's CODEX_HOME, by pid and argv; descriptor-derived stores are never cached. */
 const processHomes = new Map<string, { home: string | null; at: number }>();
 /**
  * A visible chat reads its conversation up to every 2 s while the transcript changes, the
@@ -436,18 +436,55 @@ const processHomes = new Map<string, { home: string | null; at: number }>();
 const PROCESS_HOME_TTL_MS = 30_000;
 
 /**
- * The CODEX_HOME in a process's environment: /proc on Linux, `ps -E` (same user only) on macOS,
- * kept for PROCESS_HOME_TTL_MS under the process's pid and argv.
+ * The environment's CODEX_HOME, or a uniquely open Linux store when a launcher selects a
+ * project store without exporting CODEX_HOME. Only the environment result is cached.
  */
 export async function processCodexHome(pid: number, argv: readonly string[] = []): Promise<string | null> {
   const key = `${pid}\0${argv.join("\0")}`;
   const known = processHomes.get(key);
-  if (known && Date.now() - known.at < PROCESS_HOME_TTL_MS) return known.home;
+  if (known && Date.now() - known.at < PROCESS_HOME_TTL_MS) return known.home ?? openProcessCodexHome(pid);
   const home = await readProcessCodexHome(pid);
   processHomes.delete(key);
   processHomes.set(key, { home, at: Date.now() });
   if (processHomes.size > 256) processHomes.delete(processHomes.keys().next().value!);
-  return home;
+  return home ?? openProcessCodexHome(pid);
+}
+
+/** A database alone may be incidental: require an interactive rollout held in the same store. */
+function openProcessCodexHome(pid: number): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    // An invalid explicit home keeps the existing fallback; it does not opt into discovery.
+    const named = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11);
+    if (named) return null;
+    const directory = `/proc/${pid}/fd`;
+    const descriptors = readdirSync(directory);
+    // A partial scan cannot establish that the store is unique.
+    if (descriptors.length > 512) return null;
+    const paths: string[] = [];
+    for (const fd of descriptors) {
+      const link = `${directory}/${fd}`;
+      let path: string;
+      let held;
+      try {
+        path = readlinkSync(link);
+        held = statSync(link, { bigint: true });
+      } catch { continue; } // A descriptor may close while enumerating it.
+      if (!isAbsolute(path) || (nodePath.basename(path) !== "state_5.sqlite" && !path.endsWith(".jsonl"))) continue;
+      // An uninspectable held candidate makes the scan incomplete: uniqueness is unknown.
+      const current = statSync(path, { bigint: true });
+      let stillHeld: boolean;
+      try { stillHeld = readlinkSync(link) === path; } catch { continue; } // Closed while inspecting it.
+      if (held.isFile() && held.dev === current.dev && held.ino === current.ino && stillHeld) paths.push(path);
+    }
+    const homes = new Set<string>();
+    for (const path of paths) {
+      if (nodePath.basename(path) !== "state_5.sqlite") continue;
+      const home = realpathSync(nodePath.dirname(path));
+      if (paths.some((file) => file.endsWith(".jsonl") && codexRolloutPath(file, home) !== null)) homes.add(home);
+    }
+    return homes.size === 1 ? [...homes][0]! : null;
+  } catch { return null; }
 }
 
 async function readProcessCodexHome(pid: number): Promise<string | null> {

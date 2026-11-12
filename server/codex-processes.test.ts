@@ -140,6 +140,26 @@ const labelledSnapshot = () => ({ panes: [{
   agent: "codex", cwd: root, agent_status: "working", focused: false, revision: 0,
 }], workspaces: [], tabs: [], agents: [], layouts: [], protocol: 1, version: "test" } satisfies SessionSnapshot);
 
+it.skipIf(process.platform !== "linux")("reads a project store held by Codex without CODEX_HOME", async () => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "CODEX_HOME"));
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { openSync } = require("node:fs");
+    const files = JSON.parse(process.env.OVIS_TEST_OPEN_FILES);
+    const descriptors = files.map(file => openSync(file, "r"));
+    console.log("READY");
+    await new Response(Bun.stdin).text();
+  `], {
+    env: { ...env, OVIS_TEST_OPEN_FILES: JSON.stringify([join(home, "state_5.sqlite"), path]) },
+    stdin: "pipe", stdout: "pipe", stderr: "ignore",
+  });
+  children.push(child);
+  expect(await firstLine(child.stdout)).toBe("READY\n");
+  foreground = [{ pid: child.pid, argv: ["codex", "resume", thread] }];
+  agentFolders = { cwd: root };
+  // No configured home and no screen match: use the process's actual store and held rollout.
+  expect(await paneTranscript(root, undefined, labelledSnapshot())).toMatchObject({ source: "codex-transcript", path });
+});
+
 it.skipIf(process.platform !== "linux")("shows no conversation of the store an earlier read's Codex keeps once another Codex runs there", async () => {
   // Given Codex A writing to this fixture's store, gone by the lookup, and Codex B started since with a store of its own
   const other = join(root, "other-store");
