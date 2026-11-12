@@ -17,9 +17,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Plugin } from "vite";
-import { pagePolicy } from "../server/file-view.ts";
-import { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
 import { REGIONAL_APPS } from "../shared/relay-regions.ts";
+import { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, pagePolicy, REVALIDATE, shellContentSecurityPolicy } from "../shared/web-policy.ts";
 
 /** Vite's `--mode` that builds the shell; the build's output directory. */
 export const SHELL_MODE = "shell";
