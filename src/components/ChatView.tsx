@@ -1193,14 +1193,16 @@ function compactCounts(t: ReturnType<typeof useT>, part: Extract<ConversationPar
  * A run of requests the agent recorded as failed: one row, each error on request, named by its first
  * part's index (`at`). `followed`: the turn went on with another request.
  */
-function FailedRequests({ parts, followed, at }: { parts: readonly Extract<ConversationPart, { kind: "text" }>[]; followed: boolean; at: number }) {
+function FailedRequests({ parts, followed, at, live = false }: { parts: readonly Extract<ConversationPart, { kind: "text" }>[]; followed: boolean; at: number; live?: boolean }) {
   const t = useT();
   const n = parts.length;
   const label = followed
     ? t(n === 1 ? "Request failed, then tried again" : "{n} requests failed, then tried again", { n })
     : t(n === 1 ? "Request failed" : "{n} requests failed", { n });
-  // a run the turn went on from is history, in the quiet register; only one nothing followed keeps the alert colour
-  return <ChatDetails memoryKey={`failed:${at}`} data-failed-requests={at} className={`chat-skill${followed ? "" : " is-error"} chat-failed-requests`}>
+  // a run the turn went on from is history, in the quiet register; only one nothing followed keeps the alert colour,
+  // and says what went wrong without a click once the turn ended on it (folded while the turn goes on, so a retry
+  // arriving under it does not fold it away under the reader)
+  return <ChatDetails memoryKey={`failed:${at}`} defaultOpen={!followed && !live} data-failed-requests={at} className={`chat-skill${followed ? "" : " is-error"} chat-failed-requests`}>
     <summary><CircleAlert aria-hidden="true" /><span className="chat-skill-name">{label}</span><ChevronDown className="chat-skill-caret" aria-hidden="true" /></summary>
     <ol className="chat-skill-detail chat-failed-requests-list">{parts.map((part, index) => <li key={index}>{part.text.replace(/^Error: /, "")}</li>)}</ol>
   </ChatDetails>;
@@ -1376,7 +1378,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
       : answerItems(segment.parts, requestDetails).map((item) => item.kind === "text"
         ? <Markdown key={`answer:${work.at.get(item.part)}`} skills={skills} visualizations>{item.part.text}</Markdown>
         // a later part of the turn is a later request: what the record shows, not whether it was a retry
-        : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} />))}
+        : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} live={live} />))}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>

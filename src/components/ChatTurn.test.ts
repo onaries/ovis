@@ -106,7 +106,9 @@ describe("the folds Settings → Chat starts a turn with", () => {
 
 describe("Compaction and failed requests (#901)", () => {
   const failed = (error: string): ConversationPart => ({ kind: "text", text: `Error: ${error}`, failed: true });
-  const rows = (html: string) => [...html.matchAll(/class="chat-skill(?: is-error)? chat-failed-requests"><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);
+  const rows = (html: string) => [...html.matchAll(/class="chat-skill(?: is-error)? chat-failed-requests"(?: open="")?><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);
+  /** the rows drawn open: the error itself in view without a click */
+  const opened = (html: string) => [...html.matchAll(/class="chat-skill(?: is-error)? chat-failed-requests"( open="")?>/g)].map((match) => match[1] !== undefined);
   /** the rows drawn in the alert colour (is-error): a run nothing followed, never one the turn went on from */
   const alerting = (html: string) => [...html.matchAll(/class="chat-skill( is-error)? chat-failed-requests"/g)].map((match) => match[1] !== undefined);
 
@@ -133,6 +135,12 @@ describe("Compaction and failed requests (#901)", () => {
     const apart = render([failed("a"), text("partial"), failed("b")], { live: false }, "assistant", on);
     expect(rows(apart)).toEqual(["Request failed, then tried again", "Request failed"]);
     expect(alerting(apart)).toEqual([false, true]);
+    // a turn that ended on its failure shows the error at once (a Codex usage limit); one it went on from stays folded
+    expect(opened(alone)).toEqual([true]);
+    expect(opened(retried)).toEqual([false]);
+    expect(opened(apart)).toEqual([false, true]);
+    // folded while the turn goes on: a retry arriving under it does not fold it away under the reader
+    expect(opened(render([failed("401 unauthorized")], { live: true }, "assistant", on))).toEqual([false]);
   });
 
   it("names the token counts a compaction recorded only while on", () => {

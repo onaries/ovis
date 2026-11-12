@@ -152,3 +152,46 @@ it("serves skill activity without shipping the selected skill's instruction body
   expect(conversation.turns.at(-1)?.parts).toContainEqual({ kind: "skill", skill: { name: "review", path: "/project/skills/review/SKILL.md", evidence: "instructions", status: "loaded" } });
   expect(JSON.stringify(conversation)).not.toContain("PRIVATE SKILL INSTRUCTIONS");
 });
+
+it("shows a turn Codex ended in an error in the chat, and reads it at rest rather than DONE", async () => {
+  const status = async () => ((await (await fetch(`http://127.0.0.1:${server.port}/api/session`)).json()) as { snapshot: { panes: { pane_id: string; agent_status: string }[] } })
+    .snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
+  // the pane's statuses as the server tells its clients, each waited for from before the report that causes it
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+  const frames: string[] = [];
+  const waiters = new Set<() => void>();
+  ws.addEventListener("message", (event) => {
+    const frame = JSON.parse(String(event.data)) as { type?: string; pane_id?: string; agent_status?: string };
+    if (frame.type === "snapshot" || (frame.type === "pane-status" && frame.pane_id === paneId)) frames.push(frame.type === "snapshot" ? "snapshot" : frame.agent_status!);
+    for (const wake of waiters) wake();
+  });
+  const settles = (wanted: string, from = frames.length) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { waiters.delete(check); reject(new Error(`the pane never read ${wanted}: ${frames.slice(from).join(", ")}`)); }, 10_000);
+    function check() { if (!frames.slice(from).includes(wanted)) return; clearTimeout(timer); waiters.delete(check); resolve(); }
+    waiters.add(check);
+    check();
+  });
+  await settles("snapshot");
+  const turn = async (rest: string) => {
+    const working = settles("working");
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "working", agent_session_path: rollout });
+    await working;
+    const rested = settles(rest);
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
+    await rested;
+  };
+  try {
+    // a turn that answered is a finish
+    writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
+    await turn("done");
+    // codex-cli 0.167.0 at its usage limit, as recorded: the turn's end carries the error, and no answer
+    const failed = readFileSync(new URL("./fixtures/codex-usage-limit-0.167.0-rollout.jsonl", import.meta.url), "utf8");
+    writeFileSync(rollout, `${transcript(`${answerPrefix}Answer one`)}\n${failed}`);
+    await turn("idle");
+    expect((await read()).turns.at(-1)?.parts).toEqual([{ kind: "text", failed: true,
+      text: "Error: You\u2019ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 13th, 2026 6:05 PM." }]);
+    // herdr saying the rest again changes nothing
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
+    expect(await status()).toBe("idle");
+  } finally { ws.close(); }
+});
