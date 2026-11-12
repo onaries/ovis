@@ -155,7 +155,10 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
     const at = findLastIndex(cleanLines, (line, index) => line !== "" && OMO_PENDING_HINT_RE.test(wrapped(cleanLines, index)));
     const box = cleanLines.findIndex((line, index) => index > at && OMO_EMPTY_BOX_RE.test(line));
     if (at < 0 || box < 0 || box - at > 60 || !cleanLines[box - 1]!.startsWith("─")) return false;
-    return omoFooterIsActive(cleanLines.slice(box + 1));
+    const tail = cleanLines.slice(box + 1).filter(Boolean);
+    // OmO 5.1.69 puts model, provider and effort inside the composer, before its closing rule.
+    if (/^\S+\s{2,}.+\s{2,}(?:off|minimal|low|medium|high|xhigh)$/.test(tail[0] ?? "") && SOLID_RULE_RE.test(tail[1] ?? "")) tail.shift();
+    return omoFooterIsActive(tail);
   }
   // pi keeps its footer under every dialog — the pane's folder, then its stats line, then any
   // extension status (piFooterLines) — so the hint sits near the end without being it. A dialog

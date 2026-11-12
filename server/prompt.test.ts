@@ -2247,6 +2247,14 @@ ${rule60}
     });
   }
 
+  test("reads a pending question above OmO's model row inside the composer", () => {
+    const open = openOmoAsks(omo48PendingFixture("two.jsonl"));
+    const screen = omo48PendingFixture("two-wide.txt").replace(/❯\n/, "❯\n\n gpt-6.1-sol  Opencodex  medium\n");
+    expect(parseInteractivePrompt("pi", screen, null, false, open)).toMatchObject({ agent: "omo", kind: "question", question: open[0]!.questions[0]!.question });
+    expect(parseInteractivePrompt("pi", screen.replace("gpt-6.1-sol  Opencodex  medium", "$ echo after"), null, false, open)).toBeNull();
+    expect(parseInteractivePrompt("pi", `${screen}$ echo after\n`, null, false, open)).toBeNull();
+  });
+
   test("keeps a form dead under output that only looks like OmO task rows", () => {
     const open = openOmoAsks(omoPendingFixture("one.jsonl"));
     const screen = omoPendingFixture("one-wide.txt");
@@ -4874,7 +4882,7 @@ ${heldRule}
   });
 
   test.skipIf(process.platform !== "linux")("opens the pending OmO form, navigates to a non-default row and confirms after redraw", async () => {
-    for (const box of ["❯", "❯ ", "❯\n ", "❯│"]) await withOmo(async (pane) => {
+    for (const box of ["❯", "❯ ", "❯\n ", "❯│", "❯\n\n gpt-6.1-sol  Opencodex  medium"]) await withOmo(async (pane) => {
       pane.screen = omoWidget(box);
       let at = 0;
       pane.onSent = (sent) => {
