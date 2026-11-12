@@ -89,7 +89,8 @@ async function paneProcesses(pane: string, cwd: string): Promise<string> {
   // whoever else waits in a FIFO's open or holds the folder's opencode.json: herdr's own detection among them
   const waiting = (() => { try { return readdirSync("/proc").filter((name) => /^\d+$/.test(name)); } catch { return []; } })()
     .map(Number)
-    .filter((pid) => read(`/proc/${pid}/wchan`).includes("fifo") || held(pid).includes(config))
+    // a process blocked opening a FIFO with no writer waits in wait_for_partner and holds no fd on it yet
+    .filter((pid) => { const wchan = read(`/proc/${pid}/wchan`); return wchan === "wait_for_partner" || wchan.includes("fifo") || held(pid).includes(config); })
     .slice(0, 20)
     .map((pid) => ({ pid, cmd: read(`/proc/${pid}/cmdline`).replaceAll("\0", " ").slice(0, 160), wchan: read(`/proc/${pid}/wchan`) }));
   const pane_processes = "error" in info ? info : processes.map(({ pid, argv }) => ({ pid, argv, wchan: pid === undefined ? null : read(`/proc/${pid}/wchan`), fds: pid === undefined ? [] : held(pid) }));
