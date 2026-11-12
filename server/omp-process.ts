@@ -1,5 +1,6 @@
 /** WSL can block procfs memory reads during agent exit. Keep them outside the bridge. */
 import { readFileSync } from "node:fs";
+import { BUN_ENV } from "./entries.ts";
 
 export interface ProcessMemory { argv: string[]; environ: string[] }
 const MAX_OUTPUT = 1024 * 1024;
@@ -115,7 +116,7 @@ export function createOmpProcessProbe({ timeoutMs = 1000, startMs = 10_000, maxP
       return Promise.resolve(null);
     }
     let child: Bun.Subprocess<"ignore", "pipe", "ignore">;
-    try { child = Bun.spawn(command(pid, argv), { stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
+    try { child = Bun.spawn(command(pid, argv), { env: { ...process.env, ...BUN_ENV }, stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
     catch { return Promise.resolve(null); }
     child.unref();
     live++;

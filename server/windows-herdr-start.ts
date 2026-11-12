@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
+import { COMPILED, entryCommand, ROOT } from "./entries.ts";
 
 export const WAITING_FOR_WINDOWS_LOGIN = "Waiting for Windows sign-in on this PC.";
 
@@ -59,7 +60,8 @@ try {
   $action = $task.Actions.Create(0)
   # Only the private launcher's path enters the task definition, never its environment.
   $action.Path = $payload.bun
-  $action.Arguments = '"' + $launcher + '"'
+  # the compiled binary runs the launcher through an entry of its own (launcherAction); from source the prefix is absent
+  $action.Arguments = [string]$payload.prefix + '"' + $launcher + '"'
   $registered = $folder.RegisterTaskDefinition($taskName, $task, 2, $sid.Value, $null, 3)
   try { $running = $registered.Run($null) }
   catch {
@@ -89,12 +91,21 @@ try {
 }
 `;
 
+/**
+ * The program the scheduled task runs the private launcher file with, and what goes before that file's quoted path:
+ * Bun runs it from source; the compiled binary through its `windows-launch` entry (server/entries.ts).
+ */
+export function launcherAction(compiled = COMPILED): { bun: string; prefix?: string } {
+  const [bun, entry] = entryCommand("windows-launch", ROOT, compiled);
+  return compiled ? { bun, prefix: `${entry} ` } : { bun };
+}
+
 /** A launch-only task escapes the bridge job without taking herdr into Session 0. */
 export async function startInteractiveWindowsHerdr(exe: string, args: string[], log: string): Promise<"started" | "waiting_login"> {
   // PowerShell's .NET writes can reject the legacy registry junction as an untrusted mount point.
   const directory = realpathSync(dirname(log));
   const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(interactiveScript, "utf16le").toString("base64")], { stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsHide: true });
-  child.stdin.write(JSON.stringify({ exe, args, log, directory, cwd: homedir(), env: process.env, bun: process.execPath, launcher: desktopLauncher }));
+  child.stdin.write(JSON.stringify({ exe, args, log, directory, cwd: homedir(), env: process.env, ...launcherAction(), launcher: desktopLauncher }));
   child.stdin.end();
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   if (code !== 0) throw new Error(`herdr could not be started in the Windows desktop session: ${stderr.trim()}`);

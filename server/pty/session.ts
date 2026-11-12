@@ -1,8 +1,10 @@
 import { join } from "node:path";
+import { COMPILED, ROOT } from "../entries.ts";
 import { disableRustHost, rustSidecar, spawnErrorReason } from "./host.ts";
 import { nodeSidecarAvailable, realNode } from "./sidecar.ts";
 
-const HOST_SCRIPT = join(import.meta.dir, "pty-host.mjs");
+// a file Node runs, never compiled in: beside the binary, or beside this one from source
+const HOST_SCRIPT = COMPILED ? join(ROOT, "pty-host.mjs") : join(import.meta.dir, "pty-host.mjs");
 
 export interface PtySessionOptions {
   command: string;

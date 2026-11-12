@@ -2,6 +2,7 @@
 // herdr owns the terminal processes and no disconnect should terminate their work.
 import "./adopt-legacy-env.ts";
 import { createServer } from "./index.ts";
+import { ROOT } from "./entries.ts";
 import { bridgeIdentity, descriptorLive, descriptorPath, registerBridge } from "./bridge.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
 import { parseProcessLine, refusedSocket, staleMarker } from "./herdr-marker.ts";
@@ -18,7 +19,7 @@ process.env["OVIS_REMOTE"] = "1";
 const windows = process.platform === "win32";
 // the transcript readers find agent stores under $HOME, which Windows does not set
 if (windows && !process.env["HOME"]) process.env["HOME"] = homedir();
-const bundle = join(import.meta.dir, "..");
+const bundle = ROOT;
 process.env["PATH"] = `${join(bundle, "bin")}${delimiter}${process.env["PATH"] ?? "/usr/bin:/bin"}`;
 const session = process.env["HERDR_REMOTE_SESSION"];
 // herdr puts its sockets under XDG_CONFIG_HOME when it is set (GitHub's Linux runners and some

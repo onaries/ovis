@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import type { FileSink, Subprocess } from "bun";
 import type { SshTarget } from "../shared/machines.ts";
+import { entryCommand } from "./entries.ts";
 import { shellQuote } from "./machine-security.ts";
 import { chunksOf } from "./remote-bundle.ts";
 
@@ -314,15 +315,15 @@ export class SshConnection {
     this.askServer.listen(this.askPath, listen.resolve);
     await listen.promise;
     if (!WINDOWS) chmodSync(this.askPath, 0o600);
-    const script = join(import.meta.dir, "ssh-askpass.ts");
+    const [runtime, script] = entryCommand("askpass");
     if (WINDOWS) {
       // cmd expands %…% even inside quotes; a literal percent sign is %%
       this.askHelper = join(this.dir, "askpass.cmd");
       const quoted = (path: string) => `"${path.replaceAll("%", "%%")}"`;
-      writeFileSync(this.askHelper, `@${quoted(process.execPath)} ${quoted(script)} %*\r\n`);
+      writeFileSync(this.askHelper, `@${quoted(runtime)} ${quoted(script)} %*\r\n`);
     } else {
       this.askHelper = join(this.dir, "askpass");
-      writeFileSync(this.askHelper, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(script)} "$@"\n`, { mode: 0o700 });
+      writeFileSync(this.askHelper, `#!/bin/sh\nexec ${shellQuote(runtime)} ${shellQuote(script)} "$@"\n`, { mode: 0o700 });
     }
     if (!existsSync(this.knownHosts())) writeFileSync(this.knownHosts(), "", { mode: 0o600 });
     if (this.multiplexed) await this.startMaster(challenge);

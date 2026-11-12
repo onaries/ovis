@@ -20,6 +20,7 @@ import { isOmoProcess, omoProcessIdentity } from "./omo.ts";
 import { psQuote } from "./powershell.ts";
 import { descendantArgv, windowsProcessTable } from "./windows-processes.ts";
 import { userHome } from "./user-home.ts";
+import { COMPILED } from "./entries.ts";
 
 /** kind -> the foreground-process test that proves the agent is running in the pane. */
 export const SHELL_AGENTS: Record<string, (argv: readonly string[]) => boolean> = {
@@ -56,10 +57,11 @@ const LOGIN_ENV_END = "__OVIS_LOGIN_ENV_END__";
  * The same for the whole environment, printed as JSON by this server's own runtime: `env` prints one
  * `NAME=value` per line, which a value holding a newline or an exported bash function
  * (`BASH_FUNC_f%%=() {…`) cannot be read back from. It reads no .env and no bunfig.toml (whose
- * preload would run in the home folder it starts in). Single quotes read the same in fish.
+ * preload would run in the home folder it starts in). Single quotes read the same in fish. The compiled
+ * binary is Bun only with BUN_BE_BUN set, through `env`: csh and fish before 3.1 take no `NAME=value command`.
  */
 const loginEnvScript = (runtime: string): string =>
-  `printf '\\n%s\\n' ${LOGIN_ENV_START}; '${runtime}' --no-env-file --config=/dev/null -e 'process.stdout.write(JSON.stringify(process.env))'; printf '\\n%s\\n' ${LOGIN_ENV_END}`;
+  `printf '\\n%s\\n' ${LOGIN_ENV_START}; ${COMPILED ? "env BUN_BE_BUN=1 " : ""}'${runtime}' --no-env-file --config=/dev/null -e 'process.stdout.write(JSON.stringify(process.env))'; printf '\\n%s\\n' ${LOGIN_ENV_END}`;
 
 /** The user's login shell as an absolute executable: $SHELL, else the account's; null when neither is one. */
 export function loginShell(env: Record<string, string | undefined> = process.env): string | null {

@@ -9,6 +9,31 @@ const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe("the served build's revision", () => {
+  it("reads the build in the folder the supervisor started a source bridge in, as main does", async () => {
+    // the supervisor starts a source bridge with its cwd the release or checkout it serves, whose server code may be
+    // another folder's (the updater tests' stand-in bridge runs this checkout's code): the build is read in the cwd
+    const directory = mkdtempSync(join(tmpdir(), "herdr-served-cwd-"));
+    directories.push(directory);
+    const revision = "b".repeat(40);
+    const probe = `const { connectUpdater } = await import(${JSON.stringify(join(import.meta.dir, "update-api.ts"))});
+      const { mkdirSync, utimesSync, writeFileSync } = await import("node:fs");
+      const service = connectUpdater();
+      mkdirSync("dist", { recursive: true });
+      writeFileSync("dist/build.json", JSON.stringify({ revision: ${JSON.stringify(revision)} }));
+      // the file clock is coarser than Date.now(): a build written just now may carry a time before the start
+      const later = new Date(Date.now() + 60_000);
+      utimesSync("dist/build.json", later, later);
+      const read = service.servedRevision;
+      console.log(JSON.stringify(read ? await read() : "unmanaged"));
+      process.exit(0);`;
+    const env: Record<string, string | undefined> = { ...process.env, OVIS_MANAGED: "1" };
+    delete env["OVIS_ASSETS"];
+    const child = Bun.spawn([process.execPath, "-e", probe], { cwd: directory, env, stdout: "pipe", stderr: "inherit", ipc() {} });
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.trim())).toBe(revision);
+  });
+
   it("reads the commit dist/build.json names, as it is now", async () => {
     const directory = mkdtempSync(join(tmpdir(), "herdr-served-revision-"));
     directories.push(directory);

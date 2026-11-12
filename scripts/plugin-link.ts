@@ -1037,9 +1037,9 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   };
   // the person is asked what becomes of those. `key`: which devices, and whether this PC is in an account; `alone`:
   // each came through the relay and left this PC in no account. `shownAt`: when the question first was on the screen
-  let asking: { readonly key: string; readonly devices: readonly Device[]; readonly prompt: string; readonly alone: boolean; shownAt: number | null } | null = null;
+  let asking = null as { readonly key: string; readonly devices: readonly Device[]; readonly prompt: string; readonly alone: boolean; shownAt: number | null } | null;
   let keys: ReturnType<typeof typing> | null = null;
-  let reply: string | null = null;
+  let reply = null as string | null;
   let added = false;
   let enrollingSaid = false;
   // devices were removed on the person's answer with this PC in no account: what the run ends with once a look

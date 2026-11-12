@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
+import { entryCommand, ROOT } from "./entries.ts";
 import { HANDOVER_EXIT, moveLegacyStateDir, releaseIn, updateStateDir } from "./update-state.ts";
 
 /** The active release's supervisor, when it is still the build of this checkout's revision. */
@@ -25,11 +26,12 @@ export function releaseSupervisor(root: string, stateDir: string): string | null
   } catch { return null; }
 }
 
-export async function runManaged(root = resolve(import.meta.dir, "..")) {
+export async function runManaged(root = ROOT) {
   root = resolve(root);
   moveLegacyStateDir();
   const stateDir = updateStateDir(root, Number(process.env["PORT"] ?? DEFAULT_PORT));
-  const own = join(import.meta.dir, "supervisor.ts");
+  // the compiled binary has no supervisor.ts: there it runs as `ovis-server supervisor`
+  const own = entryCommand("supervisor")[1];
   let child: ReturnType<typeof Bun.spawn> | null = null;
   let stopping = false;
   const stop = (signal: NodeJS.Signals) => { stopping = true; child?.kill(signal); };

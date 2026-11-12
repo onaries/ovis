@@ -11,11 +11,12 @@ import type { BunFile } from "bun";
 import { existsSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { accountServiceOrigin, CSP_DIRECTIVES, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../shared/web-policy.ts";
+import { ASSETS } from "./entries.ts";
 
 export { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy };
 
 // A URL's pathname is not a file path: on Windows it is `/C:/...`, and spaces come percent-encoded.
-const DIST_DIR = join(import.meta.dir, "..", "dist");
+const DIST_DIR = join(ASSETS, "dist");
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",

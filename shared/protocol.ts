@@ -138,6 +138,8 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *                                          terminal lens is the pane's screen, repainted; /api/bridge tells the same herdr), auth: HealthAuth,
  *                                          web_ui: { boot_id: string, revision: string | null, server_id?: string (its relay ID,
  *                                          authenticated only, where it has one: Machine.server_id) },
+ *                                          version?: string (this server's own version, package.json's, which the compiled
+ *                                          binary carries from its build; authenticated only),
  *                                          security?: SecuritySummary (authenticated only, no-store),
  *                                          herdr_core?: HerdrCoreFacts (shared/machines.ts; authenticated only, absent until
  *                                          the server's first look for hc has ended), herdr_runtime?: HerdrRuntimeFacts (a driving owner

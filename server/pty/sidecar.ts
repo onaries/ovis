@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { HerdrIdentity } from "../../shared/machines.ts";
+import { COMPILED, ROOT } from "../entries.ts";
 import { capabilities } from "../runtime/capabilities.ts";
 import { rustSidecar } from "./host.ts";
 
@@ -78,7 +79,7 @@ const here: SidecarRuntime = {
   node: nodeHere,
   pty: () => {
     try {
-      Bun.resolveSync("@lydell/node-pty", import.meta.dir);
+      Bun.resolveSync("@lydell/node-pty", COMPILED ? ROOT : import.meta.dir);
       return true;
     } catch {
       return false;

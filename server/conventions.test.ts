@@ -308,3 +308,31 @@ describe("remote PC bundle boundary", () => {
     expect(leavesBundle("server/account/mailbox.ts", "../relay/identity.ts")).toBe(false);
   });
 });
+
+describe("server entries", () => {
+  // The compiled binary (scripts/build-server.ts) has no .ts files: a child started by a source file's
+  // path works only from a checkout. server/entries.ts starts each entry, by file from source and by
+  // name in the binary (entryCommand).
+  const START_BY_PATH = /\bprocess\.execPath\s*,\s*\[?\s*(?:join\s*\(|resolve\s*\(|["'`][^"'`\n]*\.(?:ts|tsx|js|mjs)["'`])/;
+  const ALLOWED: Record<string, string> = {
+    "server/supervisor.ts": "installs the Rust PTY host with the script of a release checked out from source, which only the source updater makes",
+    "server/updater.ts": "builds a release checked out from source with that release's own scripts",
+  };
+
+  it("starts the server's own entries only through entryCommand", () => {
+    const starts = matches([...serverCode(), "scripts/plugin.ts"].filter((file) => file !== "server/entries.ts"), START_BY_PATH);
+    fail(starts.filter((start) => !(start.file in ALLOWED)).map((start) => start.at),
+      "Start the server's own code with entryCommand(name) from server/entries.ts (add the entry to ENTRIES), never with process.execPath and a .ts path: the compiled binary has no such file.");
+    const users = new Set(starts.map((start) => start.file));
+    fail(Object.keys(ALLOWED).filter((file) => !users.has(file)), "These files no longer start a file by path: remove them from ALLOWED in server/conventions.test.ts.");
+  });
+
+  it("knows a start by path from other uses of process.execPath", () => {
+    expect(START_BY_PATH.test("Bun.spawn([process.execPath, join(import.meta.dir, \"machine-entry.ts\")], {")).toBe(true);
+    expect(START_BY_PATH.test("Bun.spawn([process.execPath, \"server/index.ts\"], {")).toBe(true);
+    expect(START_BY_PATH.test("spawn(process.execPath, [join(ROOT, \"server\", \"managed.ts\")], {")).toBe(true);
+    expect(START_BY_PATH.test("run([process.execPath, \"install\", \"--frozen-lockfile\"])")).toBe(false);
+    expect(START_BY_PATH.test("[process.execPath, \"-e\", SCRIPT, String(pid)]")).toBe(false);
+    expect(START_BY_PATH.test("Bun.spawn(entryCommand(\"machine\"), {")).toBe(false);
+  });
+});

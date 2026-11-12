@@ -15,8 +15,12 @@ type SourceEnv = Record<string, string | undefined>;
  */
 const SESSION_ENV = /^(?:HOME|USER|LOGNAME|SHELL|PATH|LANG|LC_[A-Z_]+|TZ|TMPDIR|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|SSH_AUTH_SOCK|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|ZDOTDIR|XDG_CONFIG_HOME)$/;
 
-/** The shell's own bookkeeping, and what places a process in a terminal or core: never the user's setting. */
-const NOT_SETTINGS = /^(?:PWD|OLDPWD|SHLVL|_|TERM|COLORTERM|HC_.*|HERDR_.*)$/;
+/**
+ * The shell's own bookkeeping, and what places a process in a terminal or core: never the user's setting. BUN_BE_BUN
+ * is the compiled server's own: it sets it to run the probe as Bun (server/shell-agent.ts), the probe prints it back
+ * with the rest, and a pane that had it would run every Bun-compiled program (an agent's CLI, this server) as bare Bun.
+ */
+const NOT_SETTINGS = /^(?:PWD|OLDPWD|SHLVL|_|TERM|COLORTERM|BUN_BE_BUN|HC_.*|HERDR_.*)$/;
 
 /**
  * What names the probe's own session, process or tty rather than a setting: a profile that runs

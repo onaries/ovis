@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { version as builtVersion } from "../../package.json";
+import { COMPILED, ROOT } from "../entries.ts";
 import { legacyName } from "../legacy-env.ts";
 
 /** Where `cargo build --release` in crates/pty-sidecar puts the Rust PTY host. */
-export const RUST_SIDECAR_BUILD = join(import.meta.dir, "..", "..", "crates", "pty-sidecar", "target", "release", "ovis-pty-sidecar");
+export const RUST_SIDECAR_BUILD = join(ROOT, "crates", "pty-sidecar", "target", "release", "ovis-pty-sidecar");
 /** Where a release's host is installed beside the server (scripts/pty-sidecar.ts install, a remote PC bundle's bin/). */
-export const RUST_SIDECAR_INSTALLED = join(import.meta.dir, "..", "..", "bin", "ovis-pty-sidecar");
+export const RUST_SIDECAR_INSTALLED = join(ROOT, "bin", "ovis-pty-sidecar");
 
 /** each installed binary's SHA-256, one entry per path, kept while its file state stays the same */
 const digests = new Map<string, { state: string; sha256: string }>();
@@ -26,14 +28,15 @@ function binaryDigest(installed: string): string {
 /**
  * Whether the installed host is the one its record (`<binary>.json`, written by scripts/pty-sidecar.ts
  * install or the remote bundle's builder) vouches for: the same SHA-256, for the version in the
- * package.json beside the server. The record and the version are read on every call (both are small),
+ * package.json beside the server (the compiled binary's own version). The record and the version are read on every call (both are small),
  * so a rewrite of either within one tick of the file clock still counts; only the binary's hash is
  * cached, so attaches do not hash it again.
  */
-export function installedHostVouched(installed: string, packageJson = join(dirname(installed), "..", "package.json")): boolean {
+export function installedHostVouched(installed: string, packageJson: string | null = COMPILED ? null : join(dirname(installed), "..", "package.json")): boolean {
   try {
     const record = JSON.parse(readFileSync(`${installed}.json`, "utf8")) as { sha256?: unknown; version?: unknown };
-    const version = (JSON.parse(readFileSync(packageJson, "utf8")) as { version?: unknown }).version;
+    // the compiled binary carries its version, and no package.json beside it
+    const version = packageJson === null ? builtVersion : (JSON.parse(readFileSync(packageJson, "utf8")) as { version?: unknown }).version;
     return typeof record.sha256 === "string" && record.version === version && binaryDigest(installed) === record.sha256;
   } catch {
     return false;

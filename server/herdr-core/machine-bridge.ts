@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { entryCommand, ROOT } from "../entries.ts";
 import type { HcConnection } from "./connection.ts";
 import { hcBin } from "./runtime.ts";
 
@@ -60,8 +61,8 @@ export async function startMachineBridge(machine: Pick<HcMachine, "id" | "name">
     OVIS_HC_ENV: JSON.stringify(pick(CORE_ENV)),
   };
   const ready = Promise.withResolvers<{ port: number; token: string }>();
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, "machine-entry.ts")], {
-    cwd: join(import.meta.dir, "..", ".."), env, windowsHide: true, stdin: "pipe", stdout: "inherit", stderr: "inherit",
+  const child = Bun.spawn(entryCommand("machine"), {
+    cwd: ROOT, env, windowsHide: true, stdin: "pipe", stdout: "inherit", stderr: "inherit",
     ipc(message) {
       if (message?.type === "ready" && Number.isInteger(message.port) && typeof message.token === "string") ready.resolve({ port: message.port, token: message.token });
     },

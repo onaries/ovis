@@ -86,9 +86,12 @@ function bridgePort(): number {
 async function managedFixture(supervisor?: string, slowHealth = false, home?: string) {
   updater.stop();
   mkdirSync(join(upstream, "server"), { recursive: true });
+  // The bridge is this repository's server code started from a file in the fixture's tree. A real bridge's code is in
+  // the tree it serves; this one is told so before that code loads (server/entries.ts reads OVIS_ASSETS once, then)
   const entry = `
-    import { createServer } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};
-    import { connectUpdater } from ${JSON.stringify(join(import.meta.dir, "update-api.ts"))};
+    process.env.OVIS_ASSETS = require("node:path").join(import.meta.dir, "..");
+    const { createServer } = await import(${JSON.stringify(join(import.meta.dir, "index.ts"))});
+    const { connectUpdater } = await import(${JSON.stringify(join(import.meta.dir, "update-api.ts"))});
     ${slowHealth ? `
     // a busy PC: the bridge answers, but its first six health checks outlast the supervisor's 1 s probe
     // timeout, so they are refused on any machine and the start takes about 6.6 s (fixed 800 ms let a
@@ -179,7 +182,9 @@ function copySupervisor(into: string) {
     const copy = join(into, relative(repo, file));
     mkdirSync(dirname(copy), { recursive: true });
     writeFileSync(copy, source);
-    for (const { path } of transpiler.scanImports(source)) {
+    // what it loads as it starts, not the entries server/entries.ts names by import(): those are the whole server
+    for (const { path, kind } of transpiler.scanImports(source)) {
+      if (kind !== "import-statement") continue;
       const imported = resolve(dirname(file), path);
       if (path.startsWith(".") && !files.includes(imported)) files.push(imported);
     }
