@@ -82,8 +82,10 @@ async function openCodePane(label: string, session: string | null, cwd: string, 
   workspaces.push(created.workspace.workspace_id);
   const pane = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: pane, text: `exec ${standIn} ${label}\n` });
-  for (const deadline = Date.now() + 10_000; (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent !== "opencode";) {
-    if (Date.now() > deadline) throw new Error("the OpenCode stand-in did not start");
+  let seen: unknown;
+  for (const deadline = Date.now() + 10_000; (seen = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane))?.agent !== "opencode";) {
+    // what herdr last said of the pane, so a CI failure tells a slow start from a stand-in that never ran
+    if (Date.now() > deadline) throw new Error(`the OpenCode stand-in did not start: ${JSON.stringify(seen)}`);
     await Bun.sleep(50);
   }
   if (session) await herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:opencode", agent: "opencode", agent_session_id: session, session_start_source: "select" });
