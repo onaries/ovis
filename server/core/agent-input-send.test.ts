@@ -85,7 +85,7 @@ it.each([
   ["pi", ["pi"], "pi/draft-typed-119.ansi"],
   ["codex", ["codex"], "codex-0.167.0/composer-ultra-draft-100.ansi"],
   ["codex", ["codex"], "codex/mention-closed-120.ansi"],
-  ...["gjc", "muse", "qwen", "cline", "dsh-tui"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-typed-119.ansi`]),
+  ...["gjc", "muse", "qwen", "cline", "dsh-tui", "letta", "maki", "kimi", "gemini", "kilo"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-typed-119.ansi`]),
 ])("refuses an immediate send to %s over text typed in its input box (%s), typing nothing", async (agent, argv, screen) => {
   pane = { agent, argv };
   screens.visible = recorded(screen);
@@ -98,15 +98,16 @@ it.each([
   // pi's autocomplete pushes its box up past the footer: the box is not made out, so the send goes as before
   ["pi", ["pi"], "pi/draft-slash-119.ansi"],
   ["codex", ["codex"], "codex-0.167.0/composer-ultra-empty-100.ansi"],
-  ...["gjc", "muse", "qwen", "cline", "dsh-tui"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-empty-119.ansi`]),
+  ...["gjc", "muse", "qwen", "cline", "dsh-tui", "letta", "maki", "kimi", "gemini", "kilo"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-empty-119.ansi`]),
   // an agent without a recorded box is not read at all
-  ["letta", ["letta"], "pi/draft-typed-119.ansi"],
+  ["an-unrecorded-agent", ["an-unrecorded-agent"], "pi/draft-typed-119.ansi"],
 ])("sends to %s when its box shows no typed text (%s)", async (agent, argv, screen) => {
   pane = { agent, argv };
   screens.visible = recorded(screen);
   await submit();
   expect(prompted()).toBeTrue();
-  if (agent === "letta") expect(calls.some((call) => call.method === "pane.read")).toBeFalse();
+  // the box check reads the viewport in colour first: never for an agent with no recorded box
+  if (agent === "an-unrecorded-agent") expect(calls.some((call) => call.method === "pane.read" && call.params["source"] === "visible")).toBeFalse();
 });
 
 it("judges Codex's own screens and its composer on the same last read: a dialog that opens after the first read is refused", async () => {
@@ -135,6 +136,14 @@ it("reads again when text is typed between the viewport's read and the live one,
   screens.visible = recorded("pi/draft-empty-119.ansi");
   const typedScreen = recorded("pi/draft-typed-119.ansi");
   next = { visible: typedScreen };
+  expect((await refused()).code).toBe("input_draft");
+  expect(prompted()).toBeFalse();
+});
+
+it("takes the viewport for the live screen when the live read only holds a row more above it, as Gemini's does", async () => {
+  pane = { agent: "gemini", argv: ["gemini"] };
+  screens.visible = recorded("gemini/draft-typed-119.ansi");
+  screens.live = `a row above the viewport\n${stripVTControlCharacters(screens.visible)}`;
   expect((await refused()).code).toBe("input_draft");
   expect(prompted()).toBeFalse();
 });

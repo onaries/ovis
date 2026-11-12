@@ -45,6 +45,14 @@ inside an isolated herdr session (herdr 0.9.5, 119 columns by 40 rows), read by 
 0.19.0, each with its default theme. Same three states as above (`draft-empty`, `draft-typed` with `leftover draft`,
 `draft-slash` with `/mo` and the command list open), same redactions. Only gjc's box is read by the terminal peek too.
 
+## `<agent>/draft-*` for letta, maki, kimi, gemini and kilo
+
+Recorded 2026-11-12 in the agent lab the same way (isolated herdr session, 119 by 40, default themes, update checks
+off): Letta Code 0.34.23, maki 0.7.1, Kimi Code 2.5.3 (herdr names it `kimi`), Kilo 7.8.27 on the lab's QA backend
+(`run --qa`), and Gemini CLI 0.68.0 on the team proxy (it speaks only the Gemini API). Same three states;
+`kilo/draft-session-*` are Kilo's box under its first answer, the others its home screen. Letta's agent id reads
+all zeros.
+
 ## `codex-0.167.0/`: Codex's own screens, as the bridge reads them
 
 Recorded 2026-11-11 in an isolated herdr session (herdr 0.9.5) for the bridge's rule that no chat

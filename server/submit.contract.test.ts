@@ -918,6 +918,8 @@ describe("WebSocket submit", () => {
     ["a folded paste wrapped inside a word", "\u276f [Pasted te\r\n  xt #1 +12 lines]", 128],
     // wrapped twice, inside a word and between two
     ["a folded paste wrapped over three rows", "\u276f [Pasted te\r\n  xt #1 +12\r\n  lines]", 134],
+    // Claude's placeholder for a paste it cut short
+    ["a truncated paste", "\u276f [...Truncated text #1 +40 lines...]", 136],
   ] as const)("offers no send anyway over a box holding %s, whose lines the user cannot see, and refuses one (#3563)", async (_name, box, id) => {
     const socket = await Socket.connect();
     const screen = mockClaudeInput(agent.pane, claudeInputScreen(box));

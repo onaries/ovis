@@ -239,10 +239,10 @@ export function claudeInputBoxContent(live: string): string | null {
   return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
 }
 
-/** Claude Code's placeholder for a paste or an image it folded, whole: `[Pasted text #1 +12 lines]`, `[Pasted text #1]`, `[Image #1]`. */
-const FOLDED_WHOLE = /\[(?:Pastedtext#\d+(?:\+\d+lines?)?|Image#\d+)\]/;
+/** Claude Code's placeholder for a paste or an image it folded, whole: `[Pasted text #1 +12 lines]`, `[Pasted text #1]`, `[Image #1]`, `[...Truncated text #1 +40 lines...]`. */
+const FOLDED_WHOLE = /\[(?:Pastedtext#\d+(?:\+\d+lines?)?|Image#\d+)\]|\[\.\.\.Truncatedtext#\d+(?:\+\d+lines?)?\.\.\.\]/;
 /** its start, which the draft checks take as content whatever follows: the safer reading of a box */
-const FOLDED_START = /\[(?:Pastedtext#\d+|Image#\d+)/;
+const FOLDED_START = /\[(?:Pastedtext#\d+|Image#\d+|(?:\.\.\.)?Truncatedtext#\d+)/;
 
 /**
  * Whether box text, its rows as Claude Code drew them, holds a paste or an image Claude folded into a placeholder.

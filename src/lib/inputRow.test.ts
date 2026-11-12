@@ -543,6 +543,27 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     expect(typedDraft("muse", screenFromAnsi(rows.join("\n")))).toBeTrue();
   });
 
+  test.each([
+    // `/mo` typed: in the terminal's colour or the recorded typed colour (letta, maki, kilo), or drawn as a command (kimi, gemini)
+    ["letta", true], ["maki", true], ["kimi", false], ["gemini", false], ["kilo", true],
+  ])("%s, recorded in the agent lab: typed text is a draft, its empty box and placeholder are not", (agent, slash) => {
+    expect(typed(agent, `${agent}/draft-typed-119.ansi`)).toBeTrue();
+    expect(typed(agent, `${agent}/draft-empty-119.ansi`)).toBeFalse();
+    expect(typed(agent, `${agent}/draft-slash-119.ansi`)).toBe(slash);
+  });
+
+  test("Kilo's box in a session, under its first answer, reads as on its home screen", () => {
+    expect(typed("kilo", "kilo/draft-session-typed-119.ansi")).toBeTrue();
+    expect(typed("kilo", "kilo/draft-session-empty-119.ansi")).toBeFalse();
+    expect(typed("kilo", "kilo/draft-session-slash-119.ansi")).toBeTrue();
+  });
+
+  test("a character that draws nothing (Letta pads its empty box with zero-width spaces) is no typed text", () => {
+    const rule = "\u2500".repeat(60);
+    expect(typedDraft("letta", screenFromAnsi([rule, "\u203a \u001b[7m \u001b[0m\u200b\u200b\u200b", rule].join("\n")))).toBeFalse();
+    expect(typedDraft("letta", screenFromAnsi([rule, "\u203a typed", rule].join("\n")))).toBeTrue();
+  });
+
   test("an agent that draws typed text in a colour of its own: only that colour, as recorded, is typed", () => {
     const muse = readFileSync(join(FIXTURES, "muse/draft-typed-119.ansi"), "utf8");
     expect(typedDraft("muse", screenFromAnsi(muse))).toBeTrue();

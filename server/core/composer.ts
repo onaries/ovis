@@ -294,7 +294,7 @@ export async function freeAgentInput(paneId: string, agent: string | null, ident
     const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
     if (codexScreens && codexOwnScreenOpen(live)) throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
     if (!drawsColour(colors)) return;
-    if (screenText(colors) !== screenText(live)) continue;
+    if (!showsLive(colors, live)) continue;
     const screen = screenFromAnsi(colors);
     // herdr labels an OmO `pi`: OmO's box where it is drawn is the typing agent's, with no process read to tell them apart
     const typing = agent === "pi" && inputRowState("omo", screen) !== "gone" ? "omo" : agent;
@@ -305,6 +305,15 @@ export async function freeAgentInput(paneId: string, agent: string | null, ident
 
 /** How many times freeAgentInput reads the viewport and the live screen for a pair that agrees. */
 const AGENT_BOX_READS = 3;
+
+/**
+ * Whether the viewport's read shows the live screen: its rows are the live screen's last ones. herdr's live read can
+ * hold a row more at its top than the viewport (measured with Gemini CLI 0.68.0), never other rows at the bottom.
+ */
+function showsLive(colors: string, live: string): boolean {
+  const shown = screenText(colors).split("\n"), current = screenText(live).split("\n");
+  return shown.length <= current.length && shown.length >= current.length - 2 && current.slice(current.length - shown.length).join("\n") === shown.join("\n");
+}
 
 /** A screen read's rows as plain text, each row's and the screen's right edge trimmed. */
 const screenText = (text: string): string => stripVTControlCharacters(text).split(/\r?\n/).map((line) => line.trimEnd()).join("\n").trimEnd();
