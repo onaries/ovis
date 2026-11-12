@@ -1293,7 +1293,7 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
  * endpoint answers all three; gjc is read the same way but would carry image refs nothing answers, so it
  * names none. gjc's tool parts carry their call ids, which the chat matches gjc's rewrites by */
 function ompReading(source: RecognizedConversation["source"], path: string, taskTitles?: Map<string, string>) {
-  return { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript" || source === "omo-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles };
+  return { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript" || source === "omo-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles, usage: source === "omo-transcript" };
 }
 
 /** The blob store of the omp transcript a stream reads (ompBlobStore), for its turn scan; null for any other agent. */

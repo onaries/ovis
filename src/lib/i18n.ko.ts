@@ -31,6 +31,7 @@ import { RUNTIME_MOVE_KO } from "./i18n/runtime-move.ko.ts";
  */
 const BASE: Record<string, string> = {
   "Input": "입력",
+  "Cache hit rate": "캐시 적중률",
   "Output": "출력",
   "Send to agent": "에이전트에 전달",
   "Agent waiting on background work": "에이전트가 백그라운드 작업을 기다리는 중",

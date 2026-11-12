@@ -137,6 +137,7 @@ run_script scripts/portal-regression.ts
 run_script scripts/deep-link-demo-regression.ts
 run_script scripts/chat-history-browser-qa.ts
 run_script scripts/omo-queue-browser-qa.ts
+run_script scripts/omo-usage-browser-regression.ts
 run_script scripts/dsh-session-switch-browser-regression.ts
 run_script scripts/codex-queue-browser-qa.ts
 run_script scripts/session-history-browser-qa.ts

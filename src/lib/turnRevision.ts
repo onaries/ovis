@@ -23,6 +23,7 @@ export function turnRevision(turn: ConversationTurn, immutable = false): string 
     // a tool row draws its name, summary, input, output, error, images and skill: all of it counts
     else add(JSON.stringify(part));
   }
+  if (turn.usage !== undefined) add(JSON.stringify(turn.usage));
   const revision = `${turn.role}|${turn.ts ?? ""}|${turn.end_ts ?? ""}|${turn.parts.length}|${(hash >>> 0).toString(36)}`;
   if (immutable) revisions.set(turn, revision);
   return revision;

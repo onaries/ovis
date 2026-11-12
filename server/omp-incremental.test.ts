@@ -17,6 +17,30 @@ const titleResult = (id: string, title: string) => message("toolResult", "Starte
   toolName: "task", toolCallId: `call-${id}`, details: { task_id: id, task_summary: title },
 });
 
+test("OmO sums recorded model usage within each answer without leaking previews or later turns", () => {
+  const first = message("assistant", [{ type: "toolCall", id: "read", name: "read", arguments: {} }], {
+    stopReason: "toolUse", usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 50 },
+  });
+  const final = message("assistant", [{ type: "text", text: "Done" }], {
+    stopReason: "stop", usage: { input: 40, output: 30, cacheRead: 400, cacheWrite: 0 },
+  });
+  const parser = createOmpTranscriptParser({ usage: true });
+  parser.write(jsonl([first]));
+  expect(parser.snapshot(JSON.stringify(final))[0]?.usage).toEqual({ input: 140, output: 50, cache_read: 700, cache_write: 50 });
+  expect(parser.snapshot()[0]?.usage).toEqual({ input: 100, output: 20, cache_read: 300, cache_write: 50 });
+  parser.write(jsonl([final, message("assistant", [{ type: "text", text: "Next" }], {
+    stopReason: "stop", usage: { input: 5, output: 7, cacheRead: 0, cacheWrite: 0 },
+  })]));
+  expect(parser.snapshot().map((turn) => turn.usage)).toEqual([
+    { input: 140, output: 50, cache_read: 700, cache_write: 50 },
+    { input: 5, output: 7, cache_read: 0, cache_write: 0 },
+  ]);
+  expect(parseOmpTranscript(jsonl([first, final]))[0]?.usage).toBeUndefined();
+  for (const usage of [undefined, {}, { input: -1, output: 2, cacheRead: 0, cacheWrite: 0 }, { input: 1, output: 2, cacheRead: "3", cacheWrite: 0 }]) {
+    expect(parseOmpTranscript(jsonl([message("assistant", [{ type: "text", text: "Unknown" }], { usage })]), Infinity, { usage: true })[0]?.usage).toBeUndefined();
+  }
+});
+
 /** Every record boundary also exercises a speculative valid and torn final line. */
 function appendRecords(rows: unknown[], options: { images?: boolean } = {}) {
   const parser = createOmpTranscriptParser(options);

@@ -11,6 +11,7 @@ import "./ChatView.css";
 import "./ChatTimeline.css";
 
 import { AgentMark } from "./AgentMark.tsx";
+import { TurnUsage } from "./TurnUsage.tsx";
 import { CapacityRetry } from "./CapacityRetry.tsx";
 import { AnimatedHeight } from "./AnimatedHeight.tsx";
 import { ChatDiffContext, TurnChangedFiles } from "./TurnChangedFiles.tsx";
@@ -1418,6 +1419,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
       <CopyButton className="chat-meta-btn chat-meta-plain" text={plainText(answerText)} label={t("Copy as plain text")} onResult={copied}><span className="chat-meta-fmt">TXT</span><span className="chat-meta-word">{t("Plain text")}</span></CopyButton>
       {time}
+      <TurnUsage usage={turn.usage} />
     </div>}
     {copyError}
   </article>;

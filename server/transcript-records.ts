@@ -337,7 +337,7 @@ export interface TranscriptParser {
 /** `images`: the pictures of prompts and tool results are named, inline ones (pi) and, with `blobs`,
  * those omp keeps in that blob store. `callIds`: each tool part carries its call's own id (gjc, whose
  * rewrites the chat matches by it) */
-type OmpTranscriptOptions = { images?: boolean; blobs?: string | null; callIds?: boolean; taskTitles?: Map<string, string> };
+type OmpTranscriptOptions = { images?: boolean; blobs?: string | null; callIds?: boolean; taskTitles?: Map<string, string>; usage?: boolean };
 
 interface OmpParseState {
   turns: ConversationTurn[];
@@ -348,10 +348,11 @@ interface OmpParseState {
   settled: boolean;
   /** The index of the turn that shows OmO's goal waiting (omoGoalWait); only ever the last turn. */
   wait: number | null;
+  usage: boolean;
 }
 
 function ompParseState(options: OmpTranscriptOptions): OmpParseState {
-  return { turns: [], pending: new Map(), taskTitles: options.taskTitles ?? new Map(), settled: false, wait: null };
+  return { turns: [], pending: new Map(), taskTitles: options.taskTitles ?? new Map(), settled: false, wait: null, usage: options.usage === true };
 }
 
 /**
@@ -498,6 +499,17 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
         }) || (message.stopReason === "error" && typeof message.errorMessage === "string" && message.errorMessage.length > 0);
         const turn = assistantTurn(timestamp, speaks);
         if (timestamp) turn.end_ts = timestamp;
+        if (state.usage) {
+          const usage = record(message.usage);
+          const counts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
+          if (counts.every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)) {
+            const previous = turn.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+            turn.usage = {
+              input: previous.input + Number(usage.input), output: previous.output + Number(usage.output),
+              cache_read: previous.cache_read + Number(usage.cacheRead), cache_write: previous.cache_write + Number(usage.cacheWrite),
+            };
+          }
+        }
         for (const block of message.content) {
           if (typeof block !== "object" || block === null) continue;
           const b = block as { type?: string; text?: unknown; thinking?: unknown; name?: unknown; id?: unknown; arguments?: unknown; intent?: unknown };

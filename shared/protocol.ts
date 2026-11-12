@@ -664,6 +664,8 @@ export interface ConversationTurn {
   ts: string | null;
   /** Last recorded assistant activity, never the next user's timestamp. */
   end_ts?: string;
+  /** Recorded OmO model requests in this answer; input excludes the separately counted cache tokens. */
+  usage?: { input: number; output: number; cache_read: number; cache_write: number };
   /**
    * The store row each text part was read from, in the parts' order (Hermes's message ids): a search
    * match is found by the row its words are in, wherever a page boundary split the turn.

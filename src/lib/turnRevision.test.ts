@@ -25,6 +25,16 @@ test("ordinary revision reads still detect mutation, including same-length edits
   expect(turnRevision(value)).not.toBe(first);
 });
 
+test("usage arriving after the answer changes the rendered turn revision", () => {
+  const value = turn("Done");
+  const before = turnRevision(value);
+  value.usage = { input: 10, output: 20, cache_read: 30, cache_write: 0 };
+  expect(turnRevision(value)).not.toBe(before);
+  const recorded = turnRevision(value);
+  value.usage.output = 21;
+  expect(turnRevision(value)).not.toBe(recorded);
+});
+
 test("a turn parsed again unchanged keeps its revision; new content or a later end changes it", () => {
   expect(turnRevision(turn("same"))).toBe(turnRevision(structuredClone(turn("same"))));
   expect(turnRevision(turn("same"))).not.toBe(turnRevision(turn("same, and more")));
