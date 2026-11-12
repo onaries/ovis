@@ -79,4 +79,5 @@ export const SETUP_ZH: Record<string, string> = {
   "Show {name}": "显示 {name}",
   "Cannot check": "无法检查",
   "Manual install": "需手动安装",
+  "Old record": "旧记录",
 };

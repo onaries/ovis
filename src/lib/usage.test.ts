@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
-import { canSignInAgain, composerUsage, creditsText, formatPercent, formatResetIn, glanceWindow, meterPercent, meterText, moveInOrder, orderProviders, planForPane, providerForAgent, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
+import { canSignInAgain, composerUsage, creditsText, formatPercent, formatResetIn, glanceWindow, isCurrent, isSignIn, meterPercent, meterText, moveInOrder, orderProviders, planForPane, providerForAgent, recordedBy, recordedNote, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
 const window = (used_percent: number, kind: UsageWindow["kind"] = "week", scope: string | null = null): UsageWindow => ({ kind, scope, used_percent, resets_at: null, starts_at: null });
@@ -84,6 +84,43 @@ describe("usage meters", () => {
     expect(moveInOrder(["a", "b", "c"], ["x", "b"], "c", -1)).toEqual(["a", "c", "b", "x"]);
     expect(moveInOrder(["a", "b", "c"], [], "a", -1)).toEqual(["a", "b", "c"]);
     expect(moveInOrder(["a", "b"], [], "a", 1)).toEqual(["b", "a"]);
+  });
+
+  it("says of another tool's record who recorded it and when, and that it may have moved once that tool stopped reading", () => {
+    const at = (minutesAgo: number, stale: boolean): ProviderUsage => ({ ...provider("claude", [window(40)]), checked_at: new Date(NOW - minutesAgo * 60_000).toISOString(), recorded: { by: "omp", stale, signed_in: false } });
+    expect(recordedNote(at(4, false), NOW)).toEqual(["Recorded by Oh My Pi, 4 min ago"]);
+    expect(recordedNote(at(180, true), NOW)).toEqual(["Recorded by Oh My Pi, 3 h ago", "It may have changed since."]);
+    expect(recordedBy(at(4, false))).toBe("Recorded by Oh My Pi");
+    // a reading the server made itself carries no such note, however old
+    const own: ProviderUsage = { ...provider("claude", [window(40)]), checked_at: new Date(NOW - 180 * 60_000).toISOString() };
+    expect(recordedNote(own, NOW)).toBeNull();
+    expect(recordedBy(own)).toBeNull();
+  });
+
+  const withProblem = (problem: ProviderUsage["problem"], recorded?: ProviderUsage["recorded"]): ProviderUsage => ({ ...provider("claude", [window(40)]), problem, ...(recorded ? { recorded } : {}) });
+
+  it("takes a number as what is used now when the server read it without a problem, or a tool still records it", () => {
+    expect(isCurrent(withProblem(null))).toBe(true);
+    expect(isCurrent(withProblem("expired"))).toBe(false);
+    expect(isCurrent(withProblem(null, { by: "omp", stale: false, signed_in: false }))).toBe(true);
+    expect(isCurrent(withProblem(null, { by: "omp", stale: true, signed_in: false }))).toBe(false);
+    // the problem is the sign-in's: the record standing in for its numbers is as current as the tool keeps it
+    expect(isCurrent(withProblem("expired", { by: "omp", stale: false, signed_in: true }))).toBe(true);
+    expect(isCurrent(withProblem("rate_limited", { by: "omp", stale: true, signed_in: true }))).toBe(false);
+  });
+
+  it("takes an account as a sign-in of this PC's unless it is known from another tool's record alone", () => {
+    expect(isSignIn(withProblem(null))).toBe(true);
+    expect(isSignIn(withProblem("expired"))).toBe(true);
+    expect(isSignIn(withProblem("expired", { by: "omp", stale: false, signed_in: true }))).toBe(true);
+    expect(isSignIn(withProblem(null, { by: "omp", stale: false, signed_in: false }))).toBe(false);
+  });
+
+  it("offers signing in again for an expired sign-in whose numbers a record stands in for, never for a record alone", () => {
+    const account = (recorded: ProviderUsage["recorded"], problem: ProviderUsage["problem"]): ProviderUsage => ({ ...withProblem(problem, recorded), key: "claude:team" });
+    expect(canSignInAgain(account({ by: "omp", stale: false, signed_in: true }, "expired"))).toBe(true);
+    expect(canSignInAgain(account({ by: "omp", stale: false, signed_in: true }, "failed"))).toBe(false);
+    expect(canSignInAgain(account({ by: "omp", stale: false, signed_in: false }, null))).toBe(false);
   });
 
   it("offers signing in again only for an expired sign-in this PC's own CLI holds", () => {

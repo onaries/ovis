@@ -637,6 +637,45 @@ describe("usage API", () => {
     } finally { app.stop(); rmSync(usageState, { recursive: true, force: true }); }
   });
 
+  it("returns a Claude account from Oh My Pi's record of its limits, named as that record, without Oh My Pi's sign-in", async () => {
+    const usageState = mkdtempSync(join(tmpdir(), "herdr-usage-recorded-contract-"));
+    const now = Date.parse("2026-10-06T00:00:00Z");
+    const secret = "omp-sign-in-contract-only";
+    const account = "11111111-2222-4333-8444-555555555555";
+    // Oh My Pi's store as it writes it: the limits it read four minutes ago, beside the table that holds its sign-in
+    mkdirSync(join(usageState, ".omp", "agent"), { recursive: true });
+    const store = new Database(join(usageState, ".omp", "agent", "agent.db"), { create: true });
+    store.exec(`
+      CREATE TABLE usage_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, recorded_at INTEGER NOT NULL, provider TEXT NOT NULL, account_key TEXT NOT NULL,
+        email TEXT, account_id TEXT, limit_id TEXT NOT NULL, label TEXT NOT NULL, window_label TEXT, used_fraction REAL, status TEXT, resets_at INTEGER
+      );
+      CREATE INDEX idx_usage_history_recorded ON usage_history(recorded_at);
+      CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT NOT NULL, credential_type TEXT NOT NULL, data TEXT NOT NULL);
+      INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('anthropic', 'oauth', '{"access":"${secret}"}');
+      INSERT INTO usage_history (recorded_at, provider, account_key, email, account_id, limit_id, label, used_fraction, status, resets_at)
+        VALUES (${now - 4 * 60_000}, 'anthropic', 'oauth|account:${account}|email:me@example.com', 'me@example.com', '${account}', 'anthropic:5h', 'Claude 5 Hour', 0.42, 'ok', ${now + 3 * 3600_000});
+    `);
+    store.close();
+    const usage = new UsageService({
+      home: usageState, env: {}, platform: "linux", now: () => now,
+      keychain: async () => ({ status: "missing" }), run: async () => null, has: () => true,
+      fetch: async () => { throw new Error("a recorded account asks no provider"); },
+    }, USAGE_PROVIDERS.filter((provider) => provider.id === "claude"));
+    const app = createServer({ port: 0, stateDir: usageState, usage });
+    try {
+      const response = await fetch(`http://localhost:${app.port}/api/usage`);
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).not.toContain(secret);
+      expect((JSON.parse(body) as UsageReport).providers).toEqual([{
+        id: "claude", key: `claude:${account}`, account: "me@example.com", plan: null, problem: null, checked_at: "2026-10-05T23:56:00.000Z",
+        windows: [{ kind: "session", scope: null, used_percent: 42, resets_at: "2026-10-06T03:00:00.000Z", starts_at: "2026-10-05T22:00:00.000Z" }],
+        recorded: { by: "omp", stale: false, signed_in: false },
+      }]);
+    } finally { app.stop(); rmSync(usageState, { recursive: true, force: true }); }
+  });
+
   it("answers the report and keeps it behind the token gate", async () => {
     const usageState = mkdtempSync(join(tmpdir(), "herdr-usage-auth-"));
     const usage = new UsageService(undefined, []);

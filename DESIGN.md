@@ -2087,6 +2087,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   footer and scrolling when it outgrows the sidebar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
   note is dim, red for an expired sign-in or a failed request.
+- An account whose numbers another tool recorded (the server read that tool's record, not a sign-in)
+  never reads as a reading of our own. Its chip's bar is dotted, the popover names it under the
+  account in dim `--fs-xs` (`Recorded by Oh My Pi, 4 min ago`), and the button's name and tooltip add
+  the same. Once that tool has stopped reading (the report's `stale`), a second line says it may have
+  changed since, the chip's mark and bar fade and its percent takes `--text-dim`, and the popover's
+  labels and percents take `--text-dim` over faded bars: the numbers stay readable (above 4.5:1), and
+  neither a percent nor a bar keeps the red of a limit near its end, since a stale figure is no alarm.
+  The two lines are two blocks, so no language breaks between them mid-word. A record standing in for
+  the numbers of a sign-in this PC holds is drawn the same: the sign-in keeps its plan pill, and of its
+  problems only those its owner can mend are told under the record's line, an expiry (with **Sign in
+  again**) or a keychain the server cannot open: a failed or slowed read explains numbers that are not
+  the ones shown, and no problem fades a chip whose numbers are a record. Reference: OpenUsage marks values more than two refresh cycles old
+  with a clock and a short muted tag, the age in its tooltip; here the source is named at all times,
+  as the number is not ours, and the age is in the line, as a phone has no tooltip. No code is borrowed.
 - Under the limits, only when the provider reports them: **Usage credits** (Claude's extra usage,
   spent against its monthly cap in the provider's currency, over a bar counted like the limits) or
   **Credits** (Codex's balance, in whole credits), then **Limit resets** (Codex's: how many are
@@ -3517,7 +3531,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - A local desktop composer shows the first visible account in Settings order for its agent's
   provider as a read-only usage reference inside the model pill. Plan-wide five-hour session is
   preferred, with weekly fallback; scoped, failed and unavailable limits do not substitute.
-  The title names the account and reset times. This is not active-account detection. Mobile and
+  The title names the account and reset times. A limit another tool recorded is underlined dotted, as
+  its chip's bar is, and its title names that tool and when, whatever the state of this PC's own
+  sign-in of the account; a stale record is left out like a failed limit. This is not active-account detection. Mobile and
   remote panes omit it. The context ring only shows: its number is in the tooltip, and a press does nothing.
 - Working Send on a supporting bridge adds a pending message above the input card, before the
   prompt dock. `PendingMessages` uses the chat's column and neutral user-bubble surface: plain
@@ -4330,8 +4346,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   launch modes of Claude Code and Codex (always shown, whatever the PC has), and **Plan limits** closes the
   page: one Plan limits row (Off, Used, Remaining), Limit shown under it while on, then Claude's
   status-line switch. Old `?settings=usage` and `?settings=integrations` links open Agents.
-- An account row (Agents) has email/name, then dim source (**This PC** or **Hub**), known plan and written
-  sign-in status with an existing status-token dot, without badge pills. Within-provider reorder
+- An account row (Agents) has email/name, then its dim facts, each wrapping whole so a phone's row
+  breaks between two and not inside one (`.usage-account-fact`): source (**This PC**, **Hub**, or
+  **Recorded by Oh My Pi** where the numbers are that tool's record), known plan and the limit, then written
+  sign-in status with an existing status-token dot, without badge pills. An account known from a record
+  alone is no sign-in of ours: its status is how long ago it was recorded, or **Old record** with that age
+  once the tool stopped reading, on a `--text-dim` dot, and the agent's own state line and its **Sign in**
+  do not count it. A record standing in for the numbers of a sign-in this PC holds leaves the status the
+  sign-in's (**Signed in**, or **Expired** with **Sign in again**), and its age, after **Old record** once
+  stale, follows the tool's name among the facts. Within-provider reorder
   and visibility controls stay in fixed columns; hidden rows remain listed but fade. Empty lists
   show one dim sentence.
 - Local account rows also offer **Remove**, with the existing confirmation dialog (Cancel focused).

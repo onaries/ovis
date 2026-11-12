@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Browser, BrowserContext, BrowserContextOptions } from "playwright-core";
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from "playwright-core";
+import { AGENT_CATALOG, catalogRow } from "../shared/agent-catalog.ts";
 import type { UsageReport } from "../shared/protocol.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
@@ -232,6 +233,225 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   }
   console.log("PASS plan meters beside the Settings gear: session left by default, accounts, order, hiding, week and used, row fit, popover, refresh, Escape, off switch and phone fit");
   await checkStatuslineSwitch(browser, origin);
+  await checkRecordedAccounts(browser, origin);
+}
+
+/**
+ * Two Claude accounts the server knows only from Oh My Pi's record of them, one it still reads and one it stopped
+ * reading three hours ago, beside a Codex sign-in of this PC's own.
+ */
+const recordedReport = (): UsageReport => ({
+  providers: [
+    { id: "claude", key: "claude:recorded", account: "omp@example.com", plan: null, problem: null, checked_at: at(0), recorded: { by: "omp", stale: false, signed_in: false }, windows: [
+      { kind: "session", scope: null, used_percent: 31, resets_at: at(3), starts_at: at(3 - 5) },
+      { kind: "week", scope: null, used_percent: 52, resets_at: at(76), starts_at: at(76 - 168) },
+    ] },
+    { id: "claude", key: "claude:stale", account: "idle@example.com", plan: null, problem: null, checked_at: at(-3), recorded: { by: "omp", stale: true, signed_in: false }, windows: [
+      { kind: "session", scope: null, used_percent: 87, resets_at: at(1.4), starts_at: at(1.4 - 5) },
+    ] },
+    { id: "codex", key: "codex:work", account: "me@work.example", plan: "pro", problem: null, checked_at: at(0), windows: [
+      { kind: "session", scope: null, used_percent: 12, resets_at: at(0.8), starts_at: at(0.8 - 5) },
+    ] },
+  ],
+});
+
+/**
+ * Claude Code's own sign-ins with Oh My Pi's record standing in for the numbers of each: one expired, its record still
+ * read and its week nearly used up; one well, its record three hours old; one whose keychain the server cannot open;
+ * one the provider asked to slow down.
+ */
+const standInReport = (): UsageReport => ({
+  providers: [
+    { id: "claude", key: "claude:team", account: "me@team.example", plan: "max", problem: "expired", checked_at: at(0), recorded: { by: "omp", stale: false, signed_in: true }, windows: [
+      { kind: "session", scope: null, used_percent: 31, resets_at: at(3), starts_at: at(3 - 5) },
+      { kind: "week", scope: null, used_percent: 91, resets_at: at(76), starts_at: at(76 - 168) },
+    ] },
+    { id: "claude", key: "claude:home", account: "me@example.com", plan: "pro", problem: null, checked_at: at(-3), recorded: { by: "omp", stale: true, signed_in: true }, windows: [
+      { kind: "session", scope: null, used_percent: 87, resets_at: at(1.4), starts_at: at(1.4 - 5) },
+    ] },
+    { id: "claude", key: "claude:mac", account: "mac@example.com", plan: null, problem: "locked", checked_at: at(0), recorded: { by: "omp", stale: false, signed_in: true }, windows: [
+      { kind: "session", scope: null, used_percent: 20, resets_at: at(4), starts_at: at(4 - 5) },
+    ] },
+    { id: "claude", key: "claude:slow", account: "slow@example.com", plan: null, problem: "rate_limited", checked_at: at(0), recorded: { by: "omp", stale: false, signed_in: true }, windows: [
+      { kind: "session", scope: null, used_percent: 50, resets_at: at(2), starts_at: at(2 - 5) },
+    ] },
+  ],
+});
+
+/** how many lines the text of each element takes */
+const lineCounts = (target: ReturnType<Page["locator"]>): Promise<number[]> => target.evaluateAll((elements) => elements.map((element) => {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+}));
+
+/**
+ * An account another tool recorded is never drawn as a reading of the server's own: its chip's bar is dotted and the
+ * popover, the strip's name and Settings say who recorded it and when. A stale one says it may have changed and loses
+ * its alarm colour. Known from the record alone, it is no sign-in of Claude Code, whose row still offers Sign in;
+ * standing in for the numbers of a sign-in this PC holds, it leaves that sign-in its plan, its problem and Sign in again.
+ */
+async function checkRecordedAccounts(browser: Browser, origin: string): Promise<void> {
+  // the earlier checks on this server saved an order and a hidden account: this one starts from neither
+  const reset = await fetch(`${origin}/api/preferences`, { method: "PUT", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ settings: { showUsage: true, usageOrder: [], usageHidden: [], usageCount: "left", usageGlance: "session" } }) });
+  assert.equal(reset.status, 200);
+  const installed = { installed: true, binary: "/usr/bin/claude", on_path: true, version: "2.1.311", version_error: null, meets_min_version: true };
+  const claudeCode = catalogRow(AGENT_CATALOG.find((entry) => entry.id === "claude")!, "linux", installed);
+  const staged = async (context: BrowserContext, report: () => UsageReport = recordedReport): Promise<void> => {
+    await context.route("**/api/agent-catalog", (route) => route.fulfill({ json: { platform: "linux", agents: [claudeCode] } }));
+    await context.route("**/api/usage/statusline", (route) => route.fulfill({ json: { installed: false, supported: true } }));
+    await context.route("**/api/usage*", (route) => route.fulfill({ json: report() }));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ showUsage: true })));
+  };
+  const notes = (popover: ReturnType<Page["locator"]>) => popover.locator(".usage-provider").evaluateAll((sections) =>
+    sections.map((section) => [...section.querySelectorAll(".usage-recorded > span")].map((line) => line.textContent)));
+  const chips = (page: Page) => page.locator(".usage-chip").evaluateAll((all) =>
+    all.map((chip) => [chip.querySelector(".usage-chip-value")?.textContent, ...["has-problem", "is-recorded", "is-stale"].filter((name) => chip.classList.contains(name))]));
+  /** the alarm a limit near its end is drawn in, and the dim ink, as this theme computes them */
+  const inks = (page: Page) => page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement("span"));
+    const ink = (token: string): string => { probe.style.color = `var(${token})`; return getComputedStyle(probe).color; };
+    const found = { alarm: ink("--status-blocked"), dim: ink("--text-dim") };
+    probe.remove();
+    return found;
+  });
+  /** what each account row of Settings says, its status with what its dot stands for */
+  const accountRows = (row: ReturnType<Page["locator"]>) => row.locator(".usage-accounts-row").evaluateAll((rows) => rows.map((account) =>
+    [...account.querySelectorAll(".usage-account-meta > span")].map((cell) => `${cell.textContent}${cell.classList.contains("has-problem") ? " (problem)" : ""}${cell.classList.contains("is-recorded") ? " (record)" : ""}`)));
+
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    await staged(context);
+    const page = await context.newPage();
+    await page.goto(origin);
+    const strip = page.locator(".usage-strip");
+    await strip.waitFor();
+    // the strip: a record is told from a reading by its bar, a stale one is dimmed and no longer red
+    assert.deepEqual(await chips(page), [["69%", "is-recorded"], ["13%", "is-recorded", "is-stale"], ["88%"]]);
+    const { alarm, dim } = await inks(page);
+    assert.notEqual(alarm, dim);
+    // the stale record has 13% left, a limit near its end: neither its percent nor its bar is drawn as that alarm
+    const staleChip = page.locator(".usage-chip.is-stale.is-high");
+    assert.equal(await staleChip.count(), 1);
+    assert.equal(await staleChip.locator(".usage-chip-value").evaluate((value) => getComputedStyle(value).color), dim, "a stale record's percent is drawn in the dim ink, not the colour of a limit near its end");
+    assert.equal((await staleChip.locator(".usage-chip-bar").evaluate((bar) => getComputedStyle(bar).backgroundImage)).includes(alarm), false, "a stale record's bar is not red either");
+    assert.equal(await strip.getAttribute("aria-label"),
+      "Subscription usage: Claude · omp@example.com 69% left (Recorded by Oh My Pi, just now), Claude · idle@example.com 13% left (Recorded by Oh My Pi, 3 h ago · It may have changed since.), Codex · me@work.example 88% left");
+
+    // the popover: who recorded it and when under the account, a second line once it is stale, nothing under a reading of our own
+    await strip.click();
+    const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+    await popover.waitFor();
+    assert.deepEqual(await notes(popover), [["Recorded by Oh My Pi, just now"], ["Recorded by Oh My Pi, 3 h ago", "It may have changed since."], []]);
+    assert.deepEqual(await popover.locator(".usage-provider").evaluateAll((sections) => sections.map((section) => section.classList.contains("is-stale"))), [false, true, false]);
+    const stale = popover.locator(".usage-provider.is-stale");
+    assert.deepEqual(await stale.locator(".usage-row.is-high").first().evaluate((row) => [getComputedStyle(row.querySelector(".usage-row-value")!).color, getComputedStyle(row.querySelector(".usage-bar > span")!).backgroundColor]), [dim, dim],
+      "a stale record's 13% left and its bar are drawn in the dim ink, not red");
+    assert.equal(await popover.locator(".usage-note.is-problem").count(), 0, "a record is no problem of a sign-in");
+    assert.equal(await popover.getByRole("button", { name: /Sign in again/ }).count(), 0);
+    if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-popover.png") });
+
+    // Settings: both are listed under Claude Code, which they do not sign in: its row says so and offers Sign in
+    await page.keyboard.press("Escape");
+    await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await openSettingsPage(page, "Agents");
+    const row = page.locator('.agents-item[data-agent="claude"]');
+    // the row's state and its one action come with the usage report Settings reads once this page shows: read once it has
+    await row.getByRole("button", { name: "Sign in to Claude Code", exact: true }).waitFor();
+    assert.equal(await row.locator(".agents-state").textContent(), "Not signed in");
+    await row.locator(".agents-toggle").click();
+    await row.locator(".usage-accounts-row").nth(1).waitFor();
+    assert.deepEqual(await accountRows(row), [["Recorded by Oh My Pi · Session 69% left", "just now (record)"], ["Recorded by Oh My Pi · Session 13% left", "Old record · 3 h ago (record)"]]);
+    assert.equal(await row.getByRole("button", { name: /Sign in again/ }).count(), 0);
+    if (process.env.UI_EVIDENCE_DIR) await page.getByRole("tabpanel", { name: "Agents", exact: true }).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-settings.png") });
+    // removing one forgets a list entry: what stays is the tool's record, not a sign-in of this PC's
+    await row.getByRole("button", { name: "Remove Claude · omp@example.com", exact: true }).click();
+    const confirmation = page.getByRole("alertdialog");
+    assert.match(await confirmation.locator(".confirm-body").textContent() ?? "", /Oh My Pi keeps its record of it/);
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    await confirmation.waitFor({ state: "detached" });
+  } finally {
+    await context.close();
+  }
+
+  // this PC's own sign-ins with a record standing in for their numbers: each stays a sign-in, its plan and problem told
+  const signedIn = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    await staged(signedIn, standInReport);
+    const page = await signedIn.newPage();
+    await page.goto(origin);
+    const strip = page.locator(".usage-strip");
+    await strip.waitFor();
+    // drawn as the records they are: a sign-in's problem fades no numbers it did not read (the strip shows as many as fit)
+    const drawn = await chips(page);
+    assert.ok(drawn.length >= 2);
+    assert.deepEqual(drawn, [["69%", "is-recorded"], ["13%", "is-recorded", "is-stale"], ["80%", "is-recorded"], ["50%", "is-recorded"]].slice(0, drawn.length));
+    await strip.click();
+    const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+    await popover.waitFor();
+    const fresh = ["Recorded by Oh My Pi, just now"];
+    assert.deepEqual(await notes(popover), [fresh, ["Recorded by Oh My Pi, 3 h ago", "It may have changed since."], fresh, fresh]);
+    assert.deepEqual(await popover.locator(".usage-plan").allTextContents(), ["max", "pro"]);
+    // of each sign-in only what its owner can mend is told: a slowed read explains numbers that are not the ones shown
+    assert.deepEqual(await popover.locator(".usage-provider").evaluateAll((sections) => sections.map((section) => [...section.querySelectorAll(".usage-note:not(.usage-recorded)")].map((note) => note.textContent))),
+      [["Sign-in expired."], [], ["The server cannot open the keychain holding this sign-in."], []]);
+    assert.equal(await popover.getByRole("button", { name: /^Sign in again/ }).count(), 1);
+    assert.equal(await popover.getByRole("button", { name: "Sign in again to Claude · me@team.example", exact: true }).count(), 1);
+    // a record still read keeps the alarm of a limit near its end: 9% of the week is left
+    const { alarm } = await inks(page);
+    assert.equal(await popover.locator(".usage-provider:not(.is-stale) .usage-row.is-high .usage-bar > span").evaluate((bar) => getComputedStyle(bar).backgroundColor), alarm);
+    if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-signed-in-popover.png") });
+
+    await page.keyboard.press("Escape");
+    await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await openSettingsPage(page, "Agents");
+    const row = page.locator('.agents-item[data-agent="claude"]');
+    // as above: Sign in again comes with the usage report, and the state line with it
+    await row.getByRole("button", { name: "Sign in again to Claude · me@team.example", exact: true }).waitFor();
+    assert.equal(await row.locator(".agents-state").textContent(), "4 accounts · 3 need attention");
+    assert.equal(await row.getByRole("button", { name: "Sign in to Claude Code", exact: true }).count(), 0);
+    await row.locator(".agents-toggle").click();
+    await row.locator(".usage-accounts-row").nth(3).waitFor();
+    assert.deepEqual(await accountRows(row), [
+      ["Recorded by Oh My Pi · just now · max · Session 69% left", "Expired (problem)"],
+      ["Recorded by Oh My Pi · Old record · 3 h ago · pro · Session 13% left", "Signed in"],
+      ["Recorded by Oh My Pi · just now · Session 80% left", "Failed (problem)"],
+      ["Recorded by Oh My Pi · just now · Session 50% left", "Failed (problem)"],
+    ]);
+    if (process.env.UI_EVIDENCE_DIR) await page.getByRole("tabpanel", { name: "Agents", exact: true }).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-signed-in-settings.png") });
+  } finally {
+    await signedIn.close();
+  }
+
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
+  try {
+    await staged(phone);
+    const page = await phone.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+    await page.locator(".usage-strip").click();
+    const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+    await popover.waitFor();
+    const box = await popover.boundingBox();
+    assert.ok(box && box.x >= 0 && box.x + box.width <= 390, "the popover stays inside the phone's screen");
+    // each line of the note is one line: no sentence is broken in the middle on a phone
+    assert.deepEqual(await lineCounts(popover.locator(".usage-recorded > span")), [1, 1, 1]);
+    if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-popover-phone.png") });
+    // Settings on the phone: each row fits, and its line breaks between two facts, never inside the limit ("Session 69%" / "left")
+    await page.keyboard.press("Escape");
+    await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await openSettingsPage(page, "Agents");
+    const row = page.locator('.agents-item[data-agent="claude"]');
+    await row.locator(".agents-toggle").click();
+    const accounts = row.locator(".usage-accounts-row");
+    await accounts.nth(1).waitFor();
+    assert.equal(await accounts.evaluateAll((rows) => rows.every((account) => account.scrollWidth <= account.clientWidth)), true, "each account row fits the phone");
+    assert.deepEqual(await lineCounts(accounts.locator(".usage-account-fact:last-child")), [1, 1]);
+    if (process.env.UI_EVIDENCE_DIR) await page.getByRole("tabpanel", { name: "Agents", exact: true }).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-recorded-settings-phone.png") });
+  } finally {
+    await phone.close();
+  }
+  console.log("PASS accounts another tool recorded: dotted chip, recorder and age in the popover, strip and Settings, a stale one dimmed and no alarm, no sign-in of Claude Code from a record alone, a sign-in kept with its plan, problem and Sign in again while a record stands in, phone fit");
 }
 
 /**

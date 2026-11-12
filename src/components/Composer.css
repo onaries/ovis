@@ -371,8 +371,10 @@
   color: var(--status-blocked);
 }
 
-.composer-usage.has-problem {
-  color: var(--text-dim);
+/* another tool's record, not a reading of the server's own: dotted, as its chip's hairline is */
+.composer-usage.is-recorded {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 .composer-status .agent-mark {

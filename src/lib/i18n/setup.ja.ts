@@ -79,4 +79,5 @@ export const SETUP_JA: Record<string, string> = {
   "Show {name}": "{name} を表示",
   "Cannot check": "確認できません",
   "Manual install": "手動でインストール",
+  "Old record": "古い記録",
 };

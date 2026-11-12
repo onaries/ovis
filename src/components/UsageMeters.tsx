@@ -7,7 +7,7 @@ import type { ProviderUsage, UsageCredits, UsageWindow } from "../../shared/prot
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
-import { canSignInAgain, creditsText, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, creditsText, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
@@ -20,9 +20,14 @@ function level(window: UsageWindow | null): string {
   return window !== null && window.used_percent >= HIGH_PERCENT ? " is-high" : "";
 }
 
-/** Why the numbers shown are old or missing; null while they are fresh. */
+/**
+ * Why the numbers shown are old or missing; null while they are fresh. Another tool's record standing in for them is
+ * neither, so a read that failed or was slowed down has nothing to explain there: of the sign-in only what is the
+ * user's to mend is told, an expiry or a keychain the server cannot open.
+ */
 function problemText(t: Translate, usage: ProviderUsage, offered: boolean): string | null {
   const name = PROVIDER_NAME[usage.id];
+  if (usage.recorded && (usage.problem === "failed" || usage.problem === "rate_limited")) return null;
   // where the popover offers Sign in again, it need not say how
   return usage.problem === "expired" ? offered ? t("Sign-in expired.") : t("Sign-in expired. Open {name} to renew it.", { name })
     : usage.problem === "rate_limited" ? t("{name} asked to slow down. These are the last numbers.", { name })
@@ -43,8 +48,9 @@ function otherHigh(usage: ProviderUsage, shown: UsageWindow | null): UsageWindow
 
 function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCount; glance: UsageGlance }) {
   const window = glanceWindow(usage, glance);
+  // a problem fades a sign-in's own numbers, old by then; a record standing in for them is drawn as the record it is
   return (
-    <span className={`usage-chip${level(window)}${usage.problem ? " has-problem" : ""}`}>
+    <span className={`usage-chip${level(window)}${usage.problem && !usage.recorded ? " has-problem" : ""}${usage.recorded ? " is-recorded" : ""}${usage.recorded?.stale ? " is-stale" : ""}`}>
       <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
       <span className="usage-chip-value">{window ? formatPercent(meterPercent(window, count)) : "—"}</span>
       <span className="usage-chip-bar" style={{ "--fill": `${window ? meterPercent(window, count) : 0}%` } as CSSProperties} />
@@ -76,14 +82,17 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
   const name = PROVIDER_NAME[usage.id];
   const offered = onLocalLogin !== undefined && canSignInAgain(usage);
   const problem = problemText(t, usage, offered);
+  const recorded = recordedNote(usage, now);
   return (
-    <section className="usage-provider" aria-label={usageName(usage)}>
+    <section className={`usage-provider${usage.recorded?.stale ? " is-stale" : ""}`} aria-label={usageName(usage)}>
       <header className="usage-provider-head">
         <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
         <span className="usage-provider-name">{name}</span>
         {usage.plan && <span className="usage-plan">{usage.plan}</span>}
         {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
       </header>
+      {/* another tool's record is never shown as a reading of our own: who recorded it, and when, comes first */}
+      {recorded && <p className="usage-note usage-recorded">{recorded.map((line) => <span key={line}>{line}</span>)}</p>}
       {problem && <p className={`usage-note${isError(usage) ? " is-problem" : ""}`}>{problem}</p>}
       {offered && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} onFollow={onFollow} />}
       {/* a 403 to a token that has not expired is a refused network, not an expired sign-in: the status line can stand in */}
@@ -210,7 +219,8 @@ export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a si
   const summary = shown.map((usage) => {
     const window = glanceWindow(usage, settings.usageGlance);
     const high = otherHigh(usage, window);
-    return `${usageName(usage)} ${window ? meterText(window, count) : "—"}${high ? ` (${windowLabel(high)} ${meterText(high, count)})` : ""}`;
+    const recorded = recordedNote(usage, now);
+    return `${usageName(usage)} ${window ? meterText(window, count) : "—"}${high ? ` (${windowLabel(high)} ${meterText(high, count)})` : ""}${recorded ? ` (${recorded.join(" · ")})` : ""}`;
   }).join(", ");
 
   return (

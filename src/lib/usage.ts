@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProviderUsage, StatuslineState, UsageCredits, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
+import type { ProviderUsage, StatuslineState, UsageCredits, UsageProviderId, UsageRecorder, UsageReport, UsageWindow } from "../../shared/protocol.ts";
 import { ApiError, fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
 import type { UsageCount, UsageGlance } from "./settings.ts";
 import { currentLocale, t } from "./i18n.ts";
+import { lastSeen } from "./lastSeen.ts";
 import { usePageVisible } from "./visibility.ts";
 
 /** The server asks a provider at most every 5 minutes; a minute here only picks that up sooner. */
@@ -25,6 +26,9 @@ export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
   week: "Weekly",
   month: "Monthly",
 };
+
+/** The tools whose own record of an account's limits the server reads, as their users know them. */
+export const RECORDER_NAME: Readonly<Record<UsageRecorder, string>> = { omp: "Oh My Pi" };
 
 /** A pane's agent selects a provider, not an inferred active account. */
 export function providerForAgent(agent: string | null | undefined): UsageProviderId | null {
@@ -88,6 +92,37 @@ export function usageName(usage: ProviderUsage): string {
 /** An account read through the hub: its sign-in lives in the hub, not on this PC. */
 export function isHubAccount(usage: ProviderUsage): boolean {
   return usage.key.startsWith(`${usage.id}:cliproxy:`);
+}
+
+/** Whose record an account's numbers are ("Recorded by Oh My Pi"); null for a reading the server made itself. */
+export function recordedBy(usage: ProviderUsage): string | null {
+  return usage.recorded ? t("Recorded by {tool}", { tool: RECORDER_NAME[usage.recorded.by] }) : null;
+}
+
+/**
+ * What tells a record from a reading, a line each: who recorded it and when ("Recorded by Oh My Pi, 4 min ago"), and,
+ * once that tool has stopped reading, that the numbers may have moved. Null for a reading the server made itself.
+ */
+export function recordedNote(usage: ProviderUsage, now: number): readonly string[] | null {
+  if (!usage.recorded) return null;
+  const by = t("Recorded by {tool}, {when}", { tool: RECORDER_NAME[usage.recorded.by], when: lastSeen(usage.checked_at, now) });
+  return usage.recorded.stale ? [by, t("It may have changed since.")] : [by];
+}
+
+/**
+ * Whether the server's PC holds a sign-in of this account. Not so for one known only from another tool's record of
+ * it: that is the tool's sign-in, and the agent itself is still to be signed in.
+ */
+export function isSignIn(usage: ProviderUsage): boolean {
+  return usage.recorded?.signed_in !== false;
+}
+
+/**
+ * Whether an account's numbers can stand for what is used now: read by the server without a problem, or recorded by a
+ * tool that still updates them. A problem is the sign-in's, and says nothing of a record standing in for its numbers.
+ */
+export function isCurrent(usage: ProviderUsage): boolean {
+  return usage.recorded ? !usage.recorded.stale : usage.problem === null;
 }
 
 /**

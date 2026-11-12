@@ -78,6 +78,27 @@
   opacity: 0.55;
 }
 
+/* another tool's record, not a reading of the server's own: its hairline is dotted */
+.usage-chip.is-recorded .usage-chip-bar {
+  -webkit-mask-image: repeating-linear-gradient(to right, var(--text) 0 2px, transparent 2px 4px);
+  mask-image: repeating-linear-gradient(to right, var(--text) 0 2px, transparent 2px 4px);
+}
+
+/* a record its tool has stopped updating: the number stays readable in the dim ink, its mark and bar fade, and a
+   limit near its end is no longer red, since a stale figure is no alarm */
+.usage-chip.is-stale .usage-chip-value {
+  color: var(--text-dim);
+}
+
+.usage-chip.is-stale .usage-chip-bar {
+  background: linear-gradient(to right, var(--text-dim) var(--fill), var(--border-strong) var(--fill));
+}
+
+.usage-chip.is-stale .agent-mark,
+.usage-chip.is-stale .usage-chip-bar {
+  opacity: 0.55;
+}
+
 .usage-popover {
   position: absolute;
   right: var(--space-3);
@@ -172,6 +193,16 @@
   color: var(--status-blocked);
 }
 
+/* who recorded an account's numbers, and when: smaller than a problem, which asks for something */
+.usage-recorded {
+  font-size: var(--fs-xs);
+}
+
+/* who and when, then that it may have moved: a line each, so no language breaks between them mid-word */
+.usage-recorded > span {
+  display: block;
+}
+
 /* Sign in again, under an expired sign-in in the popover and in Settings' account row */
 .usage-sign-in-again {
   display: flex;
@@ -240,6 +271,20 @@
 
 .usage-row.is-high .usage-bar > span {
   background: var(--status-blocked);
+}
+
+/* a record its tool has stopped updating: its numbers stay readable in the dim ink, no longer drawn as what is used now */
+.usage-provider.is-stale .usage-row-label,
+.usage-provider.is-stale .usage-row-value {
+  color: var(--text-dim);
+}
+
+.usage-provider.is-stale .usage-bar {
+  opacity: 0.55;
+}
+
+.usage-provider.is-stale .usage-bar > span {
+  background: var(--text-dim);
 }
 
 @media (pointer: coarse) {
