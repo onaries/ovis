@@ -66,8 +66,9 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
   });
 
   let actions: (target: HerdrPane) => RowMenuItem[] = () => [];
+  let actionsRef: { current: ((target: HerdrPane) => RowMenuItem[]) | null } = { current: null };
   async function draw(offer: LayoutOffer, drawn: SessionSnapshot = snapshot, watching = false): Promise<(target: HerdrPane) => string[]> {
-    const actionsRef: { current: ((target: HerdrPane) => RowMenuItem[]) | null } = { current: null };
+    actionsRef = { current: null };
     actions = (target) => actionsRef.current!(target);
     await act(async () => {
       renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
@@ -245,6 +246,32 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
   it("closes nothing on a double click's second press, which may land on the neighbour that took the corner", async () => {
     expect(await pressClose(snapshot, "p2", 2)).toEqual([]);
     expect(asking()).toHaveLength(0);
+  });
+
+  it("closes no second pane of a workspace until the roster has dropped the first, then asks for its last one (#3286)", async () => {
+    await draw(TUI);
+    const bodies: unknown[] = [];
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/pane/close") && typeof init?.body === "string") bodies.push(JSON.parse(init.body));
+      return Response.json({});
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const closeOf = (id: string) => actions(snapshot.panes.find((item) => item.pane_id === id)!).find((item) => item.id === "close")!;
+    try {
+      await act(async () => { closeOf("p2").run(); });
+      // herdr closed p2, but the roster still lists it: a press on p1 now would take the workspace without asking
+      await act(async () => { closeOf("p1").run(); });
+      await act(async () => { closeOf("p2").run(); });
+      expect(bodies).toEqual([{ pane_id: "p2" }]);
+      expect(asking()).toHaveLength(0);
+      const after: SessionSnapshot = { ...snapshot, panes: [snapshot.panes[0]!] };
+      await act(async () => { renderer!.update(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: TUI },
+        createElement(PaneCanvas, { snapshot: after, pane: after.panes[0] as HerdrPane, selectedPaneId: "p1", onSelect: () => {}, onChanged: () => {}, renderPane: () => null, actionsRef })))); });
+      await act(async () => { actions(after.panes[0]!).find((item) => item.id === "close")!.run(); });
+      expect(bodies).toEqual([{ pane_id: "p2" }]);
+      expect(asking()).toHaveLength(1);
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it("shows a watching device the title's Close, which it cannot use", async () => {

@@ -1111,13 +1111,16 @@ function ShortcutsPage() {
           // a chord the browser or the terminal also uses says so on its row, a default one too: the list's
           // " — Reserved" alone did not say whose it is (G-112)
           const rowText = recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : confirming ? riskText(confirming.risk, compactKeys(bindingDisplayKeys(confirming.value))) : selectedRisk ? riskText(selectedRisk, compactKeys(displayedKeys)) : undefined;
+          // a terminal app's close key is the browser's tab close, which Record refuses (exactChordRefusal); and
+          // the two closes differ: the tab's leaves the pane running, the pane's ends it
+          const help = shortcut.id === "close-pane" ? t("{key} closes the browser tab, so it cannot be used here: record another key. Closing a browser tab only disconnects this view; Close pane stops what runs in the pane.", { key: platformIsMac ? "⌘W" : "Ctrl+W" }) : undefined;
           const resetShortcut = (): void => {
             const next = { ...settings.shortcutOverrides };
             delete next[shortcut.id];
             update({ shortcutOverrides: next });
           };
           return (
-            <SettingsRow key={shortcut.id} label={t(shortcut.label)} onReset={Object.hasOwn(settings.shortcutOverrides, shortcut.id) && !shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides) ? resetShortcut : undefined} held={recording?.id === shortcut.id || confirming !== null} wide={!listedOnly(shortcut.id)} description={rowText === undefined ? undefined : <span role="status">{rowText}</span>}>
+            <SettingsRow key={shortcut.id} label={t(shortcut.label)} onReset={Object.hasOwn(settings.shortcutOverrides, shortcut.id) && !shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides) ? resetShortcut : undefined} held={recording?.id === shortcut.id || confirming !== null} wide={!listedOnly(shortcut.id)} description={rowText === undefined ? help : <span role="status">{rowText}</span>}>
               {listedOnly(shortcut.id) ? <span className="settings-keys">{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span> : (
                 <span className="settings-shortcut-control">
                 <button type="button" className="btn settings-shortcut-record" ref={(button) => { if (button) recordButtons.current.set(shortcut.id, button); else recordButtons.current.delete(shortcut.id); }} aria-pressed={recording?.id === shortcut.id} aria-label={t("Record shortcut for {name}", { name: t(shortcut.label) })} onClick={() => { setPending(null); setRecording(recording?.id === shortcut.id ? null : { id: shortcut.id, problem: null }); }}>{recording?.id === shortcut.id ? t("Press keys…") : t("Record")}</button>

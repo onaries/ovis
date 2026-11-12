@@ -97,6 +97,17 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     expect(renderer!.root.findByProps({ className: "palette-footer-place" }).children).toEqual(["Appearance"]);
   });
 
+  it("lists Close pane where App offers it, and not when opened over another dialog, where it would close the pane under it", async () => {
+    let closes = 0;
+    const closing = actionsOf(TUI, { closePane: () => { closes += 1; } });
+    expect(await rows(TUI, "p1", ">close pane", closing)).toEqual(["Close pane"]);
+    expect(await rows(TUI, "p1", ">close pane", actionsOf(TUI, { closePane: null }))).toEqual([]);
+    // Files (or Settings) is open under the palette: an aria-modal surface that is not the palette's own
+    (document as unknown as { querySelectorAll: () => unknown[] }).querySelectorAll = () => [{}];
+    expect(await rows(TUI, "p1", ">close pane", closing)).toEqual([]);
+    expect(closes).toBe(0);
+  });
+
   it("keeps Rename tab where a lone tab draws no row, whose dialog stands in for the row's field", async () => {
     phone = true;
     expect(await rows(TUI, "p3", ">rename tab")).toEqual(["Rename tab"]);

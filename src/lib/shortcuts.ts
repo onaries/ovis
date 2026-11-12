@@ -22,6 +22,8 @@ export const SHORTCUTS = [
   { id: "split-right", label: "Split pane right", keys: [] },
   { id: "split-down", label: "Split pane down", keys: [] },
   { id: "zoom-pane", label: "Zoom or unzoom pane", keys: [] },
+  // no default key: ⌘W and Ctrl+W, a terminal app's close, are the browser's own tab close
+  { id: "close-pane", label: "Close pane", keys: [] },
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
   { id: "next-pane", label: "Next pane", keys: ["Mod", "Shift", "ArrowDown"] },
   // no default key either, as New tab: each person picks one in Settings
@@ -227,6 +229,29 @@ export function keepsKeyForText(event: { key: string; target: KeyTargetLike | Ev
   return back ? moving > 0 : moving < (field.value ?? "").length;
 }
 
+/** The dialogs, sheets and menus that keep their keys: a confirmation, the palette, Settings, a row menu, a phone's drawer. */
+const KEY_OWNERS = "dialog, [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']";
+
+/**
+ * What a press of the Close pane binding does: "pass" leaves the key to a dialog, sheet or menu that
+ * has it, or that is open over the page (its own confirmation included), and to a field whose own list
+ * is open (the message box's slash and file suggestions: the field keeps the focus, beside its
+ * listbox, aria-expanded), and does nothing; "ignore"
+ * takes a held key's repeat and closes nothing, so holding it never goes on to the next pane; "run"
+ * closes the selected pane once.
+ */
+export function closePaneKeyStep(event: { repeat?: boolean; target: EventTarget | null }, modalOpen: boolean): "run" | "ignore" | "pass" {
+  const target = event.target as { closest?: (selector: string) => unknown; getAttribute?: (name: string) => string | null } | null;
+  if (modalOpen || (typeof target?.closest === "function" && target.closest(KEY_OWNERS) !== null)) return "pass";
+  if (typeof target?.getAttribute === "function" && target.getAttribute("aria-expanded") === "true") return "pass";
+  return event.repeat ? "ignore" : "run";
+}
+
+/** A dialog or sheet open over the page besides `own` (the palette asking from inside itself). */
+export function modalOpenBesides(own: Element | null): boolean {
+  return [...document.querySelectorAll("[aria-modal='true'], [role='alertdialog']")].some((node) => node !== own && !(own?.contains(node) ?? false));
+}
+
 export function modKeyLabel(): string {
   return isMacPlatform() ? "⌘" : "Ctrl";
 }
@@ -263,9 +288,12 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       const shortcut = matchShortcut(event, platformIsMac, settings.shortcutOverrides);
       if (shortcut === null) return;
       if (keepsKeyForText(event, shortcut)) return;
+      const closeStep = shortcut === "close-pane" ? closePaneKeyStep(event, modalOpenBesides(null)) : null;
+      if (closeStep === "pass") return;
       event.preventDefault();
       // a held chord repeats: a tab or a split is made once per press, not once per key repeat
       if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down" || shortcut === "zoom-pane")) return;
+      if (closeStep === "ignore") return;
       switch (shortcut) {
         case "palette":
           actions.openPalette();
@@ -305,6 +333,9 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
           break;
         case "zoom-pane":
           actions.toggleZoom?.();
+          break;
+        case "close-pane":
+          actions.closePane?.();
           break;
         case "previous-pane":
           actions.selectAdjacentPane(-1);

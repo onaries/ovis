@@ -109,4 +109,10 @@ export interface AppActions {
    * nothing for a pane alone in its tab. null where zoomPane is
    */
   toggleZoom: (() => void) | null;
+  /**
+   * The Close pane shortcut and palette row: the selected pane's own menu's Close (PaneCanvas), with
+   * its confirmation for a busy pane or a workspace's last one, and nothing for a locked pane. null
+   * without a pane and on a watching device
+   */
+  closePane: (() => void) | null;
 }
