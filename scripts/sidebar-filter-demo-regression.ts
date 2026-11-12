@@ -85,6 +85,8 @@ const patch = `(() => {
         const message = JSON.parse(event.data);
         if (message.type === "machines") { last = message.machines; message.machines = roster(last); }
         this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
+        // the build PC is the laptop's roster under other names: a pane's own status change reaches both, as a roster does
+        if (message.machine_id === "local" && message.message?.type === "pane-status") this.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ ...message, machine_id: "build" }) }));
       };
       this.inner.onerror = (event) => this.onerror?.(event);
       this.inner.onopen = (event) => this.onopen?.(event);
@@ -221,17 +223,13 @@ async function waitWorkspaceIds(page: Page, predicate: string): Promise<void> {
 
 interface Scene { phone: boolean; theme: Theme; language: Language }
 /**
- * The demo ends the api pane's turn 4.5 s after each load (site/demo/transport.ts): its status reaches the Laptop's row
- * alone (the build PC's copy stays working) and the Laptop's row then leaves for the resting part, behind the build
- * PC's. Every roster a step compares with another is taken after that, never across it.
+ * The demo ends the api pane's turn 4.5 s after each load (site/demo/transport.ts), on both PCs' rows (the fixture
+ * passes its status to the build PC's copy too) or already in the first roster when that comes later, and both rows
+ * leave for the resting part. Every roster a step compares with another is taken after that, never across it.
  */
 async function turnEnded(page: Page): Promise<void> {
-  await page.waitForFunction((api) => {
-    const rows = [...document.querySelectorAll<HTMLElement>(".agents-sidebar .agent-item")];
-    const laptop = rows.findIndex((row) => row.dataset["machine"] === "local" && row.dataset["pane"] === api && row.querySelector('[data-status="done"]') !== null);
-    const build = rows.findIndex((row) => row.dataset["machine"] === "build" && row.dataset["pane"] === api);
-    return laptop >= 0 && build >= 0 && build < laptop;
-  }, panes.api);
+  await page.waitForFunction((api) => ["local", "build"].every((machine) =>
+    document.querySelector(`.agents-sidebar .agent-item[data-machine="${machine}"][data-pane="${api}"] [data-status="done"]`) !== null), panes.api);
 }
 
 async function newPage(browser: Browser, scene: Scene, search: string, stored: Record<string, string> = {}): Promise<{ context: BrowserContext; page: Page; errors: string[] }> {
