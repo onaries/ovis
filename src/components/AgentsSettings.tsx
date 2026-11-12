@@ -24,7 +24,7 @@ import { lastSeen } from "../lib/lastSeen.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useSettings } from "../lib/settings.ts";
 import { openSetupGuide } from "../lib/setupGuide.ts";
-import { canSignInAgain, glanceWindow, isHubAccount, isSignIn, isStale, meterText, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedBy, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, glanceWindow, isHubAccount, isSignIn, meterText, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedBy, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { AgentTile } from "./AgentTile.tsx";
@@ -192,7 +192,7 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
       // read, as an old record once the tool stopped. Where this PC holds a sign-in of the account too, the status
       // stays the sign-in's and that age is among the facts of the line
       const recordOnly = !isSignIn(usage);
-      const age = usage.recorded ? [...(isStale(usage, Date.now()) ? [t("Old record")] : []), lastSeen(usage.checked_at)] : [];
+      const age = usage.recorded ? [...(usage.recorded.stale ? [t("Old record")] : []), lastSeen(usage.checked_at)] : [];
       const status = recordOnly ? age.join(" · ") : usage.problem === null ? t("Signed in") : {
         expired: t("Expired"), failed: t("Failed"), rate_limited: t("Failed"), locked: t("Failed"),
       }[usage.problem];

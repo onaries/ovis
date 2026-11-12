@@ -685,7 +685,7 @@ describe("usage API", () => {
       const answered = await fetch(`http://localhost:${open.port}/api/usage`);
       expect(answered.status).toBe(200);
       expect(answered.headers.get("cache-control")).toBe("no-store");
-      expect(await answered.json() as UsageReport).toEqual({ providers: [] });
+      expect(await answered.json() as UsageReport).toEqual({ server_time: expect.any(String), providers: [] });
       expect((await fetch(`http://localhost:${gated.port}/api/usage`)).status).toBe(401);
       const withToken = await fetch(`http://localhost:${gated.port}/api/usage`, { headers: { authorization: "Bearer test-usage-token" } });
       expect(withToken.status).toBe(200);

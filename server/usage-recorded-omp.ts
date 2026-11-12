@@ -74,7 +74,8 @@ interface HistoryRow {
 /**
  * Where Oh My Pi keeps agent.db, as it finds it itself (packages/utils/src/dirs.ts): in PI_CODING_AGENT_DIR, else in
  * $XDG_DATA_HOME/omp once that folder exists (Linux and macOS), else in ~/.omp/agent, where PI_CONFIG_DIR may give
- * that folder another name.
+ * that folder another name. Oh My Pi takes that name as it is; Gajae Code trims its own and passes over one that climbs
+ * out of the home: each reader follows its tool, so that it looks where the tool writes.
  */
 function storePath(ctx: RecordedContext): string {
   const agentDir = ctx.env["PI_CODING_AGENT_DIR"];

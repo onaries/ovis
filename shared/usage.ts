@@ -46,8 +46,7 @@ export type UsageRecorder = "omp" | "gjc";
 /**
  * How long a tool may go without reading an account's limits before its record is one it has stopped updating. Either
  * tool reads again five minutes after its last read, give or take a quarter: this is three reads missed. The server
- * says so in `stale` with each report; a client that keeps a report while the server cannot be reached measures the
- * record's age (`checked_at`) against the same time.
+ * says so in `stale` with each report; a page ages the records of the report it holds against the same time.
  */
 export const RECORDED_STALE_AFTER_MS: Readonly<Record<UsageRecorder, number>> = { omp: 15 * 60_000, gjc: 15 * 60_000 };
 
@@ -112,6 +111,12 @@ export interface StatuslineState {
 
 /** GET /api/usage: only providers a CLI on this PC is signed in to are listed, once per account. */
 export interface UsageReport {
+  /**
+   * The PC's clock, which the times are on (ISO time). A page ages a record by it: the record's age as the PC saw it
+   * (this less `checked_at`) plus the time gone by on the device, never the device's clock against the PC's.
+   * Absent from an older server, for whose records the page has only its own clock to ask.
+   */
+  readonly server_time?: string;
   readonly providers: readonly ProviderUsage[];
   /**
    * Providers with no account found on this PC (a hub's accounts may still be listed) whose sign-in may be kept where this PC cannot look: the

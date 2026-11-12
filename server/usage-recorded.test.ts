@@ -106,6 +106,14 @@ describe("an account another tool recorded", () => {
     expect((await listed(provider))[0]?.recorded).toEqual({ by: "omp", stale: true, signed_in: false });
   });
 
+  it("says its own time with each report, as the report leaves: a page counts a record's age from it", async () => {
+    // a Hub that takes half a minute to answer: the report is that much later than the start of its collection
+    const service = new UsageService(context(), [recordedOnly(recordedBy(() => [record(NOW)]))], async () => { now += 30_000; return []; });
+    expect((await service.report()).server_time).toBe(iso(NOW + 30_000));
+    now = NOW + 7 * MINUTE;
+    expect((await service.report()).server_time).toBe(iso(NOW + 7 * MINUTE + 30_000));
+  });
+
   it("reads a tool's store once for the reports of half a minute, and again after that", async () => {
     let reads = 0;
     const service = new UsageService(context(), [recordedOnly(recordedBy(() => { reads += 1; return [record(NOW)]; }))]);

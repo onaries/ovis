@@ -97,7 +97,7 @@ afterEach(() => rmSync(home, { recursive: true, force: true }));
 describe("providers", () => {
   it("lists nothing when no CLI is signed in, and asks no one", async () => {
     const report = await new UsageService(context("darwin")).report();
-    expect(report).toEqual({ providers: [] });
+    expect(report).toEqual({ server_time: expect.any(String), providers: [] });
     expect(requests).toEqual([]);
   });
 
@@ -821,14 +821,14 @@ describe("providers", () => {
   it.each(["missing", "failing"] as const)("does not show Antigravity when Linux secret-tool is %s", async (result) => {
     if (result === "failing") commands.set("secret-tool lookup service gemini username antigravity", "");
     const report = await new UsageService(context("linux"), only("antigravity")).report();
-    expect(report).toEqual({ providers: [] });
+    expect(report).toEqual({ server_time: expect.any(String), providers: [] });
     expect(commandCalls).toEqual([["secret-tool", "lookup", "service", "gemini", "username", "antigravity"]]);
   });
 
   it("names secret-tool when Linux lacks it and no Antigravity sign-in was found, and looks again on the next report", async () => {
     absent.add("secret-tool");
     const service = new UsageService(context("linux"), only("antigravity"));
-    expect(await service.report()).toEqual({ providers: [], missing_commands: [{ provider: "antigravity", command: "secret-tool" }] });
+    expect(await service.report()).toEqual({ server_time: expect.any(String), providers: [], missing_commands: [{ provider: "antigravity", command: "secret-tool" }] });
     // installed since: the next plain report finds the keyring item, without waiting for FRESH_MS
     absent.delete("secret-tool");
     commands.set("secret-tool lookup service gemini username antigravity", JSON.stringify({
@@ -844,7 +844,7 @@ describe("providers", () => {
 
   it("looks in the keyring again once secret-tool, removed after a search was kept, is back", async () => {
     const service = new UsageService(context("linux"), only("antigravity"));
-    expect(await service.report()).toEqual({ providers: [] });
+    expect(await service.report()).toEqual({ server_time: expect.any(String), providers: [] });
     absent.add("secret-tool");
     now += 1000;
     expect((await service.report()).missing_commands).toEqual([{ provider: "antigravity", command: "secret-tool" }]);
@@ -866,7 +866,7 @@ describe("providers", () => {
 
   it("never names secret-tool off Linux", async () => {
     absent.add("secret-tool");
-    expect(await new UsageService(context("darwin"), only("antigravity")).report()).toEqual({ providers: [] });
+    expect(await new UsageService(context("darwin"), only("antigravity")).report()).toEqual({ server_time: expect.any(String), providers: [] });
   });
 
   it.each([

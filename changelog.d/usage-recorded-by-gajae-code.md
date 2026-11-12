@@ -5,7 +5,8 @@
 
 ### Fixed
 - A recorded limit no longer passes for a current one while the server cannot be reached: the page
-  judges the record's own age, so it dims and says it may have changed after 15 minutes, and the
+  adds the time gone by since the server's last answer to the record's age, without comparing its
+  clock with the server's, so it dims and says it may have changed after 15 minutes, and the
   composer stops showing it.
 - A tool's record is found where `PI_CONFIG_DIR` (Oh My Pi) or `GJC_CONFIG_DIR` (Gajae Code) gives its
   folder another name than `.omp` or `.gjc`.

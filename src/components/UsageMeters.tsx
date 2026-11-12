@@ -7,7 +7,7 @@ import type { ProviderUsage, UsageCredits, UsageWindow } from "../../shared/prot
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
-import { canSignInAgain, creditsText, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, isStale, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, creditsText, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
@@ -46,11 +46,11 @@ function otherHigh(usage: ProviderUsage, shown: UsageWindow | null): UsageWindow
   return usage.windows.find((window) => window !== shown && window.used_percent >= HIGH_PERCENT) ?? null;
 }
 
-function Chip({ usage, count, glance, stale }: { usage: ProviderUsage; count: UsageCount; glance: UsageGlance; stale: boolean }) {
+function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCount; glance: UsageGlance }) {
   const window = glanceWindow(usage, glance);
   // a problem fades a sign-in's own numbers, old by then; a record standing in for them is drawn as the record it is
   return (
-    <span className={`usage-chip${level(window)}${usage.problem && !usage.recorded ? " has-problem" : ""}${usage.recorded ? " is-recorded" : ""}${stale ? " is-stale" : ""}`}>
+    <span className={`usage-chip${level(window)}${usage.problem && !usage.recorded ? " has-problem" : ""}${usage.recorded ? " is-recorded" : ""}${usage.recorded?.stale ? " is-stale" : ""}`}>
       <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
       <span className="usage-chip-value">{window ? formatPercent(meterPercent(window, count)) : "—"}</span>
       <span className="usage-chip-bar" style={{ "--fill": `${window ? meterPercent(window, count) : 0}%` } as CSSProperties} />
@@ -84,7 +84,7 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
   const problem = problemText(t, usage, offered);
   const recorded = recordedNote(usage, now);
   return (
-    <section className={`usage-provider${isStale(usage, now) ? " is-stale" : ""}`} aria-label={usageName(usage)}>
+    <section className={`usage-provider${usage.recorded?.stale ? " is-stale" : ""}`} aria-label={usageName(usage)}>
       <header className="usage-provider-head">
         <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
         <span className="usage-provider-name">{name}</span>
@@ -234,7 +234,7 @@ export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a si
         title={summary}
         onClick={() => setOpen(!open)}
       >
-        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} glance={settings.usageGlance} stale={isStale(usage, now)} />)}
+        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} glance={settings.usageGlance} />)}
         {folded > 0 && <span className="usage-more">+{folded}</span>}
       </button>
       {open && (
