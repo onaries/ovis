@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 const TOUCH_TARGET = 44;
 const CLEARANCE = 6;
@@ -95,6 +96,53 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
           assert.ok(option.top >= bar.top - 0.5 && option.bottom <= bar.bottom + 0.5, `${size.label}: the touch target stays inside the bar`);
         }
         if (evidence) await page.screenshot({ path: join(evidence, `lens-switch-${size.label.replace(/\s+/g, "-")}.png`), clip: { x: 0, y: 0, width: size.width, height: 140 } });
+      } finally { await context.close(); }
+    }
+    // openLens picks the control by the width the page has now, never by what is drawn that instant: here the page has
+    // narrowed to a phone's width while the header still draws the wide switch (its media-query change is held), as
+    // it does for a frame after a rotation. The held change is let go when openLens asks the width, or when the wide
+    // switch is clicked; a click there fails the check, whichever came first
+    {
+      const context = await browser.newContext({ viewport: { width: 720, height: 870 }, isMobile: true, hasTouch: true, locale: "en-US" });
+      try {
+        await context.addInitScript(() => {
+          if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+          const qa = window as unknown as { holdMedia: boolean; wideClicks: number; heldMedia: Array<() => void>; releaseMedia: () => void };
+          qa.holdMedia = false;
+          qa.wideClicks = 0;
+          qa.heldMedia = [];
+          qa.releaseMedia = () => { qa.holdMedia = false; for (const run of qa.heldMedia.splice(0)) run(); };
+          const add = MediaQueryList.prototype.addEventListener;
+          MediaQueryList.prototype.addEventListener = function (this: MediaQueryList, type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) {
+            if (type !== "change" || !listener) return add.call(this, type, listener, options);
+            const query = this;
+            const wrapped = (event: Event) => {
+              const deliver = () => typeof listener === "function" ? listener.call(query, event) : listener.handleEvent(event);
+              if (qa.holdMedia) qa.heldMedia.push(deliver);
+              else deliver();
+            };
+            return add.call(this, type, wrapped, options);
+          } as typeof MediaQueryList.prototype.addEventListener;
+          const matchMediaOwn = window.matchMedia.bind(window);
+          window.matchMedia = (query: string) => {
+            // openLens asking the width while the change is held: let it go after this answer
+            if (qa.holdMedia && query === "(max-width: 640px)") queueMicrotask(qa.releaseMedia);
+            return matchMediaOwn(query);
+          };
+          document.addEventListener("click", (event) => {
+            if ((event.target as Element | null)?.closest?.(".app-header .view-switch")) { qa.wideClicks += 1; if (qa.holdMedia) qa.releaseMedia(); }
+          }, true);
+        });
+        const page = await context.newPage();
+        await page.goto(`${origin}/?pane=${encodeURIComponent(created.root_pane.pane_id)}`);
+        await page.locator(".app-header .view-switch").waitFor();
+        await page.evaluate(() => { (window as unknown as { holdMedia: boolean }).holdMedia = true; });
+        await page.setViewportSize({ width: 412, height: 915 });
+        assert.equal(await page.evaluate(() => matchMedia("(min-width: 641px)").matches), false, "the page is a phone's width");
+        assert.equal(await page.locator(".app-header .view-switch").count(), 1, "the wide switch is still drawn: its change is held");
+        await openLens(page, "terminal");
+        await page.locator('.app-header .lens-toggle[data-view="terminal"]').waitFor();
+        assert.equal(await page.evaluate(() => (window as unknown as { wideClicks: number }).wideClicks), 0, "openLens never clicks the wide switch a phone's width no longer shows");
       } finally { await context.close(); }
     }
     console.log("PASS the touch header's Chat/Terminal switch: from 641px a compact track with room above and below and 44px touch targets inside the bar, on a phone one 44px button inside the bar that switches the lens and no session counts, folded, unfolded, landscape, under a notch and in the compact density");
