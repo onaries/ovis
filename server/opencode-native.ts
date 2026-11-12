@@ -305,8 +305,6 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
   if (paneId === undefined) return { service: service!, sessionID };
   // a verified OpenCode v2 pane keeps its service's event stream open, so a later send's events are not missed
   const live = ensureStream(service!);
-  // a read that named no process keeps the pid known, and an older verification ending after a newer
-  // one does not put its older pid back
   const earlier = verifiedPanes.get(paneId);
   // An older verification ending after a newer one leaves the newer one's pid, even none: a read that names no process
   // clears it, so a new OpenCode stopped before any read saw it is still looked for (stoppedAgentJob walks without one)

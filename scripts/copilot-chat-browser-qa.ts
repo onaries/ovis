@@ -116,8 +116,9 @@ console.log("fixture ready");`);
   const newMessages = page.locator(`.pane-frame[data-layout-pane="${pane}"]`).getByRole("button", { name: "New messages" });
   await followUp.or(newMessages).first().waitFor();
   // looked up and clicked in one step in the page: the list settling at its end in between unmounts the
-  // button, and a locator click would wait on a button that is gone
-  await page.evaluate((pane) => document.querySelector<HTMLButtonElement>(`.pane-frame[data-layout-pane="${pane}"] .chat-new-messages`)?.click(), pane);
+  // button, and a locator click would wait on a button that is gone. New messages only, not the icon-only
+  // Jump to latest that shares its class
+  await page.evaluate((pane) => document.querySelector<HTMLButtonElement>(`.pane-frame[data-layout-pane="${pane}"] .chat-new-messages:not(.is-icon)`)?.click(), pane);
   await followUp.waitFor();
   appendFileSync(transcript, event("user.message", { content: "Finish task" })
     + event("assistant.message", { toolRequests: [{ toolCallId: "finish-call", name: "task_complete",
