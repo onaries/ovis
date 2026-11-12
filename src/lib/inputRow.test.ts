@@ -482,8 +482,10 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     // a draft starting with a Markdown quote or an arrow is still one
     expect(typedRow("> please retain this quote")).toBeTrue();
     expect(typedRow("→ note to self")).toBeTrue();
-    // a dialog's search field typed into, over its select cursor, is none
+    // a dialog's search field typed into, over its select cursor drawn in colour, is none
     expect(typedRow("> sea\r\n\u001b[38;2;167;152;215m→ Auto-compact\u001b[0m")).toBeFalse();
+    // a typed draft of both, a quote and an arrow, in the terminal's own colour, is one (#3769)
+    expect(typedRow("> quoted\r\n→ an arrow line")).toBeTrue();
   });
 
   test("a read whose escapes carry no colour or style (bold, resets) proves nothing", () => {
@@ -511,6 +513,27 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     expect(typed(agent, `${agent}/draft-typed-119.ansi`)).toBeTrue();
     expect(typed(agent, `${agent}/draft-empty-119.ansi`)).toBeFalse();
     expect(typed(agent, `${agent}/draft-slash-119.ansi`)).toBe(slash);
+  });
+
+  test("a Qwen draft whose second row starts with Qwen's own mark is still its box's draft (#3769)", () => {
+    const rows = readFileSync(join(FIXTURES, "qwen/draft-typed-119.ansi"), "utf8").split("\n");
+    const at = rows.findIndex((row) => row.includes("leftover draft"));
+    rows.splice(at + 1, 0, "> quoted line\r");
+    expect(typedDraft("qwen", screenFromAnsi(rows.join("\n")))).toBeTrue();
+  });
+
+  test("a GJC draft wrapped onto a second row of its box is read whole by the draft check", () => {
+    const rows = readFileSync(join(FIXTURES, "gjc/draft-typed-119.ansi"), "utf8").split("\n");
+    const at = rows.findIndex((row) => row.includes("\u2502 \u001b") && row.includes(">"));
+    rows.splice(at + 1, 0, `\u2502   typed on the second row${" ".repeat(90)}\u2502\r`);
+    expect(typedDraft("gjc", screenFromAnsi(rows.join("\n")))).toBeTrue();
+  });
+
+  test("a GJC draft that starts with a blank line is read from its wrapped rows", () => {
+    const rows = readFileSync(join(FIXTURES, "gjc/draft-typed-119.ansi"), "utf8").replace("leftover draft", "").split("\n");
+    const at = rows.findIndex((row) => row.includes("\u2502 \u001b") && row.includes(">"));
+    rows.splice(at + 1, 0, `\u2502   typed on the second row${" ".repeat(90)}\u2502\r`);
+    expect(typedDraft("gjc", screenFromAnsi(rows.join("\n")))).toBeTrue();
   });
 
   test("a draft wrapped onto a second row of the box is read whole", () => {

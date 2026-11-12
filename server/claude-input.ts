@@ -161,7 +161,7 @@ export function claudeInputDraft(live: string, colors: string | null): boolean {
   const afterPill = withoutIdePill(box.plain[0]!.slice(1));
   if ([afterPill, ...box.plain.slice(1)].join("\n").replace(/\u00a0/g, " ").trim() === "") return false;
   // a paste or an image Claude folded into a placeholder is content, however it is colored
-  if (foldedPlaceholder(box.plain.join(" "))) return true;
+  if (foldedPlaceholder(box.plain.join("\n"))) return true;
   if (colors === null) return true;
   const shown = claudeInputBox(colors);
   if (shown === null || shown === "clipped" || shown.plain.join("\n") !== box.plain.join("\n")) return true;
@@ -239,13 +239,19 @@ export function claudeInputBoxContent(live: string): string | null {
   return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
 }
 
+/** Claude Code's placeholder for a paste or an image it folded, whole: `[Pasted text #1 +12 lines]`, `[Pasted text #1]`, `[Image #1]`. */
+const FOLDED_WHOLE = /\[(?:Pastedtext#\d+(?:\+\d+lines?)?|Image#\d+)\]/;
+/** its start, which the draft checks take as content whatever follows: the safer reading of a box */
+const FOLDED_START = /\[(?:Pastedtext#\d+|Image#\d+)/;
+
 /**
- * Whether box text holds a paste or an image Claude Code folded into a placeholder (`[Pasted text #1 +12 lines]`,
- * `[Image #1]`). Any run of spaces or row breaks counts as one space: Claude wraps its box at the pane's width,
- * also inside a placeholder.
+ * Whether box text, its rows as Claude Code drew them, holds a paste or an image Claude folded into a placeholder.
+ * Claude wraps its box at the pane's width, also inside a placeholder, between words or inside one, any number of
+ * times: the text is read with every space and row break taken out, as are the placeholder patterns. Only the whole
+ * placeholder counts (`whole`, for Send anyway: a typed `[Image #1` is not one); the draft checks take its start.
  */
-export function foldedPlaceholder(text: string): boolean {
-  return /\[(?:Pasted text #\d+|Image #\d+)/.test(text.replace(/\s+/g, " "));
+export function foldedPlaceholder(text: string, whole = false): boolean {
+  return (whole ? FOLDED_WHOLE : FOLDED_START).test(text.replace(/\s+/g, ""));
 }
 
 /**
@@ -256,7 +262,7 @@ export function foldedPlaceholder(text: string): boolean {
  */
 export function claudeSendAnywayBox(live: string): string | null {
   const content = claudeInputBoxContent(live);
-  return content === null || foldedPlaceholder(content) ? null : content;
+  return content === null || foldedPlaceholder(content, true) ? null : content;
 }
 
 /**
@@ -293,7 +299,7 @@ export function claudeRestoredDraft(live: string, colors: string | null, sent: s
   if (sent === null || sent.trim() === "" || colors === null || !claudeInputDraft(live, colors)) return null;
   const box = claudeInputBox(live);
   if (box === null || box === "clipped" || !box.plain[0]?.startsWith("❯")) return null;
-  if (foldedPlaceholder(box.plain.join(" "))) return null;
+  if (foldedPlaceholder(box.plain.join("\n"))) return null;
   // each row's own words exactly (the box's U+00A0 as a space), its marker, indentation and padding
   // aside; where the terminal wrapped, a word split in two joins with nothing between, and a wrap
   // between words with one space or line break. Any other change to the spaces is the user's edit.

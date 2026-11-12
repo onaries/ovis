@@ -86,6 +86,7 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.": "未发送：终端中 Claude Code 的输入框不是空的。请先在那里发送或清除，再发送这条消息。",
   "Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.": "未发送：终端中 Hermes 的输入框不是空的。请先在终端里发送或清除它，然后再发送这条消息。",
   "Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.": "未发送：终端中代理的输入框里有已输入的文字。请先在终端里发送或清除它，然后再发送这条消息。",
+  "Not sent: Claude Code's input box in the terminal holds a paste or image it folded, whose lines are not shown here, so it cannot be sent over. Send or clear it there, then send this message.": "未发送：终端中 Claude Code 的输入框里有折叠的粘贴内容或图片，其中的行不会显示在这里，因此不能覆盖发送。请先在终端里发送或清除它，然后再发送这条消息。",
   "Not sent: Claude Code's input box in the terminal already holds “{draft}”.": "未发送：终端中 Claude Code 的输入框里已有“{draft}”。",
   "Clear it and send": "清除并发送",
   "Send it": "原样发送",

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock, spyOn } from "bun:test";
+import { CLAUDE_FOLDED_DRAFT_MESSAGE } from "../shared/submit-outcome.ts";
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -1506,6 +1507,19 @@ describe("connection-owned pending input", () => {
     expect(await f.socket.action(10)).toMatchObject({ ok: true });
     await f.removed(message.id);
     await f.waitBytes(`${paste("queued message")}\r`);
+  }, 30_000);
+
+  it("refuses a queued message over a folded paste in Claude's box with nothing to send anyway over (#3563)", async () => {
+    const f = await setup("folded");
+    const rule = "\u2500".repeat(60);
+    const footer = "[Haiku 4.5] \u2502 project";
+    await f.showScreen(`${rule}\n\u276f [Pasted text #1 +12 lines]\n${rule}\n  ${footer}\n`, footer);
+    await f.state("idle");
+    f.socket.send({ type: "submit", id: 2, pane_id: f.pane, text: "then reply PONG", payload: "unused\r", delivery: "queue" });
+    const refused = await f.socket.result(2);
+    expect(refused).toMatchObject({ ok: false, code: "input_draft", message: CLAUDE_FOLDED_DRAFT_MESSAGE });
+    expect(refused.box).toBeUndefined();
+    expect(f.bytes()).toBe("");
   }, 30_000);
 
   it("holds a queued message rather than clearing the stopped chat message Claude put back in its box", async () => {

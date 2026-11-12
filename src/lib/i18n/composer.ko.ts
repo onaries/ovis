@@ -86,6 +86,7 @@ export const COMPOSER_KO: Record<string, string> = {
   "Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.": "보내지 않음: 터미널의 Claude Code 입력란이 비어 있지 않습니다. 그곳에서 보내거나 지운 뒤 이 메시지를 보내세요.",
   "Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 Hermes 입력칸이 비어 있지 않습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
   "Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 에이전트 입력칸에 입력한 글자가 있습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
+  "Not sent: Claude Code's input box in the terminal holds a paste or image it folded, whose lines are not shown here, so it cannot be sent over. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 Claude Code 입력칸에 접힌 붙여넣기나 이미지가 있어 그 줄이 여기 보이지 않으므로 그 위로 보낼 수 없습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
   "Not sent: Claude Code's input box in the terminal already holds “{draft}”.": "보내지 않음: 터미널의 Claude Code 입력란에 이미 입력된 내용이 있습니다(“{draft}”).",
   "Clear it and send": "지우고 보내기",
   "Send it": "그대로 보내기",

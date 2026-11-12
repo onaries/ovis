@@ -783,7 +783,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // The box is the live screen's; only the viewport read tells Claude's grey text from a draft. The live
       // read comes after the colors, so text typed between the two is in the box and holds the message.
       if (context.identity.agent === "claude") await freeClaudeBox(paneId, context.working, () => authorizePending(owner, paneId, lease), arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS), automatic || queued)
-        .catch((error: unknown) => { throw error instanceof InputDraftError ? new InputDraftError(error.draft, context.identity, error.box) : error; });
+        .catch((error: unknown) => { throw error instanceof InputDraftError ? new InputDraftError(error.draft, context.identity, error.box, error.message) : error; });
       else if (context.identity.agent === "hermes") context.screen = await freeHermesInput(paneId, context.identity);
       // any other agent's box, where its recorded shape shows typed text (freeAgentInput)
       else await freeAgentInput(paneId, context.identity.agent, context.identity);

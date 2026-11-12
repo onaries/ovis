@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { AGENT_INPUT_DRAFT_MESSAGE } from "../../shared/submit-outcome.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, CLAUDE_FOLDED_DRAFT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentDisplayLabel, claudeMainAtRest, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain, draftSendNote, endsWithTurn, stoppedTurn } from "./compose.ts";
 import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, namesHiddenCommand, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
 import type { ConversationTurn, SlashCommand } from "../../shared/protocol.ts";
@@ -220,6 +220,8 @@ describe("composerMessage and submitNote", () => {
     // a refusal over another agent's box keeps its note where herdr labels the pane Claude Code (an OmO with its SDK child)
     expect(submitNote("input_draft", AGENT_INPUT_DRAFT_MESSAGE, "claude")).toBe(submitNote("input_draft", "x", "gjc"));
     expect(submitNote("input_draft", "x", "claude")).not.toBe(submitNote("input_draft", "x", "gjc"));
+    // Claude Code's box holding a folded paste has a note of its own, saying why nothing can be sent over it
+    expect(submitNote("input_draft", CLAUDE_FOLDED_DRAFT_MESSAGE, "claude")).not.toBe(submitNote("input_draft", "x", "claude"));
     expect(submitRefusal("input_draft", "x", undefined, "! ls")).toEqual({ note: "Not sent: Claude Code's input box in the terminal may not be empty. It shows “! ls”.", anyway: true });
     // a box the server could not read whole is shown nothing to send over: the plain note
     expect(submitRefusal("input_draft", "x", undefined, "")).toBe(submitNote("input_draft", "x"));

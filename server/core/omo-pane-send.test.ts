@@ -144,6 +144,8 @@ it("sends into a Claude-labelled omo pane without Claude's draft refusal, and st
   panes["w:p2"] = { agent: "claude", process: [{ pid: 2147483646, argv: ["/usr/bin/claude"], cwd: root }] };
   await submitter()("w:p1", "hello", "hello", Date.now());
   expect(calls.some((call) => call.method === "agent.prompt" && call.params.text === "hello")).toBeTrue();
+  // Claude Code's own box check never ran there (it reads the live text first): only OmO's, the viewport's colours, then the live screen
+  expect(calls.filter((call) => call.method === "pane.read").map((call) => [call.params.source, call.params.format])).toEqual([["visible", "ansi"], ["detection", "text"]]);
   calls.length = 0;
   const refused = await submitter()("w:p2", "hello", "hello", Date.now()).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(HerdrError);

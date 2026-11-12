@@ -23,7 +23,8 @@ const PROMPT = "Enter passphrase for key '/tmp/key': ";
  * was read, the last await before the final checks of the paste; `afterPaste` once the paste was written. Both may
  * replace what the pane shows or runs, as another process or a prompt can between a check and herdr's write.
  */
-async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0 }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
+async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0, boxCheck = false }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
+  /** skill mode: run GJC's box check (composer.ts freeAgentInput) on `screen`, its viewport read answered with `screen` too */ boxCheck?: boolean;
   /** once the message is queued (or held), before the agent's turn ends and the queue is drained (or before its Send now) */ beforeDrain?: (pane: Pane) => void;
   /** after that drain; `turn` is one more turn of the agent, ended, and the drain its end brings */ afterDrain?: (pane: Pane, turn: () => Promise<void>) => Promise<void>;
   /** how many more messages are queued behind the first */ behind?: number }) {
@@ -31,7 +32,7 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   if (mode === "claude") { spyOn(claude, "claudeForegroundSession").mockResolvedValue("session-a"); spyOn(composer, "freeClaudeBox").mockResolvedValue(undefined as never); }
   // the skill mode's pane runs gjc, whose box the send now reads first (composer.ts freeAgentInput): these tests count the
   // skill key's own screen reads, so that check is left out here (agent-input-send.test.ts covers it)
-  if (mode === "skill") spyOn(composer, "freeAgentInput").mockResolvedValue(undefined);
+  if (mode === "skill" && !boxCheck) spyOn(composer, "freeAgentInput").mockResolvedValue(undefined);
   if (mode === "skill") { spyOn(prompt, "prepareCommandSend").mockReturnValue({} as never); spyOn(prompt, "bindCommandProcess").mockImplementation(() => {}); spyOn(opencode, "startOpenCodeWatch").mockReturnValue(null); }
   const shown: Pane = { birth: 1_000 as number | null, screen, foreground: [{ pid: 41001, name: "gjc", argv: ["gjc"] }] };
   spyOn(processStart, "processStartedAtAsync").mockImplementation(async () => shown.birth);
@@ -44,7 +45,8 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   let visible = 0;
   const selected = readFileSync(join(import.meta.dir, "../fixtures/opencode-autocomplete-2.0.32-ansi-first-selected.ansi"), "utf8");
   spyOn(client, "paneRead").mockImplementation(async (options) => {
-    if (mode !== "skill" || options.source !== "visible") {
+    // the box check's viewport read comes before any of the skill key's (`boxCheck`)
+    if (mode !== "skill" || options.source !== "visible" || (boxCheck && visible++ === 0)) {
       const text = shown.screen;
       shown.onScreenRead?.();
       return { text } as Awaited<ReturnType<typeof client.paneRead>>;
@@ -124,6 +126,12 @@ interface Pane { birth: number | null; screen: string; foreground: Array<{ pid: 
 it("holds a queued message rather than pasting it over text typed in GJC's box (composer.ts freeAgentInput)", async () => {
   const typedBox = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/gjc/draft-typed-119.ansi"), "utf8");
   expect(await drain({ screen: typedBox })).toEqual([]);
+  expect(listed()[0]?.slice(0, 2)).toEqual(["held", "input_draft"]);
+});
+
+it("holds a queued message with an OpenCode skill rather than typing it over text typed in GJC's box", async () => {
+  const typedBox = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/gjc/draft-typed-119.ansi"), "utf8");
+  expect(await drain({ mode: "skill", boxCheck: true, screen: typedBox })).toEqual([]);
   expect(listed()[0]?.slice(0, 2)).toEqual(["held", "input_draft"]);
 });
 
