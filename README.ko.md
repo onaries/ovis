@@ -23,6 +23,7 @@
   <a href="https://ovis.sh/demo/">데모 체험</a> ·
   <a href="docs/guide.md#quick-start">빠른 시작</a> ·
   <a href="docs/guide.md#faq">자주 묻는 질문</a> ·
+  <a href="https://ovis.sh/discord">디스코드</a> ·
   <a href="#docs">문서</a>
 </p>
 

@@ -81,6 +81,8 @@ export const SETTINGS_KO: Record<string, string> = {
   "Install app": "앱 설치",
   "About": "정보",
   "Star on GitHub": "GitHub에서 Star 누르기",
+  "Questions and chat": "질문과 대화",
+  "Join Discord": "디스코드 참여",
   "Show in sidebar": "사이드바에 표시",
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "이 기기에만 적용됩니다. 숨긴 PC도 계속 연결되어 있으며, 링크나 알림으로는 그 PC의 패널을 그대로 열 수 있습니다. PC 하나는 항상 표시됩니다.",
   "The Host: the computer this app runs on": "호스트: 이 앱이 실행되는 컴퓨터",

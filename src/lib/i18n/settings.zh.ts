@@ -81,6 +81,8 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Install app": "安装应用",
   "About": "关于",
   "Star on GitHub": "在 GitHub 上点 Star",
+  "Questions and chat": "提问与交流",
+  "Join Discord": "加入 Discord",
   "Show in sidebar": "在侧边栏中显示",
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "仅对此设备生效。隐藏的 PC 仍保持连接，链接或通知仍可打开它的窗格。始终至少显示一台 PC。",
   "The Host: the computer this app runs on": "主机：运行此应用的计算机",

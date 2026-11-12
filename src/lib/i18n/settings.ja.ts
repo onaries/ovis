@@ -81,6 +81,8 @@ export const SETTINGS_JA: Record<string, string> = {
   "Install app": "アプリをインストール",
   "About": "情報",
   "Star on GitHub": "GitHub で Star する",
+  "Questions and chat": "質問と雑談",
+  "Join Discord": "Discord に参加",
   "Show in sidebar": "サイドバーに表示",
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "このデバイスだけの設定です。非表示の PC も接続は続き、リンクや通知からはその PC のペインを開けます。PC は常に 1 台以上表示されます。",
   "The Host: the computer this app runs on": "ホスト: このアプリが動作しているコンピューター",

@@ -1,7 +1,8 @@
 # Contributing
 
-Thanks for helping. Bugs and ideas go in an [issue](https://github.com/devswha/ovis/issues/new/choose);
-security problems never do: see [SECURITY.md](SECURITY.md). For a larger change, open an issue first so
+Thanks for helping. Questions and chat go to the [Ovis Discord](https://ovis.sh/discord). Bugs and
+ideas go in an [issue](https://github.com/devswha/ovis/issues/new/choose); security problems never
+do: see [SECURITY.md](SECURITY.md). For a larger change, open an issue first so
 the approach can be agreed before you build it. Small fixes can go straight to a PR.
 
 **Features.** Open a [feature request](https://github.com/devswha/ovis/issues/new?template=feature_request.yml)

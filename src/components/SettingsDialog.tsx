@@ -1813,6 +1813,12 @@ function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntim
           </div>
           <a className="btn" href="https://github.com/devswha/ovis" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
         </div>
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <span className="settings-label-line"><MessagesSquare className="settings-row-icon" aria-hidden="true" />{t("Questions and chat")}</span>
+          </div>
+          <a className="btn" href="https://ovis.sh/discord" target="_blank" rel="noreferrer">{t("Join Discord")}</a>
+        </div>
       </SettingsGroup>
     </SettingsBare.Provider>
   );

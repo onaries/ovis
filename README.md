@@ -23,6 +23,7 @@
   <a href="https://ovis.sh/demo/">try the demo</a> ·
   <a href="docs/guide.md#quick-start">quick start</a> ·
   <a href="docs/guide.md#faq">faq</a> ·
+  <a href="https://ovis.sh/discord">discord</a> ·
   <a href="#docs">docs</a>
 </p>
 
