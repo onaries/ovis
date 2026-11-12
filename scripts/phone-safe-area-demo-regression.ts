@@ -31,7 +31,7 @@ const LANDSCAPE: Screen = { label: "landscape", width: 844, height: 390, insets:
 const evidence = process.env["UI_EVIDENCE_DIR"];
 if (evidence) mkdirSync(evidence, { recursive: true });
 
-async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page) => Promise<void>, keyboard = false): Promise<void> {
+async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page) => Promise<void>, keyboard = false, pane = panes.api): Promise<void> {
   const context = await browser.newContext({ viewport: { width: screen.width, height: screen.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, locale: "en-US" });
   try {
     await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
@@ -51,7 +51,7 @@ async function open(browser: Browser, origin: string, screen: Screen, run: (page
     const { top, right, bottom, left } = screen.insets;
     const cdp = await context.newCDPSession(page);
     await cdp.send("Emulation.setSafeAreaInsetsOverride" as never, { insets: { top, topMax: top, right, rightMax: right, bottom, bottomMax: bottom, left, leftMax: left } } as never);
-    await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
+    await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await page.locator(".conn-live").waitFor();
     await run(page);
     assert.deepEqual(errors, [], `${screen.label}: no page errors`);
@@ -233,6 +233,8 @@ try {
       }
     }, true);
 
+    // the web pane's agent waits on its question for good: closing its tab always asks first. The api pane's turn ends
+    // 4.5 s after load (site/demo/transport.ts), and an idle tab among others closes without a confirmation
     await open(browser, origin, LANDSCAPE, async (page) => {
       const label = LANDSCAPE.label;
       await page.locator(".sidebar").getByRole("button", { name: /^Settings/ }).first().click();
@@ -250,7 +252,7 @@ try {
       clear(await outside(page, "[role=alertdialog]", LANDSCAPE.insets), `${label}: a confirmation clears the insets`);
       await reachable(page.getByRole("alertdialog").getByRole("button", { name: "Close tab" }), LANDSCAPE.insets, `${label}: the confirmation's Close tab`);
       await close(page, "[role=alertdialog]");
-    });
+    }, false, panes.web);
   } finally {
     await browser.close();
     await server.stop(true);
