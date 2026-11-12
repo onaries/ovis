@@ -161,12 +161,11 @@ function ageWhenHeard(held: HeldReport, checkedAt: string | null, limit: number)
 }
 
 /**
- * The report in hand as of `now`: a record older by then than its tool leaves between reads is stale, whatever the PC
- * said of it. Its age is the one it had when the PC last answered plus the time gone by on this device since. The held
- * report itself where nothing has aged.
+ * The report in hand, `since` milliseconds after the PC's last answer: a record older by then than its tool leaves
+ * between reads is stale, whatever the PC said of it. Its age is the one it had when the PC last answered plus the time
+ * gone by on this device since. The held report itself where nothing has aged.
  */
-export function agedReport(held: HeldReport, now: DeviceTime): UsageReport {
-  const since = goneBy(held.heardAt, now);
+export function agedReport(held: HeldReport, since: number): UsageReport {
   const aged = (usage: ProviderUsage): ProviderUsage => {
     if (!usage.recorded || usage.recorded.stale) return usage;
     const limit = (RECORDED_STALE_AFTER_MS as Readonly<Record<string, number | undefined>>)[usage.recorded.by] ?? LONGEST_STALE_AFTER_MS;
@@ -283,8 +282,13 @@ export function moveInOrder(shown: readonly string[], saved: readonly string[], 
 export function useUsage(enabled: boolean) {
   const [held, setHeld] = useState<HeldReport | null>(null);
   const [loading, setLoading] = useState(false);
-  /** when the server was last asked: the report in hand is aged up to then, and one heard since is not aged at all */
-  const [asOf, setAsOf] = useState(deviceTime);
+  /**
+   * How long the PC has been silent, from its last answer (`from`) up to the last ask (`at`). At each ask it is the
+   * longer of two: what it was plus what surely went by since the ask before, which is the running clock's stretch; and
+   * what the two clocks say of the whole time since the answer. So a clock put right takes nothing back and no record
+   * grows younger, a clock set back and forward again counts for nothing, and a sleep still counts.
+   */
+  const [silence, setSilence] = useState<{ readonly since: number; readonly at: DeviceTime; readonly from: DeviceTime }>(() => { const opened = deviceTime(); return { since: 0, at: opened, from: opened }; });
   const visible = usePageVisible();
   const generation = useRef(0);
 
@@ -292,10 +296,11 @@ export function useUsage(enabled: boolean) {
     const current = ++generation.current;
     setLoading(true);
     // asked, not yet answered: a server that never answers must not leave the report in hand as young as it arrived
-    setAsOf(deviceTime());
+    const askedAt = deviceTime();
+    setSilence((before) => ({ since: Math.max(before.since + Math.max(0, askedAt.running - before.at.running), goneBy(before.from, askedAt)), at: askedAt, from: before.from }));
     try {
       const next = await fetchUsage(refresh);
-      if (current === generation.current) { const heardAt = deviceTime(); setHeld((previous) => heldReport(previous, next, heardAt)); }
+      if (current === generation.current) { const heardAt = deviceTime(); setHeld((previous) => heldReport(previous, next, heardAt)); setSilence({ since: 0, at: heardAt, from: heardAt }); }
     } catch { /* offline or restarting: the last report stays, and ages with each ask */ }
     finally { if (current === generation.current) setLoading(false); }
   }, []);
@@ -316,7 +321,7 @@ export function useUsage(enabled: boolean) {
   }, [enabled, load]);
 
   const refresh = useCallback(() => { if (enabled) void load(true); }, [enabled, load]);
-  const report = useMemo(() => held === null ? null : agedReport(held, asOf), [held, asOf]);
+  const report = useMemo(() => held === null ? null : agedReport(held, silence.since), [held, silence.since]);
   return { report, loading, refresh };
 }
 

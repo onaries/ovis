@@ -126,6 +126,43 @@ describe("the report the usage hook hands on", () => {
     expect([asks, stale()]).toEqual([4, true]);
   });
 
+  it("lets no record grow younger while the PC is silent: a sleep that stopped the running clock, then the wall clock set back", async () => {
+    pc = says(PC - 13 * MINUTE);
+    await open();
+    pc = silent;
+    // twenty minutes asleep on a device whose running clock stands still meanwhile, and the page asks on waking
+    setSystemTime(new Date(Date.now() + 20 * MINUTE));
+    await minute("unheard");
+    expect([asks, stale()]).toEqual([2, true]);
+    // then the device's clock is put right, 25 minutes back: what went by is not taken back
+    setSystemTime(new Date(Date.now() - 25 * MINUTE));
+    await minute("unheard");
+    expect([asks, stale()]).toEqual([3, true]);
+  });
+
+  it("counts a clock set back and then forward again as no time at all, while the PC is silent", async () => {
+    pc = says(PC - 2 * MINUTE);
+    await open();
+    pc = silent;
+    setSystemTime(new Date(Date.now() - 25 * MINUTE));
+    await minute("unheard");
+    setSystemTime(new Date(Date.now() + 25 * MINUTE));
+    await minute("unheard");
+    expect([asks, stale()]).toEqual([3, false]);
+  });
+
+  it("takes a record as the PC has just called it, though the device's clock was set back while the ask was in flight", async () => {
+    pc = says(PC - 2 * MINUTE);
+    await open();
+    // the next ask is answered, and before the answer arrives the device's clock is put right, an hour back
+    pc = async () => {
+      setSystemTime(new Date(Date.now() - 60 * MINUTE));
+      return says(PC - 2 * MINUTE)();
+    };
+    await minute("heard");
+    expect([asks, stale()]).toEqual([2, false]);
+  });
+
   it("hands on the same report while the PC says the same, though its time moves on", async () => {
     pc = says(PC - 2 * MINUTE);
     await open();

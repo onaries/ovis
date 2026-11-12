@@ -107,18 +107,15 @@ describe("usage meters", () => {
     const own: ProviderUsage = { ...provider("claude", [window(40)], "own"), checked_at: new Date(PC - 180 * 60_000).toISOString() };
     const heardAt: DeviceTime = { wall: NOW, running: 5_000 };
     const held: HeldReport = { report: { providers: [record(4, "omp"), record(10, "gjc"), record(10, "a-tool-not-known-yet"), record(180, "omp", true), own] }, serverTime: new Date(PC).toISOString(), heardAt };
-    const later = (minutes: number): DeviceTime => ({ wall: heardAt.wall + minutes * 60_000, running: heardAt.running + minutes * 60_000 });
-    const stale = (from: HeldReport, minutes: number) => agedReport(from, later(minutes)).providers.map((usage) => usage.recorded?.stale ?? null);
+    const stale = (from: HeldReport, minutes: number) => agedReport(from, minutes * 60_000).providers.map((usage) => usage.recorded?.stale ?? null);
     expect(stale(held, 0)).toEqual([false, false, false, true, null]);
     expect(stale(held, 5)).toEqual([false, false, false, true, null]);
     expect(stale(held, 6)).toEqual([false, true, true, true, null]);
     expect(stale(held, 12)).toEqual([true, true, true, true, null]);
-    // the wall clock set back a quarter of an hour while twelve minutes went by: every record is twelve minutes older all the same
-    expect(agedReport(held, { wall: heardAt.wall - 15 * 60_000, running: heardAt.running + 12 * 60_000 }).providers.map((usage) => usage.recorded?.stale ?? null)).toEqual([true, true, true, true, null]);
     // nothing aged: the report in hand itself, so that nothing is redrawn
-    expect(agedReport(held, later(5))).toBe(held.report);
+    expect(agedReport(held, 5 * 60_000)).toBe(held.report);
     // a number that is no longer current leaves the composer, as a stale record does
-    expect(agedReport(held, later(6)).providers.map(isCurrent)).toEqual([true, false, false, false, true]);
+    expect(agedReport(held, 6 * 60_000).providers.map(isCurrent)).toEqual([true, false, false, false, true]);
     // a server that does not say its time: only the time gone by here counts
     const older: HeldReport = { ...held, serverTime: undefined };
     expect(stale(older, 15)).toEqual([false, false, false, true, null]);
@@ -139,7 +136,7 @@ describe("usage meters", () => {
 
   it("asks this device's clock for a record's age where an older server says no time, and believes it only where it agrees with the PC", () => {
     const record = (readAt: number): ProviderUsage => ({ ...provider("claude", [window(40)], "recorded"), checked_at: new Date(readAt).toISOString(), recorded: { by: "omp", stale: false, signed_in: false } });
-    const stale = (readAt: number, minutes: number) => agedReport({ report: { providers: [record(readAt)] }, serverTime: undefined, heardAt: { wall: NOW, running: 0 } }, { wall: NOW + minutes * 60_000, running: minutes * 60_000 }).providers[0]?.recorded?.stale;
+    const stale = (readAt: number, minutes: number) => agedReport({ report: { providers: [record(readAt)] }, serverTime: undefined, heardAt: { wall: NOW, running: 0 } }, minutes * 60_000).providers[0]?.recorded?.stale;
     // the PC had just called the record current, and by this device's clock it was 14 minutes old: old two minutes on
     expect([1, 2].map((minutes) => stale(NOW - 14 * 60_000, minutes))).toEqual([false, true]);
     // a device clock 20 minutes ahead makes it 34 minutes old, which the PC had just denied: not believed, and the count starts at the answer
@@ -158,11 +155,8 @@ describe("usage meters", () => {
     const again = heldReport(first, answer(14, record(NOW)), at(14));
     expect(again.report).toBe(first.report);
     expect(again).toEqual({ report: first.report, serverTime: answer(14, record(NOW)).server_time, heardAt: at(14) });
-    // the PC out of reach from then: the record is 16 minutes old two minutes later
-    expect([15, 16].map((minute) => agedReport(again, at(minute)).providers[0]?.recorded?.stale)).toEqual([false, true]);
-    // a wall clock corrected forward by half an hour between two answers ages nothing: the count starts again at each answer
-    const corrected: DeviceTime = { wall: at(14).wall + 30 * 60_000, running: at(14).running };
-    expect(agedReport(heldReport(first, answer(14, record(NOW)), corrected), corrected).providers[0]?.recorded?.stale).toBe(false);
+    // the PC out of reach from then: the record, 14 minutes old by the PC's latest word, is 16 minutes old two minutes later
+    expect([1, 2].map((minutes) => agedReport(again, minutes * 60_000).providers[0]?.recorded?.stale)).toEqual([false, true]);
     // an answer that says anything else takes the report's place
     const reread = record(NOW + 14 * 60_000);
     expect(heldReport(again, answer(15, reread), at(15))).toEqual({ report: { providers: [reread] }, serverTime: answer(15, reread).server_time, heardAt: at(15) });
