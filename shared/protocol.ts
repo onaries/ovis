@@ -845,6 +845,16 @@ export interface ConversationResponse {
    */
   hint?: "copilot_ui_server";
   /**
+   * On a scrollback answer: why the pane's conversation could not be read, where the reason is one the
+   * chat can put in plain words. `not_found`: the agent has not recorded a conversation the reader can
+   * tie to this pane (normal before its first message). `no_reader`: no reader for this pane's program
+   * (a plain shell reads so too; the chat tells them apart by the pane's agent). `unreadable`: the file it
+   * was read from is gone, or could not be read. `no_folder`: herdr gave the pane
+   * no folder. `no_integration`: an agent whose session only herdr's integration for it reports (OpenCode, Grok),
+   * and that integration is not installed on this PC. Absent for any other reason, and from older bridges.
+   */
+  unavailable?: "not_found" | "no_reader" | "unreadable" | "no_folder" | "no_integration";
+  /**
    * Where the first turn sits in the transcript: pass it as `before` for the page
    * of turns before these (with `since`, never reaching back past that cursor), or
    * as `from` to keep polling from it. A `from` answer starts later than `from` when

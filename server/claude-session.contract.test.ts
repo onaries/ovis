@@ -422,7 +422,7 @@ it.skipIf(!NATIVE)("refuses a reused PID record rather than selecting another sa
   const previous = readFileSync(path, "utf8");
   try {
     writeFileSync(path, JSON.stringify({ ...JSON.parse(previous), procStart: "1" }));
-    expect(await read(first.pane)).toEqual({ source: "scrollback", turns: [] });
+    expect(await read(first.pane)).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
   } finally { writeFileSync(path, previous); }
 });
 
@@ -436,7 +436,7 @@ it.skipIf(!NATIVE)("answers a session Claude has not written yet as an empty con
   expect(written.history_id).not.toBe(`unwritten:${UNWRITTEN}`);
   expect(written.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${UNWRITTEN}` });
   rmSync(join(project, `${UNWRITTEN}.jsonl`));
-  expect(await read(fresh.pane)).toEqual({ source: "scrollback", turns: [] });
+  expect(await read(fresh.pane)).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
 });
 
 it.skipIf(!NATIVE)("answers a session not written yet as empty while Herdr says working, as a /clear does for a moment (#2550)", async () => {

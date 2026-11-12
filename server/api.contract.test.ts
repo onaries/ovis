@@ -159,7 +159,7 @@ describe("Grok conversation API", () => {
         if (Date.now() > deadline) throw new Error("Herdr did not apply the second session report");
         await Bun.sleep(50);
       }
-      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
     } finally {
       app?.stop(); await workspaceClose(created.workspace.workspace_id);
       forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
@@ -193,7 +193,7 @@ describe("Agy conversation API", () => {
       }
       app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state") });
       const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`;
-      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
       db = new Database(join(root, "conversations", `${id}.db`));
       db.exec("PRAGMA journal_mode=WAL; CREATE TABLE steps(idx INTEGER PRIMARY KEY)");
       const empty = await (await fetch(url)).json();
@@ -238,7 +238,7 @@ describe("Agy conversation API", () => {
       const local = await fetch(url.replace("/api/pane/", "/api/machines/local/pane/"));
       expect((await local.json()).turns).toHaveLength(1);
       db.exec("DROP TABLE steps");
-      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
     } finally {
       monitor?.stop(); app?.stop(); db?.close(); await workspaceClose(created.workspace.workspace_id);
       forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
@@ -280,7 +280,7 @@ describe("Muse conversation API", () => {
       // a session no lock ties to this process is never shown, whatever its folder or age
       writeFileSync(join(first, "session.jsonl"), live);
       writeFileSync(join(first, ".session.lock"), `pid=${pid! + 1}\nhost=${hostname()}\n`);
-      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
       writeFileSync(join(first, ".session.lock"), `pid=${pid}\nhost=${hostname()}\n`);
       // the scan that found nothing stands for 2 s, as for a fresh Muse that has written no log yet
       let response: Response, body;
@@ -307,13 +307,13 @@ describe("Muse conversation API", () => {
       // a record in a shape the reader does not know, or a log it cannot read, shows Terminal
       const log = join(second, "session.jsonl");
       appendFileSync(log, `${prompt.replace('"runtime.user_intent.accepted"', '"runtime.user_intent.renamed"')}\n`);
-      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
       writeFileSync(log, `${prompt}\n`);
       expect((await (await fetch(url)).json()).source).toBe("muse-transcript");
       // root reads a file whatever its mode
       if (process.getuid?.() !== 0) {
         chmodSync(log, 0);
-        expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+        expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
       }
     } finally {
       app?.stop(); await workspaceClose(created.workspace.workspace_id);

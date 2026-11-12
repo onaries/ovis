@@ -341,7 +341,7 @@ describe("native conversation invalidation", () => {
     afterFirst = first.frames.length;
     rmSync(path);
     await first.changed(paneId, afterFirst);
-    expect(await read()).toEqual({ source: "scrollback", turns: [] });
+    expect(await read()).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
     afterFirst = first.frames.length;
     writeFileSync(path, transcript());
     await first.changed(paneId, afterFirst);

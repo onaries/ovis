@@ -86,7 +86,7 @@ it("serves native Codex conversations and invalidates replaced files even at the
   expect(replaced.history_id).not.toBe(first.history_id);
   expect(replaced.turns.at(-1)?.parts[0]).toMatchObject({ text: `${answerPrefix}Answer two` });
   rmSync(rollout);
-  expect(await read()).toEqual({ source: "scrollback", turns: [] });
+  expect(await read()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
 });
 
 it("answers an unchanged conversation with a bodyless 304 and a changed one in full", async () => {

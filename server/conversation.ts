@@ -68,7 +68,7 @@ import { AGY_CATALOG_BYTES, AgyUnavailable, agyCatalogOffThread, agyDatabasePath
 import { agyFreshSession, resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
 import { FileBusyError } from "./file-pool.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
-import { resolveMuseSession } from "./muse-store.ts";
+import { MuseLogUnreadable, resolveMuseSession } from "./muse-store.ts";
 import { LettaUnavailable, lettaToolOutputOffThread, parseLettaTranscript } from "./letta.ts";
 import { programName } from "./agent-identity.ts";
 import { lettaLocalSettings, resolveLettaTranscript } from "./letta-store.ts";
@@ -2265,7 +2265,10 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       return { source: "grok-transcript", path: found };
     }
     if (agent === "muse") {
-      const path = await resolveMuseSession(pane, museData, known);
+      const path = await resolveMuseSession(pane, museData, known).catch((error: unknown) => {
+        if (error instanceof MuseLogUnreadable) throw new ConversationUnavailable("transcript_unreadable");
+        throw error;
+      });
       if (path === null) throw new ConversationUnavailable("no_session_path");
       return { source: "muse-transcript", path };
     }

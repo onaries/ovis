@@ -516,8 +516,8 @@ export async function pluginLogList(pluginId: string, limit: number, socketPath?
 }
 
 /** herdr's built-in agent integrations and whether each is installed. Read only: this bridge never installs one. */
-export async function integrationList(socketPath?: string): Promise<AgentIntegration[]> {
-  return (await herdrRpc<{ integrations: AgentIntegration[] }>("integration.list", {}, socketPath)).integrations;
+export async function integrationList(socketPath?: string, timeoutMs?: number): Promise<AgentIntegration[]> {
+  return (await herdrRpc<{ integrations: AgentIntegration[] }>("integration.list", {}, socketPath, timeoutMs)).integrations;
 }
 
 export interface WorkspaceCreateResult {

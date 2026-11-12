@@ -587,7 +587,8 @@ export function PaneTerminal({
   // pane's tile, a PC with no terminal) the terminal lens opens, as it did before.
   const peekOutcome = useCallback((text: string) => {
     const open = onPeekRef.current;
-    if (open === undefined || heldRef.current || unsupportedRef.current) { onOpenTerminal?.(); return; }
+    // no command to name (the chat's own Open Terminal): the terminal itself, as showStillOpen opens it
+    if (open === undefined || heldRef.current || unsupportedRef.current || text === "") { onOpenTerminal?.(); return; }
     open({ command: outcomeCommand(text), text: null, knownOutcomeIds: null, auto: false, watch: null, inputRowSeen: inputRowNow() === "ready" });
   }, [onOpenTerminal, inputRowNow]);
   const setDraft = useCallback((value: InputDraft | ((previous: InputDraft) => InputDraft)) => {
