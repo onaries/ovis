@@ -73,6 +73,8 @@ export const TERMINAL_KO: Record<string, string> = {
   "Not sent: a screen is still open in the terminal.": "보내지 않음: 터미널에 화면이 아직 열려 있습니다.",
   "Not sent: the terminal is not ready for keys.": "보내지 못했습니다: 터미널이 아직 키를 받을 준비가 되지 않았습니다.",
   "Not stopped: Hermes does not show a turn to interrupt. Check the terminal.": "멈추지 않았습니다: Hermes 화면에 중단할 작업이 보이지 않습니다. 터미널을 확인하세요.",
+  "Not stopped: Grok does not show a turn to cancel. Check the terminal.": "멈추지 않았습니다: Grok 화면에 취소할 작업이 보이지 않습니다. 터미널을 확인하세요.",
+  "Not stopped: Grok got Ctrl+C under 2 seconds ago, and a second one may quit it. Try again in a moment.": "멈추지 않았습니다: Grok에 2초 안에 Ctrl+C를 이미 보냈고, 한 번 더 보내면 종료될 수 있습니다. 잠시 후 다시 시도하세요.",
   "Not stopped: Hermes got Ctrl+C under 2 seconds ago, and a second one would quit it. Try again in a moment.": "멈추지 않았습니다: Hermes가 2초 안에 Ctrl+C를 받았고, 한 번 더 보내면 종료됩니다. 잠시 후 다시 시도하세요.",
   "Not sent: the terminal is not ready, and a password is never held for later.": "보내지 못했습니다: 터미널이 아직 준비되지 않았고, 비밀번호는 나중을 위해 보관하지 않습니다.",
   "Queued messages ({n})": "대기 메시지 {n}개",

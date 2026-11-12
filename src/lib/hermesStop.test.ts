@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { HERMES_CTRL_C_WINDOW_MS, hermesCtrlCTooSoon, hermesInterruptible, stopKey } from "./hermesStop.ts";
+import { HERMES_CTRL_C_WINDOW_MS, grokCancellable, hermesCtrlCTooSoon, hermesInterruptible, stopKey } from "./hermesStop.ts";
 
 // The bottom rows of real Hermes 0.21.5 screens (herdr pane read), classic CLI and TUI.
 const CLASSIC_BUSY = [
@@ -89,5 +89,30 @@ describe("stopKey", () => {
     expect(stopKey("hermes", rows, false, T, T + HERMES_CTRL_C_WINDOW_MS)).toBe("\u0003");
     expect(stopKey("hermes", () => TUI_BUSY, false, T, T + 5000)).toBe("\u0003");
     expect(hermesCtrlCTooSoon(null, T)).toBe(false);
+  });
+});
+
+// Grok 1.0.77's key row, as it draws it while a turn runs and at rest (recorded in an isolated session, 2026-11-12)
+const GROK_BUSY = ["  \u2502 \u276f                                    \u2502", "  Shift+Tab:mode  \u2502  Ctrl+c:cancel  \u2502  Ctrl+b:send to bg  \u2502  Ctrl+.:shortcuts", ""];
+const GROK_IDLE = ["  \u2502 \u276f                                    \u2502", "  Shift+Tab:mode  \u2502  Ctrl+.:shortcuts", ""];
+
+describe("stop keys of other agents", () => {
+  const T = 1_000_000;
+
+  it("sends Grok one Ctrl+C while its key row offers cancel, and nothing at rest", () => {
+    expect(grokCancellable(GROK_BUSY)).toBe(true);
+    expect(grokCancellable(GROK_IDLE)).toBe(false);
+    expect(stopKey("grok", () => GROK_BUSY, false, null, T)).toBe("\u0003");
+    expect(stopKey("grok", () => GROK_IDLE, false, null, T)).toBeNull();
+    expect(stopKey("grok", () => GROK_BUSY, true, null, T)).toBeNull();
+    expect(stopKey("grok", () => GROK_BUSY, false, T, T + 500)).toBeNull();
+  });
+
+  it("reads only Grok's last row: the hint quoted above it is no cancel", () => {
+    expect(grokCancellable([...GROK_BUSY.slice(1, 2), ...GROK_IDLE])).toBe(false);
+  });
+
+  it("sends Escape twice to the agents whose single Escape does not stop them", () => {
+    for (const agent of ["devin", "kilo", "maki"]) expect(stopKey(agent, () => { throw new Error("read"); }, false, null, T)).toBe("\u001b\u001b");
   });
 });
