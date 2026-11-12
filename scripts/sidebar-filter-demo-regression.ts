@@ -85,8 +85,14 @@ const patch = `(() => {
         const message = JSON.parse(event.data);
         if (message.type === "machines") { last = message.machines; message.machines = roster(last); }
         this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
-        // the build PC is the laptop's roster under other names: a pane's own status change reaches both, as a roster does
-        if (message.machine_id === "local" && message.message?.type === "pane-status") this.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ ...message, machine_id: "build" }) }));
+        // the build PC is the laptop's roster under other names: a pane's own status change reaches both, as a roster does,
+        // and stays in the roster this fixture sends again after an edit
+        if (message.machine_id === "local" && message.message?.type === "pane-status") {
+          const { pane_id, agent_status, finish_id } = message.message;
+          const snap = last?.find((item) => item.id === "local")?.snapshot;
+          for (const entry of [...(snap?.panes ?? []), ...(snap?.agents ?? [])]) if (entry.pane_id === pane_id) Object.assign(entry, { agent_status, ...(finish_id === undefined ? {} : { finish_id }) });
+          this.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ ...message, machine_id: "build" }) }));
+        }
       };
       this.inner.onerror = (event) => this.onerror?.(event);
       this.inner.onopen = (event) => this.onopen?.(event);
