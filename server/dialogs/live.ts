@@ -154,7 +154,8 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
     // the box's line, empty, a rule) and then OmO's extension status and native footer.
     const at = findLastIndex(cleanLines, (line, index) => line !== "" && OMO_PENDING_HINT_RE.test(wrapped(cleanLines, index)));
     const box = cleanLines.findIndex((line, index) => index > at && OMO_EMPTY_BOX_RE.test(line));
-    if (at < 0 || box < 0 || box - at > 60 || !cleanLines[box - 1]!.startsWith("─")) return false;
+    const beforeBox = findLastIndex(cleanLines.slice(0, box), (line) => line !== "");
+    if (at < 0 || box < 0 || box - at > 60 || !(cleanLines[beforeBox] ?? "").startsWith("─")) return false;
     const tail = cleanLines.slice(box + 1).filter(Boolean);
     // OmO 5.1.69 puts model, provider and effort inside the composer, before its closing rule.
     if (/^\S+\s{2,}.+\s{2,}(?:off|minimal|low|medium|high|xhigh)$/.test(tail[0] ?? "") && SOLID_RULE_RE.test(tail[1] ?? "")) tail.shift();
