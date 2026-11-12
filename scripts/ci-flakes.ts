@@ -211,7 +211,7 @@ async function main(): Promise<void> {
     return;
   }
   const unread = stats.runsUnread + stats.logsUnread;
-  if (unread > 0) console.log(`Not read for a server error: ${stats.runsUnread} run attempts' job lists and ${stats.logsUnread} job logs.`);
+  if (unread > 0) console.log(`Not read for a server error: ${stats.runsUnread} run attempts' job lists and ${stats.logsUnread} jobs whose log or annotations could not be read.`);
   if (rows.length === 0) {
     console.log(unread > 0 ? "No browser script failed or needed a second run in what could be read." : "No browser script failed or needed a second run.");
     return;
