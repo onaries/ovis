@@ -40,8 +40,16 @@ export type UsageCredits =
  */
 export type UsageProblem = "expired" | "rate_limited" | "failed" | "locked";
 
-/** A tool on the server's PC whose own record of an account's limits the server reads: Oh My Pi. */
-export type UsageRecorder = "omp";
+/** A tool on the server's PC whose own record of an account's limits the server reads: Oh My Pi, Gajae Code. */
+export type UsageRecorder = "omp" | "gjc";
+
+/**
+ * How long a tool may go without reading an account's limits before its record is one it has stopped updating. Either
+ * tool reads again five minutes after its last read, give or take a quarter: this is three reads missed. The server
+ * says so in `stale` with each report; a client that keeps a report while the server cannot be reached measures the
+ * record's age (`checked_at`) against the same time.
+ */
+export const RECORDED_STALE_AFTER_MS: Readonly<Record<UsageRecorder, number>> = { omp: 15 * 60_000, gjc: 15 * 60_000 };
 
 /**
  * Numbers the server did not read itself: another tool on its PC read them with that tool's own sign-in and kept

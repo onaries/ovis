@@ -90,6 +90,9 @@ describe("usage meters", () => {
     const at = (minutesAgo: number, stale: boolean): ProviderUsage => ({ ...provider("claude", [window(40)]), checked_at: new Date(NOW - minutesAgo * 60_000).toISOString(), recorded: { by: "omp", stale, signed_in: false } });
     expect(recordedNote(at(4, false), NOW)).toEqual(["Recorded by Oh My Pi, 4 min ago"]);
     expect(recordedNote(at(180, true), NOW)).toEqual(["Recorded by Oh My Pi, 3 h ago", "It may have changed since."]);
+    // a report kept while the server cannot be reached grows old without it: the record's own age says so, from the minute the server would
+    expect(recordedNote(at(15, false), NOW)).toEqual(["Recorded by Oh My Pi, 15 min ago"]);
+    expect(recordedNote(at(16, false), NOW)).toEqual(["Recorded by Oh My Pi, 16 min ago", "It may have changed since."]);
     expect(recordedBy(at(4, false))).toBe("Recorded by Oh My Pi");
     // a reading the server made itself carries no such note, however old
     const own: ProviderUsage = { ...provider("claude", [window(40)]), checked_at: new Date(NOW - 180 * 60_000).toISOString() };
@@ -100,13 +103,17 @@ describe("usage meters", () => {
   const withProblem = (problem: ProviderUsage["problem"], recorded?: ProviderUsage["recorded"]): ProviderUsage => ({ ...provider("claude", [window(40)]), problem, ...(recorded ? { recorded } : {}) });
 
   it("takes a number as what is used now when the server read it without a problem, or a tool still records it", () => {
-    expect(isCurrent(withProblem(null))).toBe(true);
-    expect(isCurrent(withProblem("expired"))).toBe(false);
-    expect(isCurrent(withProblem(null, { by: "omp", stale: false, signed_in: false }))).toBe(true);
-    expect(isCurrent(withProblem(null, { by: "omp", stale: true, signed_in: false }))).toBe(false);
+    expect(isCurrent(withProblem(null), NOW)).toBe(true);
+    expect(isCurrent(withProblem("expired"), NOW)).toBe(false);
+    expect(isCurrent(withProblem(null, { by: "omp", stale: false, signed_in: false }), NOW)).toBe(true);
+    expect(isCurrent(withProblem(null, { by: "omp", stale: true, signed_in: false }), NOW)).toBe(false);
     // the problem is the sign-in's: the record standing in for its numbers is as current as the tool keeps it
-    expect(isCurrent(withProblem("expired", { by: "omp", stale: false, signed_in: true }))).toBe(true);
-    expect(isCurrent(withProblem("rate_limited", { by: "omp", stale: true, signed_in: true }))).toBe(false);
+    expect(isCurrent(withProblem("expired", { by: "omp", stale: false, signed_in: true }), NOW)).toBe(true);
+    expect(isCurrent(withProblem("rate_limited", { by: "omp", stale: true, signed_in: true }), NOW)).toBe(false);
+    // …and no longer than that tool leaves between its reads, whatever the report said when it was made
+    const kept = (minutesAgo: number): ProviderUsage => ({ ...withProblem(null, { by: "gjc", stale: false, signed_in: false }), checked_at: new Date(NOW - minutesAgo * 60_000).toISOString() });
+    expect(isCurrent(kept(15), NOW)).toBe(true);
+    expect(isCurrent(kept(16), NOW)).toBe(false);
   });
 
   it("takes an account as a sign-in of this PC's unless it is known from another tool's record alone", () => {

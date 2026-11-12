@@ -2090,7 +2090,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - An account whose numbers another tool recorded (the server read that tool's record, not a sign-in)
   never reads as a reading of our own. Its chip's bar is dotted, the popover names it under the
   account in dim `--fs-xs` (`Recorded by Oh My Pi, 4 min ago`), and the button's name and tooltip add
-  the same. Once that tool has stopped reading (the report's `stale`), a second line says it may have
+  the same. Once that tool has stopped reading (the report's `stale`, or the record's own age where the page keeps a
+  report the server can no longer renew), a second line says it may have
   changed since, the chip's mark and bar fade and its percent takes `--text-dim`, and the popover's
   labels and percents take `--text-dim` over faded bars: the numbers stay readable (above 4.5:1), and
   neither a percent nor a bar keeps the red of a limit near its end, since a stale figure is no alarm.

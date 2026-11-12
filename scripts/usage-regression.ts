@@ -423,6 +423,25 @@ async function checkRecordedAccounts(browser: Browser, origin: string): Promise<
     await signedIn.close();
   }
 
+  // a report the page keeps while the server cannot be reached: the record's own age turns it stale, whatever the report said
+  const kept = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    await staged(kept, () => ({ providers: [{ id: "claude", key: "claude:kept", account: "kept@example.com", plan: null, problem: null, checked_at: at(-1), recorded: { by: "gjc", stale: false, signed_in: false }, windows: [
+      { kind: "session", scope: null, used_percent: 40, resets_at: at(2), starts_at: at(2 - 5) },
+    ] }] }));
+    const page = await kept.newPage();
+    await page.goto(origin);
+    const strip = page.locator(".usage-strip");
+    await strip.waitFor();
+    assert.deepEqual(await chips(page), [["60%", "is-recorded", "is-stale"]]);
+    await strip.click();
+    const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+    await popover.waitFor();
+    assert.deepEqual(await notes(popover), [["Recorded by Gajae Code, 1 h ago", "It may have changed since."]]);
+  } finally {
+    await kept.close();
+  }
+
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
   try {
     await staged(phone);
