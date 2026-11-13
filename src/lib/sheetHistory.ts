@@ -65,6 +65,11 @@ const staying = new Set<string>();
  * the next traversal leaves what covered them, not them, so it does not ask them to close.
  */
 const covered = new Set<string>();
+/**
+ * Of those, the ones under a navigation: it took their entry, or the entry of a sheet opened over
+ * them. Until they hold an entry again; the rest are under a sheet alone.
+ */
+const underNavigation = new Set<string>();
 /** the sheet still up under each sheet, whose entry it took: straight, or through a sheet that closed as it opened */
 const heirs = new Map<string, string>();
 /**
@@ -167,16 +172,22 @@ let climbing: { key: string; owner: string; state: unknown; href: string } | nul
 let took = false;
 /**
  * The entry the app is on while the history is off it: the user's Back or Forward left it, and a
- * sheet with no entry of its own refused. The history is on its way onto it again. Kept through a
- * way back the browser drops (another traversal overtook it), until the history is on it again,
- * a traversal lands that no sheet refuses, or an entry is pushed.
+ * sheet with no entry of its own refused (`by`). The history is on its way onto it again
+ * (`pending`, until the browser drops that way, or the time a step takes has passed with no
+ * landing). Kept through a way back the browser drops (another traversal overtook it), until the
+ * history is on it again, a traversal lands that no sheet refuses, or an entry is pushed. A landing
+ * on it is held while its way back is pending, or the sheet that refused is up: with the way back
+ * lost and that sheet gone (answered from another device), the user's own Forward onto the entry
+ * is the app's to follow.
  */
-let stood: string | null = null;
+let stood: { key: string; by: string; pending: boolean } | null = null;
 /** whether the popstate being dispatched is a step of that: the traversal a sheet refused, or the way back (sheetStep.holds) */
 let holding = false;
 /** each sheet's entry by that key, where the browser gives one */
 const entryKeys = new Map<string, string>();
+/** The sheet holds the entry the history is on: the entry's key is kept, and the sheet is under no navigation. */
 function keep(id: string): void {
+  underNavigation.delete(id);
   const key = navigation()?.currentEntry?.key;
   if (key !== undefined) entryKeys.set(id, key);
 }
@@ -185,10 +196,19 @@ function placeOf(id: string): number {
   const key = entryKeys.get(id);
   return key === undefined ? -1 : navigation()?.entries().find((entry) => entry.key === key)?.index ?? -1;
 }
-/** the staying sheet whose entry `state` is, when it is still up: a navigation is about to take its entry over */
+/**
+ * A navigation is about to take over the entry `state` is: the staying sheet whose entry it is, and
+ * each one still up under a sheet whose entry it is, is under that navigation from here. A sheet
+ * under it that holds an entry of its own again (a Back the sheet over it refused gave each its
+ * own) shares none: the link to it is left from before, and the walk ends there.
+ */
 function cover(state: unknown): void {
-  const id = sheetOf(state);
-  if (id !== null && open.has(id) && staying.has(id)) covered.add(id);
+  const top = sheetOf(state);
+  if (top === null) return;
+  if (open.has(top) && staying.has(top)) { covered.add(top); underNavigation.add(top); }
+  for (let id = heirs.get(top); id !== undefined && covered.has(id); id = heirs.get(id)) {
+    if (open.has(id) && staying.has(id)) underNavigation.add(id);
+  }
 }
 let pushing = false;
 /**
@@ -349,6 +369,7 @@ function remake(id: string, onBack: () => boolean | void): void {
 /** Steps off the sheet's entry once the closing click's effects are through (RowMenu's effect on unmount). */
 export function leaveSheet(id: string): void {
   covered.delete(id);
+  underNavigation.delete(id);
   staying.delete(id);
   waiting.delete(id);
   if (!open.delete(id)) return;
@@ -491,8 +512,8 @@ if (typeof window !== "undefined") {
       }
       return;
     }
-    if (stood !== null && here?.key === stood) {
-      // on the entry a refused Back or Forward left: its way back, and no traversal of the user's
+    if (stood !== null && here?.key === stood.key && (stood.pending || open.has(stood.by))) {
+      // on the entry a refused Back or Forward left, by its way back or under the sheet that refused: no traversal of the user's
       stood = null;
       seen = sheetOf(event.state);
       steppedOff = true;
@@ -540,16 +561,17 @@ if (typeof window !== "undefined") {
     // They are asked from the top down, the one opened last first, and one that refuses keeps the
     // Back from those under it: they stay as they are
     const again: Array<{ id: string; onBack: () => boolean | void; under: boolean; refused: boolean }> = [];
-    let refusal = false;
+    let refuser: string | null = null;
     for (const [id, onBack] of [...open].reverse()) {
       if (id === landed) continue;
       // a sheet that stays under a navigation which took its entry (a terminal peek under Settings),
-      // with the history on that entry or above it: the navigation is still over it
-      if (here !== null && staying.has(id) && covered.has(id) && placeOf(id) >= 0 && here.index >= placeOf(id)) continue;
+      // with the history on that entry or above it: the navigation is still over it. One under a
+      // sheet alone is no such sheet: what the traversal left is the sheet over it
+      if (here !== null && covered.has(id) && underNavigation.has(id) && placeOf(id) >= 0 && here.index >= placeOf(id)) continue;
       open.delete(id);
       if (covered.delete(id)) again.unshift({ id, onBack, under: true, refused: false });
-      else if (own || step?.has(id) || refusal) again.unshift({ id, onBack, under: false, refused: false });
-      else if (onBack() === false) { again.unshift({ id, onBack, under: false, refused: true }); refusal = true; }
+      else if (own || step?.has(id) || refuser !== null) again.unshift({ id, onBack, under: false, refused: false });
+      else if (onBack() === false) { again.unshift({ id, onBack, under: false, refused: true }); refuser = id; }
       else { heirs.delete(id); waiting.delete(id); entryKeys.delete(id); }
     }
     // a Back off a sheet's entry that leaves a sheet up was the sheets' own (one refused it, or the one
@@ -588,16 +610,19 @@ if (typeof window !== "undefined") {
     // (sheetStep.holds). Where either entry is one with no key (a browser that tells none, an entry
     // this module cannot place) the traversal is left as it landed, and Back from the first entry
     // leaves the app with no popstate to refuse
-    const onto = refusal && step === null && from === null && was !== null ? stood ?? was.key : undefined;
-    if (onto !== undefined && here !== null && here.key !== onto) {
+    const onto = refuser !== null && step === null && from === null && was !== null ? { key: stood?.key ?? was.key, by: refuser, pending: true } : null;
+    if (onto !== null && here !== null && here.key !== onto.key) {
       steppedOff = true;
       holding = true;
       for (const kept of again) { open.set(kept.id, kept.onBack); if (kept.under) covered.add(kept.id); }
       stood = onto;
-      // a way back the browser drops (another traversal overtook it) is taken again when that one lands
-      const way = navigation()!.traverseTo(onto);
-      way.committed.catch(() => undefined);
+      // a way back the browser drops (another traversal overtook it) is taken again when that one
+      // lands. Dropped, or with no landing in the time a step takes, it is pending no longer
+      const lost = (): void => { onto.pending = false; };
+      const way = navigation()!.traverseTo(onto.key);
+      way.committed.catch(lost);
       way.finished.catch(() => undefined);
+      setTimeout(lost, LANDING_MS);
       return;
     }
     // a traversal no sheet refused is the app's to follow, from wherever a dropped way back left it
