@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
-import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, WEB_PANEL_BELOW_KEY as BELOW_KEY, SHEET_HISTORY_KEY, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
+import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, WEB_PANEL_BELOW_KEY as BELOW_KEY, SHEET_HISTORY_KEY, sheetStep, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 import { outsideSettings, settingsEntry } from "./settingsHistory.ts";
 import { panelUrl, wantsPanel } from "./webPanel.ts";
@@ -61,6 +61,9 @@ export function useWebPanel({ settings, filePanelAvailable }: { settings: Settin
 
   useEffect(() => {
     const onPop = (event: PopStateEvent): void => {
+      // a Back that a sheet with no entry refused, or its way back: the page under the sheet stays, and no entry is
+      // written for it. Nor is an entry the page left, gone onto again by the sheet that takes it, a page to show again
+      if (sheetStep.holds(event) || sheetStep.taking(event)) return;
       closingWebPage.current = false;
       const next = webPanelFromState(event.state);
       const docked = isDocked(event.state);

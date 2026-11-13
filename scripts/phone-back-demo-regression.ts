@@ -8,6 +8,11 @@
  * a connection, which stays up as Settings closes under it, then closes by Back with nothing of
  * Settings left. On its side (844x390) a menu is a
  * popover, and Back closes it the same. Back on the first screen, with nothing open, leaves the app.
+ * A tablet (1180x820, by touch) lays the app out as a desktop does, the sidebar and a panel beside
+ * the pane, and Back is still the system's: a row's menu, a tab's close confirmation, Files with a
+ * document or a diff opened from it, and a menu over a web page docked beside the pane.
+ * With the browser's Navigation API taken away, as in a Chromium before 102, the app keeps each
+ * entry's place in its state: a menu over the drawer and Files after Back closed a file close the same.
  *
  * Chromium's own Back skips every entry of a page that added one with no tap since the user's last
  * Back or Forward, which leaves the app with the surface still up, and a script cannot press that
@@ -31,18 +36,23 @@ type Entry = { taps: number; keys: string };
 
 const UPRIGHT: Screen = { label: "upright", width: 390, height: 844 };
 const ON_ITS_SIDE: Screen = { label: "on its side", width: 844, height: 390 };
+const TABLET: Screen = { label: "a tablet", width: 1180, height: 820 };
 
 const evidence = process.env["UI_EVIDENCE_DIR"];
 if (evidence) mkdirSync(evidence, { recursive: true });
 const keep = async (page: Page, name: string): Promise<void> => { if (evidence) await page.screenshot({ path: join(evidence, `phone-back-${name}.png`) }); };
 
-/** The app on the api pane, reached from a blank page: one step back from it leaves the app. */
-async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page, entries: Entry[]) => Promise<void>): Promise<void> {
+/**
+ * The app on the api pane, reached from a blank page: one step back from it leaves the app. `settings` are
+ * this device's, beside the language. Without `navigationApi` the browser's is taken away before the app loads.
+ */
+async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page, entries: Entry[]) => Promise<void>, settings: Record<string, string> = {}, navigationApi = true): Promise<void> {
   const context = await browser.newContext({ viewport: { width: screen.width, height: screen.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, locale: "en-US" });
   const entries: Entry[] = [];
   try {
+    if (!navigationApi) await context.addInitScript(() => { delete (window as unknown as { navigation?: unknown }).navigation; });
     // the blank page the app is reached from, and left for, has no storage
-    await context.addInitScript(() => { if (location.protocol !== "about:") localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })); });
+    await context.addInitScript((saved) => { if (location.protocol !== "about:") localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", ...saved })); }, settings);
     await context.exposeBinding("entryAdded", (_source, entry: Entry) => { entries.push(entry); });
     await context.addInitScript(() => {
       let taps = 0;
@@ -72,6 +82,7 @@ async function open(browser: Browser, origin: string, screen: Screen, run: (page
     await page.goto("about:blank");
     await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
     await page.locator(".conn-live").waitFor();
+    assert.equal(await page.evaluate(() => (window as unknown as { navigation?: unknown }).navigation !== undefined), navigationApi, `${screen.label}: the browser's Navigation API is ${navigationApi ? "there" : "taken away"}`);
     await run(page, entries);
     assert.deepEqual(errors, [], `${screen.label}: no page errors`);
     assert.deepEqual(entries.filter((entry) => entry.taps === 0), [], `${screen.label}: no history entry is added with no tap since the page last moved in its history`);
@@ -112,6 +123,8 @@ try {
     return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
   } });
   const origin = `http://127.0.0.1:${server.port}`;
+  // a page on another port of this PC, for the panel beside the pane: it frames none of the app's own port
+  const pages = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><title>Report</title><h1>Report</h1>", { headers: { "content-type": "text/html; charset=utf-8" } }) });
   let browser: Browser | undefined;
   try {
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
@@ -314,12 +327,136 @@ try {
       await menu.waitFor({ state: "detached" });
       await stillHere(page, origin, shown, "a menu with the phone on its side");
     });
+
+    // a tablet: the sidebar stays beside the pane, a row's menu is a popover, and the tab strip is in the header
+    await open(browser, origin, TABLET, async (page) => {
+      const shown = await paneShown(page);
+      assert.equal(await page.locator(".drawer-toggle").isVisible(), false, "a tablet keeps the sidebar beside the pane: there is no drawer");
+      await page.locator('.sidebar [aria-label="More for checkout-api"]').tap();
+      const menu = page.locator(".row-menu");
+      await menu.waitFor();
+      await entryHeld(page);
+      await keep(page, "tablet-row-menu");
+      await back(page);
+      await menu.waitFor({ state: "detached" });
+      await stillHere(page, origin, shown, "a row's menu on a tablet");
+
+      // a tab's close asks first: Back closes the question, and the tab is still there
+      const tabs = await page.locator(".tab-strip-tab").count();
+      await page.locator(".tab-strip-close").first().tap();
+      const confirm = page.locator(".confirm-dialog");
+      await confirm.waitFor();
+      await entryHeld(page);
+      await back(page);
+      await confirm.waitFor({ state: "detached" });
+      await stillHere(page, origin, shown, "a tab's close confirmation on a tablet");
+      assert.equal(await page.locator(".tab-strip-tab").count(), tabs, "a tab's close confirmation on a tablet: Back closes the question and no tab");
+      // with nothing open, the first screen is where Back leaves the app
+      await back(page);
+      await page.waitForURL("about:blank");
+    });
+
+    // Files on a tablet, a dialog as on a desktop: a document and a change each open over it, and Back closes one thing at a time
+    await open(browser, origin, TABLET, async (page) => {
+      const shown = await paneShown(page);
+      const files = page.getByRole("dialog", { name: "Files", exact: true });
+      await page.locator(".header-files-button").tap();
+      await files.getByRole("button", { name: "Documents", exact: true }).tap();
+      await files.locator(".md-docs-item").first().tap();
+      const viewer = page.locator(".modal.file-viewer");
+      await viewer.waitFor();
+      await back(page);
+      await viewer.waitFor({ state: "detached" });
+      assert.equal(await files.count(), 1, "a document over Files on a tablet: Back closes the document and leaves Files");
+      await entryHeld(page);
+
+      await files.getByRole("button", { name: "Changes", exact: true }).tap();
+      await files.locator(".repo-change").first().tap();
+      const diff = page.locator(".repo-diff-viewer");
+      await diff.waitFor();
+      await back(page);
+      await diff.waitFor({ state: "detached" });
+      assert.equal(await files.count(), 1, "a change over Files on a tablet: Back closes the diff and leaves Files");
+      await entryHeld(page);
+      await keep(page, "tablet-files-after-diff-back");
+      await back(page);
+      await files.waitFor({ state: "detached" });
+      await stillHere(page, origin, shown, "Files on a tablet");
+    });
+
+    // a web page beside the pane, where a tablet docks it: a menu opened over it is Back's, and the page stays
+    await open(browser, origin, TABLET, async (page) => {
+      const shown = await paneShown(page);
+      await page.locator(".header-more-button").tap();
+      await page.locator(".row-menu").getByRole("menuitem", { name: "Search panes and actions" }).tap();
+      const palette = page.getByRole("dialog", { name: "Command palette" });
+      const search = palette.getByRole("searchbox");
+      await search.fill(">open a page");
+      await page.getByRole("option", { name: "Open a page on this PC…", exact: true }).tap();
+      await search.pressSequentially(`${pages.port}/report`);
+      await page.getByRole("option", { name: `Open localhost:${pages.port}/report`, exact: true }).waitFor();
+      await search.press("Enter");
+      const report = page.locator(".file-panel.web-panel");
+      await page.frameLocator(".web-panel-page").getByRole("heading", { name: "Report" }).waitFor();
+      await palette.waitFor({ state: "detached" });
+      await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === undefined);
+
+      await page.locator('.sidebar [aria-label="More for checkout-api"]').tap();
+      const menu = page.locator(".row-menu");
+      await menu.waitFor();
+      await entryHeld(page);
+      await keep(page, "tablet-menu-over-web-page");
+      await back(page);
+      await menu.waitFor({ state: "detached" });
+      await stillHere(page, origin, shown, "a menu over a web page beside the pane");
+      assert.equal(await report.count(), 1, "a menu over a web page beside the pane: Back closes the menu and leaves the page");
+      await page.frameLocator(".web-panel-page").getByRole("heading", { name: "Report" }).waitFor();
+    }, { webLinks: "panel" });
+
+    // a Chromium with no Navigation API (before 102) tells the app neither which entry the history is on nor
+    // how to go onto one: the app keeps each entry's place in its state, and Back closes one thing at a time the same
+    await open(browser, origin, UPRIGHT, async (page) => {
+      const shown = await paneShown(page);
+      await page.locator(".drawer-toggle").tap();
+      await drawerOpen(page);
+      await page.getByRole("button", { name: "More for checkout-api" }).tap();
+      const menu = page.locator(".row-sheet");
+      await menu.waitFor();
+      await entryHeld(page);
+      await back(page);
+      await menu.waitFor({ state: "detached" });
+      assert.equal(await page.locator("#workspace-drawer.is-open").count(), 1, "with no Navigation API, a row's menu over the drawer: Back closes the menu and leaves the drawer");
+      // the history went onto the drawer's entry again, by the places the app keeps: the next Back is the drawer's
+      await entryHeld(page);
+      await back(page);
+      await drawerClosed(page);
+      await stillHere(page, origin, shown, "with no Navigation API, the drawer under a menu");
+
+      // a file opened from Files and closed by Back: Files takes the entry that Back left, and the next Back closes it
+      await page.locator(".header-more-button").tap();
+      await page.getByRole("dialog", { name: "More", exact: true }).getByRole("button", { name: "Browse files", exact: true }).tap();
+      const files = page.getByRole("dialog", { name: "Files", exact: true });
+      await files.getByRole("button", { name: "Documents", exact: true }).tap();
+      await files.locator(".md-docs-item").first().tap();
+      const viewer = page.locator(".modal.file-viewer");
+      await viewer.waitFor();
+      await back(page);
+      await viewer.waitFor({ state: "detached" });
+      assert.equal(await files.count(), 1, "with no Navigation API, a file closed by Back leaves Files up under it");
+      await entryHeld(page);
+      await back(page);
+      await files.waitFor({ state: "detached" });
+      await stillHere(page, origin, shown, "with no Navigation API, Files after Back closed a file opened from it");
+    }, {}, false);
   } finally {
-    // the server goes whatever else failed, a browser that did not start included: left up, it keeps this script from ending
+    // the servers go whatever else failed, a browser that did not start included: left up, they keep this script from ending
     try { await browser?.close(); }
-    finally { await server.stop(true); }
+    finally {
+      try { await server.stop(true); }
+      finally { await pages.stop(true); }
+    }
   }
-  console.log("PASS a phone's Back closes the drawer, a menu over it, New workspace and its lists one at a time, Files after a file closed by its X or by Back and Add PC opened as Settings closed, upright and on its side, and adds no entry with no tap behind it");
+  console.log("PASS a phone's Back closes the drawer, a menu over it, New workspace and its lists one at a time, Files after a file closed by its X or by Back and Add PC opened as Settings closed, upright and on its side; a tablet's closes a menu, a confirmation, Files with a document or a diff over it and a menu over a page beside the pane; with no Navigation API a menu over the drawer and Files after a file closed by Back close the same; and no entry is added with no tap behind it");
 } finally {
   rmSync(app, { recursive: true, force: true });
 }

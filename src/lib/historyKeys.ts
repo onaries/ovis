@@ -7,6 +7,11 @@
 export const SHEET_HISTORY_KEY = "ovis:sheet";
 /** the sheet's id on the entry it opened over, and on its own: one that takes the sheet's entry over can tell that entry */
 export const SHEET_UNDER_KEY = "ovis:sheet-under";
+/**
+ * where an entry lies in the tab's history: a key of its own and its count, written by
+ * lib/sheetHistory.ts on every entry where the browser tells neither (no Navigation API)
+ */
+export const PLACE_KEY = "ovis:place";
 
 /** a file's own entry (lib/useFileViewer.ts) and a repository diff's (lib/repoDiff.ts) */
 export const FILE_PREVIEW_KEY = "ovis:file-preview";
@@ -79,9 +84,19 @@ export const sheetStep: {
   /**
    * Whether a popstate lands on the entry the user's Back left a moment ago, which a sheet that
    * came back in front is taking for its own (the file list, once Back closed the file opened from
-   * it): the entry still holds what the file or the diff wrote, is rewritten as the sheet's, and is
-   * nothing to show again. The file viewer and the diff viewer ask; sheetHistory answers, whichever
+   * it; a terminal peek, once Back closed Settings opened over it): the entry still holds what the
+   * file, the diff, Settings or the web page wrote, is rewritten as the sheet's, and is nothing to
+   * show again. Whoever keeps state by the history's entry asks; sheetHistory answers, whichever
    * hears the event first.
    */
   taking: (event: Event) => boolean;
-} = { lands: () => false, goingBack: () => false, dropped: () => {}, taking: () => false };
+  /**
+   * Whether a popstate is a step of a Back or a Forward that a phone sheet with no history entry
+   * of its own refused (a device's request to join, up with no tap behind it): the traversal
+   * itself, which the history is about to leave again, or its way back onto the entry the app is
+   * on. Nothing under the sheet moves, so whoever keeps state by the history's entry (Settings, a
+   * file, a diff, a web page) asks first and leaves its state as it is. sheetHistory answers, and
+   * hears the event then if its own listener has not run yet.
+   */
+  holds: (event: Event) => boolean;
+} = { lands: () => false, goingBack: () => false, dropped: () => {}, taking: () => false, holds: () => false };

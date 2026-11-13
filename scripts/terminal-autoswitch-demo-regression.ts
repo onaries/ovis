@@ -372,6 +372,33 @@ try {
         await page.goBack();
         await expectReturned();
         console.log(`PASS ${tag}: a sheet over the peek closes back onto it`);
+
+        // Settings over the peek takes the peek's entry, and a page of it is one entry more. Back goes
+        // from the page to the list with the peek still under Settings, then closes Settings, which
+        // gives the peek its entry back, and only then ends the peek: one thing each, on the same pane
+        await send(page, "/doctor");
+        await expectPeek(false, "/doctor");
+        const sheetEntry = (): boolean => typeof (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === "string";
+        const settingsDepth = (depth: number): boolean => ((history.state as Record<string, { depth?: number } | undefined> | null)?.["ovis:settings"]?.depth ?? 0) === depth;
+        await page.waitForFunction(sheetEntry);
+        await page.locator(".drawer-toggle").click();
+        await page.locator("#workspace-drawer.is-open").waitFor();
+        await page.locator(".sidebar-footer-settings").click();
+        const settings = page.locator(".settings-dialog");
+        await settings.waitFor();
+        await settings.locator(".settings-tab").first().click();
+        await page.waitForFunction(settingsDepth, 2);
+        await page.goBack();
+        await page.waitForFunction(settingsDepth, 1);
+        assert.equal(await peek(page).count(), 1, "Back inside Settings leaves the peek under it");
+        await page.goBack();
+        await settings.waitFor({ state: "detached" });
+        assert.equal(await peek(page).count(), 1, "Back closes Settings and leaves the peek");
+        await page.waitForFunction(sheetEntry);
+        await page.goBack();
+        await expectReturned();
+        assert.equal(new URL(page.url()).searchParams.get("pane"), owner, "Back ends the peek after Settings, and stays on the pane");
+        console.log(`PASS ${tag}: Back closes Settings opened over the peek, then the peek`);
       }
 
       const keepWays: [string, () => Promise<void>][] = [

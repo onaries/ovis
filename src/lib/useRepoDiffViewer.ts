@@ -14,8 +14,9 @@ export function useRepoDiffViewer() {
 
   useEffect(() => {
     const onPop = (event: PopStateEvent): void => {
-      // the entry Back closed the diff off, gone onto again by the file list that takes it: no diff to show again
-      if (sheetStep.taking(event)) return;
+      // the entry Back closed the diff off, gone onto again by the file list that takes it: no diff to show again.
+      // Nor does a Back that a sheet with no entry refused, or its way back, move the diff under the sheet
+      if (sheetStep.taking(event) || sheetStep.holds(event)) return;
       closing.current = false;
       setViewing(diffTargetFromState(event.state));
     };

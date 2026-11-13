@@ -50,11 +50,11 @@ afterEach(async () => {
   descriptors.clear();
 });
 
-async function mount(reopenFileOnReturn: boolean): Promise<void> {
+async function mount(reopenFileOnReturn: boolean, filePanelAvailable = true): Promise<void> {
   function Probe() {
     panels = useFilePanels({
       settings: { ...DEFAULT_SETTINGS, reopenFileOnReturn },
-      filePanelAvailable: true, selectedPaneId: "p1", selectedMachineId: "local",
+      filePanelAvailable, selectedPaneId: "p1", selectedMachineId: "local",
     });
     return null;
   }
@@ -251,4 +251,91 @@ it("does not show again a diff whose entry the file list goes onto to take for i
 
   // Then the diff stays closed.
   expect(panels.diffViewing).toBeNull();
+});
+
+it("keeps a file as it is while a Back that a sheet with no entry refused goes and comes back", async () => {
+  // Given a file open on its entry, under a request that shows by itself and holds no entry.
+  await mount(false);
+  await act(async () => { panels.openFile(fileOn("p1")); });
+  const shown = panels.viewing;
+  expect(shown).toEqual(fileOn("p1"));
+
+  // When the Back lands on the entry before and the history goes again onto the file's
+  // (lib/sheetHistory.ts says so for both events).
+  const answering = sheetStep.holds;
+  sheetStep.holds = () => true;
+  try {
+    await act(async () => { window.history.go(-1); });
+    // Then the file stays up while the history is off its entry, and is the same one when it is back.
+    expect(panels.viewing).toBe(shown);
+    await act(async () => { window.history.go(1); });
+  } finally { sheetStep.holds = answering; }
+  expect(panels.viewing).toBe(shown);
+  expect(panels.fileFromPop()).toBe(0);
+
+  // And a Back of the user's still closes it.
+  await act(async () => { window.history.go(-1); });
+  expect(panels.viewing).toBeNull();
+});
+
+it("keeps a diff as it is while a Back that a sheet with no entry refused goes and comes back", async () => {
+  await mount(false);
+  const diff = { machineId: "local", paneId: "p1", directory: "/r", path: "b.md", oldPath: null, scope: "workspace" as const, base: null, head: null, comparison: null };
+  await act(async () => { panels.openDiff(diff); });
+  const shown = panels.diffViewing;
+  expect(shown).toEqual(diff);
+
+  const answering = sheetStep.holds;
+  sheetStep.holds = () => true;
+  try {
+    await act(async () => { window.history.go(-1); });
+    expect(panels.diffViewing).toBe(shown);
+    await act(async () => { window.history.go(1); });
+  } finally { sheetStep.holds = answering; }
+  expect(panels.diffViewing).toBe(shown);
+
+  await act(async () => { window.history.go(-1); });
+  expect(panels.diffViewing).toBeNull();
+});
+
+it("keeps a web page as it is, and writes no entry for it, while a Back that a sheet with no entry refused goes and comes back", async () => {
+  // Given a page in a narrow window's popup, which owns a history entry.
+  await mount(false, false);
+  await act(async () => { expect(panels.openWebPage("http://localhost:3000/report", DEFAULT_SETTINGS.webLinks !== "panel", "local")).toBe(true); });
+  const shown = panels.webPage;
+  expect(shown).not.toBeNull();
+  const held = [...entries];
+  expect(held.length).toBe(2);
+
+  const answering = sheetStep.holds;
+  sheetStep.holds = () => true;
+  try {
+    await act(async () => { window.history.go(-1); });
+    expect(panels.webPage).toBe(shown);
+    await act(async () => { window.history.go(1); });
+  } finally { sheetStep.holds = answering; }
+  expect(panels.webPage).toBe(shown);
+  expect(entries).toEqual(held);
+
+  await act(async () => { window.history.go(-1); });
+  expect(panels.webPage).toBeNull();
+});
+
+it("does not show again a web page whose entry a sheet goes onto to take for its own", async () => {
+  // Given a page in a narrow window's popup that the user's Back closed: its entry lies ahead, still naming the page.
+  await mount(false, false);
+  await act(async () => { expect(panels.openWebPage("http://localhost:3000/report", DEFAULT_SETTINGS.webLinks !== "panel", "local")).toBe(true); });
+  await act(async () => { window.history.go(-1); });
+  expect(panels.webPage).toBeNull();
+
+  // When a sheet that stayed under the page goes onto that entry (lib/sheetHistory.ts says so for the event).
+  const answering = sheetStep.taking;
+  sheetStep.taking = () => true;
+  try { await act(async () => { window.history.go(1); }); } finally { sheetStep.taking = answering; }
+
+  // Then the page stays closed; a Forward of the user's onto a page's entry still shows it.
+  expect(panels.webPage).toBeNull();
+  await act(async () => { window.history.go(-1); });
+  await act(async () => { window.history.go(1); });
+  expect(panels.webPage).not.toBeNull();
 });
