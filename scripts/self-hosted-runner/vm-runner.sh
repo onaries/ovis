@@ -21,13 +21,19 @@ dockerd_up() {
 # resolver docker gives it. (A user-defined docker network gets no internet in these VMs; the default bridge does.)
 firewall() {
   ipt() { sudo -n iptables "$@"; }
-  ipt -C INPUT -i docker0 -j DROP 2>/dev/null || ipt -I INPUT -i docker0 -j DROP
+  ipt -C INPUT -i docker0 -j DROP 2>/dev/null || ipt -I INPUT -i docker0 -j DROP || return 1
   for d in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
-    ipt -C DOCKER-USER -i docker0 -d "$d" -j DROP 2>/dev/null || ipt -I DOCKER-USER -i docker0 -d "$d" -j DROP
+    ipt -C DOCKER-USER -i docker0 -d "$d" -j DROP 2>/dev/null || ipt -I DOCKER-USER -i docker0 -d "$d" -j DROP || return 1
   done
-  # DNS goes through, inserted above the drops: the resolver docker hands a container may sit in a private range
+  # an any-address port 53 rule from an earlier version of this script goes
   for pr in udp tcp; do
-    ipt -C DOCKER-USER -i docker0 -p "$pr" --dport 53 -j ACCEPT 2>/dev/null || ipt -I DOCKER-USER -i docker0 -p "$pr" --dport 53 -j ACCEPT
+    while ipt -C DOCKER-USER -i docker0 -p "$pr" --dport 53 -j ACCEPT 2>/dev/null; do ipt -D DOCKER-USER -i docker0 -p "$pr" --dport 53 -j ACCEPT || return 1; done
+  done
+  # DNS to the resolvers a job container is actually given (read from one), IPv4 ones, port 53 only, above the drops
+  for ns in $(sudo -n docker run --rm --network "$NET" --entrypoint awk "$IMAGE" '/^nameserver/ {print $2}' /etc/resolv.conf | grep -E '^[0-9]+(\.[0-9]+){3}$'); do
+    for pr in udp tcp; do
+      ipt -C DOCKER-USER -i docker0 -d "$ns" -p "$pr" --dport 53 -j ACCEPT 2>/dev/null || ipt -I DOCKER-USER -i docker0 -d "$ns" -p "$pr" --dport 53 -j ACCEPT || return 1
+    done
   done
 }
 case "${1:?setup|register|supervise|stop}" in
@@ -54,7 +60,9 @@ case "${1:?setup|register|supervise|stop}" in
     echo "$$" > "$HOME/.ovis-ci/runner.pid"
     while :; do
       dockerd_up || { sleep 30; continue; }
-      firewall
+      # never a job without the firewall
+      firewall || { echo "$(date -u +%FT%TZ) firewall could not be applied; no job taken" >> "$LOG"; sleep 30; continue; }
+      started=$SECONDS
       echo "$(date -u +%FT%TZ) job container start" >> "$LOG"
       sudo -n docker run --rm --name ovis-vm-job --network "$NET" --cpuset-cpus "0-$(( $(nproc) - 1 ))" --shm-size 2g \
         --pids-limit 8192 --ulimit core=0 --security-opt no-new-privileges --cap-drop ALL \
@@ -64,7 +72,9 @@ case "${1:?setup|register|supervise|stop}" in
         -c 'cp /cred/.runner /cred/.credentials /cred/.credentials_rsaparams . && exec ./run.sh --once </dev/null' >> "$LOG" 2>&1
       rc=$?
       echo "$(date -u +%FT%TZ) job container exit $rc" >> "$LOG"
-      sleep 3
+      # a container that ends at once (a removed registration, say) waits longer each time, up to 5 minutes
+      if (( SECONDS - started < 30 )); then wait_s=$(( ${wait_s:-3} * 2 > 300 ? 300 : ${wait_s:-3} * 2 )); else wait_s=3; fi
+      sleep "$wait_s"
     done ;;
   stop)
     [ -f "$HOME/.ovis-ci/runner.pid" ] && kill "$(cat "$HOME/.ovis-ci/runner.pid")" 2>/dev/null || true

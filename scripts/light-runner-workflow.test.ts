@@ -66,6 +66,8 @@ describe("self-hosted runners and fork pull requests", () => {
     const changes = ci.jobs.changes!;
     expect(changes.outputs?.linux).toBe("${{ steps.route.outputs.linux }}");
     expect(changes.outputs?.fast).toBe("${{ steps.route.outputs.fast }}");
+    // CI_LINUX_SELF_HOSTED_LABELS reaches the route only in ci.yml's own runs, never in a caller's (relay-deploy on a push to main)
+    expect(changes.steps?.find((step) => step.id === "route")?.env?.["LINUX_LABELS"]).toBe("${{ github.workflow == 'CI' && vars.CI_LINUX_SELF_HOSTED_LABELS || '' }}");
     expect(changes.steps?.find((step) => step.id === "route")?.run).toBe('bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"');
   });
 

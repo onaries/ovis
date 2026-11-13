@@ -207,9 +207,34 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     expect(routed({ EVENT_NAME: "workflow_dispatch", REQUESTED_LABELS: labels, CONFIGURED_LABELS: hosted })).toEqual(JSON.parse(labels));
   });
 
+  describe("CI_LINUX_SELF_HOSTED_LABELS", () => {
+    const vm = '["self-hosted","ovis-vm"]';
+
+    it("moves the Linux jobs of a push and of a same-repository pull request", () => {
+      expect(routed({ EVENT_NAME: "push", REF: "refs/heads/topic", LINUX_LABELS: vm })).toEqual(["self-hosted", "ovis-vm"]);
+      expect(routed({ EVENT_NAME: "pull_request", HEAD_REPO: repo, LINUX_LABELS: vm })).toEqual(["self-hosted", "ovis-vm"]);
+      const result = route({ EVENT_NAME: "push", REF: "refs/heads/topic", LINUX_LABELS: vm });
+      expect(result.stderr).toContain("from repository variable CI_LINUX_SELF_HOSTED_LABELS");
+    });
+
+    it("leaves a tag push, a manual run and a workflow that calls ci.yml on CI_SELF_HOSTED_LABELS' routing", () => {
+      expect(routed({ EVENT_NAME: "push", REF: "refs/tags/v1.2.3", LINUX_LABELS: vm })).toEqual(["self-hosted", "self-hosted-ovis"]);
+      expect(routed({ EVENT_NAME: "workflow_dispatch", LINUX_LABELS: vm })).toBe("ubuntu-24.04");
+      expect(routed({ EVENT_NAME: "workflow_dispatch", LINUX_LABELS: vm, CONFIGURED_LABELS: '["self-hosted","self-hosted-ovis"]' })).toEqual(["self-hosted", "self-hosted-ovis"]);
+    });
+
+    it("never moves a fork pull request", () => {
+      expect(routed({ EVENT_NAME: "pull_request", HEAD_REPO: "someone/fork", LINUX_LABELS: vm })).toBe("ubuntu-24.04");
+    });
+  });
+
   describe("Fast checks", () => {
     const vm = '["self-hosted","ovis-vm"]';
     const pc = '["self-hosted","self-hosted-ovis"]';
+
+    it("of a manual run that names ovis-vm stay with the rest", () => {
+      expect(outputs({ EVENT_NAME: "workflow_dispatch", REQUESTED_LABELS: vm, FAST_LABELS: pc })).toEqual({ linux: ["self-hosted", "ovis-vm"], fast: ["self-hosted", "ovis-vm"] });
+    });
 
     it("follow the Linux jobs when CI_FAST_SELF_HOSTED_LABELS is unset", () => {
       expect(outputs({ EVENT_NAME: "push", CONFIGURED_LABELS: vm })).toEqual({ linux: ["self-hosted", "ovis-vm"], fast: ["self-hosted", "ovis-vm"] });
