@@ -15,7 +15,7 @@ const xdg = join(home, "xdg");
 // Claude's store: the bridge reads a pane's Claude transcripts from here, not the runner's own
 const claudeConfig = join(home, ".claude");
 mkdirSync(bundle); mkdirSync(home);
-const bun = join(bundle, windows ? "bin/bun.exe" : "bin/bun");
+const server = join(bundle, windows ? "ovis-server.exe" : "ovis-server");
 const herdr = windows ? process.env["OVIS_HERDR_BIN"] || join(process.env["LOCALAPPDATA"] ?? "", "Programs/Herdr/bin/herdr.exe") : join(bundle, "bin/herdr");
 if (windows) assert.ok(existsSync(herdr), `herdr is not installed at ${herdr}`);
 // The PC this stands for has no Node of its own: the terminal attach must run on the Node the
@@ -36,7 +36,9 @@ try {
     assert.equal(host.exitCode, 2, "the bundle's Rust PTY host runs and prints its usage");
     assert.match(host.stderr.toString(), /^pty-sidecar: usage:/);
   }
-  child = Bun.spawn([bun, join(bundle, "server/remote-entry.ts")], { env, stdout: "inherit", stderr: "inherit" });
+  // the bundle carries no server sources: its compiled server runs the bridge
+  for (const sources of ["server", "shared"]) assert.equal(existsSync(join(bundle, sources)), false, `the bundle holds no ${sources}/`);
+  child = Bun.spawn([server, "remote"], { env, stdout: "inherit", stderr: "inherit" });
   const { createHash } = await import("node:crypto");
   const socket = join(xdg, "herdr/sessions/smoke/herdr.sock");
   const described = join(home, ".config/herdr-web-ui/bridges", createHash("sha256").update(socket).digest("hex") + ".json");
@@ -86,7 +88,7 @@ try {
   }
 
   // A Claude conversation's picture, as the chat view loads it: the transcript is read by the
-  // bundle's own Bun through the shared transcript reader, on this PC's file system. The pane is
+  // bundle's compiled server through the shared transcript reader, on this PC's file system. The pane is
   // told it runs Claude with that session (as Claude's hook tells herdr), so no Claude is needed.
   const session = randomUUID();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");

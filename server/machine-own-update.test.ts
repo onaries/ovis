@@ -340,7 +340,7 @@ describe("a PC whose own Ovis is away (#2047)", () => {
     const left = await until((machine) => !machine.updating && machine.state !== "connecting");
     expect(manager.job(job.id)).toMatchObject({ phase: "failed", error: expect.stringContaining("Unexpected remote command") });
     // what was approved there, and only that: the runtime's install, then the start that failed
-    expect(operations).toEqual(["install-bundle", expect.stringContaining("remote-entry.ts")]);
+    expect(operations).toEqual(["install-bundle", expect.stringContaining('ovis-server" remote')]);
     const approved = [...operations];
     // the dialog tells why; the PC was never moved, and tries its own address again
     expect(left).toMatchObject({ state: "reconnecting", target: { destination: "fixture@pc.invalid" } });

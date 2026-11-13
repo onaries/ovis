@@ -63,12 +63,12 @@ mac:
   # The afterSign hook notarizes the app: electron-builder's own stapling gives up within seconds.
   notarize: false
   # Signed under the hardened runtime (electron-builder's default): the app takes build/entitlements.mac.plist
-  # and everything else inside build/entitlements.mac.inherit.plist, found by name. Resources holds the server's files too: sign only its programs (hc, Bun, the PTY host)
+  # and everything else inside build/entitlements.mac.inherit.plist, found by name. Resources holds the server's files too: sign only its programs (hc, Bun, the server's binary, the PTY host)
   # and native modules, not every data file in them. A new Mach-O there that this misses fails notarization.
   # signs the PTY host first and brings its record up to the signed bytes (scripts/sign-mac.mjs)
   sign: ./scripts/sign-mac.mjs
   signIgnore:
-    - '/Contents/Resources/(?!ovis/bin/|ovis/server/bin/)(?!.*(\.node|\.dylib|/spawn-helper)$)'
+    - '/Contents/Resources/(?!ovis/bin/|ovis/server/bin/|ovis/server/ovis-server$)(?!.*(\.node|\.dylib|/spawn-helper)$)'
   extendInfo:
     NSMicrophoneUsageDescription: Ovis uses the microphone for dictation.
 dmg:

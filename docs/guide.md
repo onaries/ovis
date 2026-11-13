@@ -257,10 +257,11 @@ bun scripts/install-gjc-integration.ts
 Restart existing GJC sessions to load it. The installer writes only the web UI's extension;
 it does not replace GJC settings or other extensions. To remove it, run the same command
 with `--remove` and restart GJC again. No running session is modified by the installer.
-A remote PC with only the runtime bundle has no checkout: run the installer with the bundle's
-own Bun from its folder, `cd ~/.local/share/herdr-web-ui/remote-vN && bin/bun
-scripts/install-gjc-integration.ts` (on Windows, `bin\bun.exe` in
-`%LOCALAPPDATA%\herdr-web-ui\remote-vN`), where `N` is the bundle version.
+A remote PC with only the runtime bundle has no checkout: run the built installer the bundle
+carries with its own server, which runs it as Bun, `cd ~/.local/share/herdr-web-ui/remote-vN &&
+BUN_BE_BUN=1 ./ovis-server scripts/install-gjc-integration.js` (on Windows, in
+`%LOCALAPPDATA%\herdr-web-ui\remote-vN`, `set BUN_BE_BUN=1` then `ovis-server.exe
+scripts\install-gjc-integration.js`), where `N` is the bundle version.
 
 The extension reports its current session ID and exact file path on session changes and
 refreshes a short-lived process binding. The bridge checks the process identity and native

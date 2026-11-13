@@ -5,6 +5,9 @@ on:
       - 'server/**'
       - 'shared/**'
       - 'scripts/build-remote-bundle.ts'
+      - 'scripts/server-artifact.ts'
+      - 'scripts/install-*-integration.ts'
+      - 'integrations/**'
       - 'scripts/remote-bundle-smoke.ts'
       - 'scripts/pty-sidecar.ts'
       - 'crates/pty-sidecar/**'
@@ -54,7 +57,7 @@ jobs:
         with:
           name: remote-${{ matrix.os }}
           path: remote-bundles/*
-  # Windows bundles are Bun alone, assembled on Linux from the pinned release; the smoke job
+  # Windows bundles are the compiled server alone (scripts/server-artifact.ts), assembled on Linux; the smoke job
   # below runs the result on a real Windows runner against herdr's own installer
   bundle-windows:
     timeout-minutes: 20

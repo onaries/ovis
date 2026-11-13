@@ -300,13 +300,14 @@ for (const migrated of [false, true]) {
       expect((await windowsHost.inspect(ssh, session)).descriptors).toEqual([descriptor]);
       await windowsHost.stop(ssh, descriptor.pid);
       expect(existsSync(join(registry, "fixture[1].json"))).toBe(false);
-      mkdirSync(join(inspection.runtimeDir, "bin"), { recursive: true });
-      mkdirSync(join(inspection.runtimeDir, "server"));
-      copyFileSync(process.execPath, join(inspection.runtimeDir, "bin", "bun.exe"));
-      writeFileSync(join(inspection.runtimeDir, "server", "remote-entry.ts"), `await Bun.write(${JSON.stringify(join(home, "started.json"))}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd() })); console.log("bridge log line");`);
+      // the bundle's server, compiled as the bundle's is: the launcher runs `ovis-server.exe remote`
+      mkdirSync(inspection.runtimeDir, { recursive: true });
+      const standIn = join(home, "stand-in.ts");
+      writeFileSync(standIn, `await Bun.write(${JSON.stringify(join(home, "started.json"))}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd(), entry: process.argv[2] })); console.log("bridge log line");`);
+      expect(Bun.spawnSync([process.execPath, "build", "--compile", standIn, "--outfile", join(inspection.runtimeDir, "ovis-server.exe")], { stdout: "ignore", stderr: "inherit" }).exitCode).toBe(0);
       writeFileSync(join(registry, files.status), "interactive_failed: stale attempt");
       await windowsHost.start(ssh, { session, herdrPath: "C:\\herdr.exe", inspection });
-      expect(JSON.parse(readFileSync(join(home, "started.json"), "utf8"))).toEqual({ session: session ?? "", cwd: home });
+      expect(JSON.parse(readFileSync(join(home, "started.json"), "utf8"))).toEqual({ session: session ?? "", cwd: home, entry: "remote" });
       const launcher = readFileSync(join(registry, files.launcher), "utf8");
       expect(launcher.startsWith("@echo off\r\n")).toBe(true);
       expect(launcher).toContain(`set "HERDR_REMOTE_SESSION=${session ?? ""}"`);
@@ -340,8 +341,12 @@ it.skipIf(!onWindows)("installs with native tar when PATH shadows tar, and prese
   };
   const ssh = { runPowerShell, upload: async (source: string, destination: string) => copyFileSync(source, destination) } as unknown as SshConnection;
   try {
-    mkdirSync(join(home, "input", "bin"), { recursive: true });
-    copyFileSync(process.execPath, join(home, "input", "bin", "bun.exe"));
+    // the bundle's server, compiled as the bundle's is: the install runs `ovis-server.exe remote --help` and refuses a
+    // runtime it does not answer with exit 0; any other command fails
+    mkdirSync(join(home, "input"), { recursive: true });
+    const standIn = join(home, "stand-in.ts");
+    writeFileSync(standIn, `process.exit(process.argv[2] === "remote" && process.argv[3] === "--help" && process.argv.length === 4 ? 0 : 2);`);
+    expect(Bun.spawnSync([process.execPath, "build", "--compile", standIn, "--outfile", join(home, "input", "ovis-server.exe")], { stdout: "ignore", stderr: "inherit" }).exitCode).toBe(0);
     mkdirSync(join(home, "shadow"));
     // An invalid executable first on PATH must never handle this archive.
     writeFileSync(join(home, "shadow", "tar.exe"), "not a Windows executable");
@@ -351,7 +356,7 @@ it.skipIf(!onWindows)("installs with native tar when PATH shadows tar, and prese
     await writeManifest();
     process.env["OVIS_BUNDLE_MANIFEST"] = manifest;
     await windowsHost.installBundle(ssh, "win32-x64", AbortSignal.timeout(60_000));
-    expect(existsSync(join(runtime, "bin", "bun.exe"))).toBe(true);
+    expect(existsSync(join(runtime, "ovis-server.exe"))).toBe(true);
     const target = realpathSync(runtime);
     writeFileSync(join(home, "bundle.tgz"), "invalid archive with a valid manifest checksum");
     await writeManifest();

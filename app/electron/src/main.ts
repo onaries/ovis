@@ -142,8 +142,8 @@ async function launch(): Promise<void> {
   showConnect();
   let log: WriteStream | null = null;
   try {
-    if (!isFile(programs.bun) || !isFile(programs.hc)) {
-      setStatus({ core: "failed", detail: `This build has no bundled herdr-core and Bun in ${resources}. Build it with \`bun scripts/build.ts stage\` in app/electron.` });
+    if (!isFile(programs.serverBinary) || !isFile(programs.hc)) {
+      setStatus({ core: "failed", detail: `This build has no bundled herdr-core and Ovis server in ${resources}. Build it with \`bun scripts/build.ts stage\` in app/electron.` });
       return;
     }
     let hc: string;
@@ -165,7 +165,7 @@ async function launch(): Promise<void> {
       // recorded as soon as it runs, so a crash of the app before it listens still leaves its pid behind
       const running = await startServer(programs, serverEnv(process.env, { hc, stateDir, port }), log, 60_000, (child) => {
         spawning = child;
-        writeSaved(savedPath, { port, server: { pid: child.pid!, bun: programs.bun, started: processStartSync(child.pid!) } });
+        writeSaved(savedPath, { port, server: { pid: child.pid!, bun: programs.serverBinary, started: processStartSync(child.pid!) } });
       });
       spawning = null;
       if (quitting) {

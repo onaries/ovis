@@ -24,7 +24,8 @@ import { mergeEnvLayers } from "../server/legacy-env.ts";
 import { acquireOwnerDirectory, guardPath, type OwnerLease } from "../server/owner-guard.ts";
 import { parseBirth, readProcessBirth } from "../server/process-owner.ts";
 import { defaultStateDir } from "../server/update-state.ts";
-import { entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
+import { COMPILED, entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
+import { version as builtVersion } from "../package.json";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, uptime } from "node:os";
@@ -1053,9 +1054,11 @@ async function phoneSetup(): Promise<number> {
 /**
  * The version that runs, or runs at the next start: the release Settings → Updates installed, else
  * this checkout. herdr's plugin list names only the checkout's, which keeps the version first
- * installed, so Ovis for Windows reads this line to tell an old server from an updated one.
+ * installed, so Ovis for Windows reads this line to tell an old server from an updated one. The compiled server has
+ * no package.json beside it: it is the version compiled into it (updates stay unmanaged there for now).
  */
 function runningVersion(): string | null {
+  if (COMPILED) return builtVersion;
   try {
     const version = (JSON.parse(readFileSync(join(dirname(activePluginScript(ROOT, port, APP_STATE_DIR)), "..", "package.json"), "utf8")) as { version?: unknown }).version;
     return typeof version === "string" ? version : null;

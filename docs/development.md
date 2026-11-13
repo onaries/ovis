@@ -885,8 +885,55 @@ scripts/pty-sidecar.ts install` (herdr's plugin build, each update installed fro
 `install.sh`) puts the binary for its PC in `bin/ovis-pty-sidecar` only when the release's crate
 tree matches the checkout and the SHA-256 matches; otherwise that install runs the Node sidecar where
 the PC has Node, and mirrors its panes where it has none.
-A release without them gets them from **Actions → Attach the Rust PTY host** with its tag. Then it
-attaches the signed Ovis for Mac `Ovis.dmg` to the release, or skips that with a notice while the
+A release without them gets them from **Actions → Attach the Rust PTY host** with its tag.
+
+It also builds the server as one compiled binary per platform (`server-binary`, on the same runners as the
+rest of the release, `bun scripts/build-server.ts release`): `ovis-server-linux-x64`, `-linux-arm64`,
+`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, with `ovis-server.json` (the version, the git trees of
+`server/` and `shared/`, each file's SHA-256), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
+signature over the manifest's exact bytes. `server-binary-sign` signs on GitHub's runner: beside the key run only Bun,
+installed by the SHA-pinned `oven-sh/setup-bun`, and `scripts/server-manifest.ts`, which uses Node's built-ins; none
+of the repository's dependencies is installed there. It then verifies the folder for the version being released.
+`server-binary-attest` attests the files, and `publish` verifies them again for that version and attaches each by
+name, refusing a folder that holds anything else. The signature vouches for whatever `server-binary` built.
+
+`bun scripts/build-server.ts verify <dir> --public-key <base64> --expect-version <X.Y.Z>` checks a downloaded set, and
+stops at the first part that fails, with one line naming it (exit 1):
+- the folder holds exactly the five binaries, the manifest, its signature and the sums file;
+- the signature over the manifest's bytes (both the signature and the key in standard base64, nothing around them);
+- the manifest in its canonical form: exactly its fields and the five platforms, no duplicate key;
+- the version, when `--expect-version` is given;
+- each binary's SHA-256 (a mismatch names its platform), and the sums file, which is required and must list exactly the
+  manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
+
+A signature alone does not stop a downgrade: an older release signed by the same key verifies too. Every consumer (the
+installers, the updater, a fleet machine: todos 6, 7, 28 and 59 of the relay-fleet plan) passes the version it asked
+for, as the release job does. Remote PC bundles and the desktop app carry the same binary with what runs beside it
+(`scripts/server-artifact.ts`), and no server sources. The builds are reproducible with the same Bun: CI pins Bun 1.4.2,
+so CI's hashes differ from ones built with another Bun.
+
+### The server binary's signing key
+
+The private key is the secret `OVIS_SERVER_SIGNING_KEY` of the GitHub environment `release-signing`, whose
+deployment branches are `main` alone. Only a workflow run for `main` whose job names that environment can read
+it, and only `server-binary-sign` does: it is not a repository secret, and `production` (the deploy jobs'
+environment) never holds it. Without the environment or its secret, `server-binary-sign` fails with an error naming
+the secret, and `publish`, which needs it, does not run: no tag and no release are made, and nothing is published
+unsigned. In a fork the job is skipped, and so is `publish`.
+
+The owner sets it up once, before the first release that signs, on a Linux or macOS PC they trust (`keygen` refuses
+to run on Windows, where a file mode does not keep the key to its owner):
+1. `bun scripts/build-server.ts keygen <folder>` writes `<folder>/ovis-server-signing-key.pem` (readable by them
+   alone) and prints only the public key.
+2. Create the environment `release-signing` with deployment branches limited to `main` (Settings → Environments →
+   New environment; Deployment branches and tags: Selected branches and tags, add `main`).
+3. `gh secret set OVIS_SERVER_SIGNING_KEY --env release-signing --repo devswha/ovis < <folder>/ovis-server-signing-key.pem`
+   (the key is read from the file, never typed on a command line).
+4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. Once a
+   release pins it in the binary, replacing the key strands the installs that took it, so losing the private key means
+   no further verified update reaches them.
+
+Then the Release run attaches the signed Ovis for Mac `Ovis.dmg` to the release, or skips that with a notice while the
 signing secrets are unset ([app/mac/README.md](../app/mac/README.md#releases)), and Ovis for Windows'
 `Ovis.exe` ([app/windows/README.md](../app/windows/README.md#releases)); the release becomes GitHub's
 latest only once it has both. A red `mac-dmg` or `windows-app` job leaves the release published: run

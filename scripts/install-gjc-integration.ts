@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -16,8 +16,13 @@ export interface InstallGjcIntegrationResult {
   path: string;
 }
 
-/** Bundles one integrations/ entry into a standalone file, as the agent loads it. */
+/**
+ * Bundles one integrations/ entry into a standalone file, as the agent loads it. Beside a compiled server
+ * (scripts/server-artifact.ts) there are no sources: the integration was built with it, as integrations/<name>.js.
+ */
 export async function buildIntegration(name: string, target: "bun" | "node"): Promise<string> {
+  const built = join(import.meta.dir, "..", "integrations", `${name}.js`);
+  if (existsSync(built)) return readFileSync(built, "utf8");
   const entrypoint = join(import.meta.dir, "..", "integrations", `${name}.ts`);
   const staging = mkdtempSync(join(tmpdir(), `herdr-${name}-integration-`));
   try {

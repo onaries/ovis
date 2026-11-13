@@ -200,8 +200,8 @@ describe("release.yml", () => {
     expect(Object.entries(release.jobs).filter(([, candidate]) => candidate.uses?.endsWith("/ci.yml")).map(([id]) => id)).toEqual([]);
   });
 
-  test("publishes only after validate and the PTY host, and first requires the verdict's name", () => {
-    expect(publish.needs).toEqual(["validate", "pty-sidecar"]);
+  test("publishes only after validate, the PTY host and the attested server binaries, and first requires the verdict's name", () => {
+    expect(publish.needs).toEqual(["validate", "pty-sidecar", "server-binary-sign", "server-binary-attest"]);
     expect(publish.if).toBeUndefined();
     expect(release.jobs["pty-sidecar"]!.if).toBeUndefined();
     const guard = publish.steps![0]!;
@@ -228,8 +228,8 @@ describe("release.yml", () => {
     const before = Object.entries(release.jobs).filter(([id]) => !published.includes(id)).map(([id, candidate]) => [id, writes(candidate)] as const);
     // pty-sidecar runs beside validate, before the verdict: its two scopes sign the binaries' build
     // provenance (pty-sidecar.yml's attest job) and can create neither a tag nor a release, which
-    // take contents: write
-    expect(before).toEqual([["preflight", []], ["validate", []], ["pty-sidecar", ["id-token", "attestations"]]]);
+    // take contents: write; so does server-binary-attest, for the server binaries and their signed manifest
+    expect(before).toEqual([["preflight", []], ["validate", []], ["pty-sidecar", ["id-token", "attestations"]], ["server-binary", []], ["server-binary-sign", []], ["server-binary-attest", ["id-token", "attestations"]]]);
     expect(release.jobs["pty-sidecar"]!.permissions).toEqual({ contents: "read", "id-token": "write", attestations: "write" });
     expect(writes(publish)).toEqual(["contents"]);
     // the rule itself

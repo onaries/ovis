@@ -15,6 +15,27 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { chosenHerdrSocketStatus, discoverHerdrSessions, validHerdrSocket } from "./herdr-discovery.ts";
 
+// What setup asks the installed runtime before a bridge runs (server/remote-host.ts): the bundle carries no sources a
+// `bun -e` could import, so the answers come from this entry, and nothing below runs for them
+const [request, socketArgument, ...extra] = process.argv.slice(2);
+const REMOTE_USAGE = "usage: ovis-server remote [--discover | --socket-status <herdr socket>]\n  with no argument: the bridge for the herdr session HERDR_REMOTE_SESSION names, started over SSH";
+if (request === "--help") {
+  console.log(REMOTE_USAGE);
+  process.exit(0);
+}
+if (request === "--discover" && socketArgument === undefined) {
+  console.log(JSON.stringify(await discoverHerdrSessions()));
+  process.exit(0);
+}
+if (request === "--socket-status" && socketArgument !== undefined && extra.length === 0) {
+  console.log(await chosenHerdrSocketStatus(socketArgument));
+  process.exit(0);
+}
+if (request !== undefined) {
+  console.error(REMOTE_USAGE);
+  process.exit(2);
+}
+
 process.env["OVIS_REMOTE"] = "1";
 const windows = process.platform === "win32";
 // the transcript readers find agent stores under $HOME, which Windows does not set
