@@ -449,6 +449,16 @@ try {
     // Settings has two stops on a phone (Close, and the one focusable tab of its roving list): Tab
     // moves between them; the trap beneath held it on the first
     assert.ok(new Set(focused).size >= 2 && focused[0] !== focused[1], `Tab moves through Settings at ${width}px: ${focused.join(" | ")}`);
+    // a desktop's walk ends on the open page's first setting, and the keyboard on a setting shows its row's
+    // sentence (#3275): Escape closes that sentence alone, then the next one closes Settings. A phone's walk stays
+    // on the list of pages, where no sentence shows
+    const sentence = page.locator(".settings-help");
+    assert.equal(await sentence.count(), width === 390 ? 0 : 1, `a setting's sentence shows only where the walk reached a setting, at ${width}px`);
+    if (width !== 390) {
+      await page.keyboard.press("Escape");
+      await sentence.waitFor({ state: "detached" });
+      assert.equal(await settings.isVisible(), true, `the first Escape closes the sentence, not Settings, at ${width}px`);
+    }
     await page.keyboard.press("Escape");
     await settings.waitFor({ state: "hidden" });
     await page.waitForFunction(() => history.state?.["ovis:settings"] === undefined);

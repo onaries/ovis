@@ -92,4 +92,8 @@ export const DASHBOARD_ZH: Record<string, string> = {
   "1 relay": "1 个中继",
   "{count} relays": "{count} 个中继",
   "Account setup is incomplete. Open it to try again.": "账户设置尚未完成。打开它即可重试。",
+  "Dark and Light keep one look; System follows this device's dark or light mode.": "“深色”和“浅色”固定为该外观；“跟随系统”则跟随此设备的深色或浅色模式。",
+  "Compact makes text one step smaller and rows shorter, so more fits on the screen.": "“紧凑”会把文字缩小一级、行高调低，让一屏显示更多内容。",
+  "The text size of this app's menus, lists and dialogs.": "本应用的菜单、列表和对话框的字号。",
+  "The language of this app. System follows the browser's language.": "本应用的显示语言。“跟随系统”则跟随浏览器的语言。",
 };

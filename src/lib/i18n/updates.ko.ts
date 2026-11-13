@@ -62,4 +62,5 @@ export const UPDATES_KO: Record<string, string> = {
   "Updates require a Git checkout on the main branch.": "업데이트는 main 브랜치를 체크아웃한 Git 저장소에서만 할 수 있어요.",
   "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.": "이 서버는 설치된 업데이트 폴더에서 실행 중이에요. 소스 체크아웃에서 Ovis를 다시 시작한 뒤(허더 플러그인의 Stop 후 Start, 또는 bun run start) 업데이트하세요.",
   "The running version is not part of the release history; automatic downgrade is disabled.": "실행 중인 버전이 릴리즈 기록에 없어요. 이전 버전으로는 자동 전환하지 않습니다.",
+  "The version of Ovis running on this PC. Update and restart installs the release shown and then restarts Ovis.": "이 PC에서 실행 중인 Ovis 버전입니다. '업데이트하고 다시 시작'은 표시된 버전을 설치한 뒤 Ovis를 다시 시작합니다.",
 };

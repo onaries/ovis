@@ -192,11 +192,9 @@ export const FILES_JA: Record<string, string> = {
   "The pull request changed since it was shown. Refresh it, then merge.": "表示後にプルリクエストが変わりました。更新してからマージしてください。",
   "This base branch merges through a merge queue; merge it on GitHub.": "このベースブランチはマージキューでマージされます。GitHub でマージしてください。",
   "File text size": "ファイルの文字サイズ",
-  "An open file's text, in its preview and its source. Follows the chat font size until you choose one.": "開いたファイルの文字(プレビューとソース)。選ぶまではチャットのフォントサイズに従います。",
   "Decrease file text size": "ファイルの文字を小さく",
   "Increase file text size": "ファイルの文字を大きく",
   "Files beside the pane": "ペインの横にファイル一覧",
-  "On a wide window, Browse files opens as a panel on the right of the pane instead of a popup. With Open files set to Beside the pane, a file opened from it shows in its place, and closing the file brings the list back.": "広いウィンドウでは、ファイルの参照がポップアップではなくペインの右側のパネルで開きます。「ファイルを開く」が「ペインの横」のときは、一覧から開いたファイルがその場所に表示され、閉じると一覧に戻ります。",
   "Outline": "目次",
   "Edit file": "ファイルを編集",
   "Unsaved changes": "未保存の変更",
@@ -229,4 +227,6 @@ export const FILES_JA: Record<string, string> = {
   "Diff layout": "差分の表示形式",
   "Unified": "1列",
   "Split": "並べて表示",
+  "The text size of a file you open, in its preview and its source. It follows the chat font size until you set one here.": "開いたファイルの文字サイズで、プレビューにもソースにも適用されます。ここで決めるまではチャットの文字サイズに合わせます。",
+  "On a wide window, Browse files opens as a panel to the right of the pane and not as a popup. With Open files on Beside the pane, a file opened from the list takes its place, and closing the file brings the list back.": "広いウィンドウでは、「ファイルを参照」がポップアップではなくペインの右側のパネルとして開きます。「ファイルを開く」が「ペインの横」のときは、一覧から開いたファイルがその場所に表示され、ファイルを閉じると一覧に戻ります。",
 };

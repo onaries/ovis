@@ -22,7 +22,6 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Helpers": "도우미",
   "Helpers of {title}": "{title}의 도우미",
   "Fold helpers under their agent": "도우미를 에이전트 아래에 접기",
-  "On this device, an agent's helpers fold under one line below its row in the Agents list, with how many there are. A helper that needs you and the selected one stay in sight.": "이 기기의 에이전트 목록에서 에이전트의 도우미를 그 행 아래 한 줄로 접고 개수를 보여 줍니다. 내 응답이 필요한 도우미와 선택한 도우미는 계속 보입니다.",
   "Background tasks running: {count}": "실행 중인 백그라운드 작업: {count}",
   "Agent waiting on background work": "에이전트가 백그라운드 작업을 기다리는 중",
   "Has a question": "질문 있음",
@@ -76,4 +75,5 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Move to {group}": "{group}(으)로 옮기기",
   "Remove from {group}": "{group}에서 빼기",
   "{count} working": "작업 중 {count}개",
+  "On this device, an agent's helpers fold into one line under it in the Agents list, with their count. A helper that needs you and the one you selected stay in sight.": "이 기기의 에이전트 목록에서 에이전트의 도우미들을 그 아래 한 줄로 접고 개수를 보여 줍니다. 내 응답이 필요한 도우미와 선택한 도우미는 계속 보입니다.",
 };

@@ -1031,7 +1031,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--ring-inset-offset` | `-2px` | Inset outline offset inside scroll-clipped strips |
 | `--z-header` | `4` | A phone's glass header, over the transcript that scrolls under it |
 | `--z-banner` | `5` | Terminal banners |
-| `--z-popover` | `10` | Composer completions |
+| `--z-popover` | `10` | Composer completions; a Settings row's sentence, inside its dialog's scrim |
 | `--z-scrim` | `15` | Mobile drawer scrim |
 | `--z-drawer` | `20` | Mobile drawer |
 | `--z-modal` | `30` | Dialog scrims |
@@ -4118,7 +4118,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   font) is found by that row's words. Nothing matching says **No settings match.** A
   phone's results take the list's place under the field. Edit key bar opens over the Terminal
   page, so Back steps out to it. The first Escape empties the search wherever the focus is in it and
-  gives the field the focus, the next closes Settings. The command palette's Settings entries still land on pages and groups.
+  gives the field the focus, the next closes Settings; a row's sentence that is showing closes before either (below). The command palette's Settings entries still land on pages and groups.
 - Each step into Settings is an entry of the browser's history (`lib/settingsHistory.ts`): the
   dialog, the page a phone opens from its list, the key bar editor. The system Back button (and
   an edge swipe) takes one step out and never leaves the app from inside Settings; the Back
@@ -4176,6 +4176,53 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   a `details` whose `summary` is the sentence); the conditions and exceptions open under it. On
   coarse pointers an invisible expander gives that line the touch target without changing its
   height.
+- On a page drawn without sentences, a row's sentence shows on demand (#3275; `useRowSentence` and
+  `RowSentence` in `components/SettingsControls.tsx`). A mouse resting `450ms` on the row, or the
+  keyboard's focus on its control, draws it over the page (`.settings-help`): the relay map's tooltip
+  surface (`--bg-elevated`, hairline `--border-strong`, `--radius-sm`, `--shadow-menu`, `--fs-xs`,
+  no wider than `22rem`), fixed in the dialog's scrim so the scrolling page does not cut it. It goes
+  above the row with its left edge on the name's, so it covers neither the row's own control nor
+  the row below, which the pointer goes to next; under the row only where the screen ends above it,
+  and never above the screen's top, so a sentence taller than a short window still starts in sight; it is never taller than the
+  screen, and scrolls under the pointer where its words do not fit.
+  Over another row's control it narrows to the room beside that control, down to `224px`; with less
+  room than that (the row under a font row's field) it keeps its width and lies on that control's
+  near end. There the pointer is the control's, not the sentence's: the sentence goes as the pointer
+  comes onto that part, so a press reaches the control instead of landing on the sentence. It is drawn only while
+  its row is in the page's view: a dialog's Tab moves the focus without scrolling
+  (`lib/useFocusTrap.ts`), so on a setting the page is not scrolled to the sentence waits for the
+  row, and Escape is not its own meanwhile. It never
+  moves: it is there or it is not, and a row entered within `400ms` of another's closing shows its
+  own at once. The pointer on it keeps it, it takes no focus, and Escape closes it alone and leaves
+  Settings open. The keyboard on a setting always shows its sentence, so from there the first Escape
+  closes the sentence and the next does what Escape does (empties the search, closes Settings), as
+  [React Aria's tooltip](https://github.com/adobe/react-spectrum/blob/main/packages/react-aria/src/tooltip/useTooltipTrigger.ts)
+  takes Escape while it is open and stops it there: closing Settings would move the focus, which
+  1.4.13 does not allow a dismissal to do. A press on the row's control closes the sentence too, the
+  keyboard's as a pointer's (a choice, not a question; that tooltip's `shouldCloseOnPress`), so
+  Escape after a choice is Settings' at once. A focus is the keyboard's when a key that moves the
+  focus came last (Tab, an arrow, Home, End): a click or a tap that puts the focus in a field or a
+  select shows no sentence, and neither does the focus the app gives back after Escape or Enter (a
+  closed editor, a confirmed dialog), where a sentence would take the next Escape from Settings. A
+  dialog opened over Settings keeps its own Escape, and a pen taps as a finger does. In a text field that
+  Escape is the field's too, and the first text typed closes it. A finger has no hover: a tap on the row, anywhere but its control, opens the sentence in the
+  row, under the name and the control at the row's width (`.settings-row-sentence`), and a second
+  tap closes it, so nothing is drawn over a phone's page. Escape closes it too, before Settings (a
+  touch screen with a keyboard), and a row that a search hides takes its sentence with it. Every control in the row is described by
+  the same sentence (`aria-describedby`): its switch, select, stepper or group of choices, and a
+  button or a field the page draws there (one that brings a description of its own keeps it), as
+  [Zed's settings](https://github.com/zed-industries/zed/blob/main/crates/settings_ui/src/settings_ui.rs)
+  give each control its row's description, so a screen reader reads it with the control. The
+  pattern is WAI-ARIA's [tooltip](https://www.w3.org/WAI/ARIA/apg/patterns/tooltip/) (hover and
+  focus, Escape, no focus of its own) under WCAG 2.2
+  [1.4.13](https://www.w3.org/WAI/WCAG22/Understanding/content-on-hover-or-focus.html)
+  (dismissible, hoverable, persistent).
+- A row's sentence is one or two sentences: what the setting changes, what each choice means, and
+  whether it is this device's or every device's, in the words its label already uses. A row whose
+  name alone misleads also keeps one short line in sight (`condition`), as
+  [herdr-app's](https://github.com/herdrdev/herdr-app/blob/master/defaults/frame/settings/main.js)
+  rows carry a line only where there is something to say; every other row stays a name and its
+  control.
 - Settings selects use `SettingsSelect` in `components/SettingsControls.tsx`: an inset Lucide
   chevron with space reserved beside the text. This follows the padded indicator in
   [T3 Code](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/ui/select.tsx),

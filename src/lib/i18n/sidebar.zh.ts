@@ -22,7 +22,6 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Helpers": "助手",
   "Helpers of {title}": "{title} 的助手",
   "Fold helpers under their agent": "把助手折叠在其代理下",
-  "On this device, an agent's helpers fold under one line below its row in the Agents list, with how many there are. A helper that needs you and the selected one stay in sight.": "在此设备的代理列表中，把代理的助手折叠为其行下方的一行，并显示数量。需要你回应的助手和选中的助手仍然可见。",
   "Background tasks running: {count}": "正在运行的后台任务：{count}",
   "Agent waiting on background work": "Agent 正在等待后台工作",
   "Has a question": "有问题",
@@ -76,4 +75,5 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Move to {group}": "移到 {group}",
   "Remove from {group}": "从 {group} 移出",
   "{count} working": "{count} 个工作中",
+  "On this device, an agent's helpers fold into one line under it in the Agents list, with their count. A helper that needs you and the one you selected stay in sight.": "在此设备的 Agent 列表中，把 Agent 的助手折叠成它下方的一行，并显示数量。需要你回应的助手和当前选中的助手仍会显示。",
 };

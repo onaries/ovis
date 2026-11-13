@@ -62,4 +62,5 @@ export const UPDATES_ZH: Record<string, string> = {
   "Updates require a Git checkout on the main branch.": "更新需要检出了 main 分支的 Git 仓库。",
   "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.": "此服务器正从已安装更新的文件夹运行。请从源码检出重新启动 Ovis（herdr 插件的 Stop 然后 Start，或 bun run start），再更新。",
   "The running version is not part of the release history; automatic downgrade is disabled.": "正在运行的版本不在发布历史中，不会自动降级。",
+  "The version of Ovis running on this PC. Update and restart installs the release shown and then restarts Ovis.": "此 PC 上正在运行的 Ovis 版本。“更新并重启”会安装所显示的版本，然后重启 Ovis。",
 };

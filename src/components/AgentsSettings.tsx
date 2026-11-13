@@ -74,7 +74,7 @@ function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }:
   const effortId = `settings-${agent}-launch-effort`;
   return <>
     <SettingsRow icon={Cpu} label={t("Model")} htmlFor={modelId} wide reset={agent === "claude" ? ["claudeLaunchModel"] : ["codexLaunchModel"]} resetAlso={{ changed: false, restore: () => setDraft("") }}
-      description={t("New workspace and New tab fill it in, still changeable there; New worktree starts the agent on it. Empty: the agent's own model.")}
+      description={t("The model a new agent starts with: New workspace and New tab fill it in, still changeable there, and New worktree uses it as is. Empty leaves the choice to the agent, and an agent already running is not changed.")}
       condition={invalid ? <span id={`${modelId}-error`} className="settings-condition" role="alert">{t("One model name, without spaces.")}</span> : undefined}>
       <input id={modelId} className="input settings-font-input" value={draft} placeholder={t("Agent default")}
         list={suggestions.length > 0 ? `${modelId}-list` : undefined} aria-invalid={invalid || undefined} aria-describedby={invalid ? `${modelId}-error` : undefined}
@@ -86,7 +86,7 @@ function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }:
         }} />
       {suggestions.length > 0 && <datalist id={`${modelId}-list`}>{suggestions.map((alias) => <option key={alias} value={alias} />)}</datalist>}
     </SettingsRow>
-    <SettingsRow icon={Zap} label={t("Effort")} htmlFor={effortId} reset={agent === "claude" ? ["claudeLaunchEffort"] : ["codexLaunchEffort"]} description={t("Filled in the same way. Agent default adds no flag; the levels a model takes depend on the model.")}>
+    <SettingsRow icon={Zap} label={t("Effort")} htmlFor={effortId} reset={agent === "claude" ? ["claudeLaunchEffort"] : ["codexLaunchEffort"]} description={t("How much effort a new agent puts into reasoning, filled in the same way as Model. Agent default leaves it to the agent; which levels work depends on the model.")}>
       <SettingsSelect id={effortId} value={effort} onChange={(event) => onEffort(event.target.value)}>
         <option value="">{t("Agent default")}</option>
         {efforts.map((level) => <option key={level} value={level}>{level}</option>)}
@@ -104,10 +104,9 @@ function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }:
 function AgentOwnRows({ agentId }: { agentId: string }) {
   const { settings, update } = useSettings();
   const t = useT();
-  const launch = t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.");
   switch (agentId) {
     case "claude": return <>
-      <SettingsRow icon={ShieldCheck} label={t("Permission mode")} description={launch} htmlFor="settings-claude-launch-mode" reset={["claudeLaunchMode"]}>
+      <SettingsRow icon={ShieldCheck} label={t("Permission mode")} description={t("The permission mode a new Claude Code starts in when you open it from New workspace, New tab or New worktree. Agent default leaves it to Claude Code's own settings, and a running agent is not changed.")} htmlFor="settings-claude-launch-mode" reset={["claudeLaunchMode"]}>
         <SettingsSelect id="settings-claude-launch-mode" value={settings.claudeLaunchMode} onChange={(event) => update({ claudeLaunchMode: event.target.value as ClaudeLaunchMode })}>
           {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
         </SettingsSelect>
@@ -116,7 +115,7 @@ function AgentOwnRows({ agentId }: { agentId: string }) {
         onModel={(claudeLaunchModel) => update({ claudeLaunchModel })} onEffort={(effort) => update({ claudeLaunchEffort: CLAUDE_EFFORTS.find((level) => level === effort) ?? "" })} />
     </>;
     case "codex": return <>
-      <SettingsRow icon={Shield} label={t("Sandbox and approvals")} description={launch} htmlFor="settings-codex-launch-mode" reset={["codexLaunchMode"]}>
+      <SettingsRow icon={Shield} label={t("Sandbox and approvals")} description={t("The sandbox and approval preset a new Codex starts with when you open it from New workspace, New tab or New worktree. Agent default leaves it to Codex's own settings, and a running agent is not changed.")} htmlFor="settings-codex-launch-mode" reset={["codexLaunchMode"]}>
         <SettingsSelect id="settings-codex-launch-mode" value={settings.codexLaunchMode} onChange={(event) => update({ codexLaunchMode: event.target.value as CodexLaunchMode })}>
           {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
         </SettingsSelect>
@@ -161,7 +160,7 @@ function IntegrationRow({ integration, label }: { integration: AgentIntegration;
   };
   const state = integration.state === "outdated" ? t("Installed, but older than this herdr: run this to update it") : t("Not installed");
   return (
-    <SettingsRow icon={History} label={label} keywords={state} wide condition={<span className="settings-condition">{state}</span>}>
+    <SettingsRow icon={History} label={label} description={t("herdr's own integration for resuming this agent's session. Installing it changes the agent's settings, so Ovis shows the command to run and does not install it itself.")} keywords={state} wide condition={<span className="settings-condition">{state}</span>}>
       {/* the command stays in sight on a page without sentences: it is what Copy copies */}
       <span className="settings-integration-action">
         <code ref={commandRef} className="settings-integration-command">{command}</code>
@@ -329,16 +328,16 @@ function PlanLimits({ watching }: { watching: boolean }) {
   // one row: off, or on and counted one way; the row says what it shows, the sign-in sentence is the account's own (G-095, G-098)
   return (
     <SettingsGroup section="plan-limits" className="agents-limits">
-      <SettingsRow icon={Gauge} label={t("Plan limits")}
+      <SettingsRow icon={Gauge} label={t("Plan limits")} description={t("Meters of your plans' limits, on every device: Used shows the share already spent, Remaining what is left, and Off hides them.")}
         condition={<span className="settings-condition">{t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}</span>} keywords={`${t("Plan limits")} ${t("Show plan limits")} ${t("Meters show")} ${t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}`} wide reset={settings.showUsage ? ["showUsage", "usageCount"] : ["showUsage"]}>
         <Segmented label={t("Plan limits")} value={settings.showUsage ? settings.usageCount : "off"} onChange={(shown) => update(shown === "off" ? { showUsage: false } : { showUsage: true, usageCount: shown })} options={[{ value: "off", label: t("Off") }, { value: "used", label: t("Used") }, { value: "left", label: t("Remaining") }] as const} />
       </SettingsRow>
       {settings.showUsage && <>
-        <SettingsRow icon={CalendarClock} label={t("Limit shown")} description={t("Session is the 5-hour limit. Without it, the closest limit is shown.")} wide reset={["usageGlance"]}>
+        <SettingsRow icon={CalendarClock} label={t("Limit shown")} description={t("Which limit the meter shows first: the week's or the 5-hour session's. An account without that limit shows the one closest to running out.")} wide reset={["usageGlance"]}>
           <Segmented label={t("Limit shown")} value={settings.usageGlance} onChange={(usageGlance) => update({ usageGlance })} options={[{ value: "week", label: t("Weekly") }, { value: "session", label: t("Session") }]} />
         </SettingsRow>
         {statusline.state?.supported && <SettingsRow icon={SquareTerminal} label={t("Read Claude's limits from its status line")}
-          description={t("For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.")}>
+          description={t("For networks that block Claude's usage service. It wraps Claude Code's status line on this PC to read the limits Claude shows there; your own status line keeps drawing as before, and turning this off puts Claude's settings back.")}>
           <Toggle label={t("Read Claude's limits from its status line")} checked={statusline.state.installed} disabled={statusline.busy || watching}
             onChange={(enabled) => void statusline.set(enabled)} />
         </SettingsRow>}
@@ -444,7 +443,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
     <SettingsBare.Provider value={true}>
       {/* the first-run guide again (lib/setupGuide.ts): it sets up this PC, and a watching device is never shown it */}
       {!watching && local && <SettingsGroup section="guide">
-        <SettingsRow icon={Compass} label={t("Setup guide")}>
+        <SettingsRow icon={Compass} label={t("Setup guide")} description={t("Opens the first-run guide again, from its first step, to install coding agents on this PC and connect them. What was set up before stays as it is.")}>
           <button type="button" className="btn" onClick={() => { onOpenGuide(); openSetupGuide(); }}>{t("Open setup guide")}</button>
         </SettingsRow>
       </SettingsGroup>}
@@ -488,7 +487,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
 
       <section className="settings-section" data-section="other-accounts" tabIndex={-1} aria-label={t("Other accounts")}>
         <SettingsGroup>
-          <SettingsRow icon={Users} label={t("Other accounts")}
+          <SettingsRow icon={Users} label={t("Other accounts")} description={t("Accounts of providers that none of the agents listed above signs in to, such as Cursor or an agent this PC does not have.")}
             condition={!settings.showUsage ? <span className="settings-condition">{t("Turn on plan limits to see accounts.")}</span> : !local ? <span className="settings-condition">{t("Accounts are read on the PC Ovis runs on.")}</span> : undefined}>
             {!watching ? <button ref={addButton} className="btn btn-ghost" type="button" onClick={() => setDialog({ kind: "add", provider: null })}><Plus aria-hidden="true" />{t("Add account")}</button> : <span />}
           </SettingsRow>

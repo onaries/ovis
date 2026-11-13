@@ -5,7 +5,6 @@
  */
 export const RUNTIME_MOVE_KO: Record<string, string> = {
   "Move everything to herdr-core": "herdr-core로 전부 옮기기",
-  "Every workspace, tab and agent reopens on herdr-core, all at once.": "모든 워크스페이스·탭·에이전트를 한꺼번에 herdr-core에서 다시 엽니다.",
   "Install herdr-core and move everything": "herdr-core 설치하고 전부 옮기기",
   "Installs herdr-core {version} into ~/.local/bin, then shows what moves before anything does.": "herdr-core {version}을 ~/.local/bin에 설치한 뒤, 무엇이 옮겨지는지 먼저 보여 줍니다.",
   "Install and move…": "설치하고 옮기기…",
@@ -68,4 +67,5 @@ export const RUNTIME_MOVE_KO: Record<string, string> = {
   "Running on herdr-core.": "herdr-core에서 돌고 있습니다.",
   "The server was switching its runtime.": "서버가 런타임을 전환하는 중이었습니다.",
   "An agent did not reopen its conversation on herdr-core.": "에이전트가 herdr-core에서 같은 대화를 다시 열지 못했습니다.",
+  "Every workspace, tab and agent reopens on herdr-core, all at once, after a list shows what moves. Scrollback and programs running in shells do not come along.": "모든 워크스페이스, 탭, 에이전트를 한 번에 herdr-core에서 다시 열며, 옮길 내용을 먼저 목록으로 보여 줍니다. 이전 출력(스크롤백)과 셸에서 실행 중인 프로그램은 옮겨지지 않습니다.",
 };

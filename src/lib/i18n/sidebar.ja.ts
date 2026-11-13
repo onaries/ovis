@@ -22,7 +22,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Helpers": "ヘルパー",
   "Helpers of {title}": "{title} のヘルパー",
   "Fold helpers under their agent": "ヘルパーをエージェントの下にたたむ",
-  "On this device, an agent's helpers fold under one line below its row in the Agents list, with how many there are. A helper that needs you and the selected one stay in sight.": "このデバイスのエージェント一覧で、エージェントのヘルパーをその行の下の 1 行にたたみ、数を表示します。応答が必要なヘルパーと選択中のヘルパーは表示されたままです。",
   "Background tasks running: {count}": "実行中のバックグラウンドタスク: {count}",
   "Agent waiting on background work": "エージェントがバックグラウンドの作業を待っています",
   "Has a question": "質問があります",
@@ -76,4 +75,5 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Move to {group}": "{group} に移動",
   "Remove from {group}": "{group} から外す",
   "{count} working": "作業中 {count} 件",
+  "On this device, an agent's helpers fold into one line under it in the Agents list, with their count. A helper that needs you and the one you selected stay in sight.": "このデバイスのエージェント一覧で、エージェントのヘルパーをその下の 1 行にたたみ、数を表示します。応答が必要なヘルパーと選択中のヘルパーは表示されたままです。",
 };

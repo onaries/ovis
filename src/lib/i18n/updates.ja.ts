@@ -62,4 +62,5 @@ export const UPDATES_JA: Record<string, string> = {
   "Updates require a Git checkout on the main branch.": "更新には main ブランチをチェックアウトした Git リポジトリが必要です。",
   "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.": "このサーバーはインストールされた更新のフォルダーから動いています。ソースのチェックアウトから Ovis を起動し直して（herdr プラグインの Stop と Start、または bun run start）更新してください。",
   "The running version is not part of the release history; automatic downgrade is disabled.": "実行中のバージョンはリリース履歴にありません。前のバージョンへは自動では戻しません。",
+  "The version of Ovis running on this PC. Update and restart installs the release shown and then restarts Ovis.": "この PC で動いている Ovis のバージョンです。「更新して再起動」は、表示されているリリースをインストールしてから Ovis を再起動します。",
 };

@@ -81,7 +81,7 @@ export function ThemeFiles({ onImported }: { onImported: (sides: readonly Mode[]
         icon={FileUp}
         label={t("Theme file")}
         keywords={`${t("Import")} Base16`}
-        description={t("Import a theme from a file of colors: a Base16 scheme, or a file with a dark and a light side. Only colors are read from it.")}
+        description={t("Adds a theme from a file of colors: a Base16 scheme, or a file with a dark and a light side. Only colors are read from it; the theme is chosen at once and joins the cards above.")}
         condition={status !== null && <span className={status.failed ? "settings-condition" : "settings-hint"} role={status.failed ? "alert" : "status"}>{status.text}</span>}
       >
         {/* beside the button, not in the description: a page without sentences still says where the format is written down */}

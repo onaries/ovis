@@ -41,13 +41,13 @@ export function KeyBarToggles() {
     <SettingsBare.Provider value={true}>
       <SettingsGroup>
         {/* the picture: a tap on the terminal, with the keyboard it brings up or not */}
-        <SettingsRow label={t("Don't open the keyboard when tapping the terminal")} icon={Keyboard} preview={<PhonePreview keyboard={!settings.terminalKeyboardOnRequest} bar="keys" />} reset={["terminalKeyboardOnRequest"]} keywords={t("Keyboard only from the key bar")}>
+        <SettingsRow label={t("Don't open the keyboard when tapping the terminal")} description={t("On this device, a tap on the terminal no longer brings up the keyboard; the key bar's keyboard key shows and hides it.")} icon={Keyboard} preview={<PhonePreview keyboard={!settings.terminalKeyboardOnRequest} bar="keys" />} reset={["terminalKeyboardOnRequest"]} keywords={t("Keyboard only from the key bar")}>
           <Toggle label={t("Don't open the keyboard when tapping the terminal")} checked={settings.terminalKeyboardOnRequest} onChange={(terminalKeyboardOnRequest) => update({ terminalKeyboardOnRequest })} />
         </SettingsRow>
-        <SettingsRow label={t("Hide the key bar in the input line")} icon={FoldVertical} preview={<PhonePreview keyboard bar={settings.terminalFoldKeyBar ? "folded" : "keys"} />} reset={["terminalFoldKeyBar"]} keywords={t("Fold the key bar")}>
+        <SettingsRow label={t("Hide the key bar in the input line")} description={t("On this device, with Input line chosen, the key bar stays folded under the line until its Terminal keys button opens it.")} icon={FoldVertical} preview={<PhonePreview keyboard bar={settings.terminalFoldKeyBar ? "folded" : "keys"} />} reset={["terminalFoldKeyBar"]} keywords={t("Fold the key bar")}>
           <Toggle label={t("Hide the key bar in the input line")} checked={settings.terminalFoldKeyBar} onChange={(terminalFoldKeyBar) => update({ terminalFoldKeyBar })} />
         </SettingsRow>
-        <SettingsRow label={t("Attach files button")} icon={Paperclip} reset={["terminalAttachButton"]}>
+        <SettingsRow label={t("Attach files button")} description={t("Adds a button that picks files on this device, uploads them to the PC and puts their paths in the terminal. It sits in the input line, or in the key bar while you type directly.")} icon={Paperclip} reset={["terminalAttachButton"]}>
           <Toggle label={t("Attach files button")} checked={settings.terminalAttachButton} onChange={(terminalAttachButton) => update({ terminalAttachButton })} />
         </SettingsRow>
       </SettingsGroup>

@@ -200,6 +200,31 @@
   height: var(--icon-size-sm);
 }
 
+/* A bare row's sentence over the page (#3275), while a mouse rests on the row or the keyboard is on its
+   control: the one tooltip surface the app has (.relay-map-tooltip), placed by placeSentence in
+   SettingsControls.tsx. It never moves: it is there or it is not. */
+.settings-help {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  max-width: min(22rem, calc(100vw - var(--space-4)));
+  /* in a window shorter than the sentence (a high zoom) it stays inside the screen and scrolls under the pointer */
+  max-height: calc(100dvh - var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-menu);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-base);
+  overflow-wrap: break-word;
+}
+
 /* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
 .theme-cards {
   display: flex;
@@ -479,6 +504,22 @@
 .settings-row-text > .settings-description,
 .settings-row-text > .settings-hint {
   max-width: 54ch;
+}
+
+/* a bare row's sentence opened in the row by a tap (a finger has no hover, #3275): under the name and the
+   control, as wide as the row, starting where the name does */
+.settings-row.is-explained {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.settings-row > .settings-row-sentence {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.settings-row:has(> .settings-row-text .settings-row-icon) > .settings-row-sentence {
+  padding-inline-start: var(--settings-icon-column);
 }
 
 /* a condition that applies right now, on its own line under the sentence */
@@ -791,8 +832,15 @@
     min-width: 0;
   }
 
-  .settings-row.is-wide > .settings-font-input {
+  .settings-row.is-wide > .settings-font-input,
+  .settings-row.is-wide > .settings-row-sentence {
     flex: 0 0 auto;
+  }
+
+  /* a stacked row is a column already, and the opened sentence its last line: wrapping would size that column to
+     its widest child's own width (a font field, four segments), past the card */
+  .settings-row.is-wide.is-explained {
+    flex-wrap: nowrap;
   }
 
   /* a stepper under its name ends on the card's edge, as the font rows' steppers do */
@@ -828,6 +876,7 @@
 
   .settings-description,
   .settings-hint,
+  .settings-help,
   .settings-row-text > .settings-condition {
     font-size: var(--fs-sm);
   }

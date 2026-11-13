@@ -121,7 +121,7 @@ export const DEVICES_ZH: Record<string, string> = {
   "Visitors can watch your terminals, but cannot type or change anything. Your app token or paired device keeps its existing access.": "访客可以查看你的终端，但不能输入或更改。你的应用令牌或已配对设备保留现有权限。",
   "With no names, every unexpired link you issue opens it. Add names to accept only links issued to them.": "没有名称时，你签发的所有未过期链接都能打开。添加名称后，只接受签发给这些名称的链接。",
   "Test notification": "测试通知",
-  "Check whether this device can receive push alerts": "检查此设备能否接收推送通知",
+  "Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.": "立即向此设备发送一条通知，以便确认推送通知能否送达这里。无法发送时，名称下方的一行会给出提示。",
   "Send test": "发送测试",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "推送通知需要 HTTPS 或 localhost。在 iPhone 上请使用添加到主屏幕的应用。",
   "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
