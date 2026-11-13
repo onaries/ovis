@@ -8,7 +8,7 @@
  * unless what an item mounted (a rename field, a confirm) takes it first: the button is focused
  * in a layout cleanup, before a new field's autoFocus and a dialog's own focus.
  */
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, type LucideIcon } from "lucide-react";
 
@@ -53,6 +53,8 @@ interface Props {
   /** the menu's accessible name, and the sheet's title */
   title: string;
   subtitle?: string;
+  /** what the row waits for, in the waiting state's colour, wrapped and whole: first under the sheet's subtitle, and under the popover's header */
+  alert?: string;
   /** a phone's sheet only, under the subtitle and wrapped, not cut: text a row cuts (a hover tooltip says it on a desktop) */
   detail?: string;
   /** drawn above the items, and in the sheet's head in the title's place: what the menu is about, when that is more than a name */
@@ -82,10 +84,11 @@ export function rowMenuAnchor(node: Element): HTMLElement | null {
   return surface === null ? null : anchors.get(surface) ?? null;
 }
 
-export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail, header, items, align = "end", onClose, variant }: Props) {
+export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, alert, detail, header, items, align = "end", onClose, variant }: Props) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const surface = useRef<HTMLDivElement>(null);
+  const alertId = useId();
   // the letters typed so far and when the last came: a long list (a tab strip's More) is searched by its
   // items' first letters, as a native menu is (G-160)
   const typed = useRef<{ text: string; at: number }>({ text: "", at: 0 });
@@ -250,10 +253,11 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
           {/* a header of the menu's own stands in for the title and subtitle; the detail still follows it */}
-          {header ? <div className="row-sheet-head">{header}{detail && <span className="row-sheet-detail">{detail}</span>}</div> : (
+          {header ? <div className="row-sheet-head">{header}{alert && <span className="row-sheet-alert">{alert}</span>}{detail && <span className="row-sheet-detail">{detail}</span>}</div> : (
             <div className="row-sheet-head">
               <span className="row-sheet-title">{title}</span>
               {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}
+              {alert && <span className="row-sheet-alert">{alert}</span>}
               {detail && <span className="row-sheet-detail">{detail}</span>}
             </div>
           )}
@@ -288,8 +292,9 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }
 
   return createPortal(
-    <div ref={surface} className={`menu row-menu${overModal ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
-      {header && <div className="row-menu-header" role="presentation">{header}</div>}
+    <div ref={surface} className={`menu row-menu${overModal ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} aria-describedby={alert ? alertId : undefined} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
+      {/* the reason describes the menu: a screen reader inside a menu reads its items, and nothing that stands between them */}
+      {(header || alert) && <div className="row-menu-header" role="presentation">{header}{alert && <span id={alertId} className="row-menu-alert">{alert}</span>}</div>}
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.divider && <span className="row-menu-divider" role="separator" />}

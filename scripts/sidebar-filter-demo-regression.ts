@@ -179,9 +179,14 @@ async function rosterView(page: Page) {
   });
 }
 
-/** Everything this page keeps: folds, pins and the rest, to prove a filter writes none of it and the query is nowhere. */
+/**
+ * Everything this page keeps: folds, pins and the rest, to prove a filter writes none of it and the query is nowhere.
+ * Two records are left out, since they follow the page's own life and not the filter: where each chat is scrolled to,
+ * and when each agent's state began (lib/agentStateSince.ts), written whenever a roster this script sends moves a state.
+ */
 const storageView = (page: Page) => page.evaluate(() => {
-  const read = (store: Storage) => Object.fromEntries(Object.keys(store).filter((key) => key !== "ovis:chat-positions").sort().map((key) => [key, store.getItem(key)]));
+  const apart = new Set(["ovis:chat-positions", "ovis:agent-state-since"]);
+  const read = (store: Storage) => Object.fromEntries(Object.keys(store).filter((key) => !apart.has(key)).sort().map((key) => [key, store.getItem(key)]));
   return { local: read(localStorage), session: read(sessionStorage) };
 });
 

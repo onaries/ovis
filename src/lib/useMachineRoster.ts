@@ -9,6 +9,7 @@ import { withPairedNotice } from "./pairedNotices.ts";
 import { takeAuthTokenFromUrl } from "./authLink.ts";
 import { applyPaneStatus } from "./snapshot.ts";
 import { setAgentRowTokens } from "./agentRowTokens.ts";
+import { stateWatch } from "./agentStateWatch.ts";
 import { SnapshotRequests } from "./snapshotRequests.ts";
 import { ReorderCoordinator } from "./workspaceOrder.ts";
 import type { AppLink } from "./deepLink.ts";
@@ -103,6 +104,9 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
   const stream = useRef({ open: false, localConnected: false });
   const polling = useRef<((readNow: boolean) => void) | null>(null);
   const onRosterStream = useCallback((update: RosterStreamUpdate) => {
+    // the agents' state times go by what the page was told, and when (lib/agentStateWatch.ts)
+    if (Array.isArray(update)) stateWatch.pushed();
+    else stateWatch.subscription(update);
     const previous = stream.current.open && stream.current.localConnected;
     if (Array.isArray(update)) stream.current.localConnected = localConnectedIn(update);
     // Every opening, a switch from SSE to the terminal socket included, waits for its own first
@@ -134,6 +138,7 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
   const [reorderCoordinator] = useState(() => new ReorderCoordinator({ verify: verifySourceBoot, onSettled: () => void loadRef.current() }));
   const load = useCallback(async () => {
     const started = reorderCoordinator.loadStarted();
+    const asked = stateWatch.asked();
     // the PC events this read starts after: a roster read later names its panes' sessions as they are now
     const readAfter = paneSessionEvents();
     try {
@@ -152,6 +157,7 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
         reorderCoordinator.roster(next, { kind: "load", started });
         setMachines((previous) => sameData(previous, next) ? previous : next);
         rosterIn();
+        stateWatch.read(asked);
         setMachineRosterLoaded(true);
         setError(null); setLocked(false);
       });
@@ -262,6 +268,7 @@ export function useRosterEvents({ onPaneMoved, machineSessions, locked, onRoster
   useEffect(() => {
     if (locked !== false) return;
     const onMessage = (payload: MachineEvent) => {
+      stateWatch.heard();
       const takeNotificationTargetRef = getTakeNotificationTargetRef();
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
       if (payload.type === "herdr-sidebar") { setAgentRowTokens(payload.agents); return; }

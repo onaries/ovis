@@ -117,6 +117,18 @@
   border-bottom: var(--hairline) solid var(--border);
 }
 
+/* what the row waits for, under the header: a row with no room for it leaves it out whole, and a touch screen too
+   wide for the sheet has no tooltip to say it, so the popover says it, wrapped and whole, as the sheet does */
+.row-menu-alert {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--status-blocked);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .row-menu-divider {
   height: var(--hairline);
   margin: var(--space-1) 0;
@@ -221,6 +233,23 @@
   overflow-wrap: anywhere;
   text-overflow: clip;
   white-space: normal;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* what the row waits for, in the agent's own words: the first thing under its name and place, in the waiting
+   state's colour, since a one-line row has no room to say it. It wraps and can be copied, as the name can. The
+   words are the agent's, of any length: past a fifth of the screen they scroll here instead of pushing the name
+   and the actions out of the sheet, and a fifth, not the detail's third, since both can be at their limit at once */
+.row-sheet-alert {
+  max-height: 20vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: var(--space-1);
+  color: var(--status-blocked);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
   -webkit-user-select: text;
   user-select: text;
   -webkit-touch-callout: default;

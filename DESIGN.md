@@ -1315,7 +1315,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   linked worktrees, and Expand/Collapse for a group. Pane renaming stays in the pane menu. The
   danger item takes `--status-blocked`. The popover is as tall as its items, up to the room on
   its side of the button (it scrolls only on a screen too short for it). At `<=640px` it is a `.modal` bottom sheet (`.row-sheet`):
-  a grip, the row's name and place, 48px rows and a Cancel button; Tab stays among them. The
+  a grip, the row's name and place, 48px rows and a Cancel button; Tab stays among them. A row
+  whose agent waits says what it waits for on a line of its own under the place
+  (`.row-sheet-alert`, `--status-blocked`, `--fs-sm`, wrapped and whole): a one-line row has no
+  room for it, and the sheet is where a thumb reads it without opening the pane. The words are
+  the agent's own, of any length: past a fifth of the screen they scroll in their own box, so the
+  name, the actions and Cancel stay in reach. The popover a
+  wider screen opens says it too, under its header (`.row-menu-alert`, `--fs-meta`, wrapped and
+  whole): a touch screen too wide for the sheet has no tooltip either. There it is the menu's
+  description (`aria-describedby`): a screen reader inside a menu reads the items alone. The
   rows scroll between the head and Cancel (`.row-sheet-items`), which stay put, when the sheet's
   92% of the screen cannot hold them. Escape, a press outside and
   focus leaving it close it (on a desktop a scroll or a resize too), and focus returns to the
@@ -1711,8 +1719,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--text-dim` on the `--bg-panel` it masks the edge with); it is hidden from screen readers,
   where the list itself is labelled **Pinned**. Without pins there is no card and no caption. Pins are shared with the other browsers of the server.
 - Appearance's **Sidebar rows** is **One line** by default: a workspace row is its name, and an
-  agent row is one line on a workspace row's height, its dim place after the title (the title keeps
-  its width first, the place takes what is left with an ellipsis). Two lines draws the row as the
+  agent row is one line on a workspace row's height, its dim place after the title. The title keeps
+  its width first. Under a pointer the place shows after it only where at least `4.5em` of it fits,
+  cut there with an ellipsis, and is left out whole where less would fit: a row never ends in a
+  couple of stray letters. A blocked agent's reason and its percent stand after the title the same
+  way, whole or not at all. On a touch screen the row is one line too, as the setting promises: its
+  mark, its title and its time, in a `--touch-target` row. It draws no place there (a screen reader
+  still hears it, and the row's `⋯` sheet says it whole); the one-line row gives the title what
+  the place took, and loses the place from sight. Two lines draws the row as the
   roster did before it was one line, on an agent row's height and type: the title of the pane the
   row opens, and under it in `--text-dim` `--fs-xs` the place, "workspace · folder" with no name
   said twice (`taskRowLines`, lib/paneName.ts). A shell titled by its folder leads with the
@@ -1749,8 +1763,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   filter is) moves the Agents list above the workspaces and splits its unpinned rows into
   groups: **Needs you** (blocked), **Working** (BG included), **Done** (a finish not read yet)
   and **Idle** (ready, a finish already read, an unknown state, or a PC that is away). Each
-  group has a quiet caps heading with its count in the trailing cell, as Slack's sidebar
-  sections do; the Needs you heading takes `--status-blocked`. An empty group is left out, and
+  group has a quiet heading that says its state once (`.agent-group-toggle`): the fold's caret in
+  the leading cell, the state's word in sentence case, `--fs-meta` `--fw-medium`, in the state's
+  own colour (`--status-blocked`, `--status-working`, `--status-done`; Idle in `--text-dim`), and
+  its count beside the word in `--text-dim`. A row under a heading that says its state draws no
+  state mark of its own, a working row's breathing dot included (the mark stays in the row for a
+  screen reader); a row whose state differs from
+  its group's (an agent kept with a helper that needs the reader, a BG ring under Working, a state
+  nobody knows under Idle) keeps its mark, drawn
+  before its time so that the times of a group still end on one edge. An
+  empty group is left out, and
   the pinned card stays first. **Within a state** orders each group: **Longest wait** (the
   default; the oldest `state_change_seq` first, as herdr's agent view sorts with
   `state_change_seq` ascending, #2015), **Recent** (the newest first) or **Name** (the title each
@@ -1759,6 +1781,112 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   PCs' list order; Name orders across PCs. An agent and its helpers stay together, in the
   group of the one of them that needs the reader most. The shared Agents order applies while
   grouping is off.
+- A state group folds from its heading (#3505): the heading is a button (`aria-expanded`, Enter
+  and Space), a label over rows rather than a line among them. Under a pointer it is
+  `--pointer-target` tall with its words centred, below a `--space-2` gap that is the list's and
+  not the button's, over the first heading too; on a touch screen it is a row (`--touch-target`)
+  tall and takes no gap, its words low in it under `--space-4`. Either way there is more space
+  over the words than under them (about 1.75 to 1), which files a heading with the rows it heads,
+  and the focus ring, drawn inside the button, clears the words. Under the pointer
+  its caret, its count and a dim word take `--text`, as the list's other fold lines brighten, and
+  a state's colour stays its own; it takes no fill. The list's fold lines that stand in for rows
+  (**+N background**, **+N resting**) keep a row's height and take the headings' type. A folded
+  heading keeps its count and turns its caret. The folds are kept on
+  this device (`ovis:agent-state-folds`), as a named group's are, and read anew at each press, so
+  a fold another tab made is kept. With none kept, **Idle** starts
+  folded: the agents that need the reader, work or just finished stand first, and the resting ones
+  are a press away. A folded group keeps the selected agent in sight, as the list's other folds
+  that start folded do (the resting line, the background workspaces), so reading a finished agent
+  never makes its row vanish. Under the filter every group stands open and no heading folds, as
+  the other folds do, and a heading that cannot fold draws no caret (a named group's neither);
+  the kept folds return with the filter's end. A row with the keyboard's focus
+  whose new state files it under a folded group hands the focus to that group's heading, and
+  only then: a focus the reader has put anywhere else is never taken. The
+  headings follow herdr-app's agents mod, whose priority sections fold from a header in the
+  state's colour with a dim count beside it, and whose rows under such a header say the state
+  only in short; here they do not say it at all.
+- Every agent row says how long its agent has been in its state (`.agent-since`: `<1m`, then
+  minutes, hours and days, `5m`, `2h`, `3d`; `stateAge`), in `--text-dim` `--fs-meta` with tabular
+  digits, right-aligned in a column four figures wide at the row's end: before the state cell, or
+  ending the row where a heading says the state. Under a pointer a one-line row's `⋯` shows
+  before it, never over it; on a row that says no time the `⋯` keeps no room for one. On a
+  two-line row the time ends the second line, beside the place,
+  and the row's marks (plan, helpers, context) end the first, so the times of a list stand in one
+  column and a row with no marks gives its title the whole first line; there the `⋯` takes its
+  room from the row under the pointer, as it always did, and the time moves with the place.
+  The time's box is as tall as its words (`--lh-tight`), and a two-line row's lines are the
+  title's and the place's own: marks and a time stand in a line and never size it, so every row
+  is as tall as before and draws its words at the same height, with a time or without, at either
+  density and at any interface type size.
+  Beside the filter's **Selected** note a one-line row's time steps aside, as its place does.
+  herdr reports no time of change, so this device stamps a change when it sees one and keeps the
+  stamps (`ovis:agent-state-since`, lib/agentStateSince.ts) across reloads, where two counters
+  prove that nothing changed meanwhile: herdr's `state_change_seq`, and the server's count of the
+  pane's finishes (`finish_id`, in its `finish_epoch`), since the state Ovis shows is not always
+  herdr's (a Claude that rests while its subagent keeps herdr at working). A stamp is kept only
+  where it and the row carry the same two numbers. So a time lasts until the page is loaded again
+  with a herdr that counts nothing (herdr-core), once the server has started anew, and for the
+  agents whose state Ovis reads from their own session files (OmO, GJC, Letta), for which herdr's
+  counter stands still. While the page watches, a counter that moves under a state that reads the
+  same means the state was left and come back to, and its time goes. Two moves of herdr's counter
+  keep the time: the one owed to what a pushed status told of first (a change, herdr's own turn
+  from done, the rest of a turn whose background work holds the row at working), and a move by
+  exactly one, which is a single turn of herdr's own and cannot have left a state that reads the
+  same before and after it (a row that background work held at working is not forgiven it: that
+  work's end shows the rest, and moves no counter). Two tabs of one device read the stamps anew at
+  each look: a tab keeps the time another stamped for a change both see, and leaves alone a stamp
+  of a change it has not seen yet. A change is dated only while the page was being told of its PCs:
+  its roster stream open and the page running, or a roster read within the last minute and a half
+  (lib/agentStateWatch.ts). After a longer gap (a phone that slept, a laptop's lid shut, a server
+  out of reach) the next roster is read as a reload reads it: a time stands where the counters
+  prove it, and what changed meanwhile says no time. A stream that says nothing vouches only while
+  it lives: once it ends, the page knew its PCs as of the last roster or event it heard (a hidden
+  tab reads no roster and probes no connection, so its stream can be dead for hours unnoticed). A
+  roster read after the stream said nothing for as long dates no change either, and keeps the times
+  the page had; if that stream then ends within half a minute it was dead, not silent, and the
+  roster is read as after a longer gap. The first roster of a stream that takes over from a silent
+  one, which is stopped with no word of its end, dates nothing either. A pane missing from a roster
+  for no longer than that is the row the page was seeing when it is back in the state it left in,
+  under the counter of herdr's it left with, and its agent is one that counter tells of. Otherwise
+  another agent may have been started in it: back in another state within that gap, its state began
+  as it came back; else it says no time unless the counters prove one. A pane that neither the page
+  nor the device has seen is stamped as its agent appears, once the page has looked at its PC for
+  longer than that gap: sooner, the roster may not have listed the agent yet. A pane's ID is not
+  the pane for good: herdr gives a pane it moves to another workspace a new ID, and an ID may come
+  to name another pane (the server reckons with an ended pane's ID being given out again). So a
+  stamp names its pane's terminal, which a pane keeps: a moved pane's time goes with it, and a pane
+  under an ID given out again has none of the last one's. The server counts finishes by pane ID, so
+  the count a pane had under the ID it left is not held against it. The page knows the panes it has
+  seen by their terminal as well: one whose ID went to another while it was out of sight is no new
+  pane when it is back. Done and idle are one state: reading a finished agent does not reset its
+  time. A state this device did not see begin says no time rather than a wrong one, a PC that is
+  away says none, and a pane gone from its roster for thirty days is forgotten. The times are
+  stamped in one place for the whole page (lib/useAgentStateSince.ts) and every list reads them:
+  those of the PCs the page has looked at, and no other. A roster is looked at in the commit that
+  draws it, before it is painted, so a list already drawn shows for no frame a time its look takes
+  back; one first drawn with that roster learns of the look a frame later. They are redrawn every
+  30 seconds while the list is open, in steps, never as a running clock. The format and the
+  done-and-idle rule are herdr-app's agents mod's.
+- Brief (the Agents list by state). Primary action: open the agent a row names. Priorities: who
+  needs the reader, what works, what just finished; then how long each has been so. Required
+  content: the Agents head with its fold; each state's heading with its word, count and caret;
+  each row's agent mark, title, time in its state and `⋯` menu, and the marks it had (plan,
+  helpers, progress, context ring, plugin tokens); a waiting agent's reason on the row where it
+  fits whole, a row's place where at least `4.5em` of it fits (none on a touch screen's one-line
+  row), and both always in its tooltip and its `⋯` menu (a phone's sheet, a popover elsewhere);
+  the pinned card; the
+  fold lines; the empty line. Left out on purpose: a state mark on every row under a heading that
+  already says the state; on a One line row, a second line, and on a touch screen the place; a
+  clock that runs by the second.
+- Layout: the Agents list by state - labels with a trailing value, stacked under headings that
+  fold -> `badge-list` rows in a `feed`
+  (<https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/badge-list.md>,
+  <https://github.com/changeroa/StyleGallery/blob/main/patterns/stacking/feed.md>); scroll owner:
+  `.agent-list-contents`, the Agents section's one scroller, beside the PCs' own (`.machine-list`);
+  a group, a heading and a row scroll nothing of their own; anti-patterns: a One line row that
+  shows a second line or scrolls sideways to fit its place, a trailing time whose column moves
+  with the title's length, a heading that sticks over its rows or scrolls apart from them, a
+  scroller inside a group.
 - Panes a launcher tags `role=background` (`herdr pane report-metadata --token`, any case),
   and the helpers they start (`parent_pane_id`), stand after the Agents list's other unpinned
   rows, under a **Background agents** heading styled like a group's (`.agent-background-toggle`)

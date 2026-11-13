@@ -43,6 +43,7 @@ import { AppLayoutContext, appLayoutOf, MachineContext } from "./lib/machineCont
 import { MachineActionBanner, MachineSidebar } from "./components/MachineSidebar.tsx";
 import { SidebarResizer } from "./components/SidebarResizer.tsx";
 import { type PanePresence, useSidebarActivityState } from "./lib/sidebarActivity.tsx";
+import { useAgentStateStamping } from "./lib/useAgentStateSince.ts";
 import { FilePanelResizer } from "./components/FilePanelResizer.tsx";
 import { openPresentation } from "./lib/filePresentation.ts";
 import { MachineDialog } from "./components/MachineDialog.tsx";
@@ -471,6 +472,8 @@ export function App() {
   [locked, linkLanded, inbox.shown, drawerOpen, settingsOpen, newSessionOpen, filesOpen, filesDocked, machineDialog, paletteOpen, diffViewing, viewing, fileDocked, dialogCover, contentReady, contentKey]);
   // one source for the sidebar's two lists: live counters per PC and finishes looked at here
   const activity = useSidebarActivityState(machines, selectedMachineId, presentedPaneId, panePresence, shareSeen);
+  // and one for how long each agent has been in its state: stamped here, read by the lists (lib/useAgentStateSince.ts)
+  useAgentStateStamping(machines, activity);
 
   const { pickView, setView } = usePaneViewPicks({ setViewPicks, setNotificationViewTarget, setTerminalPeek, setLens, setAutoSelected, selectedPaneId, selectedMachineId });
   const { unsentFor, openUnsent, closeUnsent, recover } = useUnsentRecovery({ selectedMachineId, selectedPaneId, setView, pickView });
