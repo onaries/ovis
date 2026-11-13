@@ -38,6 +38,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       draft: ${{ steps.filter.outputs.draft }}
       linux: ${{ steps.route.outputs.linux }}
+      fast: ${{ steps.route.outputs.fast }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,9 +53,12 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           REQUESTED_LABELS: ${{ inputs.self_hosted_labels }}
-          CONFIGURED_LABELS: ${{ vars.CI_SELF_HOSTED_LABELS }}
+          # CI_LINUX_SELF_HOSTED_LABELS moves only these Linux jobs (pages.yml and release.yml keep
+          # following CI_SELF_HOSTED_LABELS), e.g. to the cloud VM runners: '["self-hosted","ovis-vm"]'
+          CONFIGURED_LABELS: ${{ vars.CI_LINUX_SELF_HOSTED_LABELS || vars.CI_SELF_HOSTED_LABELS }}
           MAIN_LABELS: ${{ vars.CI_MAIN_SELF_HOSTED_LABELS }}
           SELF_HOSTED_CAPACITY: ${{ vars.CI_SELF_HOSTED_CAPACITY }}
+          FAST_LABELS: ${{ vars.CI_FAST_SELF_HOSTED_LABELS }}
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"
       - id: filter
@@ -242,7 +246,7 @@ jobs:
   fast:
     name: Fast checks
     needs: changes
-    runs-on: ${{ fromJSON(needs.changes.outputs.linux) }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.fast) }}
     timeout-minutes: 10
     env:
       CHECK_DIR: ${{ github.workspace }}/.ci
@@ -397,11 +401,13 @@ jobs:
     runs-on: ${{ fromJSON(needs.changes.outputs.linux) }}
     # A hosted runner has 4 CPUs: one job running every script there took about 28 minutes, and
     # frame-timing checks failed under the load. So hosted runs split the scripts over four jobs
-    # (scripts/ci-browser-parallel.ts's BROWSER_SHARD); a self-hosted run keeps one job.
+    # (scripts/ci-browser-parallel.ts's BROWSER_SHARD); a self-hosted run keeps one job. The cloud VM
+    # runners (label ovis-vm, 4 vCPUs each, scripts/self-hosted-runner/vm-runner.sh) are hosted-sized:
+    # five jobs there, so no shard waits past the longest script for long.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(contains(needs.changes.outputs.linux, 'self-hosted') && '[1]' || '[1,2,3,4]') }}
+        shard: ${{ fromJSON(contains(needs.changes.outputs.linux, 'ovis-vm') && '[1,2,3,4,5]' || contains(needs.changes.outputs.linux, 'self-hosted') && '[1]' || '[1,2,3,4]') }}
     # a wait for a slot counts against it
     timeout-minutes: 50
     env:

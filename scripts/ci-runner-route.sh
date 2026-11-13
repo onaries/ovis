@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Picks the runner for ci.yml's Linux jobs and prints `linux=<json>` for $GITHUB_OUTPUT.
+# Picks the runner for ci.yml's Linux jobs and prints `linux=<json>` for $GITHUB_OUTPUT, then `fast=<json>` for Fast checks.
 # A fork pull request always gets the GitHub-hosted image: its code must never reach the
 # self-hosted runner. Otherwise the workflow_dispatch input wins over the repository variable
 # CI_SELF_HOSTED_LABELS. With neither, a push goes to the maintainer PC's runners
@@ -115,6 +115,7 @@ route_pull_request() {
   fi
 }
 
+route_linux() {
 if [[ ("$event" == "pull_request" || "$event" == "pull_request_target") && "${HEAD_REPO:-}" != "${REPOSITORY:-}" ]]; then
   echo "Runner: ubuntu-24.04 (pull request from fork ${HEAD_REPO:-unknown})" >&2
   echo "linux=$hosted"
@@ -140,3 +141,21 @@ else
   echo "Runner: ubuntu-24.04 ($event, CI_SELF_HOSTED_LABELS unset)" >&2
   echo "linux=$hosted"
 fi
+}
+
+line=$(route_linux)
+echo "$line"
+# Fast checks can stay on other runners while the Linux jobs go to the cloud VM runners (label ovis-vm):
+# CI_FAST_SELF_HOSTED_LABELS applies only then, so a fork's Fast checks always follow its hosted Linux jobs.
+linux=${line#linux=}
+fast=$linux
+fast_labels="${FAST_LABELS:-}"
+if [[ "$linux" == *'"ovis-vm"'* && -n "${fast_labels//[[:space:]]/}" ]]; then
+  if chosen=$(jq -ce 'if type == "array" and length > 0 and all(.[]; type == "string") and any(.[]; . == "self-hosted") then . else error("invalid") end' <<<"$fast_labels" 2>/dev/null); then
+    echo "Fast checks: self-hosted $chosen (from repository variable CI_FAST_SELF_HOSTED_LABELS)" >&2
+    fast=$chosen
+  else
+    echo "::warning::repository variable CI_FAST_SELF_HOSTED_LABELS must be a JSON array of strings that contains \"self-hosted\", got: $fast_labels; Fast checks follow the Linux jobs" >&2
+  fi
+fi
+echo "fast=$fast"
