@@ -191,6 +191,15 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       const shown = () => results.evaluate((region) => [...region.querySelectorAll<HTMLElement>(".settings-search-page")].filter((section) => section.checkVisibility())
         .map((section) => [section.getAttribute("aria-label"), [...section.querySelectorAll<HTMLElement>("[data-setting]")].filter((row) => row.checkVisibility()).map((row) => row.querySelector(".settings-label")?.textContent ?? "")] as const));
 
+      // a setting that is kept in every search with its group (Test notification) is found by its own name and by
+      // the words of its sentence, like any other
+      for (const words of ["test notification", "push alerts arrive"]) {
+        await search.fill(words);
+        const alerts = await shown();
+        assert.deepEqual(alerts.map(([name]) => name), ["Alerts"], `${width}px: "${words}" finds a setting on Alerts`);
+        assert.ok(alerts[0]?.[1].includes("Test notification"), `${width}px: "${words}" finds Test notification`);
+      }
+
       await search.fill("Font SIZE");
       const found = await shown();
       // every font row is on Appearance: the terminal's and the chat's are found by their sizes' words
@@ -948,8 +957,9 @@ async function rowSentences(browser: import("playwright-core").Browser, url: str
     await page.mouse.move(2, 2);
 
     // where no room is left beside the control of the row above, the sentence lies on that control's near end.
-    // There the pointer is the control's: the sentence goes as the pointer comes onto that part, so a press
-    // reaches the control. The first row of the page whose sentence lies on another row's control shows it.
+    // There the pointer is the control's: the sentence takes no pointer on that part, so a press reaches the
+    // control, and the mouse that moves onto it has left the row, which closes a hover's sentence. The first row
+    // of the page whose sentence lies on another row's control shows it.
     // Density is asked first, and again: Escape closed its sentence with the pointer on the sentence, which sends
     // the row no leave, and a row hovered again still shows its sentence
     const withSentence = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
@@ -985,6 +995,20 @@ async function rowSentences(browser: import("playwright-core").Browser, url: str
       return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
     }, covered), covered.row, "a press on the part that lay on another row's control reaches that control");
     await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+    // the keyboard's sentence stays while it lies there, and a press that comes with no move before it (a finger
+    // on a touch screen with a keyboard) still lands on the control, not on the sentence
+    const lyingRow = (await page.evaluate((was) => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
+      .find((row) => row.querySelector(":scope > .settings-row-text > .visually-hidden[id]")?.textContent === was)?.querySelector(".settings-label")?.textContent ?? null, lying))!;
+    await rowOf(page, lyingRow).locator("button, input, select").first().focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const under = document.elementFromPoint(x, y);
+      return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    }, covered), covered.row, "under the keyboard's sentence too, a press on the covered part lands on the control");
+    await page.keyboard.press("Escape");
     await sentence.waitFor({ state: "detached" });
 
     // a search hides a row while its sentence shows: the row is removed under a still pointer, which sends no

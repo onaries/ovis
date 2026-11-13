@@ -151,11 +151,13 @@ const SENTENCE_FOLLOW_MS = 400;
 /** one sentence over the page at a time: how to close the one showing, and when the last one closed */
 let closeSentence: (() => void) | null = null;
 let sentenceClosedAt = Number.NEGATIVE_INFINITY;
+/** how many sentences have opened over the page: a mouse's rest that began before the last one opened is out of date */
+let sentencesOpened = 0;
 
 const FOCUS_KEYS = new Set(["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"]);
 
 /** Whether a key moves the focus. Escape, Enter and Space do not: they close, confirm and press. */
-export function movesFocus(key: string): boolean {
+function movesFocus(key: string): boolean {
   return FOCUS_KEYS.has(key);
 }
 
@@ -166,9 +168,15 @@ export function movesFocus(key: string): boolean {
  * a sentence there would take the next Escape from Settings.
  */
 let keyboardMovedFocus = false;
+
+/** What the reader did last: a key, or a press of the pointer. The window's own listeners call it. */
+export function inputWas(input: { key: string } | "pointer"): void {
+  keyboardMovedFocus = input !== "pointer" && movesFocus(input.key);
+}
+
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("keydown", (event) => { keyboardMovedFocus = movesFocus(event.key); }, true);
-  window.addEventListener("pointerdown", () => { keyboardMovedFocus = false; }, true);
+  window.addEventListener("keydown", (event) => inputWas({ key: event.key }), true);
+  window.addEventListener("pointerdown", () => inputWas("pointer"), true);
 }
 
 /**
@@ -176,7 +184,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
  * typed in; or not the sentence's at all, when an IME takes it to drop its composition, when nothing is drawn (its row
  * is outside the page's view), or when a dialog opened over Settings (Files, the palette) has the keyboard.
  */
-export function escapeFor(state: { composing: boolean; drawn: boolean; textField: boolean; otherModal: boolean }): "sentence" | "both" | "other" {
+function escapeFor(state: { composing: boolean; drawn: boolean; textField: boolean; otherModal: boolean }): "sentence" | "both" | "other" {
   if (state.composing || !state.drawn || state.otherModal) return "other";
   return state.textField ? "both" : "sentence";
 }
@@ -208,7 +216,7 @@ function inTextField(): boolean {
  * tap closes it.
  * `on`: the row has a sentence and its page does not show it.
  */
-function useRowSentence(on: boolean): {
+export function useRowSentence(on: boolean): {
   row: RefObject<HTMLDivElement | null>;
   /** over the page now, and why */
   shown: "hover" | "focus" | null;
@@ -216,9 +224,7 @@ function useRowSentence(on: boolean): {
   drawn: RefObject<boolean>;
   /** in the row now, opened by a tap */
   opened: boolean;
-  /** the sentence over the page goes: the pointer went on to a control it lies on */
-  pass: () => void;
-  /** the row is gone from the page (a search hides it): its sentence over the page goes with it, and its rest timer */
+  /** the row is gone from the page (a search hides it): its sentence goes with it, however it was shown, and its rest timer */
   forget: () => void;
   rowEvents: { onPointerEnter?: (event: ReactPointerEvent) => void; onPointerLeave?: () => void; onPointerDown?: (event: ReactPointerEvent) => void; onFocus?: (event: ReactFocusEvent) => void; onBlur?: (event: ReactFocusEvent) => void; onInput?: () => void; onClick?: (event: ReactMouseEvent) => void };
 } {
@@ -235,6 +241,7 @@ function useRowSentence(on: boolean): {
   useEffect(() => () => { if (rest.current !== undefined) window.clearTimeout(rest.current); }, []);
   useEffect(() => {
     if (shown === null) return;
+    sentencesOpened += 1;
     closeSentence?.();
     const close = (): void => setShown(null);
     closeSentence = close;
@@ -270,15 +277,20 @@ function useRowSentence(on: boolean): {
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
   }, [closable, opened]);
-  const pass = (): void => setShown(null);
   const forget = (): void => {
     if (rest.current !== undefined) window.clearTimeout(rest.current);
     dismissed.current = false;
     setShown(null);
+    setOpened(false);
   };
-  if (!on) return { row, shown: null, drawn, opened: false, pass, forget, rowEvents: {} };
+  // a row whose sentence goes away (a description that comes and goes) keeps none marked as showing or opened:
+  // an Escape taken for a sentence nobody sees would be lost
+  const forgetRef = useRef(forget);
+  forgetRef.current = forget;
+  useEffect(() => { if (!on) forgetRef.current(); }, [on]);
+  if (!on) return { row, shown: null, drawn, opened: false, forget, rowEvents: {} };
   return {
-    row, shown: opened ? null : shown, drawn, opened, pass, forget,
+    row, shown: opened ? null : shown, drawn, opened, forget,
     rowEvents: {
       onPointerEnter: (event) => {
         if (event.pointerType === "touch" || opened) return;
@@ -287,7 +299,10 @@ function useRowSentence(on: boolean): {
         // removes it under the pointer, and a row hovered again is asked again
         dismissed.current = false;
         if (shown !== null) return;
-        rest.current = window.setTimeout(() => setShown("hover"), performance.now() - sentenceClosedAt < SENTENCE_FOLLOW_MS ? 0 : SENTENCE_REST_MS);
+        // the last thing asked stays: when the keyboard asks for another row's sentence during the rest, the mouse that
+        // has not moved since does not replace it; a mouse that comes to rest after that sentence opened does
+        const asked = sentencesOpened;
+        rest.current = window.setTimeout(() => { if (sentencesOpened === asked) setShown("hover"); }, performance.now() - sentenceClosedAt < SENTENCE_FOLLOW_MS ? 0 : SENTENCE_REST_MS);
       },
       // the sentence is drawn elsewhere but is this row's child: the pointer on it has not left the row, so it stays to be read
       onPointerLeave: () => {
@@ -341,22 +356,18 @@ function useRowSentence(on: boolean): {
  * A row's sentence over the page: drawn in the dialog's own layer, over the dialog and not cut by its scrolling
  * page (in the document where the row is in no dialog), and placed by placeSentence. Over a row whose control
  * would be under it, it narrows to the room beside that control (sentenceRoom). Where that room is too little it
- * keeps its width and lies on the control's near end: there the pointer is the control's, not the sentence's, so
- * the sentence goes as the pointer comes onto that part (`onPass`) and the press reaches the control. It follows
- * its row while the page scrolls and is drawn only while the row is in the page's view: a dialog moves the
- * keyboard's focus without scrolling (lib/useFocusTrap.ts), so the focus can be on a setting the page is not
+ * keeps its width and lies on the control's near end: there the pointer is the control's, not the sentence's. Such
+ * a sentence takes no pointer at all (`is-over-control`), so a press on the covered part reaches the control
+ * itself, and a span over its start (`keep`: the part that lies on no control) is what keeps it under the pointer.
+ * It follows its row while the page scrolls and is drawn only while the row is in the page's view: a dialog moves
+ * the keyboard's focus without scrolling (lib/useFocusTrap.ts), so the focus can be on a setting the page is not
  * scrolled to, and its sentence then waits for the row (`drawn` says which). Not read out: the row's own copy
  * describes the control.
  */
-function RowSentence({ row, drawn, onPass, children }: { row: HTMLElement; drawn: RefObject<boolean>; onPass: () => void; children: ReactNode }) {
+function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObject<boolean>; children: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState<{ left: number; top: number; maxWidth: string } | null>(null);
-  // the other rows' controls the sentence lies on, where it found no room beside them
-  const covered = useRef<readonly ScreenBox[]>([]);
-  const passOnControl = (event: ReactPointerEvent): void => {
-    const { clientX: x, clientY: y } = event;
-    if (covered.current.some((control) => x >= control.left && x <= control.right && y >= control.top && y <= control.bottom)) onPass();
-  };
+  // `keep`: how much of its width, from its start, lies on no other row's control; null where it lies on none
+  const [at, setAt] = useState<{ left: number; top: number; maxWidth: string; keep: number | null } | null>(null);
   useLayoutEffect(() => {
     const place = (): void => {
       const tip = box.current;
@@ -365,7 +376,6 @@ function RowSentence({ row, drawn, onPass, children }: { row: HTMLElement; drawn
       const pageEl = row.closest(".modal-body");
       if (!inPageView(row)) {
         drawn.current = false;
-        covered.current = [];
         setAt(null);
         return;
       }
@@ -397,9 +407,9 @@ function RowSentence({ row, drawn, onPass, children }: { row: HTMLElement; drawn
         next = measure();
       }
       const lies = { left: next.left, top: next.top, right: next.left + tip.offsetWidth, bottom: next.top + tip.offsetHeight };
-      covered.current = controls.filter((control) => control.left < lies.right && control.right > lies.left && control.top < lies.bottom && control.bottom > lies.top)
-        .map((control) => ({ left: control.left, top: control.top, right: control.right, bottom: control.bottom }));
-      setAt((was) => was !== null && was.left === next.left && was.top === next.top && was.maxWidth === maxWidth ? was : { left: next.left, top: next.top, maxWidth });
+      const covered = controls.filter((control) => control.left < lies.right && control.right > lies.left && control.top < lies.bottom && control.bottom > lies.top);
+      const keep = covered.length === 0 ? null : Math.max(0, Math.min(...covered.map((control) => control.left)) - lies.left);
+      setAt((was) => was !== null && was.left === next.left && was.top === next.top && was.maxWidth === maxWidth && was.keep === keep ? was : { left: next.left, top: next.top, maxWidth, keep });
     };
     place();
     window.addEventListener("scroll", place, { capture: true, passive: true });
@@ -411,7 +421,10 @@ function RowSentence({ row, drawn, onPass, children }: { row: HTMLElement; drawn
     };
   }, [row, drawn]);
   return createPortal(
-    <div ref={box} className="settings-help" aria-hidden="true" onPointerMove={passOnControl} onPointerDown={passOnControl} style={at === null ? { visibility: "hidden" } : { left: at.left, top: at.top, maxWidth: at.maxWidth === "" ? undefined : at.maxWidth }}>{children}</div>,
+    <div ref={box} className={at !== null && at.keep !== null ? "settings-help is-over-control" : "settings-help"} aria-hidden="true" style={at === null ? { visibility: "hidden" } : { left: at.left, top: at.top, maxWidth: at.maxWidth === "" ? undefined : at.maxWidth }}>
+      {children}
+      {at !== null && at.keep !== null && at.keep > 0 && <span className="settings-help-keep" style={{ width: at.keep }} />}
+    </div>,
     row.closest<HTMLElement>(".modal-scrim") ?? document.body,
   );
 }
@@ -497,7 +510,7 @@ export function SettingsRow({ label, description, keywords, held = false, htmlFo
       <SettingsRowSentence.Provider value={description !== undefined ? sentenceId : undefined}>{describedByRow(children, description !== undefined ? sentenceId : undefined)}</SettingsRowSentence.Provider>
       {/* opened by a tap: under the name and the control, as wide as the row */}
       {sentence.opened && <span id={sentenceId} className="settings-description settings-row-sentence">{description}</span>}
-      {sentence.shown !== null && sentence.row.current !== null && <RowSentence row={sentence.row.current} drawn={sentence.drawn} onPass={sentence.pass}>{description}</RowSentence>}
+      {sentence.shown !== null && sentence.row.current !== null && <RowSentence row={sentence.row.current} drawn={sentence.drawn}>{description}</RowSentence>}
     </div>
   );
 }

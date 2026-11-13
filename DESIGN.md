@@ -4315,13 +4315,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   screen, and scrolls under the pointer where its words do not fit.
   Over another row's control it narrows to the room beside that control, down to `224px`; with less
   room than that (the row under a font row's field) it keeps its width and lies on that control's
-  near end. There the pointer is the control's, not the sentence's: the sentence goes as the pointer
-  comes onto that part, so a press reaches the control instead of landing on the sentence. It is drawn only while
+  near end. There the pointer is the control's, not the sentence's: such a sentence takes no pointer
+  (`.is-over-control`), so a press on that part reaches the control itself, a finger's or a pen's too,
+  and the mouse that moves onto it has left the row, which closes a hover's sentence. A span over the
+  sentence's start, which lies on no control, keeps it while the pointer is on it. It is drawn only while
   its row is in the page's view: a dialog's Tab moves the focus without scrolling
   (`lib/useFocusTrap.ts`), so on a setting the page is not scrolled to the sentence waits for the
   row, and Escape is not its own meanwhile. It never
   moves: it is there or it is not, and a row entered within `400ms` of another's closing shows its
-  own at once. The pointer on it keeps it, it takes no focus, and Escape closes it alone and leaves
+  own at once. The last thing asked stays: a mouse's rest that began before the keyboard
+  asked for another row's sentence shows nothing when it ends, and one that begins after it takes its place. The pointer on it keeps it, it takes no focus, and Escape closes it alone and leaves
   Settings open. The keyboard on a setting always shows its sentence, so from there the first Escape
   closes the sentence and the next does what Escape does (empties the search, closes Settings), as
   [React Aria's tooltip](https://github.com/adobe/react-spectrum/blob/main/packages/react-aria/src/tooltip/useTooltipTrigger.ts)

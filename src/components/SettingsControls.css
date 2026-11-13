@@ -225,6 +225,20 @@
   overflow-wrap: break-word;
 }
 
+/* a sentence that lies on another row's control (no room beside it): the part on the control is the control's
+   for the pointer, so the sentence takes no pointer, and a press there reaches the control itself. A span over
+   its start, the part that lies on no control, still keeps it while the pointer is on it */
+.settings-help.is-over-control {
+  pointer-events: none;
+}
+
+.settings-help-keep {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  pointer-events: auto;
+}
+
 /* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
 .theme-cards {
   display: flex;

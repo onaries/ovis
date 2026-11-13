@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useContext, useRef } from "react";
 import { BellRing } from "lucide-react";
 import { ApiError } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
@@ -9,7 +9,7 @@ import { repairFailed, runPushAction, usePushHealth, type PushActionOutcome, typ
 import { repairOutcome } from "../lib/useNotifications.ts";
 import { useSettings } from "../lib/settings.ts";
 import { repairFailureText } from "./PushHealthNotice.tsx";
-import { SettingsRow } from "./SettingsControls.tsx";
+import { matchesSettingsQuery, SettingsQuery, SettingsRow } from "./SettingsControls.tsx";
 
 export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushActionResult> }) {
   const { settings } = useSettings();
@@ -53,11 +53,18 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushAct
     : health.transient !== null ? t("The last alert did not reach this device; the next one is tried as usual. Send a test to check.")
     : !settings.alertsOn ? t("Alerts off") : null);
 
+  const words = useContext(SettingsQuery);
+  const label = t("Test notification");
+  const description = t("Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.");
+  // the row is kept in every search (held), so its being drawn does not say the search found it: this does,
+  // for the rules that show a group and a page by what was found in them (SettingsDialog.css)
+  const found = words.length > 0 && matchesSettingsQuery(words, label, description, hint);
+
   return (
-    <div className="settings-item">
+    <div className="settings-item" data-found={found ? "" : undefined}>
       {/* held: in a search the row stays with its group, as it did before it was a SettingsRow. The hint is always
           in the document, empty until there is something to say: a live region */}
-      <SettingsRow held icon={BellRing} label={t("Test notification")} description={t("Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.")}
+      <SettingsRow held icon={BellRing} label={label} description={description}
         condition={<span className="settings-hint" role="status" data-testid="push-health-hint">{hint}</span>}>
         <button type="button" className="btn" disabled={busy !== null || !settings.alertsOn || !supported || denied || result === "read-only"} onClick={() => void send(false)}>{busy === "test" ? t("Sending…") : t("Send test")}</button>
       </SettingsRow>

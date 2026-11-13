@@ -120,16 +120,18 @@
   font-size: var(--fs-sm);
 }
 
-.settings-search-results:not(:has(> .settings-search-page > [data-found], > .settings-search-page > .settings-section > .settings-card > [data-setting])) > .settings-search-empty {
+.settings-search-results:not(:has(> .settings-search-page > [data-found], > .settings-search-page > .settings-section > .settings-card > [data-setting], > .settings-search-page > .settings-section > .settings-card > [data-found])) > .settings-search-empty {
   display: block;
 }
 
 /* a group is found by a setting it holds (SettingsControls.tsx SettingsRow) or by its title: it is
    drawn with its note and what goes with those settings (a form, a status line); a group or a page
-   with nothing found, and what a page holds outside its groups, stay on the page itself */
+   with nothing found, and what a page holds outside its groups, stay on the page itself. A setting
+   kept in every search with its group says itself when it is found (`data-found` on what holds it:
+   PushTestControls.tsx), since its being drawn does not */
 .settings-search-page > :not(.settings-section, .settings-search-page-title),
-.settings-search-results .settings-section:not([data-found]):not(:has(> .settings-card > [data-setting])),
-.settings-search-page:not(:has(> [data-found], > .settings-section > .settings-card > [data-setting])) {
+.settings-search-results .settings-section:not([data-found]):not(:has(> .settings-card > [data-setting], > .settings-card > [data-found])),
+.settings-search-page:not(:has(> [data-found], > .settings-section > .settings-card > [data-setting], > .settings-section > .settings-card > [data-found])) {
   display: none;
 }
 

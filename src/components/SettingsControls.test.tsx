@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { act, createElement, Fragment, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
 import { SettingsProvider } from "../lib/settings.ts";
-import { escapeFor, movesFocus, placeSentence, sentenceRoom, SettingsBare, SettingsRow, Stepper, Toggle, typedStep } from "./SettingsControls.tsx";
+import { inputWas, placeSentence, sentenceRoom, SettingsBare, SettingsRow, Stepper, Toggle, typedStep, useRowSentence } from "./SettingsControls.tsx";
 
 /** A key on the size field, as React hands it over: `composing` while an IME still holds the draft. */
 const key = (name: string, composing: boolean) => ({
@@ -156,29 +156,211 @@ describe("where a row's sentence goes (#3275)", () => {
     // 152px beside the control: narrower than a sentence is worth, so it keeps its width
     expect(sentenceRoom(lies, [{ left: 300, top: 250, right: 600, bottom: 284 }])).toBeNull();
   });
-});
-
-describe("when a row's sentence shows and whose Escape it is (#3275)", () => {
-  it("does not take for the keyboard's a focus that follows Escape, Enter or Space: the app gives the focus back after those", () => {
-    // closing an editor (Escape) and answering a confirmation (Enter, Space) return the focus to a setting: a
-    // sentence there would take the next Escape from Settings. Tab is what moves the reader's own focus
-    expect({ Escape: movesFocus("Escape"), Enter: movesFocus("Enter"), Space: movesFocus(" "), Tab: movesFocus("Tab") }).toEqual({ Escape: false, Enter: false, Space: false, Tab: true });
-  });
-
-  it("gives Escape to the sentence alone, shares it with a text field, and leaves it to an IME, to a row out of view and to another dialog", () => {
-    const showing = { composing: false, drawn: true, textField: false, otherModal: false };
-    expect(escapeFor(showing)).toBe("sentence");
-    expect(escapeFor({ ...showing, textField: true })).toBe("both");
-    expect(escapeFor({ ...showing, textField: true, composing: true })).toBe("other");
-    expect(escapeFor({ ...showing, drawn: false })).toBe("other");
-    expect(escapeFor({ ...showing, otherModal: true })).toBe("other");
-  });
 
   it("starts a sentence taller than the screen at the screen's top", () => {
-    const row = { left: 100, top: 20, right: 600, bottom: 80 };
-    const placed = placeSentence(row, { left: 120, top: 40, right: 200, bottom: 60 }, 40, 80, { width: 300, height: 250 }, { width: 800, height: 200 });
+    const first = { left: 100, top: 20, right: 600, bottom: 80 };
+    const placed = placeSentence(first, { left: 120, top: 40, right: 200, bottom: 60 }, 40, 80, { width: 300, height: 250 }, { width: 800, height: 200 });
     expect(placed.side).toBe("below");
     expect(placed.top).toBe(8);
+  });
+});
+
+describe("a row's sentence, as its hook keeps it (#3275)", () => {
+  const names = ["window", "document", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "IS_REACT_ACT_ENVIRONMENT"];
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  /** an element of the page, as the hook asks about it: the dialog it is in, and whether text is typed in it */
+  class HTMLElement {
+    isContentEditable = false;
+    constructor(readonly dialog: object | null) {}
+    closest(selector: string): object | null { return selector === "[aria-modal='true']" ? this.dialog : null; }
+    contains(other: unknown): boolean { return other === this; }
+    getBoundingClientRect(): { top: number; bottom: number } { return { top: 0, bottom: 40 }; }
+  }
+  class HTMLInputElement extends HTMLElement { type = "text"; }
+  class HTMLTextAreaElement extends HTMLElement {}
+  interface Key { key: string; isComposing: boolean; keyCode: number; stopped: boolean; preventDefault(): void; stopPropagation(): void }
+  interface Heard { type: string; run: (event: Key) => void; capture: boolean }
+  /** the window or the document: who listens there, and on which leg of a key's way through the page */
+  class Target {
+    heard: Heard[] = [];
+    addEventListener(type: string, run: Heard["run"], capture: boolean = false): void { this.heard.push({ type, run, capture }); }
+    removeEventListener(type: string, run: Heard["run"], capture: boolean = false): void { this.heard = this.heard.filter((one) => !(one.type === type && one.run === run && one.capture === capture)); }
+  }
+  const settings = { name: "Settings" };
+  const palette = { name: "the palette, opened over Settings" };
+  let win: Target & { setTimeout(run: () => void): number; clearTimeout(id?: number): void };
+  let doc: Target & { activeElement: HTMLElement | null };
+  /** the rests of resting mice, by timer: run by the test when the rest is over */
+  let rests: Map<number, () => void>;
+  let renderer: ReactTestRenderer | undefined;
+  const rows = new Map<string, ReturnType<typeof useRowSentence>>();
+  const row = (name = "a") => rows.get(name)!;
+
+  function Row({ name, on }: { name: string; on: boolean }) {
+    rows.set(name, useRowSentence(on));
+    return null;
+  }
+  /** the rows of a page: each by its name, with a sentence of its own or (false) without one */
+  async function draw(page: Record<string, boolean> = { a: true }): Promise<void> {
+    const tree = createElement(Fragment, null, ...Object.entries(page).map(([name, on]) => createElement(Row, { key: name, name, on })));
+    await act(async () => { if (renderer) renderer.update(tree); else renderer = create(tree); });
+    for (const name of Object.keys(page)) (row(name).row as { current: unknown }).current ??= new HTMLElement(settings);
+  }
+  const does = (run: () => void): Promise<void> => act(async () => { run(); });
+  /** the focus comes to the row's control after `key`, which the window heard first */
+  const focusAfter = (key: string, name = "a") => does(() => { inputWas({ key }); row(name).rowEvents.onFocus?.({} as never); });
+  const focusLeaves = (name = "a") => does(() => row(name).rowEvents.onBlur?.({ relatedTarget: null } as never));
+  /** whether the sentence is drawn on the screen, as RowSentence says once it has placed it, or found its row out of view */
+  const drawn = (is = true, name = "a"): void => { (row(name).drawn as { current: boolean }).current = is; };
+  const mouseEnters = (name = "a") => does(() => row(name).rowEvents.onPointerEnter?.({ pointerType: "mouse" } as never));
+  const restEnds = () => does(() => { for (const run of [...rests.values()]) run(); rests.clear(); });
+  /** a finger's tap on the row's name: the press, then the click it makes */
+  async function tapName(name = "a"): Promise<void> {
+    const target = { closest: (selector: string) => selector === ".settings-row-text" ? {} : null };
+    await does(() => row(name).rowEvents.onPointerDown?.({ pointerType: "touch", target } as never));
+    await does(() => row(name).rowEvents.onClick?.({ target, currentTarget: row(name).row.current, preventDefault() {} } as never));
+  }
+  /**
+   * Escape on its way through the page: the window's capturing listeners, the document's, and back out. True when
+   * Settings' own listener heard it: the window's, on the way back out (SettingsDialog.tsx closeOnEscape).
+   */
+  async function escape(over: Partial<Key> = {}): Promise<boolean> {
+    let heard = false;
+    const closeSettings = (): void => { heard = true; };
+    win.addEventListener("keydown", closeSettings);
+    const event: Key = { key: "Escape", isComposing: false, keyCode: 27, stopped: false, preventDefault() {}, stopPropagation() { this.stopped = true; }, ...over };
+    await act(async () => {
+      for (const [target, capture] of [[win, true], [doc, true], [doc, false], [win, false]] as const) {
+        if (event.stopped) break;
+        for (const one of [...target.heard]) if (one.type === "keydown" && one.capture === capture) one.run(event);
+      }
+    });
+    win.removeEventListener("keydown", closeSettings);
+    return heard;
+  }
+
+  beforeEach(() => {
+    for (const name of names) saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    rests = new Map();
+    let last = 0;
+    win = Object.assign(new Target(), { setTimeout: (run: () => void) => { rests.set(++last, run); return last; }, clearTimeout: (id?: number) => { if (id !== undefined) rests.delete(id); } });
+    doc = Object.assign(new Target(), { activeElement: null as HTMLElement | null });
+    for (const [name, value] of Object.entries({ window: win, document: doc, HTMLElement, HTMLInputElement, HTMLTextAreaElement, IS_REACT_ACT_ENVIRONMENT: true })) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+    doc.activeElement = new HTMLElement(settings);
+  });
+
+  afterEach(async () => {
+    await act(async () => { renderer?.unmount(); });
+    renderer = undefined;
+    rows.clear();
+    for (const name of names) {
+      const was = saved.get(name);
+      if (was) Object.defineProperty(globalThis, name, was);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  });
+
+  it("shows on a focus the keyboard moved, not on one the app gives back after Escape or Enter, nor on a pointer's", async () => {
+    await draw();
+    await focusAfter("Escape");
+    expect(row().shown).toBeNull();
+    await focusAfter("Enter");
+    expect(row().shown).toBeNull();
+    await does(() => { inputWas("pointer"); row().rowEvents.onFocus?.({} as never); });
+    expect(row().shown).toBeNull();
+    await focusAfter("Tab");
+    expect(row().shown).toBe("focus");
+  });
+
+  it("takes Escape for itself while it is on the screen, and leaves it to a text field, an IME, another dialog and Settings otherwise", async () => {
+    await draw();
+    const show = async (): Promise<void> => { await focusLeaves(); await focusAfter("Tab"); drawn(); };
+    await show();
+    expect(await escape()).toBe(false);
+    expect(row().shown).toBeNull();
+
+    // in a text field the Escape is the field's too, and goes on
+    await show();
+    doc.activeElement = new HTMLInputElement(settings);
+    expect(await escape()).toBe(true);
+    expect(row().shown).toBeNull();
+
+    // an IME's Escape drops its composition: the sentence stays
+    await show();
+    expect(await escape({ isComposing: true })).toBe(true);
+    expect(row().shown).toBe("focus");
+
+    // a dialog opened over Settings has the keyboard: the Escape is that dialog's, and the sentence under it goes
+    doc.activeElement = new HTMLElement(palette);
+    expect(await escape()).toBe(true);
+    expect(row().shown).toBeNull();
+
+    // shown for a row the page is not scrolled to, it is drawn nowhere: nothing of its own to close
+    doc.activeElement = new HTMLElement(settings);
+    await focusLeaves();
+    await focusAfter("Tab");
+    drawn(false);
+    expect(await escape()).toBe(true);
+    expect(row().shown).toBe("focus");
+  });
+
+  it("stays closed after Escape while the focus moves inside the row, and shows again once the focus or the pointer has left", async () => {
+    await draw();
+    await focusAfter("Tab");
+    drawn();
+    await escape();
+    await focusAfter("ArrowRight");
+    expect(row().shown).toBeNull();
+    await focusLeaves();
+    await focusAfter("Tab");
+    expect(row().shown).toBe("focus");
+
+    drawn();
+    await escape();
+    // the pointer comes in from outside: a new visit, also where Escape removed the sentence under it and no leave came
+    await mouseEnters();
+    await restEnds();
+    expect(row().shown).toBe("hover");
+  });
+
+  it("closes a sentence a tap opened on Escape, before Settings, and with a row the search hides", async () => {
+    await draw();
+    await tapName();
+    expect(row().opened).toBe(true);
+    expect(await escape()).toBe(false);
+    expect(row().opened).toBe(false);
+    expect(await escape()).toBe(true);
+
+    await tapName();
+    await does(() => row().forget());
+    expect(row().opened).toBe(false);
+    expect(await escape()).toBe(true);
+  });
+
+  it("keeps what was asked last: the keyboard's sentence over a rest that began before it, the mouse's over a sentence that was there first", async () => {
+    await draw({ a: true, b: true });
+    await mouseEnters("a");
+    await focusAfter("Tab", "b");
+    await restEnds();
+    expect([row("a").shown, row("b").shown]).toEqual([null, "focus"]);
+
+    // the mouse leaves, comes back and rests: asked after the keyboard's sentence opened, it takes its place
+    await does(() => row("a").rowEvents.onPointerLeave?.());
+    await mouseEnters("a");
+    await restEnds();
+    expect([row("a").shown, row("b").shown]).toEqual(["hover", null]);
+  });
+
+  it("keeps no sentence for a row whose description went away, and takes no Escape for it", async () => {
+    await draw();
+    await tapName();
+    expect(row().opened).toBe(true);
+    await draw({ a: false });
+    expect(row().opened).toBe(false);
+    expect(await escape()).toBe(true);
+    // the description is back: the sentence is not
+    await draw({ a: true });
+    expect(row().opened).toBe(false);
   });
 });
 
