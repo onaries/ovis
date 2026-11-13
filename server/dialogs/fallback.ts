@@ -76,8 +76,9 @@ const OMP_STATUS_ROW_RE = /^((?:[\ue0b0-\ue0d4] |╭─+ )?)(?:[⠋⠙⠹⠸⠼�
  * "Deleting production…".
  */
 function steadyReader(agent: string, shown: string[]): SteadyReader {
-  const waiting = WAITING_LINES[agent];
-  const pattern = agent === "claude" ? WORKING_LINE_RE : agent === "omp" ? OMP_STATUS_ROW_RE : waiting?.pattern ?? null;
+  const waiting = agent === "claude" || agent === "omp" ? undefined : WAITING_LINES[agent];
+  if (waiting) return waitingReader(waiting, shown);
+  const pattern = agent === "claude" ? WORKING_LINE_RE : agent === "omp" ? OMP_STATUS_ROW_RE : null;
   // omp draws its status row last, under the panel: a status-shaped line anywhere else is read as written, and a
   // row whose exact text another shown line also has is not blanked at all, as `read` goes by the text (#3412)
   const last = shown.at(-1);
@@ -90,29 +91,74 @@ function steadyReader(agent: string, shown: string[]): SteadyReader {
   const steady = agent === "omp"
     // the spinner and the elapsed time, or the resting π, are omp's ticking part; the model, folder and context stay (#3412)
     ? line.replace(OMP_STATUS_ROW_RE, (_all, lead: string, braille: string | undefined, gauged: string | undefined) => `${lead}<status>${braille ?? gauged}`)
-    : waiting ? line.replace(waiting.pattern, waiting.steady)
     : line.replace(WORKING_LINE_RE, (_all, doing: string, hint: string | undefined) => `* ${doing} (<time> · <tokens>${hint ?? ""})`);
   return { read: (other) => other === line ? steady : other, working: at };
 }
 
+/** A spinner of braille frames as maki and kimi draw it at the start of a row: one frame and a space. */
+const BRAILLE_SPINNER = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
+
+/** an elapsed time as agents draw it: "7.4s", "59s", "1m 06s", "01m05s", "1h 2m 3s" */
+const ELAPSED = String.raw`(?:\d+h ?)?(?:\d+m ?)?\d+(?:\.\d+)?s`;
+
 /**
- * The line other agents with no reader redraw every second while a prompt of theirs waits, to the letter, and what
- * it reads as in the id: the time and the token count blanked, every word kept ("Waiting on answers for <the
- * question>"). Like Claude's working line it is blanked only when exactly one shown line has the shape.
- * Copilot 1.0.109's running tool row: "○ Asking user Waiting for response      36s".
- * Grok 1.0.77's waiting row: "◆ Waiting on answers for Option A or option B?      7.4s ⇣21.5k [stop]".
+ * The lines agents with no reader of their own (and Hermes, for its generic card) redraw while a prompt of theirs
+ * waits, each to the letter, and what it reads as in the id: the clock, countdown, spinner frame or token count
+ * blanked, every word kept. A rule is applied only when exactly one shown line has its shape, so two rows of a menu
+ * that happen to look alike are read as written; `each` (a spinner frame that starts a row) applies to every row with
+ * it, as maki draws one on its tool row and its status bar at once. Recorded from Copilot 1.0.109, Grok 1.0.77,
+ * Hermes 0.21.5, Muse 1.4.14, maki, kimi and dsh-tui as the agent lab runs them (2026-11-12).
  */
-const WAITING_LINES: Readonly<Record<string, { pattern: RegExp; steady: string }>> = {
-  copilot: { pattern: /^(○ \S(?:.*\S)?) {2,}(?:\d+h )?(?:\d+m )?\d+s$/u, steady: "$1 <time>" },
-  grok: { pattern: /^(◆ Waiting on answers for \S(?:.*\S)?) {2,}(?:\d+m )?\d+(?:\.\d+)?s [⇣↓][\d.]+[kKmM]? \[stop\]$/u, steady: "$1 <time> <tokens> [stop]" },
+const WAITING_LINES: Readonly<Record<string, readonly WaitingLine[]>> = {
+  // "○ Asking user Waiting for response      36s"
+  copilot: [{ pattern: /^(○ \S(?:.*\S)?) {2,}(?:\d+h )?(?:\d+m )?\d+s$/u, steady: "$1 <time>" }],
+  // "◆ Waiting on answers for Option A or option B?      7.4s ⇣21.5k [stop]"
+  grok: [{ pattern: /^(◆ Waiting on answers for \S(?:.*\S)?) {2,}(?:\d+m )?\d+(?:\.\d+)?s [⇣↓][\d.]+[kKmM]? \[stop\]$/u, steady: "$1 <time> <tokens> [stop]" }],
+  hermes: [
+    // the question with its timer, padded to six characters: "❓ Which color?  ( 57.9s · ↓ 34 tok)", "(01m05s · ↓ 34 tok)",
+    // and so "(  5.2s · ↓ 34 tok)" in its first ten seconds
+    { pattern: new RegExp(`^(❓ \\S(?:.*\\S)?) {2}\\(\\s*${ELAPSED} · ↓ [\\d.,]+[kKmM]? tok\\)$`, "u"), steady: "$1  (<time> · ↓ <tokens> tok)" },
+    // the hint with the time left to answer: "↑/↓ to select, Enter to lock, Tab next question  (3542s)"
+    { pattern: /^(↑\/↓ to select, Enter to lock\b.*\S) {2}\(\d+s\)$/u, steady: "$1  (<time left>)" },
+    // the status bar under it: the model's name first, then segments that each tick, up to its timer; the name and the
+    // words it echoes after the timer stay:
+    // "☤ gpt-6-luna │ 12.7K/1.1M │ … │ ⏱ 1m 2s   ─ Use your…"
+    { pattern: new RegExp(`^☤ ([^│\\s][^│]*?) │ (?:.* │ )?⏱ ${ELAPSED}(?: {2,}(\\S.*))?$`, "u"), steady: (_all, model, echo) => `☤ ${model} <status>${echo ? ` ${echo}` : ""}` },
+  ],
+  // "◈ Request user input Color — running (59s)", its glyph turning ◆/◈/◇
+  muse: [{ pattern: new RegExp(`^[◆◈◇] (\\S(?:.*\\S)?) — running \\(${ELAPSED}\\)$`, "u"), steady: "◈ $1 — running (<time>)" }],
+  // "⠏ bash> List directory contents    16:34:03" and "⠇ [BUILD]../lab-maki  anthropic/… $0.001"
+  maki: [{ pattern: new RegExp(`^${BRAILLE_SPINNER} (\\S.*)$`, "u"), steady: "<spinner> $1", each: true }],
+  // "⠋ Using Shell (ls -la)"
+  kimi: [{ pattern: new RegExp(`^${BRAILLE_SPINNER} (\\S.*)$`, "u"), steady: "<spinner> $1", each: true }],
+  // "🌖 Checking with you · 50s · ↑ 11.3k · ↓ 18 tokens", its moon turning
+  "dsh-tui": [{ pattern: new RegExp(`^[\\u{1F311}-\\u{1F318}] (\\S(?:.*\\S)?) · ${ELAPSED} · ↑ [\\d.,]+[kKmM]? · ↓ [\\d.,]+[kKmM]? tokens$`, "u"), steady: "<moon> $1 · <time> · <tokens>" }],
 };
+
+interface WaitingLine { pattern: RegExp; steady: string | ((all: string, ...groups: (string | undefined)[]) => string); each?: true }
+
+function waitingReader(rules: readonly WaitingLine[], shown: string[]): SteadyReader {
+  const steadied = new Map<string, string>();
+  const working: number[] = [];
+  for (const rule of rules) {
+    const at = shown.flatMap((line, index) => rule.pattern.test(line) ? [index] : []);
+    if (at.length === 0 || (at.length > 1 && !rule.each)) continue;
+    for (const index of at) {
+      steadied.set(shown[index]!, (typeof rule.steady === "string" ? shown[index]!.replace(rule.pattern, rule.steady) : shown[index]!.replace(rule.pattern, rule.steady)));
+      working.push(index);
+    }
+  }
+  return working.length === 0 ? { read: (other) => other, working: null }
+    // one line read so stays a number, as the id has always held it (Copilot's and Grok's cards keep their ids)
+    : { read: (other) => steadied.get(other) ?? other, working: working.length === 1 ? working[0]! : working.sort((a, b) => a - b) };
+}
 
 interface SteadyReader {
   read(line: string): string;
   /** which of the shown lines was read as the working line; it goes into the id beside the text, so
    * that a screen holding the blanked form as its own text ("* Tempering… (<time> · <tokens>)") is
    * another card */
-  working: number | null;
+  working: number | number[] | null;
 }
 
 export function parseFallbackPrompt(agent: string, screen: string): InteractivePrompt {

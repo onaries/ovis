@@ -183,6 +183,53 @@ test("sends nothing for an answer given up during the read before its key", asyn
   });
 });
 
+// The agent lab's agents whose generic cards changed id every second (agent-lab audit, 2026-11-12): each recorded twice,
+// a few seconds apart, while its question or approval waited, then a change of words that must still be another card
+test.each([
+  // the waiting line's own words, each found once on the screen, so the change is to that line and nothing else
+  ["hermes", "\u2753 Which color?", "\u2753 Which size?"],
+  ["muse", "Request user input Color", "Request user input Size"],
+  ["maki", "bash> List directory contents", "bash> Remove directory contents"],
+  ["kimi", "Using Shell (ls -la)", "Using Shell (rm -rf .)"],
+  ["dsh-tui", "Checking with you", "Deleting for you"],
+])("keeps %s's card while its timer or spinner redraws, and not once its words change", (agent, from, to) => {
+  const [before, after] = ["a", "b"].map((frame) => recorded(`lab-${agent}-waiting-${frame}`)) as [string, string];
+  expect(after).not.toBe(before);
+  expect(parseFallbackPrompt(agent, after).id).toBe(parseFallbackPrompt(agent, before).id);
+  // Muse turns its glyph through three frames
+  if (agent === "muse") expect(parseFallbackPrompt(agent, after.replace("\u25c7 Request", "\u25c6 Request")).id).toBe(parseFallbackPrompt(agent, before).id);
+  expect(after.split(from).length).toBe(2);
+  expect(parseFallbackPrompt(agent, after.replace(from, to)).id).not.toBe(parseFallbackPrompt(agent, before).id);
+});
+
+test("keeps Hermes's card in its first ten seconds, where the timer is padded with two spaces", () => {
+  const screen = recorded("lab-hermes-waiting-a");
+  expect(screen.split("( 57.9s").length).toBe(2);
+  const at = (time: string) => parseFallbackPrompt("hermes", screen.replace("( 57.9s", time)).id;
+  expect(at("(  5.3s")).toBe(at("(  5.2s"));
+  expect(at("(  5.2s")).toBe(at("( 57.9s"));
+  // a token count past a thousand is drawn with a K
+  expect(screen.split("\u2193 34 tok)").length).toBe(2);
+  expect(parseFallbackPrompt("hermes", screen.replace("\u2193 34 tok)", "\u2193 1.2K tok)")).id).toBe(at("( 57.9s"));
+});
+
+test("keeps the words Hermes's status bar echoes, blanking only its ticking segments", () => {
+  const [before, after] = ["a", "b"].map((frame) => recorded(`lab-hermes-waiting-${frame}`)) as [string, string];
+  const echo = "\u2500 Use your tool for asking...";
+  expect(after.split(echo).length).toBe(2);
+  expect(parseFallbackPrompt("hermes", after).id).toBe(parseFallbackPrompt("hermes", before).id);
+  expect(parseFallbackPrompt("hermes", after.replace(echo, "\u2500 Delete the staging data...")).id).not.toBe(parseFallbackPrompt("hermes", before).id);
+  // the model's name does not tick either: it stays in the id
+  expect(after.split("\u2624 gpt-6-luna \u2502").length).toBe(2);
+  expect(parseFallbackPrompt("hermes", after.replace("\u2624 gpt-6-luna \u2502", "\u2624 gpt-6-sol \u2502")).id).not.toBe(parseFallbackPrompt("hermes", before).id);
+});
+
+test("keeps the ids of Copilot's and Grok's cards as #3730 gave them", () => {
+  // their one waiting line is still read as one index, so a card already on screen keeps its id across this change
+  expect(parseFallbackPrompt("copilot", recorded("copilot-1.0.109-ask-32s")).id).toBe("2af485654211");
+  expect(parseFallbackPrompt("grok", recorded("grok-1.0.77-ask")).id).toBe("09168e691891");
+});
+
 // A picker of the agent's own that herdr reports at rest under (Devin's and Copilot's folder trust at start): the chat
 // shows its card, and a chat message is refused rather than picking the row under the cursor (core/composer.ts).
 test.each([
