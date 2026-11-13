@@ -57,6 +57,8 @@ export const UPDATES_ZH: Record<string, string> = {
   "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.": "此服务器是 Ovis 应用的一部分，会随应用一起更新：更新来自应用，而不是这里。",
   "Start with bun run start or the herdr plugin to enable updates.": "只有通过 herdr 插件或 bun run start 启动的 Ovis 才能在此更新。请按安装方式更新。",
   "Switch the source checkout to main to update.": "请先将源码检出切换到 main 分支，再更新。",
+  "Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.": "Ovis 在这里作为已安装的版本运行：请再次运行安装程序来更新(curl -fsSL https://ovis.sh/install.sh | sh，Windows 上为 irm https://ovis.sh/install.ps1 | iex)，然后重启 Ovis。",
+  "Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.": "Ovis 在这里作为 herdr 插件的编译版服务器运行：请用 herdr 更新(herdr plugin update devswha.ovis)，然后重启 Ovis。",
   "The source checkout changed. Restart the app before updating.": "源码检出已更改。请先重启 Ovis，再更新。",
   "The source checkout has local changes. Commit or move them before updating.": "源码检出中有未提交的更改。请先提交或移走，再更新。",
   "Updates require a Git checkout on the main branch.": "更新需要检出了 main 分支的 Git 仓库。",

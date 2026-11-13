@@ -4,6 +4,10 @@ $installer = Join-Path $PSScriptRoot '..\install.ps1'
 $originalPath = $env:PATH
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalUserProfile = $env:USERPROFILE
+# The cases below install from source (Bun and herdr's plugin checkout); the release's binary has its own cases,
+# against a local release folder, near the end
+$originalFromSource = $env:OVIS_FROM_SOURCE
+$env:OVIS_FROM_SOURCE = '1'
 $state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true; refId = 'devswha.ovis'; installedId = ''; manifestBlocked = $false; startedLegacy = $false; legacyInstalled = $false; stopStateDirs = @(); handStarted = $false }
 $global:herdrInstallOpened = @()
 # gh is a stand-in .cmd, first on PATH: the installer runs gh as a process, and no real star is read or given.
@@ -44,6 +48,7 @@ function herdr {
         'plugin list --json' {
             $plugins = @()
             if ($state.installed) { $plugins = @(@{ plugin_id = $state.installedId; plugin_root = $pluginRoot }) }
+            if ($state.linkedRoot) { $plugins = @(@{ plugin_id = 'devswha.ovis'; plugin_root = $state.linkedRoot }) }
             if ($state.legacyInstalled) { $plugins += @{ plugin_id = 'devswha.herdr-web-ui'; plugin_root = (Join-Path $ghStandIn 'legacy root') } }
             @{ result = @{ plugins = $plugins } } | ConvertTo-Json -Depth 4 -Compress
         }
@@ -55,6 +60,7 @@ function herdr {
         'plugin config-dir devswha.ovis' { Join-Path $ghStandIn 'config\devswha.ovis' }
         'plugin config-dir devswha.herdr-web-ui' { Join-Path $ghStandIn 'config\devswha.herdr-web-ui' }
         default {
+            if ($args[0] -eq 'plugin' -and $args[1] -eq 'link') { $state.linkedRoot = $args[2]; return 'Linked' }
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }
                 # under the id the ref's manifest names
@@ -421,6 +427,166 @@ public static class ImmediateGh {
         $env:HERDR_TEST_GH_READY = $oldReady; $env:HERDR_TEST_GH_CHILD = $oldChild
     }
 
+    # The release's binary, from a local release folder signed by a key made for this test. The installer trusts only
+    # the key on its $releasePublicKey line, so the test runs a copy whose line names the test's key: nothing in the
+    # shipped script reads a key from anywhere else.
+    $binaryScratch = Join-Path ([IO.Path]::GetTempPath()) "ovis-binary-install-$PID"
+    New-Item -ItemType Directory -Force -Path $binaryScratch | Out-Null
+    $realBun = (Get-Command bun -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    Assert ([bool]$realBun) 'The binary cases make their release folder with Bun (ci.yml sets it up before this test)'
+    $fixture = Join-Path $binaryScratch 'fixture.ts'
+    Set-Content -LiteralPath $fixture -Encoding UTF8 -Value @'
+// <release folder> <scripts/server-manifest.ts>: v1.2.3 to v1.2.7 signed by one key, v1.2.5 then again by another,
+// v1.2.6 with a manifest for 1.2.2; prints the first key's public half
+const [releases, module] = process.argv.slice(2);
+const { generateKeyPair, releaseFile, SERVER_PLATFORMS, DIST_ARCHIVE, PTY_ASSETS, ptyFile, signManifest, writeManifest } = await import(module);
+const { mkdirSync, writeFileSync } = await import("node:fs");
+const { join } = await import("node:path");
+const key = generateKeyPair();
+for (const version of ["1.2.3", "1.2.4", "1.2.5", "1.2.6", "1.2.7"]) {
+  const dir = join(releases, `v${version}`);
+  const client = join(releases, `client-${version}`);
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(client, { recursive: true });
+  for (const platform of SERVER_PLATFORMS) writeFileSync(join(dir, releaseFile(platform)), `ovis-server ${version} for ${platform}\n`);
+  for (const build of PTY_ASSETS) writeFileSync(join(dir, ptyFile(build)), `pty host ${build}\n`);
+  writeFileSync(join(client, "index.html"), `<!doctype html><title>${version}</title>`);
+  if (Bun.spawnSync(["tar", "-czf", join(dir, DIST_ARCHIVE), "-C", client, "."]).exitCode !== 0) throw new Error("tar failed");
+  writeManifest(dir, { version: version === "1.2.6" ? "1.2.2" : version, sources: { server: "a".repeat(40), shared: "b".repeat(40) } });
+  signManifest(dir, version === "1.2.5" ? generateKeyPair().privateKeyPem : key.privateKeyPem);
+}
+// v1.2.8 to v1.3.0 as main's release step (todo 5) writes them: version, sources and assets only; v1.2.9 signed by
+// another key, v1.3.0 with "schema": 2
+const { createHash, createPrivateKey, sign } = await import("node:crypto");
+for (const [version, signer, schema] of [["1.2.8", key.privateKeyPem, null], ["1.2.9", generateKeyPair().privateKeyPem, null], ["1.3.0", key.privateKeyPem, 2]]) {
+  const dir = join(releases, `v${version}`);
+  mkdirSync(dir, { recursive: true });
+  const assets = {};
+  for (const platform of SERVER_PLATFORMS) {
+    writeFileSync(join(dir, releaseFile(platform)), `old binary ${platform}\n`);
+    assets[platform] = { file: releaseFile(platform), sha256: createHash("sha256").update(`old binary ${platform}\n`).digest("hex") };
+  }
+  const manifest = schema === null ? { version, sources: { server: "a".repeat(40), shared: "b".repeat(40) }, assets } : { schema, version, sources: { server: "a".repeat(40), shared: "b".repeat(40) }, assets };
+  const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(join(dir, "ovis-server.json"), bytes);
+  writeFileSync(join(dir, "ovis-server.json.sig"), `${sign(null, bytes, createPrivateKey(signer)).toString("base64")}\n`);
+}
+console.log(key.publicKey);
+'@
+    $releaseDir = Join-Path $binaryScratch 'release'
+    $testKey = "$(& $realBun $fixture $releaseDir (Join-Path $PSScriptRoot 'server-manifest.ts') | Select-Object -Last 1)".Trim()
+    Assert ($LASTEXITCODE -eq 0 -and $testKey -match '^[A-Za-z0-9+/]{43}=$') "The release fixture must be made: $testKey"
+    # v1.2.4's binary with one byte changed, the same size: only its SHA-256 can tell
+    $corrupt = Join-Path $releaseDir 'v1.2.4\ovis-server-windows-x64.exe'
+    $bytes = [IO.File]::ReadAllBytes($corrupt); $bytes[3] = $bytes[3] -bxor 1; [IO.File]::WriteAllBytes($corrupt, $bytes)
+    $shipped = Get-Content -Raw $installer
+    $keyLine = [regex]::Match($shipped, '(?m)^\$releasePublicKey = ''[^'']+''(?=\r?$)').Value
+    Assert ([bool]$keyLine) 'install.ps1 must pin its key on one $releasePublicKey line'
+    $copy = Join-Path $binaryScratch 'install.ps1'
+    Set-Content -LiteralPath $copy -Encoding UTF8 -Value $shipped.Replace($keyLine, "`$releasePublicKey = '$testKey'").Replace('[int]$WaitSeconds = 600', '[int]$WaitSeconds = 2')
+    $env:OVIS_FROM_SOURCE = ''
+    $env:OVIS_RELEASES_URL = ([Uri]$releaseDir).AbsoluteUri
+    $env:LOCALAPPDATA = Join-Path $binaryScratch 'local app data'
+    $state.installed = $false; $state.running = $false; $state.linkedRoot = ''
+    $ovisHome = Join-Path $env:LOCALAPPDATA 'ovis'
+    $exe = Join-Path $ovisHome 'bin\ovis-server.exe'
+    & $copy -Ref 'v1.2.3'
+    Assert ((Get-FileHash $exe).Hash -eq (Get-FileHash (Join-Path $releaseDir 'v1.2.3\ovis-server-windows-x64.exe')).Hash) 'The checked binary must be installed in bin'
+    Assert ((Get-Content -Raw (Join-Path $ovisHome 'bin\dist\index.html')) -match '1\.2\.3') 'The client must be unpacked beside it'
+    Assert ($state.linkedRoot -eq (Join-Path $ovisHome 'plugin') -and (Test-Path (Join-Path $ovisHome 'plugin\herdr-plugin.toml'))) 'The plugin that runs it must be linked into herdr'
+    $again = & $copy -Ref 'v1.2.3' 6>&1 | Out-String
+    Assert ($again -match 'nothing to do') "A second run must have nothing to do: $again"
+    Remove-Item -LiteralPath (Join-Path $ovisHome 'bin\dist\index.html')
+    $restored = & $copy -Ref 'v1.2.3' 6>&1 | Out-String
+    Assert ($restored -notmatch 'nothing to do' -and ((Get-Content -Raw (Join-Path $ovisHome 'bin\dist\index.html')) -match '1\.2\.3')) "A missing client must be installed again: $restored"
+    $kept = (Get-FileHash $exe).Hash
+    foreach ($case in @(@('v1.2.4', 'does not match its SHA-256'), @('v1.2.5', 'not a valid signature'), @('v1.2.6', 'is for version 1\.2\.2, not 1\.2\.6'))) {
+        $message = ''
+        try { & $copy -Ref $case[0] } catch { $message = $_.Exception.Message }
+        Assert ($message -match $case[1] -and $message -match 'nothing was changed') "$($case[0]) must be refused, saying why: $message"
+        Assert ((Get-FileHash $exe).Hash -eq $kept) "$($case[0]) must leave the installed binary as it was"
+    }
+    $env:OVIS_RELEASES_URL = 'http://mirror.example/ovis'
+    $message = ''
+    try { & $copy -Ref 'v1.2.3' } catch { $message = $_.Exception.Message }
+    Assert ($message -match 'OVIS_RELEASES_URL') "Plain http must be refused: $message"
+    $env:OVIS_RELEASES_URL = ([Uri]$releaseDir).AbsoluteUri
+    $message = ''
+    try { & $installer -Ref 'v1.2.4' 6>&1 | Out-Null } catch { $message = $_.Exception.Message }
+    Assert ($message -match 'not a valid signature') "The shipped installer must refuse a release its pinned key did not sign: $message"
+    # a release whose signed manifest has the shape from before schema 1 ships no compiled server this installer runs;
+    # with no plugin listed, as on a PC where the binary is what herdr runs, so the release is probed
+    $kept = (Get-FileHash $exe).Hash
+    $before = @($state.installed, $state.running, $state.linkedRoot)
+    $state.installed = $false; $state.running = $false; $state.linkedRoot = ''
+    $old = & { try { & $copy -Ref 'v1.2.8' } catch { "THREW $($_.Exception.Message)" } } *>&1 | Out-String
+    Assert ($old -match "v1\.2\.8's signed ovis-server\.json has the shape from before this installer" -and $old -match 'ships no compiled server, so it is installed from source') "An old-shape release must go to source: $old"
+    Assert ((Get-FileHash $exe).Hash -eq $kept) 'An old-shape release must not touch the installed binary'
+    $message = ''; $state.installed = $false; $state.linkedRoot = ''
+    try { & $copy -Ref 'v1.2.9' } catch { $message = $_.Exception.Message }
+    Assert ($message -match 'is not signed by the key') "An old-shape release signed by another key must be refused: $message"
+    $message = ''; $state.installed = $false; $state.linkedRoot = ''
+    try { & $copy -Ref 'v1.3.0' } catch { $message = $_.Exception.Message }
+    Assert ($message -match 'schema this installer does not know') "A manifest of schema 2 must be refused: $message"
+    $state.installed, $state.running, $state.linkedRoot = $before
+    $env:OVIS_FROM_SOURCE = '1'; $env:LOCALAPPDATA = $originalLocalAppData; Remove-Item Env:\OVIS_RELEASES_URL
+    $state.linkedRoot = ''; $state.running = $true
+    Write-Host 'PASS the release binary: installed and linked once checked, nothing to do again; a release of the old manifest shape goes to source; a corrupt binary, another key, another version and plain http refused, leaving the install as it was'
+
+    # One install at a time: a live holder's lock is waited out (the copy waits 2 s, not 600) and named, a dead holder's is
+    # taken over, and two installs started together in two processes never leave bin without a whole release.
+    $env:OVIS_FROM_SOURCE = ''
+    $env:OVIS_RELEASES_URL = ([Uri]$releaseDir).AbsoluteUri
+    $env:LOCALAPPDATA = Join-Path $binaryScratch 'lock app data'
+    $state.installed = $false; $state.running = $false; $state.linkedRoot = ''
+    $ovisHome = Join-Path $env:LOCALAPPDATA 'ovis'
+    $lock = Join-Path $ovisHome '.install.lock'
+    New-Item -ItemType Directory -Force -Path $lock | Out-Null
+    Set-Content -LiteralPath (Join-Path $lock 'pid') -Value $PID -Encoding Ascii
+    $message = ''
+    try { & $copy -Ref 'v1.2.3' } catch { $message = $_.Exception.Message }
+    Assert ($message -match "another install is running in .* \(pid $PID\)" -and -not (Test-Path (Join-Path $ovisHome 'bin'))) "A live holder's lock must be waited out and named: $message"
+    Assert ((Get-Content -LiteralPath (Join-Path $lock 'pid')) -eq "$PID") 'A live holder keeps its lock'
+    $gone = [Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{ FileName = "$env:SystemRoot\System32\cmd.exe"; Arguments = '/c exit'; UseShellExecute = $false; CreateNoWindow = $true }))
+    $gone.WaitForExit()
+    Set-Content -LiteralPath (Join-Path $lock 'pid') -Value $gone.Id -Encoding Ascii
+    & $copy -Ref 'v1.2.3'
+    Assert ((Test-Path (Join-Path $ovisHome 'bin\ovis-server.exe')) -and -not (Test-Path $lock)) 'A dead holder''s lock must be taken over'
+    $runner = Join-Path $binaryScratch 'install-runner.ps1'
+    Set-Content -LiteralPath $runner -Encoding UTF8 -Value @'
+param([string]$Installer, [string]$Version, [string]$Barrier)
+$ErrorActionPreference = 'Stop'
+$source = Get-Content -Raw -LiteralPath $Installer
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+foreach ($definition in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { . ([scriptblock]::Create($definition.Extent.Text)) }
+$ovisHome = Join-Path $env:LOCALAPPDATA 'ovis'
+$releasePublicKey = [regex]::Match($source, "(?m)^\`$releasePublicKey = '([^']+)'").Groups[1].Value
+while (-not (Test-Path -LiteralPath $Barrier)) { Start-Sleep -Milliseconds 10 }
+try { $null = Install-OvisBinary $Version; exit 0 } catch { Write-Output $_.Exception.Message; exit 1 }
+'@
+    $hashes = @{}
+    foreach ($version in '1.2.3', '1.2.7') { $hashes[(Get-FileHash (Join-Path $releaseDir "v$version\ovis-server-windows-x64.exe")).Hash] = $version }
+    for ($pair = 0; $pair -lt 6; $pair++) {
+        $barrier = Join-Path $binaryScratch "barrier-$pair"
+        $versions = if ($pair % 2) { '1.2.3', '1.2.7' } else { '1.2.7', '1.2.3' }
+        $children = foreach ($version in $versions) {
+            $info = New-Object Diagnostics.ProcessStartInfo
+            $info.FileName = (Get-Command powershell).Source
+            $info.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Installer `"$copy`" -Version $version -Barrier `"$barrier`""
+            $info.UseShellExecute = $false; $info.CreateNoWindow = $true; $info.RedirectStandardOutput = $true
+            [Diagnostics.Process]::Start($info)
+        }
+        Set-Content -LiteralPath $barrier -Value ''
+        $said = foreach ($child in $children) { $child.StandardOutput.ReadToEnd(); $child.WaitForExit() }
+        Assert (@($children | Where-Object { $_.ExitCode -eq 0 }).Count -ge 1) "Pair ${pair}: at least one install must succeed: $said"
+        $running = $hashes[(Get-FileHash (Join-Path $ovisHome 'bin\ovis-server.exe')).Hash]
+        Assert ($running -and ((Get-Content -Raw (Join-Path $ovisHome 'bin\dist\index.html')) -match [regex]::Escape($running))) "Pair ${pair}: bin must hold one whole release: $said"
+        Assert (-not (Test-Path $lock)) "Pair ${pair}: the lock must be released"
+    }
+    $state.linkedRoot = ''; $state.running = $true
+    $env:OVIS_FROM_SOURCE = '1'; $env:LOCALAPPDATA = $originalLocalAppData; Remove-Item Env:\OVIS_RELEASES_URL
+    Write-Host 'PASS one install at a time: a live holder waited out and named, a dead holder''s lock taken over, overlapping installs in two processes leave one whole release'
+
     # A PC without herdr: its installer is a stand-in .cmd, and nothing of this PC's own herdr is in reach.
     $scratch = Join-Path ([IO.Path]::GetTempPath()) "herdr-installer-test-$PID"
     New-Item -ItemType Directory -Force -Path $scratch | Out-Null
@@ -455,6 +621,9 @@ public static class ImmediateGh {
     $env:PATH = $originalPath
     $env:LOCALAPPDATA = $originalLocalAppData
     $env:USERPROFILE = $originalUserProfile
+    $env:OVIS_FROM_SOURCE = $originalFromSource
+    Remove-Item Env:\OVIS_RELEASES_URL -ErrorAction SilentlyContinue
+    if ($binaryScratch) { Remove-Item -LiteralPath $binaryScratch -Recurse -Force -ErrorAction SilentlyContinue }
     if ($herdrStandIn) { Set-Item Function:\herdr $herdrStandIn }
     if ($scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $ghStandIn -Recurse -Force -ErrorAction SilentlyContinue

@@ -24,6 +24,8 @@ import { useLocale, useT, type Translate } from "../lib/i18n.ts";
 const BLOCKED_REASONS: ReadonlyArray<{ is: (reason: string) => boolean; words: (t: Translate) => string }> = [
   { is: (reason) => reason === "Start with bun run start or the herdr plugin to enable updates.", words: (t) => t("Start with bun run start or the herdr plugin to enable updates.") },
   { is: (reason) => reason === "Switch the source checkout to main to update.", words: (t) => t("Switch the source checkout to main to update.") },
+  { is: (reason) => reason.startsWith("Ovis runs here as an installed release"), words: (t) => t("Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.") },
+  { is: (reason) => reason.startsWith("Ovis runs here as the herdr plugin's compiled server"), words: (t) => t("Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.") },
   { is: (reason) => reason === CHECKOUT_CHANGED_REASON, words: (t) => t("The source checkout changed. Restart the app before updating.") },
   { is: (reason) => reason === "The source checkout has local changes. Commit or move them before updating.", words: (t) => t("The source checkout has local changes. Commit or move them before updating.") },
   { is: (reason) => reason === "Updates require a Git checkout on the main branch.", words: (t) => t("Updates require a Git checkout on the main branch.") },

@@ -43,6 +43,7 @@ const STAND_INS: Record<string, string> = {
     printf '{"plugin_id":"someone.else","plugin_root":"/nowhere"}]}}\\n' ;;
   # under the id the ref's manifest names
   "plugin install "*)
+    printf '%s\n' "\${OVIS_FROM_SOURCE:-}" > "$SCRATCH/plugin-source"
     if [ "$(cat "$SCRATCH/ref-id" 2>/dev/null)" = devswha.herdr-web-ui ]; then
       : > "$SCRATCH/legacy"
       mkdir -p "$SCRATCH/legacy-plugin/scripts"
@@ -65,6 +66,8 @@ case "$*" in
   *" https://raw.githubusercontent.com/devswha/ovis/$OVIS_REF/herdr-plugin.toml")
     [ ! -e "$SCRATCH/manifest-blocked" ] || { echo "curl: (7) Failed to connect to raw.githubusercontent.com port 443" >&2; exit 7; }
     printf 'id = "%s"\\nname = "Ovis"\\n' "$(cat "$SCRATCH/ref-id" 2>/dev/null || echo devswha.ovis)" ;;
+  # a release from before the compiled server: no ovis-server.json
+  *" https://github.com/devswha/ovis/releases/download/$OVIS_REF/ovis-server.json") echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
   *) echo "unexpected curl $*" >&2; exit 1 ;;
 esac`,
   // a desktop's openers, which only write down what they were asked to open (renamed into place: a reader never sees half a line)
@@ -192,7 +195,7 @@ exec '${real}' "$@"
     return existsSync(file) ? Number(readFileSync(file, "utf8").trim()) : null;
   }
   private environment(extra: Record<string, string> = {}): Record<string, string> {
-    return { PATH: join(this.scratch, "bin"), HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_REF: "v0.0.0", ...extra };
+    return { PATH: join(this.scratch, "bin"), HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_REF: "v0.0.0", OVIS_FROM_SOURCE: "1", ...extra };
   }
 
   /** as a script or an agent runs it: the script on stdin, and no terminal */
@@ -350,6 +353,18 @@ describe.skipIf(platform() === "win32")("install.sh with a release from before t
     expect(out).toContain("could not read the plugin id at main");
     expect(existsSync(join(pc.scratch, "legacy-stopped"))).toBe(false);
     expect(existsSync(join(pc.scratch, "herdr.calls"))).toBe(false);
+  });
+
+  it.concurrent("has herdr build a branch from its own sources, and a release without a compiled server as it is", async () => {
+    const branch = new Pc();
+    const built = await branch.unattended({ OVIS_REF: "feat/x", OVIS_FROM_SOURCE: "" });
+    expect(built.exitCode, built.out).toBe(0);
+    expect(readFileSync(join(branch.scratch, "plugin-source"), "utf8")).toBe("1\n");
+    const release = new Pc();
+    const old = await release.unattended({ OVIS_REF: "v0.4.14", OVIS_FROM_SOURCE: "" });
+    expect(old.exitCode, old.out).toBe(0);
+    expect(old.out).toContain("ships no compiled server, so it is installed from source");
+    expect(readFileSync(join(release.scratch, "plugin-source"), "utf8")).toBe("\n");
   });
 
   it.concurrent("finds the install of a branch whose manifest cannot be read under the old id it named", async () => {

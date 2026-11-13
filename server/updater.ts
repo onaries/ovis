@@ -40,6 +40,21 @@ export function readNotesFile(path: string): string {
 }
 const SHA = /^[0-9a-f]{40,64}$/;
 const NOT_MAIN_REASON = "Switch the source checkout to main to update.";
+/** The herdr plugin checkout that runs this server as its compiled binary (scripts/plugin-launch.ts), and its version;
+ * nothing for a server run from source (it updates as a checkout) or without the launcher's OVIS_PLUGIN_CHECKOUT. */
+export function pluginBinaryOf(checkout: string | undefined, compiled: boolean): { checkout: string; version: string } | undefined {
+  if (!compiled || !checkout) return undefined;
+  try { return { checkout, version: String((JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")) as { version?: unknown }).version) }; }
+  catch { return { checkout, version: "" }; }
+}
+/** herdr updates a plugin's compiled server, not this app */
+export const PLUGIN_BINARY_REASON = "Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.";
+/** Whether a compiled server runs from where install.sh or install.ps1 put it: `<home>/ovis/releases/<id>`, or on
+ * Windows `<home>\\ovis\\bin` (its bin is the release folder itself); a herdr plugin's is under `.ovis/server` */
+export function installedBinaryAt(root: string, compiled: boolean): boolean {
+  return compiled && /[\\/]ovis[\\/](?:releases[\\/][^\\/]+|bin)[\\/]?$/i.test(root);
+}
+export const INSTALLED_BINARY_REASON = "Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.";
 
 /** Shown when the launcher runs from an installed release instead of the checkout it was built from (#1373). */
 export const RELEASE_FOLDER_REASON = "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.";
@@ -234,6 +249,11 @@ export class Updater {
     /** herdr's `plugin install` checks out a shallow, detached commit it owns; that HEAD is
      * accepted when it is an ancestor of origin/main (a user's own detached checkout is not). */
     pluginCheckout?: boolean;
+    /** The herdr plugin checkout whose launcher runs this compiled server, and its version: its updates come from
+     * `herdr plugin update`, so the app offers none and says so (the binary's own updates are todo 7's). */
+    pluginBinary?: { checkout: string; version: string };
+    /** a compiled server install.sh or install.ps1 installed: running the installer again updates it (todo 7: in-app) */
+    installedBinary?: boolean;
     /** Runs once a release is installed and active; the supervisor hands itself over here. */
     afterInstall?: (release: Release) => void | Promise<void>;
     /** A standing problem to report in every status (a supervisor that fell back to its predecessor). */
@@ -264,6 +284,14 @@ export class Updater {
       const failed = JSON.parse(readFileSync(join(this.options.stateDir, "failed.json"), "utf8")) as { revision?: string };
       if (failed.revision && SHA.test(failed.revision)) this.failedRevision = failed.revision;
     } catch { /* no failed automatic candidate */ }
+    if (this.options.pluginBinary) {
+      this.patch({ managed: false, current_version: this.options.pluginBinary.version, blocked_reason: PLUGIN_BINARY_REASON });
+      return this.release;
+    }
+    if (this.options.installedBinary) {
+      this.patch({ managed: false, blocked_reason: INSTALLED_BINARY_REASON });
+      return this.release;
+    }
     try {
       this.sourceRevision = await this.git("rev-parse", "HEAD");
       if (!SHA.test(this.sourceRevision)) throw new Error("Invalid source revision");
@@ -335,6 +363,8 @@ export class Updater {
   }
 
   private async sourceBlock(): Promise<string | null> {
+    if (this.options.pluginBinary) return PLUGIN_BINARY_REASON;
+    if (this.options.installedBinary) return INSTALLED_BINARY_REASON;
     if (isReleaseFolder(this.options.root)) return RELEASE_FOLDER_REASON;
     const branch = await this.git("branch", "--show-current");
     if (branch !== "main" && !(branch === "" && this.options.pluginCheckout)) return NOT_MAIN_REASON;

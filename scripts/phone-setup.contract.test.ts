@@ -16,7 +16,7 @@ it("herdr loads the Phone setup entrypoint and keeps its QR and code visible in 
   const manifest = Bun.TOML.parse(readFileSync(join(source, "herdr-plugin.toml"), "utf8")) as any;
   const phone = manifest.panes.find((pane: any) => pane.id === "phone");
   expect(phone.placement).toBe("zoomed");
-  expect(phone.command).toEqual(["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "phone-setup"]);
+  expect(phone.command).toEqual(["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "phone-setup"]);
   expect(manifest.actions.find((action: any) => action.id === "phone").command).toEqual([
     "herdr", "plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "phone", "--placement", "zoomed", "--focus",
   ]);
@@ -25,7 +25,10 @@ it("herdr loads the Phone setup entrypoint and keeps its QR and code visible in 
   const binary = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr")!;
   const session = "phone-setup-qa";
   const socket = join(config, "herdr", "sessions", session, "herdr.sock");
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("HERDR_"))), ...testShellEnv(config), XDG_CONFIG_HOME: config };
+  // OVIS_FROM_SOURCE: the pane runs this checkout's scripts/plugin.ts. Without it the launcher would ask GitHub whether
+  // package.json's version has a compiled server (this plugin never ran the build step that remembers the answer):
+  // a network call in a contract test, and once that release exists, a download of it instead of these sources
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("HERDR_"))), ...testShellEnv(config), XDG_CONFIG_HOME: config, OVIS_FROM_SOURCE: "1" };
   const cli = async (...args: string[]) => {
     const child = Bun.spawn([binary, ...args], { env, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);

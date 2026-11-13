@@ -18,7 +18,7 @@ function fn(name: string): string {
   if (!match) throw new Error(`install.sh defines no ${name}()`);
   return match[0];
 }
-const CONSTANTS = ["PLUGIN", "LEGACY_PLUGIN", "APP_DIR", "SERVICE", "AGENT_LABEL"].map((name) => {
+const CONSTANTS = ["PLUGIN", "LEGACY_PLUGIN", "APP_DIR", "OVIS_HOME", "SERVICE", "AGENT_LABEL"].map((name) => {
   const line = new RegExp(`^${name}=.*$`, "m").exec(INSTALLER)?.[0];
   if (!line) throw new Error(`install.sh sets no ${name}`);
   return line;
@@ -294,12 +294,13 @@ describe("core_service", () => {
 });
 
 describe("install_core", () => {
-  it("builds the app with herdr-plugin.toml's Linux/macOS build steps, the Rust PTY host aside", () => {
+  it("builds the checkout from source after herdr-plugin.toml's pre-flight step, the Rust PTY host aside", () => {
     const manifest = readFileSync(join(ROOT, "herdr-plugin.toml"), "utf8");
-    const steps = [...manifest.matchAll(/\[\[build\]\]\ncommand = (\[.*\])\nplatforms = \["linux", "macos"\]/g)]
+    const preflight = [...manifest.matchAll(/\[\[build\]\]\ncommand = (\[.*\])\nplatforms = \["linux", "macos"\]/g)]
       .map((match) => (JSON.parse(match[1]!) as string[]).join(" "))
-      .filter((step) => !step.includes("pty-sidecar"));
-    expect(steps.length).toBeGreaterThan(0);
-    expect(fn("install_core")).toContain(`(cd "$APP_DIR.new" && ${steps.join(" && ")})`);
+      .filter((step) => step.includes("preflight"));
+    expect(preflight).toEqual(["sh scripts/preflight.sh"]);
+    // what scripts/plugin-launch.ts install runs under OVIS_FROM_SOURCE=1, without its Rust PTY host step
+    expect(fn("install_core")).toContain(`(cd "$APP_DIR.new" && ${preflight[0]} && sh scripts/with-bun.sh install && sh scripts/with-bun.sh run build)`);
   });
 });

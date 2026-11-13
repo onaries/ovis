@@ -890,26 +890,42 @@ A release without them gets them from **Actions → Attach the Rust PTY host** w
 
 It also builds the server as one compiled binary per platform (`server-binary`, on the same runners as the
 rest of the release, `bun scripts/build-server.ts release`): `ovis-server-linux-x64`, `-linux-arm64`,
-`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, with `ovis-server.json` (the version, the git trees of
-`server/` and `shared/`, each file's SHA-256), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
+`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, and the built client the installers unpack beside the binary,
+`ovis-dist.tar.gz` (from `bun run build`), with `ovis-server.json` (the version, the git trees of `server/` and
+`shared/`, each file's SHA-256 and size, and those of the three Rust PTY host binaries, which `server-binary` waits
+for and copies in: the binary installers run no host but the one named there), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
 signature over the manifest's exact bytes. `server-binary-sign` signs on GitHub's runner: beside the key run only Bun,
 installed by the SHA-pinned `oven-sh/setup-bun`, and `scripts/server-manifest.ts`, which uses Node's built-ins; none
-of the repository's dependencies is installed there. It then verifies the folder for the version being released.
-`server-binary-attest` attests the files, and `publish` verifies them again for that version and attaches each by
-name, refusing a folder that holds anything else. The signature vouches for whatever `server-binary` built.
+of the repository's dependencies is installed there. `sign` refuses a key whose public half is not `RELEASE_PUBLIC_KEY`,
+committed in `scripts/server-manifest.ts`; the job then verifies the folder for the version being released against
+that committed key. `server-binary-attest` attests the files, and `publish` verifies them again for that version
+against the committed key, never one a job reports, and attaches each by name, refusing a folder that holds anything
+else; the PTY hosts it attaches must be byte for byte the ones the manifest signed. A different key put into the secret fails the release at `sign`. The signature vouches for whatever `server-binary` built.
 
-`bun scripts/build-server.ts verify <dir> --public-key <base64> --expect-version <X.Y.Z>` checks a downloaded set, and
-stops at the first part that fails, with one line naming it (exit 1):
-- the folder holds exactly the five binaries, the manifest, its signature and the sums file;
+`bun scripts/build-server.ts verify <dir> --expect-version <X.Y.Z>` checks a downloaded set against the committed key
+(`--public-key <base64>` names another, for a test's own release), and stops at the first part that fails, with one
+line naming it (exit 1):
+- the folder holds exactly the five binaries, the client archive, the manifest, its signature and the sums file;
 - the signature over the manifest's bytes (both the signature and the key in standard base64, nothing around them);
-- the manifest in its canonical form: exactly its fields and the five platforms, no duplicate key;
+- the manifest in its canonical form: exactly its fields, the five platforms and the client archive, no duplicate key;
 - the version, when `--expect-version` is given;
-- each binary's SHA-256 (a mismatch names its platform), and the sums file, which is required and must list exactly the
-  manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
+- each file's SHA-256 and size (a mismatch names its platform, or the client), and the sums file, which is required and
+  must list exactly the manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
 
 A signature alone does not stop a downgrade: an older release signed by the same key verifies too. Every consumer (the
 installers, the updater, a fleet machine: todos 6, 7, 28 and 59 of the relay-fleet plan) passes the version it asked
-for, as the release job does. Remote PC bundles and the desktop app carry the same binary with what runs beside it
+for, as the release job does. The installers do it now: `install.sh` and `install.ps1` pin the committed key on one
+line each (`RELEASE_PUBLIC_KEY=` and `$releasePublicKey =`, held equal to `scripts/server-manifest.ts` by its test),
+and `scripts/plugin-launch.ts` takes it from that file. Each checks the manifest's signature first, then its schema
+(`"schema": 1`, the first field, so a reader can tell a later shape from this one) and version, then each file's
+size and SHA-256, and only then moves the release into place, in one rename (two on Windows, where a run cut off
+between them is put back by the next), holding an install lock (`.install.lock`, made by an atomic mkdir with the
+holder's pid; a waiter breaks it once the holder's pid no longer runs, one breaker at a time, so two installs at once
+take turns; with three or more started at the same instant a narrow race remains, a follow-up). When to build
+from source instead is [one rule](../INSTALL.md#binary-or-source). Their tests run a copy whose key line names a key made for
+the test, or pass that key as `installServer`'s option, which the launcher never does: the shipped scripts read no
+key from anywhere else. `OVIS_RELEASES_URL` (https://, or a `file://` folder laid out as GitHub's
+`<url>/v<version>/<file>`) points them at another place, checked against the same key. Remote PC bundles and the desktop app carry the same binary with what runs beside it
 (`scripts/server-artifact.ts`), and no server sources. The builds are reproducible with the same Bun: CI pins Bun 1.4.2,
 so CI's hashes differ from ones built with another Bun.
 
@@ -922,15 +938,20 @@ environment) never holds it. Without the environment or its secret, `server-bina
 the secret, and `publish`, which needs it, does not run: no tag and no release are made, and nothing is published
 unsigned. In a fork the job is skipped, and so is `publish`.
 
-The owner sets it up once, before the first release that signs, on a Linux or macOS PC they trust (`keygen` refuses
-to run on Windows, where a file mode does not keep the key to its owner):
+The committed key (`RELEASE_PUBLIC_KEY`, `C8+dOD0g…`) is the public half of the key the owner already made: the
+secret holds its private half, and nothing below runs again for it. Only a new key pair (a lost or replaced key) runs
+these steps, on a Linux or macOS PC the owner trusts (`keygen` refuses to run on Windows, where a file mode does not
+keep the key to its owner), and then also commits the printed public key in `scripts/server-manifest.ts`
+(`RELEASE_PUBLIC_KEY`), `install.sh` (`RELEASE_PUBLIC_KEY=`) and `install.ps1` (`$releasePublicKey =`), before a
+release: `sign` refuses any other key, and installs that took the old key need a release under it to move on:
 1. `bun scripts/build-server.ts keygen <folder>` writes `<folder>/ovis-server-signing-key.pem` (readable by them
    alone) and prints only the public key.
 2. Create the environment `release-signing` with deployment branches limited to `main` (Settings → Environments →
    New environment; Deployment branches and tags: Selected branches and tags, add `main`).
 3. `gh secret set OVIS_SERVER_SIGNING_KEY --env release-signing --repo devswha/ovis < <folder>/ovis-server-signing-key.pem`
    (the key is read from the file, never typed on a command line).
-4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. Once a
+4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. It is
+   `RELEASE_PUBLIC_KEY` in `scripts/server-manifest.ts` and the key line of `install.sh` and `install.ps1`. Once a
    release pins it in the binary, replacing the key strands the installs that took it, so losing the private key means
    no further verified update reaches them.
 

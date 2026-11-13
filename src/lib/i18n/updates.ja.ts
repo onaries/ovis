@@ -57,6 +57,8 @@ export const UPDATES_JA: Record<string, string> = {
   "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.": "このサーバーは Ovis アプリの一部で、アプリと一緒にアップデートされます。アップデートはここではなくアプリから届きます。",
   "Start with bun run start or the herdr plugin to enable updates.": "更新は herdr プラグインか bun run start で起動した Ovis でのみ行えます。インストールした方法で更新してください。",
   "Switch the source checkout to main to update.": "ソースのチェックアウトを main に切り替えてから更新してください。",
+  "Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.": "Ovis はここでインストール済みのリリースとして動いています。インストーラーをもう一度実行して更新し(curl -fsSL https://ovis.sh/install.sh | sh、Windows では irm https://ovis.sh/install.ps1 | iex)、Ovis を再起動してください。",
+  "Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.": "Ovis はここで herdr プラグインのコンパイル済みサーバーとして動いています。herdr で更新して(herdr plugin update devswha.ovis)から Ovis を再起動してください。",
   "The source checkout changed. Restart the app before updating.": "ソースのチェックアウトが変わりました。Ovis を再起動してから更新してください。",
   "The source checkout has local changes. Commit or move them before updating.": "ソースのチェックアウトに未コミットの変更があります。コミットするか退避してから更新してください。",
   "Updates require a Git checkout on the main branch.": "更新には main ブランチをチェックアウトした Git リポジトリが必要です。",

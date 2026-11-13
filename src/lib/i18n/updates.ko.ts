@@ -57,6 +57,8 @@ export const UPDATES_KO: Record<string, string> = {
   "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.": "이 서버는 Ovis 앱에 들어 있어 앱과 함께 업데이트됩니다. 업데이트는 여기가 아니라 앱으로 받습니다.",
   "Start with bun run start or the herdr plugin to enable updates.": "업데이트는 허더 플러그인이나 bun run start로 실행한 Ovis에서만 할 수 있습니다. 설치한 방법으로 업데이트하세요.",
   "Switch the source checkout to main to update.": "소스 체크아웃을 main 브랜치로 바꾼 뒤 업데이트하세요.",
+  "Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.": "Ovis가 여기서 설치된 릴리스로 실행됩니다. 설치 프로그램을 다시 실행해 업데이트한 뒤(curl -fsSL https://ovis.sh/install.sh | sh, Windows에서는 irm https://ovis.sh/install.ps1 | iex) Ovis를 다시 시작하세요.",
+  "Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.": "Ovis가 여기서 herdr 플러그인의 컴파일된 서버로 실행됩니다. herdr로 업데이트한 뒤(herdr plugin update devswha.ovis) Ovis를 다시 시작하세요.",
   "The source checkout changed. Restart the app before updating.": "소스 체크아웃이 바뀌었어요. Ovis를 다시 시작한 뒤 업데이트하세요.",
   "The source checkout has local changes. Commit or move them before updating.": "소스 체크아웃에 저장하지 않은 변경이 있어요. 커밋하거나 옮긴 뒤 업데이트하세요.",
   "Updates require a Git checkout on the main branch.": "업데이트는 main 브랜치를 체크아웃한 Git 저장소에서만 할 수 있어요.",

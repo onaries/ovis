@@ -198,14 +198,12 @@ describe.skipIf(process.platform === "win32")("Unix Bun discovery", () => {
       manifest[section].filter(entry => entry.platforms?.includes("linux") && entry.command[1] !== "scripts/preflight.sh"
         && entry.command[0] !== "herdr").map(entry => entry.command));
     expect(commands).toEqual([
-      ["sh", "scripts/with-bun.sh", "install"],
-      ["sh", "scripts/with-bun.sh", "run", "build"],
-      ["sh", "scripts/with-bun.sh", "scripts/pty-sidecar.ts", "install"],
-      ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"],
-      ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"],
-      ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "stop"],
-      ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "status"],
-      ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "phone-setup"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "install"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "start"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "start"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "stop"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "status"],
+      ["sh", "scripts/with-bun.sh", "scripts/plugin-launch.ts", "phone-setup"],
     ]);
     for (const command of commands) {
       const result = await run(command);
@@ -214,8 +212,7 @@ describe.skipIf(process.platform === "win32")("Unix Bun discovery", () => {
     }
     expect(manifest.build.filter(entry => entry.platforms?.includes("windows")).map(entry => entry.command)).toEqual([
       ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/preflight.ps1"],
-      ["bun", "install"],
-      ["bun", "run", "build"],
+      ["bun", "scripts/plugin-launch.ts", "install"],
     ]);
   });
 });

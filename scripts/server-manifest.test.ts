@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateKeyPair, MANIFEST, releaseFile, SERVER_PLATFORMS, SIGNATURE, signManifest, SUMS, verifyRelease, writeManifest } from "./server-manifest.ts";
+import { DIST_ARCHIVE, generateKeyPair, MANIFEST, RELEASE_PUBLIC_KEY, releaseFile, PTY_ASSETS, ptyFile, SERVER_PLATFORMS, SIGNATURE, signManifest, SUMS, verifyRelease, writeManifest } from "./server-manifest.ts";
 
 /** a signed release folder and the key that signs it, for attacks that change something and sign again */
 function signedRelease(): { dir: string; privateKeyPem: string; publicKey: string } {
@@ -35,8 +35,11 @@ function releaseDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "ovis-server-release-"));
   dirs.push(dir);
   for (const platform of SERVER_PLATFORMS) writeFileSync(join(dir, releaseFile(platform)), `binary for ${platform}\n`);
+  for (const build of PTY_ASSETS) writeFileSync(join(dir, ptyFile(build)), `pty host ${build}\n`);
+  writeFileSync(join(dir, DIST_ARCHIVE), "the built client\n");
   return dir;
 }
+const RELEASE_FILES = [...SERVER_PLATFORMS.map(releaseFile), DIST_ARCHIVE, ...PTY_ASSETS.map(ptyFile)];
 const sources = { server: "a".repeat(40), shared: "b".repeat(40) };
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const script = join(import.meta.dir, "build-server.ts");
@@ -56,16 +59,21 @@ describe("the server's release manifest", () => {
     expect(manifest.sources).toEqual(sources);
     expect(Object.keys(manifest.assets).sort()).toEqual([...SERVER_PLATFORMS].sort());
     for (const platform of SERVER_PLATFORMS) {
-      expect(manifest.assets[platform]).toEqual({ file: releaseFile(platform), sha256: sha256(join(dir, releaseFile(platform))) });
+      const file = join(dir, releaseFile(platform));
+      expect(manifest.assets[platform]).toEqual({ file: releaseFile(platform), sha256: sha256(file), size: statSync(file).size });
     }
+    expect(manifest.dist).toEqual({ file: DIST_ARCHIVE, sha256: sha256(join(dir, DIST_ARCHIVE)), size: statSync(join(dir, DIST_ARCHIVE)).size });
     const sums = readFileSync(join(dir, SUMS), "utf8").trim().split("\n").sort();
-    expect(sums).toEqual(SERVER_PLATFORMS.map((platform) => `${sha256(join(dir, releaseFile(platform)))}  ${releaseFile(platform)}`).sort());
+    expect(sums).toEqual(RELEASE_FILES.map((name) => `${sha256(join(dir, name))}  ${name}`).sort());
   });
 
   it("refuses a folder that misses a platform or holds anything else", () => {
     const missing = releaseDir();
     rmSync(join(missing, releaseFile("darwin-x64")));
     expect(() => writeManifest(missing, { version: "1.2.3", sources })).toThrow(releaseFile("darwin-x64"));
+    const noClient = releaseDir();
+    rmSync(join(noClient, DIST_ARCHIVE));
+    expect(() => writeManifest(noClient, { version: "1.2.3", sources })).toThrow(DIST_ARCHIVE);
     const extra = releaseDir();
     writeFileSync(join(extra, "notes.txt"), "x");
     expect(() => writeManifest(extra, { version: "1.2.3", sources })).toThrow("notes.txt");
@@ -144,6 +152,22 @@ describe("bun scripts/build-server.ts", () => {
     expect(readFileSync(key, "utf8")).toBe(pem);
   });
 
+  it("sign refuses a key whose public half is not the one committed, unless a test names the key it expects", () => {
+    const dir = releaseDir();
+    writeManifest(dir, { version: "1.2.3", sources });
+    const { privateKeyPem, publicKey } = generateKeyPair();
+    const other = cli(["sign", dir], { OVIS_SERVER_SIGNING_KEY: privateKeyPem });
+    expect(other.code).toBe(1);
+    expect(other.err).toContain(RELEASE_PUBLIC_KEY);
+    expect(() => statSync(join(dir, SIGNATURE))).toThrow();
+    expect(cli(["sign", dir, "--public-key", publicKey], { OVIS_SERVER_SIGNING_KEY: privateKeyPem }).code).toBe(0);
+    // verify checks against the committed key unless told another: this release is not signed by it
+    const committed = cli(["verify", dir]);
+    expect(committed.code).toBe(1);
+    expect(committed.err).toContain(RELEASE_PUBLIC_KEY);
+    expect(cli(["verify", dir, "--public-key", publicKey]).code).toBe(0);
+  });
+
   it("sign refuses without the signing key and names the secret", () => {
     const dir = releaseDir();
     writeManifest(dir, { version: "1.2.3", sources });
@@ -153,16 +177,13 @@ describe("bun scripts/build-server.ts", () => {
     expect(() => statSync(join(dir, SIGNATURE))).toThrow();
   });
 
-  it("verify refuses without a public key, accepts a signed release and exits 1 naming a changed platform", () => {
+  it("verify accepts a signed release and exits 1 naming a changed platform; no variable stands in for the committed key", () => {
     const dir = releaseDir();
     const { privateKeyPem, publicKey } = generateKeyPair();
     writeManifest(dir, { version: "1.2.3", sources });
-    expect(cli(["sign", dir], { OVIS_SERVER_SIGNING_KEY: privateKeyPem }).out.trim()).toContain(publicKey);
-    const none = cli(["verify", dir]);
-    expect(none.code).toBe(2);
-    expect(none.err).toContain("OVIS_SERVER_PUBLIC_KEY");
+    expect(cli(["sign", dir, "--public-key", publicKey], { OVIS_SERVER_SIGNING_KEY: privateKeyPem }).out.trim()).toContain(publicKey);
     expect(cli(["verify", dir, "--public-key", publicKey]).code).toBe(0);
-    expect(cli(["verify", dir], { OVIS_SERVER_PUBLIC_KEY: publicKey }).code).toBe(0);
+    expect(cli(["verify", dir], { OVIS_SERVER_PUBLIC_KEY: publicKey }).code).toBe(1);
     const binary = join(dir, releaseFile("windows-x64"));
     writeFileSync(binary, Buffer.concat([readFileSync(binary), Buffer.from([0])]));
     const changed = cli(["verify", dir, "--public-key", publicKey]);
@@ -173,6 +194,13 @@ describe("bun scripts/build-server.ts", () => {
 
 it("keeps each platform's file name as installers fetch it", () => {
   expect(SERVER_PLATFORMS.map(releaseFile)).toEqual(["ovis-server-linux-x64", "ovis-server-linux-arm64", "ovis-server-darwin-arm64", "ovis-server-darwin-x64", "ovis-server-windows-x64.exe"]);
+});
+
+it("pins in install.sh and install.ps1 the public key the release jobs check against", () => {
+  expect(RELEASE_PUBLIC_KEY).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+  const root = join(import.meta.dir, "..");
+  expect(readFileSync(join(root, "install.sh"), "utf8")).toContain(`\nRELEASE_PUBLIC_KEY="${RELEASE_PUBLIC_KEY}"\n`);
+  expect(readFileSync(join(root, "install.ps1"), "utf8")).toContain(`\n$releasePublicKey = '${RELEASE_PUBLIC_KEY}'\n`);
 });
 
 describe("verify accepts only the release as written, even when the key signed something else", () => {
@@ -192,13 +220,33 @@ describe("verify accepts only the release as written, even when the key signed s
     rejects(dir, publicKey, "linux-x64");
   });
 
+  it("refuses a client archive under another name, a path out of the folder, and a size that is not a whole number", () => {
+    for (const [from, to] of [[`"file": "${DIST_ARCHIVE}"`, '"file": "../ovis-dist.tar.gz"'], [`"file": "${releaseFile("linux-x64")}"`, `"file": "../${releaseFile("linux-x64")}"`], [/"size": \d+/, '"size": 1.5'], [/"size": \d+/, '"size": -1']] as const) {
+      const { dir, privateKeyPem, publicKey } = signedRelease();
+      resigned(dir, privateKeyPem, (text) => text.replace(from, to));
+      expect(verifyRelease(dir, publicKey).ok).toBe(false);
+    }
+  });
+
+  it("refuses a manifest of another schema, signed by the right key", () => {
+    const { dir, privateKeyPem, publicKey } = signedRelease();
+    resigned(dir, privateKeyPem, (text) => text.replace('"schema": 1,', '"schema": 2,'));
+    rejects(dir, publicKey, "schema 2");
+  });
+
+  it("names the client archive when it no longer matches", () => {
+    const { dir, publicKey } = signedRelease();
+    writeFileSync(join(dir, DIST_ARCHIVE), "another client\n");
+    rejects(dir, publicKey, `${DIST_ARCHIVE} does not match`);
+  });
+
   it("refuses an extra platform, an unknown field and a duplicate key, in either order", () => {
     const extraPlatform = signedRelease();
-    resigned(extraPlatform.dir, extraPlatform.privateKeyPem, (text) => text.replace('"assets": {', `"assets": {\n    "freebsd-x64": { "file": "x", "sha256": "${"0".repeat(64)}" },`));
+    resigned(extraPlatform.dir, extraPlatform.privateKeyPem, (text) => text.replace('"assets": {', `"assets": {\n    "freebsd-x64": { "file": "x", "sha256": "${"0".repeat(64)}", "size": 1 },`));
     rejects(extraPlatform.dir, extraPlatform.publicKey, "platforms");
     const unknownField = signedRelease();
-    resigned(unknownField.dir, unknownField.privateKeyPem, (text) => text.replace('{\n  "version"', '{\n  "channel": "beta",\n  "version"'));
-    rejects(unknownField.dir, unknownField.publicKey, "exactly version, sources and assets");
+    resigned(unknownField.dir, unknownField.privateKeyPem, (text) => text.replace('{\n  "schema"', '{\n  "channel": "beta",\n  "schema"'));
+    rejects(unknownField.dir, unknownField.publicKey, "exactly schema, version, sources, assets, dist and pty");
     for (const bogusFirst of [true, false]) {
       const duplicate = signedRelease();
       resigned(duplicate.dir, duplicate.privateKeyPem, (text) => {
@@ -210,7 +258,7 @@ describe("verify accepts only the release as written, even when the key signed s
     }
     const notObject = signedRelease();
     resigned(notObject.dir, notObject.privateKeyPem, () => "[]\n");
-    rejects(notObject.dir, notObject.publicKey, "exactly version, sources and assets");
+    rejects(notObject.dir, notObject.publicKey, "exactly schema, version, sources, assets, dist and pty");
     const notJson = signedRelease();
     resigned(notJson.dir, notJson.privateKeyPem, () => "{\n");
     rejects(notJson.dir, notJson.publicKey, "not JSON");
@@ -269,5 +317,31 @@ describe("verify accepts only the release as written, even when the key signed s
     expect(malformed.code).toBe(1);
     expect(malformed.err.trim().split("\n")).toHaveLength(1);
     for (const args of [["--public-key"], ["--other", "x"], ["--public-key", publicKey, "--public-key", publicKey]]) expect(cli(["verify", dir, ...args]).code).toBe(2);
+  });
+});
+
+describe("the Rust PTY hosts in the signed manifest", () => {
+  it("names each host with its SHA-256 and size, and lists them in the sums", () => {
+    const dir = releaseDir();
+    const manifest = writeManifest(dir, { version: "1.2.3", sources });
+    for (const build of PTY_ASSETS) {
+      expect(manifest.pty[build]).toEqual({ file: ptyFile(build), sha256: sha256(join(dir, ptyFile(build))), size: readFileSync(join(dir, ptyFile(build))).length });
+      expect(readFileSync(join(dir, "ovis-server.SHA256SUMS"), "utf8")).toContain(`${sha256(join(dir, ptyFile(build)))}  ${ptyFile(build)}\n`);
+    }
+  });
+
+  it("refuses a host entry changed after signing, a host file replaced, and a manifest signed without the hosts", () => {
+    const edited = signedRelease();
+    writeFileSync(join(edited.dir, MANIFEST), readFileSync(join(edited.dir, MANIFEST), "utf8").replace(sha256(join(edited.dir, ptyFile("linux-x64"))), "0".repeat(64)));
+    rejects(edited.dir, edited.publicKey, "signature");
+    const replaced = signedRelease();
+    writeFileSync(join(replaced.dir, ptyFile("darwin-universal")), "a mirror's host\n");
+    rejects(replaced.dir, replaced.publicKey, "PTY host darwin-universal: ovis-pty-sidecar-darwin-universal does not match its SHA-256 and size");
+    const without = signedRelease();
+    resigned(without.dir, without.privateKeyPem, (text) => { const { pty: _, ...rest } = JSON.parse(text); return `${JSON.stringify(rest, null, 2)}\n`; });
+    rejects(without.dir, without.publicKey, "exactly schema, version, sources, assets, dist and pty");
+    const extra = signedRelease();
+    resigned(extra.dir, extra.privateKeyPem, (text) => { const parsed = JSON.parse(text); parsed.pty["windows-x64"] = parsed.pty["linux-x64"]; return `${JSON.stringify(parsed, null, 2)}\n`; });
+    rejects(extra.dir, extra.publicKey, "must name exactly the Rust PTY hosts");
   });
 });
