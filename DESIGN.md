@@ -1403,16 +1403,33 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A lone pane beside such a `⋯` draws no second ellipsis (its actions are in the tab's menu), on a
   desktop as on touch. The pane's own context menu carries pane actions; it opens at the pointer
   without changing which pane is focused. The pane header's ellipsis opens the same menu on touch.
-  A phone (at most 640px wide, the sheets' width) draws no tab row for any tab, which gives the pane
-  the row's 44px (header 96 -> 52px). The header's title is the way to the tabs, as the Codex and
-  Claude apps title the open conversation and list the others from it: a `ChevronDown` follows it, and
-  the whole title and crumb, grown to `--touch-target` tall, is one button ("Tabs of {workspace}",
-  `aria-haspopup="dialog"`, `aria-expanded`) that opens the workspace's tabs as a bottom sheet: each
+  A phone (at most 640px wide, the sheets' width) draws its tabs as Settings -> Appearance -> Tabs on
+  a phone says, a choice of the device's (`phoneTabs`, #3375). Under the header, the default, is the
+  row as at every other width: two or three tabs in view at 360px, one tap to another, for the row's
+  44px of the pane's height (header 52 + row 44). It follows herdr's own TUI, which keeps its tab bar
+  on screen, and Ovis up to 0.4.x; the Codex and Claude phone apps list their threads from a title
+  instead, which suits one thread at a time, not three or four agents at work in one workspace.
+  In the header keeps the 52px header of #3099 and draws the tabs in the title's place, as one row
+  that scrolls sideways (`touch-action: pan-x`, `overscroll-behavior-x: contain`, so the edge swipe
+  still opens the drawer) and fades out under its end: each tab a 44px target with its agent's mark
+  (a shell's glyph) and name, the open one a pill capped at 7rem so the next tab's mark shows beside
+  it and the row reads as tabs, not a title, a split tab's open pane (`1/2`, heard as "Pane 1 of 2", the
+  digits hidden from the tab's name) after its name, and the open tab always scrolled into view. A tap
+  opens a tab where it was left; a press held 450ms (moving no more than 8px) opens that tab's menu, as
+  a long press does a phone's list row, and the click lifting it opens no tab; Android's own long-press
+  `contextmenu` opens the same menu once, and a press still held when the PC or workspace changes opens
+  nothing. No `+` or `⋯` is drawn
+  in that row: a `ChevronDown` after it, led by the workspace's tab count ("Tabs of {workspace}",
+  `aria-haspopup="dialog"`, `aria-expanded`), opens the workspace's tabs as a bottom sheet: each
   tab with its state dot (hollow at rest), its agent's mark and a Close of its own ("Close {tab}",
   its own stop after the tab in the arrow order), the open tab marked current, its state word for a
   state; then the open tab's Move tab left / right, then New terminal and New tab with agent…. A
-  pick opens the tab where it was left; Close asks first as the row's does. Such a phone's More
-  carries the open tab's other actions as below, less the two new-tab items its title's list holds.
+  pick opens the tab where it was left; Close asks first as the row's does. A watching phone shows an
+  `Eye` ("View only") before the chevron, and a lost connection says Reconnecting… there in words,
+  then Connected, where the crumb would say them. The title's crumb (workspace, PC, folder) is not
+  drawn in this choice: the chevron's sheet is titled with the workspace, and the drawer says the rest.
+  A header note (herdr's prefix, a copied link) takes its own width beside the row, as from 769px. Such a phone's More
+  carries the open tab's other actions as below, less the two new-tab items its tab sheet holds.
   A lone tab with no row (a phone at most 700px tall, including the iPhone Duo's 678-point outer
   display, landscape or a screen made short by its keyboard) draws no pane ellipsis either: a second
   `⋯` below the glass header would repeat the header's own. The header's `⋯` is then the one menu,
@@ -2814,7 +2831,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   keeps its top-left.
   Below `769px` the title is followed, `--text-dim` and kept whole, by the selected tab's place in
   its workspace's strip (`.context-position`, "1/2", said "Tab 1 of 2"), only with two tabs or more;
-  below `420px` it leaves the header and the title's list marks the open tab.
+  below `420px` it leaves the header, and the tab row marks the open tab (with Tabs on a phone at In
+  the header, the header's row and its tab sheet).
 
 ### Chat turn (`.chat-turn`)
 - A complete Codex `visualize` reference on its own line of a chat answer is drawn as a small

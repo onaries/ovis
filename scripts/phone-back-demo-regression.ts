@@ -197,7 +197,12 @@ try {
 
       // Find in terminal, from the same sheet: Back closes the bar and keeps the terminal
       await page.locator(".header-more-button").tap();
-      await sheet.getByRole("button", { name: "Find…" }).tap();
+      // More folds the find items into Find… only where it also carries the pane's search (Tabs on a phone, In the header);
+      // with the row under the header (the default) Find in terminal is More's own item
+      const findGroup = sheet.getByRole("button", { name: "Find…" });
+      const findItem = sheet.getByRole("button", { name: "Find in terminal" });
+      await findGroup.or(findItem).first().waitFor();
+      if (await findGroup.count() > 0) await findGroup.tap();
       await page.locator(".row-sheet").getByRole("button", { name: "Find in terminal" }).tap();
       const find = page.locator(".find-bar");
       await find.waitFor();

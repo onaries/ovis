@@ -42,7 +42,7 @@ async function openApp(page: Page, origin: string, paneId: string): Promise<void
   await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
   await page.locator(".conn-live").waitFor();
   // a phone's header title lists the tabs in place of the row
-  if ((page.viewportSize()?.width ?? Infinity) <= 640) await page.locator(".app-header .context-tabs").waitFor();
+  if ((page.viewportSize()?.width ?? Infinity) <= 640) await page.locator(".app-header .header-tabs-sheet").waitFor();
   else await page.getByRole("tab", { name: TAB, exact: true }).waitFor();
   await screen(page, paneId).waitFor();
 }
@@ -60,7 +60,7 @@ async function paneMenu(page: Page, paneId: string): Promise<Locator> {
 
 async function checkDesktop(browser: Browser, origin: string, first: string, second: string, tabId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
-  await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
+  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
@@ -590,7 +590,7 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
   // Start from a known native focus before checking that a reorder preserves it.
   await paneFocus(first);
   const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true, locale: "en-US" });
-  await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
+  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
@@ -602,10 +602,10 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     assert.equal(await frame(page, first).isVisible(), true, "the open pane is the one shown");
     assert.equal(await page.locator(".pane-frame").count(), 2, "its sibling stays mounted");
     assert.equal(await page.locator(".pane-divider").count(), 0, "a phone draws no split boundary");
-    // a phone's header title lists the tabs: no row, and More is the open tab's and pane's menu
-    assert.equal(await page.locator(".tab-strip").count(), 0, "the phone draws no tab row");
-    const titleBox = await rect(page.locator(".context.has-tabs"), "the header's title");
-    assert.ok(titleBox.width >= 44 && titleBox.height >= 44, "the title that lists the tabs is a touch-sized target");
+    // a phone whose tabs are in the header: no row under it, its chevron lists them, and More is the open tab's and pane's menu
+    assert.equal(await page.locator(".pane-slot .tab-strip").count(), 0, "the phone draws no tab row under the header");
+    const listBox = await rect(page.locator(".app-header .header-tabs-sheet"), "the header's chevron");
+    assert.ok(listBox.width >= 44 && listBox.height >= 44, "the chevron that lists the tabs is a touch-sized target");
     const touchMenu = page.locator(".header-more-button");
     const touchBox = await rect(touchMenu, "the header's More");
     assert.ok(touchBox.width >= 40 && touchBox.height >= 40, "More remains a touch-sized target");
@@ -659,17 +659,18 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     await name.waitFor();
     await page.keyboard.press("Escape");
     await name.waitFor({ state: "detached" });
-    // the title's list moves the open tab, as the row's menu does
+    // the header's tab list moves the open tab, as the row's menu does
     const tabList = page.getByRole("dialog", { name: "Tabs of ovis-test-tab-menu", exact: true });
     const listTabs = async (): Promise<void> => {
-      await page.locator(".app-header .context-tabs").tap();
+      await page.locator(".app-header .header-tabs-sheet").tap();
       await tabList.waitFor();
       await sheetsSettled(page);
     };
     const owner = (await sessionSnapshot()).panes.find((pane) => pane.pane_id === first)!;
     const sibling = await tabCreate({ workspaceId: owner.workspace_id, label: "touch-reorder" });
     try {
-      await page.locator(".context-position").waitFor({ state: "attached" });
+      // the chevron counts the workspace's tabs from two
+      await page.locator(".app-header .header-tabs-count").waitFor({ state: "attached" });
       await listTabs();
       await tabList.getByRole("button", { name: "Move tab right", exact: true }).tap();
       await until(async () => (await sessionSnapshot()).tabs.filter((entry) => entry.workspace_id === owner.workspace_id)[0]?.tab_id === sibling.tab.tab_id, "the title's list reorders native tabs");
@@ -679,7 +680,7 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
       await tabList.getByRole("button", { name: "Move tab left", exact: true }).tap();
       await until(async () => (await sessionSnapshot()).tabs.filter((entry) => entry.workspace_id === owner.workspace_id)[0]?.tab_id === owner.tab_id, "the title's list restores original order");
     } finally { await tabClose(sibling.tab.tab_id); }
-    await page.locator(".context-position").waitFor({ state: "detached" });
+    await page.locator(".app-header .header-tabs-count").waitFor({ state: "detached" });
     assert.equal(await frame(page, first).locator(".pane-frame-menu").isVisible(), false, "the lone pane draws no ellipsis beside More");
     await touchMenu.tap();
     await tabSheet.waitFor();
@@ -738,7 +739,7 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
 
 async function checkTouchTablet(browser: Browser, origin: string, first: string, second: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch: true, locale: "en-US" });
-  await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
+  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);

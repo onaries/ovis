@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, ChevronDown, ChevronLeft, Plus, CircleHelp, Ellipsis, FolderOpen, Link, Menu, MessageCircle, MessageSquare, PanelLeft, PanelsTopLeft, Search, SquareTerminal, Target, TextSearch, X } from "lucide-react";
+import { Bell, ChevronDown, ChevronLeft, Eye, Plus, CircleHelp, Ellipsis, FolderOpen, Link, Menu, MessageCircle, MessageSquare, PanelLeft, PanelsTopLeft, Search, SquareTerminal, Target, TextSearch, X } from "lucide-react";
 
 import type { HerdrPane, PaneDirection } from "../shared/protocol.ts";
 import { authenticate, createTab, movePaneBeside, moveTabToWorkspace, paneSessionKey, shareSeen, swapPaneWith } from "./lib/api.ts";
@@ -835,7 +835,11 @@ export function App() {
   // From 769px with one pane in view the header is one row, a browser's tab strip: the workspace's tabs and +,
   // then the lens switch, Files and More (styles.css .header-tabs, THIRD_PARTY_NOTICES.md). A split keeps a
   // strip per half and the title here; a phone keeps the title that lists the tabs.
-  const stripInHeader = wideScreen && !splitOn && !tabsInHeader && !guideShown && snapshot !== null && selectedPane !== null && selectedWorkspace !== null;
+  // a phone whose tabs are in the header (Settings -> Tabs on a phone): the header's row is theirs in the title's place
+  // not over the inbox's list, whose header is the brand alone (components/AgentInbox.tsx)
+  const phoneTabRow = tabsInHeader && !inbox.shown;
+  const workspaceTabCount = selectedPane ? snapshot?.tabs.filter((tab) => tab.workspace_id === selectedPane.workspace_id).length ?? 0 : 0;
+  const stripInHeader = (wideScreen ? !splitOn && !tabsInHeader : phoneTabRow) && !guideShown && snapshot !== null && selectedPane !== null && selectedWorkspace !== null;
   // from 769px with a mouse the pane column ends in the Herdr app's status bar: where the pane is, its branch,
   // the connection. A touch screen keeps that room for its key bar and says them in More and the chip.
   const statusBarShown = wideScreen && keyboardLikely && selectedPane !== null && crumb !== null && !guideShown;
@@ -890,7 +894,7 @@ export function App() {
       ...(filePanelWidth === null ? {} : { "--file-panel-user-w": `${filePanelWidth}px` }),
     } as CSSProperties}>
       {selectedPane !== null && !guideShown && !inbox.shown && <h1 className="visually-hidden">{selectedTitle}</h1>}
-      <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}${stripInHeader ? " has-tab-row" : ""}`}>
+      <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}${stripInHeader && !phoneTabRow ? " has-tab-row" : ""}${phoneTabRow && stripInHeader ? " has-phone-tabs" : ""}`}>
         {/* is-zoned tells this header from the connecting shell's, which has no zones to draw.
             .header-side is the sidebar's own top row from 769px (styles.css); below that its
             buttons sit in the bar */}
@@ -929,11 +933,12 @@ export function App() {
         </div>
         <HeaderNote note={herdrPrefixWaiting ? t("herdr prefix: press a key") : note} />
         {stripInHeader ? (
-          <div className="header-tabs">
+          <div className={`header-tabs${phoneTabRow ? " is-phone" : ""}`}>
             {/* the strip that cannot be drawn leaves the sidebar and the pane working, as the pane's own strip did */}
             <RenderBoundary resetKey={`${selectedMachineId}:${selectedPane.pane_id}`} fallback={(retry) => <RegionCrash message={t("This pane can't be shown.")} retry={retry} />}>
             <PanePressContext.Provider value={pressPane}>
-              <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} splitDrag browserTabs closable={auth?.role !== "watch"}
+              <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} splitDrag={!phoneTabRow} browserTabs={!phoneTabRow} phoneRow={phoneTabRow}
+                sheet={phoneTabRow ? tabSheet : null} onSheetClose={closeTabSheet} closable={auth?.role !== "watch"}
                 renameRequest={renameRequest?.machineId === selectedMachineId && renameRequest.paneId === selectedPane.pane_id ? renameRequest : null}
                 onRenameHandled={clearRenameRequest}
                 onNewTab={() => actions.openNewTab()}
@@ -946,6 +951,16 @@ export function App() {
                 }} />
             </PanePressContext.Provider>
             </RenderBoundary>
+            {/* lost and back, the connection in words where the crumb would say it: the row has no line under it */}
+            {phoneTabRow && headerConnection !== null && <span className={`header-tabs-connection is-${headerConnection}`}>{t(headerConnection === "connected" ? "Connected" : "Reconnecting…")}</span>}
+            {/* a watching phone says so where its crumb would (G-004): the row has no line under it */}
+            {phoneTabRow && auth?.role === "watch" && <span className="header-tabs-watch" title={t("View only")}><Eye aria-hidden="true" /><span className="visually-hidden">{t("View only")}</span></span>}
+            {/* how many tabs the workspace has, beside the list of them: the row shows about one at a phone's width */}
+            {phoneTabRow && <button type="button" className="icon-button header-tabs-sheet" aria-label={t("Tabs of {workspace}", { workspace: selectedWorkspace.label })}
+              title={t("Tabs of {workspace}", { workspace: selectedWorkspace.label })} aria-haspopup="dialog" aria-expanded={tabSheet !== null} onClick={(event) => toggleTabSheet(event.currentTarget)}>
+              {workspaceTabCount > 1 && <span className="header-tabs-count" aria-hidden="true">{workspaceTabCount}</span>}
+              <ChevronDown aria-hidden="true" />
+            </button>}
           </div>
         ) : note !== null ? null : inbox.shown ? <Brand /> : selectedPane && crumb ? (
           <div className={`context${headerConnection === null ? "" : " has-connection"}${tabsInHeader && selectedWorkspace && !guideShown ? " has-tabs" : ""}`} title={crumb.tooltip}>
@@ -1023,7 +1038,7 @@ export function App() {
           {!guideShown && !inbox.shown && <ConnectionChip
             connected={connected}
             word={connWord}
-            quiet={(headerConnection === "reconnecting" && note === null && crumb !== null && !stripInHeader) || statusBarShown}
+            quiet={(headerConnection === "reconnecting" && note === null && ((crumb !== null && !stripInHeader) || (phoneTabRow && stripInHeader))) || statusBarShown}
             title={[connected ? null : connWord, shownHerdr ? (shownHerdr.runtime === "herdr-core" ? t("herdr-core {version} · protocol {protocol}", { version: shownHerdr.version, protocol: shownHerdr.protocol }) : t("herdr {version} · protocol {protocol}", { version: shownHerdr.version, protocol: shownHerdr.protocol })) : null].filter((part) => part !== null).join(" · ") || undefined}
           />}
           {/* the Host's herdr is away: the step to take is on that PC (the sidebar's state line says the same) */}

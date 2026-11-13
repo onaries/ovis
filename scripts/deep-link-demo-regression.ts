@@ -693,7 +693,8 @@ try {
       // closed by Cancel or by an item leaves no entry behind, so the next Back goes to the pane before
       const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
-        await phone.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
+        // More carries the pane's actions where the tabs are in the header (Settings -> Tabs on a phone)
+        await phone.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
         const page = await phone.newPage();
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));

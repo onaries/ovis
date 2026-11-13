@@ -2531,7 +2531,8 @@ button {
 }
 
 /* a note (herdr's prefix, a copied link) beside the row takes its own width; the tabs give way */
-.app-header.has-tab-row > .context {
+.app-header.has-tab-row > .context,
+.app-header.has-phone-tabs > .context {
   flex: 0 1 auto;
 }
 

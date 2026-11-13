@@ -110,6 +110,8 @@ async function phone(browser: Browser, settings: Settings, viewport = PHONE): Pr
   await context.addInitScript(({ key, settings, pane, height }) => {
     if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(settings));
     localStorage.setItem(`ovis:view:${pane}`, "terminal");
+    // a split tab's panes are listed in the header's More where the tabs are in the header (Settings -> Tabs on a phone)
+    if (localStorage.getItem("ovis:phone-tabs") === null) localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
     const visual = window.visualViewport!;
     let current = height;
     Object.defineProperty(visual, "height", { get: () => current });

@@ -554,6 +554,9 @@ function AppearancePage() {
       <SettingsRow icon={Rows3} label={t("Density")} wide reset={["density"]}>
         <Segmented label={t("Density")} value={settings.density} onChange={(density) => update({ density })} options={[{ value: "comfortable", label: t("Comfortable") }, { value: "compact", label: t("Compact") }]} />
       </SettingsRow>
+      <SettingsRow icon={Smartphone} label={t("Tabs on a phone")} description={t("On this device, where a phone shows the open workspace's tabs. Under the header: a row of their own shows two or three tabs at once and takes a little height from the pane. In the header: the tabs take the title's place, so the pane keeps its height, but about one tab shows at a time; swipe the row, or tap the arrow beside it to list them all.")} keywords={t("tab row tab bar tabs header phone mobile")} wide reset={["phoneTabs"]}>
+        <Segmented label={t("Tabs on a phone")} value={settings.phoneTabs} onChange={(phoneTabs) => update({ phoneTabs })} options={[{ value: "row", label: t("Under the header") }, { value: "header", label: t("In the header") }]} />
+      </SettingsRow>
       <SettingsRow icon={Languages} label={t("Language")} description={t("Follows the browser unless you choose one")} htmlFor="settings-language" reset={["language"]}>
         <SettingsSelect id="settings-language" value={settings.language} onChange={(event) => update({ language: event.target.value as typeof settings.language })}>
           {LANGUAGE_SETTINGS.map((language) => <option key={language} value={language}>{language === "system" ? t("System") : LANGUAGE_NAMES[language]}</option>)}

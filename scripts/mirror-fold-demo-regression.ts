@@ -207,7 +207,7 @@ const choose = async (page: Page, label: string, phone: boolean): Promise<void> 
   // a phone layout is waited for, not sampled: just after a resize from a desktop-wide window the header
   // still holds the desktop's tab row, which the phone layout then takes away
   if (phone) {
-    await page.locator(".app-header .context-tabs").waitFor();
+    await page.locator(".app-header .header-tabs-sheet").waitFor();
     await page.locator(".header-more-button").click();
     await page.locator(".row-sheet").waitFor();
     // the pane's actions are under More's Pane and tab… (G-143)
@@ -325,6 +325,8 @@ async function open(browser: Browser, origin: string, viewport: { width: number;
   // fixed metrics: the 120-column grid fits a 1440px desktop and no phone
   await context.addInitScript((settings) => {
     if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify(settings));
+    // the phone checks below drive the header's tab sheet and More: Tabs on a phone, In the header
+    localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
   }, SETTINGS);
   // what a tap reached and which links the page tried to open, for a failure to report
   await context.addInitScript(() => {
