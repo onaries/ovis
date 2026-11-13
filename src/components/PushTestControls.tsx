@@ -58,7 +58,7 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushAct
   const description = t("Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.");
   // the row is kept in every search (held), so its being drawn does not say the search found it: this does,
   // for the rules that show a group and a page by what was found in them (SettingsDialog.css)
-  const found = words.length > 0 && matchesSettingsQuery(words, label, description, hint);
+  const found = words.length > 0 && matchesSettingsQuery(words, label, description, hint, t("Send test"));
 
   return (
     <div className="settings-item" data-found={found ? "" : undefined}>

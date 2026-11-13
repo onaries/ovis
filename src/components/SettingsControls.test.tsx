@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
 import { SettingsProvider } from "../lib/settings.ts";
-import { inputWas, placeSentence, sentenceRoom, SettingsBare, SettingsRow, Stepper, Toggle, typedStep, useRowSentence } from "./SettingsControls.tsx";
+import { inputWas, placeSentence, sentenceHoles, sentenceRoom, SettingsBare, SettingsRow, Stepper, Toggle, typedStep, useRowSentence } from "./SettingsControls.tsx";
 
 /** A key on the size field, as React hands it over: `composing` while an IME still holds the draft. */
 const key = (name: string, composing: boolean) => ({
@@ -155,6 +155,19 @@ describe("where a row's sentence goes (#3275)", () => {
     expect(sentenceRoom(lies, [{ left: 400, top: 100, right: 600, bottom: 134 }])).toBeNull();
     // 152px beside the control: narrower than a sentence is worth, so it keeps its width
     expect(sentenceRoom(lies, [{ left: 300, top: 250, right: 600, bottom: 284 }])).toBeNull();
+  });
+
+  it("is cut out, for the pointer, in exactly the parts that lie on another row's control", () => {
+    const lies = { left: 140, top: 258, right: 440, bottom: 308 };
+    expect(sentenceHoles(lies, [])).toEqual([]);
+    // a control it does not reach
+    expect(sentenceHoles(lies, [{ left: 400, top: 100, right: 600, bottom: 134 }])).toEqual([]);
+    // the control of the row above starts inside the sentence and ends past it: the hole is the part they share,
+    // from the sentence's own corner
+    expect(sentenceHoles(lies, [{ left: 300, top: 270, right: 600, bottom: 304 }])).toEqual([{ left: 160, top: 12, right: 300, bottom: 46 }]);
+    // two controls of that row (a field, a button): a hole each, and the gap between them stays the sentence's
+    expect(sentenceHoles(lies, [{ left: 300, top: 270, right: 380, bottom: 304 }, { left: 390, top: 270, right: 600, bottom: 304 }]))
+      .toEqual([{ left: 160, top: 12, right: 240, bottom: 46 }, { left: 250, top: 12, right: 300, bottom: 46 }]);
   });
 
   it("starts a sentence taller than the screen at the screen's top", () => {
@@ -346,6 +359,15 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
 
     // the mouse leaves, comes back and rests: asked after the keyboard's sentence opened, it takes its place
     await does(() => row("a").rowEvents.onPointerLeave?.());
+    await mouseEnters("a");
+    await restEnds();
+    expect([row("a").shown, row("b").shown]).toEqual(["hover", null]);
+  });
+
+  it("shows the mouse's sentence when it comes to rest on another row while the keyboard's is showing", async () => {
+    await draw({ a: true, b: true });
+    await focusAfter("Tab", "b");
+    drawn(true, "b");
     await mouseEnters("a");
     await restEnds();
     expect([row("a").shown, row("b").shown]).toEqual(["hover", null]);

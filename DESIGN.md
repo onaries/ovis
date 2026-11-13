@@ -4315,10 +4315,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   screen, and scrolls under the pointer where its words do not fit.
   Over another row's control it narrows to the room beside that control, down to `224px`; with less
   room than that (the row under a font row's field) it keeps its width and lies on that control's
-  near end. There the pointer is the control's, not the sentence's: such a sentence takes no pointer
-  (`.is-over-control`), so a press on that part reaches the control itself, a finger's or a pen's too,
-  and the mouse that moves onto it has left the row, which closes a hover's sentence. A span over the
-  sentence's start, which lies on no control, keeps it while the pointer is on it. It is drawn only while
+  near end. There the pointer is the control's, not the sentence's: the sentence is cut out over
+  exactly that control (a `clip-path`, which cuts the pointer's reach with what is drawn, and a copy
+  under it, `.settings-help-copy`, that takes no pointer, scrolls with it and draws what was cut). A press there
+  reaches the control itself, a finger's or a pen's too, and the mouse that moves onto it has left
+  the row, which closes a hover's sentence. Everywhere else the sentence keeps the pointer, its words
+  can be selected and it scrolls. It is drawn only while
   its row is in the page's view: a dialog's Tab moves the focus without scrolling
   (`lib/useFocusTrap.ts`), so on a setting the page is not scrolled to the sentence waits for the
   row, and Escape is not its own meanwhile. It never

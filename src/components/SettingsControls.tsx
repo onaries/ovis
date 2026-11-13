@@ -131,6 +131,16 @@ export function sentenceRoom(tip: ScreenBox, controls: readonly ScreenBox[]): nu
 }
 
 /**
+ * The parts of a sentence's box that lie on `controls` (the controls of the rows it is over, where it found no room
+ * beside them), in the sentence's own coordinates. There the pointer is the control's: RowSentence cuts the sentence
+ * out for the pointer in exactly those parts.
+ */
+export function sentenceHoles(tip: ScreenBox, controls: readonly ScreenBox[]): ScreenBox[] {
+  return controls.filter((control) => control.left < tip.right && control.right > tip.left && control.top < tip.bottom && control.bottom > tip.top)
+    .map((control) => ({ left: Math.max(control.left, tip.left) - tip.left, top: Math.max(control.top, tip.top) - tip.top, right: Math.min(control.right, tip.right) - tip.left, bottom: Math.min(control.bottom, tip.bottom) - tip.top }));
+}
+
+/**
  * Where a row's sentence goes when it shows over the page (#3275): above the row, its left edge on the name's,
  * so it covers neither the row's own control nor the row below, which the pointer goes to next. `clear` is the
  * top of the highest thing in the row it must stay above (the name, or a taller control beside it) and `under`
@@ -356,9 +366,10 @@ export function useRowSentence(on: boolean): {
  * A row's sentence over the page: drawn in the dialog's own layer, over the dialog and not cut by its scrolling
  * page (in the document where the row is in no dialog), and placed by placeSentence. Over a row whose control
  * would be under it, it narrows to the room beside that control (sentenceRoom). Where that room is too little it
- * keeps its width and lies on the control's near end: there the pointer is the control's, not the sentence's. Such
- * a sentence takes no pointer at all (`is-over-control`), so a press on the covered part reaches the control
- * itself, and a span over its start (`keep`: the part that lies on no control) is what keeps it under the pointer.
+ * keeps its width and lies on the control's near end: there the pointer is the control's, not the sentence's. The
+ * sentence is cut out in exactly those parts (sentenceHoles, a clip-path, which cuts the pointer's reach with what
+ * is drawn), so a press there reaches the control itself, and a copy under it, which takes no pointer, draws what
+ * was cut. Everywhere else the sentence keeps the pointer, its words can be selected and it scrolls.
  * It follows its row while the page scrolls and is drawn only while the row is in the page's view: a dialog moves
  * the keyboard's focus without scrolling (lib/useFocusTrap.ts), so the focus can be on a setting the page is not
  * scrolled to, and its sentence then waits for the row (`drawn` says which). Not read out: the row's own copy
@@ -366,8 +377,9 @@ export function useRowSentence(on: boolean): {
  */
 function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObject<boolean>; children: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
-  // `keep`: how much of its width, from its start, lies on no other row's control; null where it lies on none
-  const [at, setAt] = useState<{ left: number; top: number; maxWidth: string; keep: number | null } | null>(null);
+  const copy = useRef<HTMLDivElement>(null);
+  // `holes`: where it lies on another row's control, in its own coordinates; `width` and `height`: its size as placed
+  const [at, setAt] = useState<{ left: number; top: number; maxWidth: string; width: number; height: number; holes: readonly ScreenBox[] } | null>(null);
   useLayoutEffect(() => {
     const place = (): void => {
       const tip = box.current;
@@ -407,9 +419,8 @@ function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObj
         next = measure();
       }
       const lies = { left: next.left, top: next.top, right: next.left + tip.offsetWidth, bottom: next.top + tip.offsetHeight };
-      const covered = controls.filter((control) => control.left < lies.right && control.right > lies.left && control.top < lies.bottom && control.bottom > lies.top);
-      const keep = covered.length === 0 ? null : Math.max(0, Math.min(...covered.map((control) => control.left)) - lies.left);
-      setAt((was) => was !== null && was.left === next.left && was.top === next.top && was.maxWidth === maxWidth && was.keep === keep ? was : { left: next.left, top: next.top, maxWidth, keep });
+      const placed = { left: next.left, top: next.top, maxWidth, width: tip.offsetWidth, height: tip.offsetHeight, holes: sentenceHoles(lies, controls) };
+      setAt((was) => was !== null && JSON.stringify(was) === JSON.stringify(placed) ? was : placed);
     };
     place();
     window.addEventListener("scroll", place, { capture: true, passive: true });
@@ -420,11 +431,15 @@ function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObj
       window.removeEventListener("resize", place);
     };
   }, [row, drawn]);
+  // the whole box, less each hole: what the sentence keeps of itself, for the eye and for the pointer
+  const cut = at === null || at.holes.length === 0 ? undefined
+    : `path(evenodd, "M0 0H${at.width}V${at.height}H0Z${at.holes.map((hole) => ` M${hole.left} ${hole.top}H${hole.right}V${hole.bottom}H${hole.left}Z`).join("")}")`;
   return createPortal(
-    <div ref={box} className={at !== null && at.keep !== null ? "settings-help is-over-control" : "settings-help"} aria-hidden="true" style={at === null ? { visibility: "hidden" } : { left: at.left, top: at.top, maxWidth: at.maxWidth === "" ? undefined : at.maxWidth }}>
-      {children}
-      {at !== null && at.keep !== null && at.keep > 0 && <span className="settings-help-keep" style={{ width: at.keep }} />}
-    </div>,
+    <>
+      {at !== null && cut !== undefined && <div ref={copy} className="settings-help-copy" aria-hidden="true" style={{ left: at.left, top: at.top, width: at.width, height: at.height }}>{children}</div>}
+      <div ref={box} className="settings-help" aria-hidden="true" onScroll={(event) => { if (copy.current) copy.current.scrollTop = event.currentTarget.scrollTop; }}
+        style={at === null ? { visibility: "hidden" } : { left: at.left, top: at.top, maxWidth: at.maxWidth === "" ? undefined : at.maxWidth, clipPath: cut }}>{children}</div>
+    </>,
     row.closest<HTMLElement>(".modal-scrim") ?? document.body,
   );
 }

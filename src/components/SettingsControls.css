@@ -203,7 +203,8 @@
 /* A bare row's sentence over the page (#3275), while a mouse rests on the row or the keyboard is on its
    control: the one tooltip surface the app has (.relay-map-tooltip), placed by placeSentence in
    SettingsControls.tsx. It never moves: it is there or it is not. */
-.settings-help {
+.settings-help,
+.settings-help-copy {
   position: fixed;
   top: 0;
   left: 0;
@@ -225,18 +226,16 @@
   overflow-wrap: break-word;
 }
 
-/* a sentence that lies on another row's control (no room beside it): the part on the control is the control's
-   for the pointer, so the sentence takes no pointer, and a press there reaches the control itself. A span over
-   its start, the part that lies on no control, still keeps it while the pointer is on it */
-.settings-help.is-over-control {
+/* a sentence that lies on another row's control (no room beside it) is cut out over that control (a clip-path
+   in SettingsControls.tsx RowSentence), so the pointer there is the control's. This copy lies under it at the
+   same place and size, takes no pointer, and draws what was cut. It scrolls as the sentence does, with a scroll
+   bar where the sentence has one, so its lines break where the sentence's do. Every theme's elevated background
+   and strong border are opaque, so the two layers read as one */
+.settings-help-copy {
+  max-width: none;
+  max-height: none;
   pointer-events: none;
-}
-
-.settings-help-keep {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0;
-  pointer-events: auto;
+  user-select: none;
 }
 
 /* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
@@ -891,6 +890,7 @@
   .settings-description,
   .settings-hint,
   .settings-help,
+  .settings-help-copy,
   .settings-row-text > .settings-condition {
     font-size: var(--fs-sm);
   }
