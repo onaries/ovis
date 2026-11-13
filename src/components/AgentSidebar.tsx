@@ -417,8 +417,15 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const folded = filter.active ? filterFold ?? (collapsed && rows.length === 0) : collapsed;
   const backgroundFolded = filter.active ? backgroundFilterFold ?? false : backgroundCollapsed;
   const restingShown = filter.active ? restingFilterOpen ?? true : restingOpen;
-  // the times tick only while the list is open and a row has one to draw
+  // the times tick only while the list is open and a row has one to draw. The clock stands still meanwhile, so it is
+  // set as its updates start again, before the list is painted: an opened list says its times as of now, where the
+  // first tick would come half a minute later
   const shouldTick = !folded && Object.values(stamps).some((pc) => Object.keys(pc.rows).length > 0);
+  const ticked = useRef(shouldTick);
+  useLayoutEffect(() => {
+    if (shouldTick && !ticked.current) setNow(Date.now());
+    ticked.current = shouldTick;
+  }, [shouldTick]);
   useEffect(() => { setTicking(shouldTick); }, [shouldTick]);
   // a state change never moves a row under the pointer or the focus (HIG): while either is in the list, rows keep
   // the order and the part they were drawn in, and a row waking from the resting fold waits until it leaves. Only

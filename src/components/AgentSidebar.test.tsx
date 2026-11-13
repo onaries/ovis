@@ -645,6 +645,37 @@ describe("AgentSidebar fold memory", () => {
     }
   });
 
+  it("says the times as of now when the folded list is opened, not as of when it was folded (#3505)", async () => {
+    const start = 1_800_000_000_000;
+    const at = (status: AgentStatus) => roster().map((machine) => ({ ...machine, snapshot: machine.snapshot && {
+      ...machine.snapshot, panes: machine.snapshot.panes.map((pane) => pane.pane_id === paneId ? { ...pane, agent_status: status } : pane),
+    } }));
+    const since = () => renderer!.root.findByProps({ "data-machine": "local", "data-pane": paneId }).findAll((node) => node.props.className === "agent-since").map((node) => node.children.join(""));
+    const section = () => renderer!.root.findByProps({ className: "agent-section-toggle sidebar-section-label" });
+    stored.set("ovis:agent-groups", "true");
+    stored.set("ovis:agent-state-folds", "[]");
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(start));
+    try {
+      // Given an agent this page saw finish, whose row says so.
+      await act(async () => { renderer = create(groupedList(inactive, at("working"))); });
+      await act(async () => { renderer!.update(groupedList(inactive, at("done"))); });
+      expect(since()).toEqual(["<1m"]);
+      // When the reader folds the list, comes back two hours later and opens it.
+      await act(async () => { section().props.onClick(); });
+      expect(section().props["aria-expanded"]).toBe(false);
+      await act(async () => { jest.setSystemTime(new Date(start + 2 * 3_600_000)); });
+      await act(async () => { section().props.onClick(); });
+      // Then the row says two hours at once: the clock that stood still while nothing was drawn is set as it starts again.
+      expect(since()).toEqual(["2h"]);
+    } finally {
+      await act(async () => { renderer?.unmount(); });
+      renderer = undefined;
+      jest.useRealTimers();
+      setSystemTime();
+    }
+  });
+
   it("looks at a roster in the commit that draws it, so no frame is painted with a time the look takes back (#3505)", async () => {
     const start = 1_800_000_000_000;
     const loaded = roster().map((machine) => ({ ...machine, snapshot: machine.snapshot && {
