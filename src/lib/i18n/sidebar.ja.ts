@@ -37,6 +37,8 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Clear search": "検索を消去",
   "Filter agents by state": "状態でエージェントを絞り込む",
   "No agents match": "一致するエージェントはありません",
+  "You: {text}": "自分: {text}",
+  "Turn failed": "エラー",
   "Expand worktrees of {name}": "{name} のワークツリーを展開",
   "Collapse worktrees of {name}": "{name} のワークツリーを折りたたむ",
   "Agents: {names}": "エージェント: {names}",

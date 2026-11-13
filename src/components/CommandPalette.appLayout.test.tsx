@@ -70,11 +70,11 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function rows(offer: LayoutOffer, selectedPaneId: string, initialQuery: string, actions = actionsOf(offer), shown = snapshot, online = false): Promise<string[]> {
+  async function rows(offer: LayoutOffer, selectedPaneId: string, initialQuery: string, actions = actionsOf(offer), shown = snapshot, online = false, inboxShown = false): Promise<string[]> {
     await act(async () => { renderer?.unmount(); });
     await act(async () => {
       renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
-        createElement(CommandPalette, { open: true, initialQuery, onClose: () => {}, machines, onSelect: () => {}, snapshot: shown, online, selectedPaneId, view: "chat", actions }))));
+        createElement(CommandPalette, { open: true, initialQuery, onClose: () => {}, machines, onSelect: () => {}, snapshot: shown, online, selectedPaneId, view: "chat", actions, inboxShown }))));
     });
     return renderer!.root.findAll((node) => node.props.className === "menu-item-main" && typeof node.props.children === "string").map((node) => node.props.children as string);
   }
@@ -119,6 +119,16 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     expect(listed).toContain("New workspace");
     expect(listed).toContain("New tab");
     expect(await rows(APP_CORE, "p3", ">move tab")).toEqual([]);
+  });
+
+  it("offers no New tab or Rename tab while a phone's agent list covers the selected pane, and New workspace still", async () => {
+    const covered = await rows(TUI, "p1", ">", undefined, snapshot, false, true);
+    expect(covered).not.toContain("New tab");
+    expect(covered).not.toContain("Rename tab");
+    expect(covered).toContain("New workspace");
+    const shown = await rows(TUI, "p1", ">");
+    expect(shown).toContain("New tab");
+    expect(shown).toContain("Rename tab");
   });
 
   it("lists a core PC's rename, split, zoom and move rows where Ovis keeps its layout", async () => {

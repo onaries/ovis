@@ -123,16 +123,29 @@ const errors: string[] = [];
 const failures: string[] = [];
 
 type Settings = Record<string, unknown>;
-interface Row { pane: string | null; state: string | null; name: string; words: string | null; chip: string | null; badges: number }
+interface Row { pane: string | null; state: string | null; name: string; words: string | null; chip: string | null; badges: number; time: string | null; datetime: string | null }
 
 const rows = (page: Page): Promise<Row[]> => page.locator(".inbox-item").evaluateAll((items) => items.map((item) => ({
   pane: item.getAttribute("data-pane"), state: item.getAttribute("data-state"),
   name: item.querySelector(".inbox-name")?.textContent ?? "", words: item.querySelector(".inbox-words")?.textContent ?? null,
   chip: item.querySelector(".badge.inbox-chip")?.textContent ?? null, badges: item.querySelectorAll(".badge").length,
+  time: item.querySelector("time.inbox-time")?.textContent ?? null, datetime: item.querySelector("time.inbox-time")?.getAttribute("datetime") ?? null,
 })));
+/** the done row's last words and its time, read from the demo's own chat after the list is drawn */
+const summaryShown = (page: Page) => page.waitForFunction((pane) => {
+  const item = document.querySelector(`.inbox-item[data-pane="${pane}"]`);
+  return Boolean(item?.querySelector(".inbox-words")?.textContent?.trim()) && item?.querySelector("time.inbox-time") !== null;
+}, DONE, { timeout: 15_000 });
 const rowCount = (page: Page, count: number) => page.waitForFunction((n) => document.querySelectorAll(".inbox-item").length === n, count, { timeout: 30_000 });
 const questionShown = (page: Page) => page.waitForFunction((pane) =>
   /Allow command\?/.test(document.querySelector(`.inbox-item[data-pane="${pane}"] .inbox-words`)?.textContent ?? ""), BLOCKED, { timeout: 15_000 });
+/** the New workspace button's box, the last row's and the scroller's, in the viewport, how far the scroller can scroll, and the button's computed sticky bottom offset in px */
+const newButtonPlace = (page: Page) => page.evaluate(() => {
+  const box = (node: Element | null) => { const r = node!.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+  const scroller = document.querySelector(".inbox-scroll")!;
+  return { button: box(document.querySelector(".inbox-new")), last: box([...document.querySelectorAll(".inbox-item")].at(-1) ?? null), list: box(scroller), range: scroller.scrollHeight - scroller.clientHeight,
+    offset: Number.parseFloat(getComputedStyle(document.querySelector(".inbox-new")!).bottom) };
+});
 const paneInAddress = (page: Page): string | null => new URL(page.url()).searchParams.get("pane");
 const frames = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 const row = (page: Page, pane: string) => page.locator(`.inbox-item[data-pane="${pane}"] .inbox-row`);
@@ -216,17 +229,25 @@ try {
 
           await rowCount(page, 6);
           await questionShown(page);
+          await summaryShown(page);
           const drawn = await rows(page);
           assert.deepEqual(drawn.map((item) => item.pane), [BLOCKED, WORKING, DONE, ...drawn.slice(3).map((item) => item.pane)]);
           assert.deepEqual(new Set(drawn.slice(3).map((item) => item.pane)), new Set(IDLE));
           assert.deepEqual(drawn.map((item) => item.chip), ["INPUT", "RUN", "DONE", null, null, null]);
           assert.deepEqual(drawn.slice(3).map((item) => item.badges), [0, 0, 0], "an idle row draws no badge");
           assert.match(drawn[0]!.words ?? "", /Allow command\?/);
+          assert.ok((drawn[2]!.words ?? "").trim() !== "", "the done row says what its agent last said");
+          assert.match(drawn[2]!.time ?? "", /^(<1m|\d+[mhd])$/, "the done row says how long it has been done");
+          assert.ok(drawn[2]!.datetime !== null && !Number.isNaN(Date.parse(drawn[2]!.datetime)), "the done row's time carries a datetime");
           assert.equal(await page.locator(`.inbox-item[data-pane="${BLOCKED}"] .inbox-dot`).count(), 1);
           assert.equal(await page.locator(".inbox-new").count(), 1, "a device that drives is offered New workspace");
+          const corner = await newButtonPlace(page);
+          assert.ok(corner.button.bottom <= corner.list.bottom + 1 && corner.button.top >= corner.list.top, `New workspace lies within the list's area: ${JSON.stringify(corner)}`);
+          assert.ok(Math.abs(corner.list.bottom - corner.button.bottom - corner.offset) <= 1, `New workspace rests its own sticky offset above the list's bottom: ${JSON.stringify(corner)}`);
           await shot(page, `inbox-390-${theme}.png`);
-          pass(2, "six rows: the waiting one first as INPUT with its question, then RUN and DONE, no badge on the idle rows");
+          pass(2, `six rows: the waiting one first as INPUT with its question, then RUN and DONE, the done row with its agent's last words and an age, no badge on the idle rows; New workspace ${Math.round(corner.list.bottom - corner.button.bottom)}px above the list's bottom, its sticky offset ${Math.round(corner.offset)}px`);
 
+          const clearance: number[] = [];
           for (const [filter, want] of [["blocked", [BLOCKED]], ["working", [WORKING]], ["done", [DONE]]] as const) {
             await page.locator(`.inbox-filter[data-status="${filter}"]`).tap();
             await page.waitForFunction((pane) => {
@@ -234,10 +255,16 @@ try {
               return items.length === 1 && items[0]?.getAttribute("data-pane") === pane;
             }, want[0]);
             assert.equal(await page.locator('.inbox-filter[aria-checked="true"]').getAttribute("data-status"), filter);
+            // a one-row list is short: it does not scroll, the button keeps its place, and the row ends above it
+            const short = await newButtonPlace(page);
+            assert.equal(short.range, 0, `one row under ${filter} does not scroll: ${JSON.stringify(short)}`);
+            for (const edge of ["top", "bottom", "left", "right"] as const) assert.ok(Math.abs(short.button[edge] - corner.button[edge]) <= 1, `New workspace keeps its ${edge} under ${filter}: ${corner.button[edge]} then ${short.button[edge]}`);
+            assert.ok(short.last.bottom < short.button.top, `under ${filter} the row ends above New workspace: row ${short.last.bottom}, button ${short.button.top}`);
+            clearance.push(Math.round(short.button.top - short.last.bottom));
           }
           await page.locator('.inbox-filter[data-status="all"]').tap();
           await rowCount(page, 6);
-          pass(3, "Needs you, Working and Done each narrow the list to their row, and All draws the six again");
+          pass(3, `Needs you, Working and Done each narrow the list to their row, and All draws the six again; each one-row list does not scroll, New workspace stays where it rests under All (within 1px), and the row ends ${clearance.join("/")}px above it`);
 
           const search = page.locator(".inbox-search-input");
           await search.fill("export");
@@ -267,7 +294,7 @@ try {
           const slot = await page.evaluate(() => [...document.querySelectorAll(".pane-slot")].map((node) => getComputedStyle(node).visibility));
           assert.ok(slot.length >= 1, "the opened pane stays mounted under the list");
           assert.ok(slot.every((visibility) => visibility === "hidden"), `the pane under the list is not visible: ${slot.join()}`);
-          // six rows fill no 844px phone: the scroll is kept on a shorter one
+          // six rows barely scroll on an 844px phone: the scroll is kept on a shorter one, where it has room to
           await page.locator('.inbox-filter[data-status="all"]').tap();
           await rowCount(page, 6);
           await page.setViewportSize({ width: 390, height: 560 });
@@ -455,11 +482,18 @@ try {
           pass(19, "in a thread from the list More has Open workspace list, which opens the drawer, and the focus goes back to More when it closes");
         });
 
-        await withPage(browser, base, { ...on, shortcutOverrides: { "close-pane": "ctrl+alt+x" } }, "/", async (page) => {
+        await withPage(browser, base, { ...on, shortcutOverrides: { "close-pane": "ctrl+alt+x", "new-tab": "ctrl+alt+u" } }, "/", async (page) => {
           await rowCount(page, 6);
           await openThread(page, WORKING);
           await page.locator(".pane-slot").first().waitFor();
           const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          // a key bound to New tab asks for a tab in the thread's workspace
+          const newTab = page.locator(".new-session-modal");
+          await blur();
+          await page.keyboard.press("Control+Alt+u");
+          await newTab.waitFor();
+          await page.keyboard.press("Escape");
+          await newTab.waitFor({ state: "detached" });
           // the key is bound: in the thread it asks to close the working agent's pane
           const confirm = page.locator(".confirm-dialog");
           await blur();
@@ -473,7 +507,10 @@ try {
           await frames(page);
           assert.equal(await confirm.count(), 0, "the key asks nothing of the pane under the list");
           assert.equal(await page.locator(`.inbox-item[data-pane="${WORKING}"]`).count(), 1, "the pane under the list is still in the roster");
-          pass(20, "a key bound to Close pane closes the thread's pane, and nothing while the list covers it");
+          await page.keyboard.press("Control+Alt+u");
+          await frames(page);
+          assert.equal(await newTab.count(), 0, "New tab's key makes no tab beside the pane under the list");
+          pass(20, "keys bound to Close pane and New tab act on the thread's pane, and do nothing while the list covers it");
         });
 
         await withPage(browser, base, { ...on, keepScreenOn: true }, "/", async (page) => {
@@ -507,12 +544,27 @@ try {
           const names: Record<string, string> = await page.evaluate(async () => Object.fromEntries((await (await fetch("/api/machines")).json()).machines.map((machine: Machine) => [machine.id, machine.name])));
           const places = await page.locator(".inbox-item").evaluateAll((items) => items.map((item) => [item.getAttribute("data-machine") ?? "", item.querySelector(".inbox-place")?.textContent ?? ""]));
           for (const [machine, place] of places) assert.equal(place!.split(" \u00b7 ")[0], names[machine!], `a row of ${machine} names its PC: ${place}`);
+          // twelve rows scroll: New workspace keeps its place from the list's top to its very end, and the last row ends clear of it
+          const scroller = page.locator(".inbox-scroll");
+          await scroller.evaluate((node) => { node.scrollTop = 0; });
+          await frames(page);
+          const atTop = await newButtonPlace(page);
+          assert.ok(atTop.range > 0, `twelve rows scroll: ${JSON.stringify(atTop)}`);
+          assert.ok(Math.abs(atTop.list.bottom - atTop.button.bottom - atTop.offset) <= 1, `at the list's top New workspace rests its sticky offset above the list's bottom: ${JSON.stringify(atTop)}`);
+          await scroller.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+          await page.waitForFunction(() => { const node = document.querySelector(".inbox-scroll")!; return Math.abs(node.scrollTop - (node.scrollHeight - node.clientHeight)) <= 1; });
+          await frames(page);
+          const atEnd = await newButtonPlace(page);
+          for (const edge of ["top", "bottom", "left", "right"] as const) assert.ok(Math.abs(atEnd.button[edge] - atTop.button[edge]) <= 1, `New workspace keeps its ${edge} at the list's end: ${atTop.button[edge]} then ${atEnd.button[edge]}`);
+          assert.ok(Math.abs(atEnd.list.bottom - atEnd.button.bottom - atEnd.offset) <= 1, `at the list's end New workspace rests its sticky offset above the list's bottom: ${JSON.stringify(atEnd)}`);
+          assert.ok(atEnd.last.bottom <= atEnd.button.top, `at the list's end the last row ends above New workspace: row ${atEnd.last.bottom}, button ${atEnd.button.top}`);
+          await scroller.evaluate((node) => { node.scrollTop = 0; });
           await page.locator(`.inbox-item[data-machine="laptop"][data-pane="${WORKING}"] .inbox-row`).tap();
           await page.locator(".agent-inbox").waitFor({ state: "detached" });
           await page.locator("#inbox-back").waitFor();
           assert.equal(new URL(page.url()).searchParams.get("machine"), "laptop");
           assert.equal(paneInAddress(page), WORKING);
-          pass(22, "with two PCs holding the same pane ids each row names its PC, and the other PC's row opens that PC's pane");
+          pass(22, `with two PCs holding the same pane ids each row names its PC, and the other PC's row opens that PC's pane; over twelve rows (${Math.round(atTop.range)}px of scroll) New workspace stays at the same place at the list's top and end, ${Math.round(atEnd.list.bottom - atEnd.button.bottom)}px above the list's bottom (its sticky offset ${Math.round(atEnd.offset)}px), the last row ending ${Math.round(atEnd.button.top - atEnd.last.bottom)}px above it`);
         });
 
         assert.deepEqual(errors, []);

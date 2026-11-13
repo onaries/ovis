@@ -61,6 +61,7 @@ const refs = {
   pendingFile: { current: null as string | null },
   pendingLink: { current: null as AppLink | null },
   pendingCreate: { current: null as CreateDraft | null },
+  newSessionPending: { current: false },
   linkSince: { current: 0 },
   rosterSeq: { current: 0 },
 };
@@ -90,7 +91,7 @@ function Probe() {
     restoreFile: () => {}, fileFromPop: () => 0, forgetLeftFiles: () => {}, openFile: () => {},
     locked: false, linkLanded, view: "chat", wideScreen: true, autoSelected: false, newTab: null,
     settingsOpen: false, settingsPage: null, settingsLinkPage: null, settingsLinkSection: null,
-    pendingFile: refs.pendingFile, pendingLink: refs.pendingLink, pendingCreate: refs.pendingCreate, linkSince: refs.linkSince, rosterSeq: refs.rosterSeq,
+    pendingFile: refs.pendingFile, pendingLink: refs.pendingLink, pendingCreate: refs.pendingCreate, newSessionPending: refs.newSessionPending, linkSince: refs.linkSince, rosterSeq: refs.rosterSeq,
     selectTargetRef: refs.selectTarget, selectionRef: refs.selection,
     setLinkLanded: () => {}, setHeaderNote: () => {},
     setNewSessionOpen: (open: boolean) => { place.newSessionOpen = open; draw(); },
@@ -115,6 +116,7 @@ beforeEach(() => {
   waiting = null;
   refs.selectTarget.current = (_machineId, paneId) => { asked.push(paneId); if (paneId !== null) { place.paneId = paneId; draw(); } };
   refs.pendingCreate.current = null;
+  refs.newSessionPending.current = false;
   const write = (method: "pushState" | "replaceState") => (state: unknown, _unused: string, url?: string): void => {
     const entry = { state, url: url === undefined ? entries[index]!.url : new URL(url, entries[index]!.url) };
     if (method === "pushState") { entries.splice(index + 1); entries.push(entry); index += 1; } else entries[index] = entry;
@@ -221,6 +223,47 @@ it("Back off the New workspace dialog's entry closes it while its fields are on 
   // Then the dialog closes, and neither entry was written over.
   expect(place.newSessionOpen).toBe(false);
   expect(addresses()).toEqual([P1, held]);
+});
+
+/**
+ * New workspace open over the list, as App has it: its sheet's entry over the list's. lib/sheetHistory.ts listens
+ * before the address bar; while the create is in flight the sheet refuses Back, and that module pushes the sheet's
+ * entry again over where Back landed, with no URL. Simulated here exactly so, by a listener ahead of the hook's.
+ */
+async function dialogOverList(): Promise<string> {
+  place = { ...place, newSessionOpen: true, newFields: { cwd: null, name: "New", agent: null }, inbox: { open: true, enabled: true } };
+  window.addEventListener("popstate", () => { if (refs.newSessionPending.current) window.history.pushState({ "ovis:sheet": "sheet-1" }, ""); });
+  await mount(["", ""]);
+  await act(async () => { draw(); });
+  expect(addresses()[0]).toBe("");
+  expect(addresses()[1]).toContain("new=workspace");
+  return addresses()[1]!;
+}
+
+it("Back while New workspace's create is in flight over the list leaves it open, its entry made again saying its address (the sheet's push simulated)", async () => {
+  const dialog = await dialogOverList();
+  refs.newSessionPending.current = true;
+
+  await back();
+
+  expect(place.newSessionOpen).toBe(true);
+  expect(index).toBe(1);
+  expect(addresses()).toEqual(["", dialog]);
+});
+
+it("Back once New workspace's create has settled closes it onto the list's entry, after a Back it refused while in flight (the sheet's push simulated)", async () => {
+  const dialog = await dialogOverList();
+  refs.newSessionPending.current = true;
+  await back();
+  expect(place.newSessionOpen).toBe(true);
+
+  refs.newSessionPending.current = false;
+  await back();
+
+  expect(place.newSessionOpen).toBe(false);
+  expect(index).toBe(0);
+  expect(addresses()).toEqual(["", dialog]);
+  expect(window.location.search).toBe("");
 });
 
 it("writes the place held back over the entry landed on, once, when that entry leads nowhere else", async () => {

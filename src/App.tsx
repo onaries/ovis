@@ -136,7 +136,7 @@ import { lensOwner, storedView, usePaneLens, usePaneLensState, usePaneViewPicks 
 import { useSplitLayout, useSplitRecheck, useSplitState } from "./lib/useSplitView.ts";
 import { linkSelects, useLinkLanding, useMachineGone, useNotificationTargets, useSelectedLayout, useSelectedMachine, useSelectedPane, useSelectionMark, useSelectionState, useSelectPane, useSelectTarget } from "./lib/useSelection.ts";
 import { useAddressBar } from "./lib/useAddressBar.ts";
-import { useInbox } from "./lib/useInbox.ts";
+import { useInbox, useInboxWaits } from "./lib/useInbox.ts";
 import { AgentInbox } from "./components/AgentInbox.tsx";
 import { catchTypeAhead } from "./lib/typeAhead.ts";
 import { goalStatusWord, sessionMenuLines, sizeWords, useSessionStats, workedWords } from "./lib/sessionStats.ts";
@@ -280,7 +280,7 @@ export function App() {
   // a diff's line notes go to its own pane: none while this window only watches that pane
   const diffPaneObserving = usePaneObserving(diffViewing?.paneId ? paneStorageId(diffViewing.machineId, diffViewing.paneId) : null);
   const { settingsOpen, setSettingsOpen, settingsLinkPage, setSettingsLinkPage, settingsLinkSection, setSettingsLinkSection, settingsPage, settingsSection, setSettingsSection, closeSettings, onSettingsPage } = useSettingsDialog(initialLink);
-  const { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newTab, setNewTab, sessionHistory, setSessionHistory, worktreeFor, setWorktreeFor } = useNewSessionState({ initialLink, watching: auth?.role === "watch" });
+  const { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newSessionPending, newTab, setNewTab, sessionHistory, setSessionHistory, worktreeFor, setWorktreeFor } = useNewSessionState({ initialLink, watching: auth?.role === "watch" });
   const { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped, reportedBy, setReportedBy } = useConnectionChip();
   const { notifications, setNotifications, pushOn, setPushOn, pushOnRef } = useNotificationState();
   // the shared settings and pins, the same in every browser of this server, once the app is in
@@ -484,9 +484,10 @@ export function App() {
   const { splitOn, others, shownSlots, rects, follows, activateSlot, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview } = useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, followPaneMove, arrangeRefused: (machineId) => !appLayoutOn(machineId).arrange });
 
   // the New workspace dialog over a phone's list is a sheet: Back closes it onto the list instead of
-  // leaving the app. Its entry is made before the address bar writes the dialog's address over it
-  usePhoneSheetBack(() => closeNewSession(), newSessionOpen && inbox.shown);
-  useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef });
+  // leaving the app. Its entry is made before the address bar writes the dialog's address over it.
+  // While its create is in flight Back refuses, as the dialog's own ways out do: what comes of it lands in the dialog
+  usePhoneSheetBack(() => { if (newSessionPending.current) return false; closeNewSession(); }, newSessionOpen && inbox.shown);
+  useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, newSessionPending, setHeaderNote, selectionRef });
 
 
   const { bell, alertsOffDot } = alertsBell({ t, alertsOn, notifications, pushOn, enableNotifications, disableNotifications });
@@ -581,7 +582,9 @@ export function App() {
         setNewTab(null);
         setNewSessionOpen(true);
       },
+      // a tab beside the pane hidden under the phone's list is not made by a key; a named workspace's is
       openNewTab: (target) => {
+        if (target === undefined && inbox.shown) return;
         const found = newTabTarget(target);
         if (!found) return;
         const { machineId, workspace, cwd } = found;
@@ -592,11 +595,12 @@ export function App() {
       },
       renameTab: () => {
         // a PC whose herdr renames no tab (lib/machineContext.tsx AppLayoutContext)
-        if (selectedPaneId === null || !tabStripMounted || !appLayout.rename) return;
+        if (selectedPaneId === null || !tabStripMounted || !appLayout.rename || inbox.shown) return;
         setDrawerOpen(false);
         requestRename(selectedMachineId, selectedPaneId);
       },
       openTerminalTab: async (target) => {
+        if (target === undefined && inbox.shown) return;
         const found = newTabTarget(target);
         if (!found) return;
         const asked = selectionRef.current;
@@ -731,6 +735,8 @@ export function App() {
   // the PCs this device shows in its sidebar, Agents list and palette (Settings → Devices and PCs); every other
   // use of the roster keeps them all, so a link, an alert or a split still reaches a hidden PC's pane
   const sidebarMachines = useShownMachines({ machines, selectedMachineRef, selectTargetRef, picks, restored: !linkSelects(initialLink) });
+  // when each inbox row began to wait, observed whether the list is shown or not, where it is enabled
+  useInboxWaits(inbox.waits, sidebarMachines, activity, inbox.enabled);
   // every connected PC's sessions as its sidebar draws them, so the "waiting for you" count and its next jump
   // triage the same set the Agents list shows (G-002), and the selected PC's even when the sidebar hides it (lib/headerSessions.ts)
   const waitingRosters = useWaitingRosters(sidebarMachines, machines.find((machine) => machine.id === selectedMachineId), activity.status);
@@ -1314,7 +1320,7 @@ export function App() {
           })}
           {inbox.shown && <AgentInbox machines={sidebarMachines} activity={activity} watching={auth?.role === "watch"} filter={inbox.filter} onFilter={inbox.setFilter} query={inbox.query} onQuery={inbox.setQuery} scroll={inbox.scroll}
             onOpen={(machineId, paneId) => selectTarget(machineId, paneId, "chat")}
-            onNew={openNewOn} questionReads={inbox.questionReads} />}
+            onNew={openNewOn} questionReads={inbox.questionReads} summaryReads={inbox.summaryReads} waits={inbox.waits} />}
           {dividers.length > 0 && <SplitDividers dividers={dividers} areaRef={paneAreaRef} onResize={resizeDivider} />}
           <SplitDropPreview visible={splitDragOn && (paneDragging || tabDrag !== null)} grid={gridPreview} />
         </div>}
@@ -1349,6 +1355,7 @@ export function App() {
         prefill={newPrefill}
         onDraft={setNewFields}
         onClose={closeNewSession}
+        onPending={(pending) => { newSessionPending.current = pending; }}
         onOpenPane={(paneId) => { closeNewSession(); selectTarget(newSessionMachineId, paneId, "terminal"); void load(); }}
         watching={auth?.role === "watch"}
         groupKept={(groupOf) => liveGroupKeys(groupOf, machines, hiddenMachines)}
@@ -1425,7 +1432,7 @@ export function App() {
       {unsentFor && <UnsentTextDialog machines={machines} target={unsentFor} canRecover={unsentFor.pane.agent != null} onClose={closeUnsent} onRecover={recover} />}
       <CommandPalette key={selectedMachineId} machines={sidebarMachines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
         // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
-        view={terminalPeek !== null ? "terminal" : view} actions={actions} watching={auth?.role === "watch"} />
+        view={terminalPeek !== null ? "terminal" : view} actions={actions} watching={auth?.role === "watch"} inboxShown={inbox.shown} />
       <MarkdownLinkMenu />
     </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider>
   );

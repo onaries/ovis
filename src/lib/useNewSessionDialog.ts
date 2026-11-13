@@ -20,6 +20,8 @@ export function useNewSessionState({ initialLink, watching = false }: { initialL
   const [newFields, setNewFields] = useState<Omit<CreateDraft, "kind"> | null>(null);
   // a link to the dialog, opened once the PCs are in (a tab, once its workspace is found)
   const pendingCreate = useRef<CreateDraft | null>(initialLink?.create ?? null);
+  // the dialog's create is in flight (its onPending): a phone's Back over the list leaves it open meanwhile
+  const newSessionPending = useRef(false);
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
   // the earlier sessions of a workspace's folder (components/SessionHistory.tsx), while open
@@ -28,7 +30,7 @@ export function useNewSessionState({ initialLink, watching = false }: { initialL
   const [worktreeFor, setWorktreeFor] = useState<WorktreeRequest | null>(null);
   // worktrees are not offered to a watching device: one open when this device turns into one closes
   useEffect(() => { if (watching) setWorktreeFor(null); }, [watching]);
-  return { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newTab, setNewTab, sessionHistory, setSessionHistory, worktreeFor, setWorktreeFor };
+  return { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newSessionPending, newTab, setNewTab, sessionHistory, setSessionHistory, worktreeFor, setWorktreeFor };
 }
 
 export function useSessionHistoryList({ machines, sessionHistory, setSessionHistory, setNewSessionOpen, setNewPrefill, setNewFields }: {

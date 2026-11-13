@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { create } from "react-test-renderer";
 import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot, TabInfo } from "../../shared/protocol.ts";
-import { drawerReturnButton, nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, type MachineRoster } from "./headerSessions.ts";
+import { nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, type MachineRoster } from "./headerSessions.ts";
 
 const pane = (pane_id: string, agent_status: AgentStatus, tab_id = "t1", workspace_id = "w1", extra: Partial<HerdrPane> = {}): HerdrPane =>
   ({ pane_id, agent_status, tab_id, workspace_id, focused: false, agent: "claude", ...extra }) as HerdrPane;
@@ -90,21 +90,5 @@ it("counts the selected PC's waiting panes, and jumps to them, while the sidebar
   } finally {
     if (before) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", before);
     else Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
-  }
-});
-
-it.each([
-  ["only Back to agents is in the header (a thread opened from the list)", [".app-header .inbox-back"], ".app-header .inbox-back"],
-  ["the drawer toggle and Back to agents are both in the header", [".app-header .inbox-back", ".app-header .drawer-toggle"], ".app-header .drawer-toggle"],
-  ["only the drawer toggle is in the header", [".app-header .drawer-toggle"], ".app-header .drawer-toggle"],
-] as const)("gives a closed drawer's focus back to the header's first button when %s", (_case, present, expected) => {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-  const buttons = new Map<string, object>(present.map((selector) => [selector, { selector }]));
-  Object.defineProperty(globalThis, "document", { configurable: true, value: { querySelector: (selector: string) => buttons.get(selector) ?? null } });
-  try {
-    expect(drawerReturnButton()).toBe(buttons.get(expected) as HTMLElement);
-  } finally {
-    if (descriptor) Object.defineProperty(globalThis, "document", descriptor);
-    else Reflect.deleteProperty(globalThis, "document");
   }
 });

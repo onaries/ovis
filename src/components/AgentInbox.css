@@ -17,13 +17,36 @@
   pointer-events: none;
 }
 
-/* the last row clears the floating button */
+/* a column, so New workspace (its last child) can rest in the bottom end corner of a short list; without it the end keeps this room */
 .inbox-scroll {
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-bottom: calc(var(--touch-target) + var(--space-8) + env(safe-area-inset-bottom));
+}
+
+/* each part keeps its own height, as in a block: none shrinks to fit (the filters' row scrolls sideways, so it could) */
+.inbox-scroll > * {
+  flex-shrink: 0;
+}
+
+/* with the button, the end's room is a box of its own after it, the height of its resting offset */
+.inbox-scroll.has-new {
+  padding-bottom: 0;
+}
+
+.inbox-scroll.has-new::after {
+  content: "";
+  flex: none;
+  height: calc(var(--space-6) + var(--space-1) + env(safe-area-inset-bottom));
+}
+
+/* the last row clears the button at the list's end */
+.inbox-scroll.has-new > .inbox-list {
+  margin-bottom: var(--space-1);
 }
 
 .inbox-title {
@@ -221,6 +244,15 @@
   white-space: nowrap;
 }
 
+/* how long the agent has been in its state, at the end of the name's line */
+.inbox-time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: var(--font-numeric);
+  white-space: nowrap;
+}
+
 .inbox-words {
   display: -webkit-box;
   margin-top: calc(var(--space-1) / 2);
@@ -269,10 +301,17 @@
   text-align: center;
 }
 
+/*
+ * the scroller's own sticky control, over the rows that scroll under it: its natural place (pushed down by the auto
+ * margin, above the scroller's ::after box, as tall as its sticky offset) is its stuck place, so it never moves at
+ * the list's end
+ */
 .inbox-new {
-  position: absolute;
+  position: sticky;
   bottom: calc(var(--space-6) + var(--space-1) + env(safe-area-inset-bottom));
-  inset-inline-end: calc(var(--space-4) + var(--space-1) / 2);
+  align-self: flex-end;
+  margin-block: auto 0;
+  margin-inline-end: calc(var(--space-4) + var(--space-1) / 2);
   gap: var(--space-2);
   height: calc(var(--touch-target) + var(--space-2));
   padding-inline: var(--space-4) var(--space-5);

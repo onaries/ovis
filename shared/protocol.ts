@@ -309,6 +309,10 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *         same pages; a few pages per answer, `cursor` goes on as `before` with the answer's
  *         history_id. 409 history_changed, 503 conversation_read_pending as above; a pane with no
  *         readable store answers no matches, one that loses it after a page was read 409 history_changed.)
+ *  GET    /api/pane/summary?pane_id=&pane_id=... -> PaneSummaries (each pane's last words for a
+ *         list row, read pane after pane within PANE_SUMMARY_DEADLINE_MS: a pane not read by then
+ *         is left out, one with nothing said or no readable conversation is null. 400
+ *         missing_pane_id, 400 too_many_panes past PANE_SUMMARY_MAX_IDS distinct ids)
  *  POST   /api/pane/close { pane_id }         -> { ok: true } (pane.close RPC; the collector's
  *         session-changed broadcast removes it from every client's sidebar)
  *  POST   /api/pane/rename { pane_id, label } -> { ok: true } (pane.rename; empty label clears it)
@@ -771,6 +775,8 @@ export type { OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetai
 export type { PlanStep, PanePlan } from "./plans.ts";
 
 export type { ConversationSearchMatch, ConversationSearchResponse } from "./conversation-search.ts";
+
+export type { PaneSummary, PaneSummaries } from "./pane-summary.ts";
 
 /** One page a Claude Code session published with its Artifact tool: its claude.ai URL, the title of its latest publish (else the published file's name) and when that was. */
 export interface ClaudeArtifact {

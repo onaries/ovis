@@ -4,13 +4,16 @@
  * (lib/agentRoster.ts, lib/sidebarActivity.tsx), so the two never disagree.
  */
 import type { Machine } from "../../shared/machines.ts";
+import { parseInline, shownText } from "../../shared/markdown.ts";
 import type { AgentStatus, PlanSummary } from "../../shared/protocol.ts";
 import { agentGroup, agentRoster, groupAgentRows, type AgentGroup, type AgentRow } from "./agentRoster.ts";
 import { fileFromLink, type AppLink } from "./deepLink.ts";
 import type { Translate } from "./i18n.ts";
 import type { AgentGroupSort } from "./settings.ts";
 import type { SidebarActivity } from "./sidebarActivity.tsx";
+import type { RowSummary } from "./useInboxSummaries.ts";
 import { capped } from "./promptText.ts";
+import { knownStatus, type KnownStatus } from "./status.ts";
 import { machineFilter, sidebarFilter } from "./sidebarFilter.ts";
 import { sidebarPinKey } from "./sidebarPins.ts";
 
@@ -68,6 +71,17 @@ export function inboxEmpty(machines: readonly Machine[], total: number, shown: n
   return shown === 0 ? "no-match" : null;
 }
 
+/**
+ * An agent's last words as a row draws them: the one line the summary route sends (its block marks and line breaks
+ * are the server's, shared/pane-summary.ts) without its inline marks (code, emphasis, a link as its text), as the
+ * chat's inline reader reads them; null when nothing is left.
+ */
+export function plainWords(text: string): string | null {
+  const bare = text.trim();
+  const shown = (bare === "" ? "" : shownText(parseInline(bare, false)) ?? bare).trim();
+  return shown === "" ? null : shown;
+}
+
 /** What a waiting agent asks, for its row: the question, then the first line of what it is about. */
 export function questionWords(words: { question: string; body: string | null }): string {
   const first = words.body?.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "";
@@ -79,6 +93,43 @@ export function inboxWords(input: { group: AgentGroup; blocked: string | null; q
   if (input.group === "blocked") return input.blocked ?? input.question ?? input.last;
   if (input.group === "working") return input.plan?.current?.trim() || input.last;
   return input.last;
+}
+
+/**
+ * Since when a row is in its state (ms): a waiting agent since this page saw it begin to wait (`waitStart`, none when
+ * the page did not: the summary knows when the agent last spoke, not when it began to wait), a working agent since
+ * the user last asked it, any other since its last words.
+ */
+export function inboxSinceAt(group: AgentGroup, summary: RowSummary | null | undefined, waitStart: number | undefined): number | null {
+  if (group === "blocked") return waitStart ?? null;
+  if (!summary) return null;
+  return group === "working" ? summary.askedAt ?? summary.at : summary.at;
+}
+
+/**
+ * When this page saw each agent begin to wait, by its row's key, as the Agents list keeps it (AgentSidebar.tsx
+ * waitStarts): a row seen in another state before (`before`, the last states seen; null before the first look) and
+ * waiting now starts at `at`; one already waiting when first seen gets none, as no time of change is known; a PC that
+ * is away (no state) keeps a start already seen and starts none on its return; a row that stops waiting or leaves
+ * loses its start. The same map when nothing changed.
+ */
+export function waitStartsAfter(starts: ReadonlyMap<string, number>, before: ReadonlyMap<string, AgentStatus | undefined> | null,
+  statuses: readonly (readonly [string, AgentStatus | undefined])[], at: number): ReadonlyMap<string, number> {
+  const next = new Map<string, number>();
+  for (const [key, status] of statuses) {
+    if (status === undefined) { const kept = starts.get(key); if (kept !== undefined) next.set(key, kept); continue; }
+    if (status !== "blocked") continue;
+    const seen = before?.get(key);
+    const start = starts.get(key) ?? (seen !== undefined && seen !== "blocked" ? at : undefined);
+    if (start !== undefined) next.set(key, start);
+  }
+  return next.size === starts.size && [...next].every(([key, start]) => starts.get(key) === start) ? starts : next;
+}
+
+/** A row's chip: its state's badge, `failed` for a done row whose last words are a failed request; a resting row has none. */
+export function inboxChip(group: AgentGroup, status: AgentStatus | undefined, summary: RowSummary | undefined): KnownStatus | "failed" | null {
+  if (group === "idle") return null;
+  return group === "done" && summary?.failed === true ? "failed" : knownStatus(status);
 }
 
 /** Whether a phone opens on the list: the address names no pane, workspace or file. */

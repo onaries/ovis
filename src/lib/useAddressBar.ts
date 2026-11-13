@@ -31,7 +31,7 @@ export function popUnread(dispatching: Event | undefined, read: Event | null): b
  * phone's agent list (lib/useInbox.ts) is the place that names no pane: leaving it for a pane is an
  * entry marked as such, and Back or Forward onto a place with no pane shows it again.
  */
-export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef }: {
+export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, newSessionPending, setHeaderNote, selectionRef }: {
   inbox: Pick<ReturnType<typeof useInbox>, "shown" | "enabled" | "show" | "leave">;
   newSessionOpen: boolean;
   /** the PC the New workspace dialog is for: the list's sheet of PCs opens it for one not selected */
@@ -70,6 +70,7 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
   rosterSeq: RefObject<number>;
   setNewSessionOpen: ReturnType<typeof useNewSessionState>["setNewSessionOpen"];
   pendingCreate: ReturnType<typeof useNewSessionState>["pendingCreate"];
+  newSessionPending: ReturnType<typeof useNewSessionState>["newSessionPending"];
   setHeaderNote: Dispatch<SetStateAction<LinkNote | "copied" | null>>;
   selectionRef: RefObject<SelectionMark>;
 }): void {
@@ -220,6 +221,9 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
       // Settings closing lands on the entry it opened over: what was picked while it was up stays
       // (hiding a PC here moves the selection off it), and the entry is written to say so
       if (settingsSteppedOff()) { sayShown(); return; }
+      // New workspace over the list refuses Back while its create is in flight (App.tsx): its sheet's entry is made
+      // again over where Back landed, at that entry's address. The dialog stays, and its address is written there again
+      if (newSessionPending.current && newSessionOpenRef.current && inboxRef.current.shown) { sayShown(); return; }
       const link = readLink(pageSearch());
       // before the PCs are in, nothing can say the entry's PC is still set up: it waits as a link
       // opened with the page does, settled against its roster or answered with a note once they are

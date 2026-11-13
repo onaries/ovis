@@ -30,6 +30,7 @@ import { firstMessageFault } from "../../shared/launch-rules.ts";
 import { insertTextProblem } from "../../shared/terminal-insert.ts";
 import { encodeOffer } from "../../shared/relay-offer.ts";
 import { searchPattern, searchTurns, MAX_SEARCH_QUERY, type ConversationSearchResponse } from "../../shared/conversation-search.ts";
+import { PANE_SUMMARY_MAX_IDS, summaryOf, type PaneSummaries } from "../../shared/pane-summary.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, moveLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { deviceLabel } from "../../src/lib/phone.ts";
@@ -1662,6 +1663,20 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (method !== "GET") return error("method_not_allowed", "use GET", 400);
     if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
     return json({ plan: keyOfPane.get(paneId) === "api" ? { steps: planSteps } : null, server_time: new Date().toISOString() } satisfies PanePlan);
+  }
+  // as the server answers it (server/pane-routes.ts), from the demo's own chats: every asked pane, null where it has nothing to say
+  if (path === "/api/pane/summary") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    const paneIds = [...new Set(query.getAll("pane_id").filter((id) => id.trim() !== ""))];
+    if (paneIds.length === 0) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    if (paneIds.length > PANE_SUMMARY_MAX_IDS) return error("too_many_panes", `at most ${PANE_SUMMARY_MAX_IDS} pane_id values`, 400);
+    const summaries: PaneSummaries["summaries"] = Object.create(null);
+    for (const id of paneIds) {
+      const key = keyOfPane.get(id);
+      const chat = key ? chats.get(key) : undefined;
+      summaries[id] = chat ? summaryOf(chat.turns) : null;
+    }
+    return json({ server_time: new Date().toISOString(), summaries } satisfies PaneSummaries, 200, { "cache-control": "no-store" });
   }
   if (path === "/api/pane/prompt") return json({ prompt: keyOfPane.get(paneId) === "web" && promptOpen ? { ...PROMPT, id: promptId } : null, outcomes: outcomesByPane.get(paneId) ?? [] });
   if (path === "/api/pane/prompt/answer") {

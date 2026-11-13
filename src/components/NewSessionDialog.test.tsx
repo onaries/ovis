@@ -271,6 +271,26 @@ describe("NewSessionDialog", () => {
     }
   });
 
+  it("tells the shell while its create is in flight, so a phone's Back can leave it open, and once the create has failed", async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
+      if (String(input).includes("workspace/create")) return await new Promise<Response>((resolve) => { answer = resolve; });
+      return new Response(JSON.stringify({ agents: [] }), { headers: { "content-type": "application/json" } });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const reported: boolean[] = [];
+    const view = createElement(SettingsProvider, { children: createElement(NewSessionDialog, { open: true, defaultCwd: "/home/u", onClose: () => undefined, onCreated: () => undefined, onPending: (pending) => { reported.push(pending); } }) });
+    try {
+      await act(async () => { renderer = create(view); });
+      await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+      expect(reported.at(-1)).toBe(true);
+      await act(async () => { answer(new Response(JSON.stringify({ error: { code: "internal", message: "herdr went away" } }), { status: 500, headers: { "content-type": "application/json" } })); });
+      expect(reported.at(-1)).toBe(false);
+      expect(renderer!.root.findAll((node) => node.type === "p" && node.props.role === "alert").length).toBe(1);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it("connects invalid_cwd error directly to the directory input via aria-invalid and aria-describedby (G-122)", async () => {
     const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
       if (String(input).includes("workspace/create")) {

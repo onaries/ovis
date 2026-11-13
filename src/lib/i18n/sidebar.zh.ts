@@ -37,6 +37,8 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Clear search": "清除搜索",
   "Filter agents by state": "按状态筛选 Agent",
   "No agents match": "没有匹配的 Agent",
+  "You: {text}": "我：{text}",
+  "Turn failed": "出错",
   "Expand worktrees of {name}": "展开 {name} 的工作树",
   "Collapse worktrees of {name}": "折叠 {name} 的工作树",
   "Agents: {names}": "代理：{names}",

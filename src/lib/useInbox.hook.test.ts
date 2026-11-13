@@ -2,8 +2,63 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement, type RefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppLink } from "./deepLink.ts";
-import { INBOX_FROM_KEY, useInbox } from "./useInbox.ts";
+import type { Machine } from "../../shared/machines.ts";
+import type { AgentStatus } from "../../shared/protocol.ts";
+import type { SidebarActivity } from "./sidebarActivity.tsx";
+import { INBOX_FROM_KEY, InboxWaits, useInbox, useInboxWaits } from "./useInbox.ts";
 import { QuestionReads } from "./useInboxQuestions.ts";
+import { SummaryReads } from "./useInboxSummaries.ts";
+
+describe("useInboxWaits", () => {
+  let renderer: ReactTestRenderer | undefined;
+  let reactAct: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    reactAct = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  });
+
+  afterEach(async () => {
+    await act(async () => { renderer?.unmount(); });
+    renderer = undefined;
+    if (reactAct) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", reactAct);
+    else Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+  });
+
+  const machine = { id: "local", state: "connected", snapshot: { panes: [{ pane_id: "w:p1" }] } } as unknown as Machine;
+
+  it("observes nothing and keeps no starts while the list is not enabled, and starts observing once it is", async () => {
+    const waits = new InboxWaits();
+    let status: AgentStatus = "working";
+    let asked = 0;
+    const activity = { status: () => { asked++; return status; } } as unknown as SidebarActivity;
+    const Probe = ({ enabled }: { enabled: boolean }) => { useInboxWaits(waits, [machine], activity, enabled); return null; };
+    const draw = async (enabled: boolean) => {
+      await act(async () => {
+        if (renderer) renderer.update(createElement(Probe, { enabled }));
+        else renderer = create(createElement(Probe, { enabled }));
+      });
+    };
+
+    await draw(false);
+    status = "blocked";
+    await draw(false);
+    expect([asked, waits.current().size]).toEqual([0, 0]);
+
+    // enabled with the row already waiting: no time for it, as at a page load
+    await draw(true);
+    expect(waits.current().size).toBe(0);
+    status = "working";
+    await draw(true);
+    status = "blocked";
+    await draw(true);
+    expect([...waits.current().keys()]).toEqual(["local:w:p1"]);
+
+    // turned off again: the starts are let go
+    await draw(false);
+    expect(waits.current().size).toBe(0);
+  });
+});
 
 describe("useInbox", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -78,6 +133,17 @@ describe("useInbox", () => {
     await act(async () => { inbox.show(); });
 
     expect(inbox.questionReads).toBe(reads);
+  });
+
+  it("keeps one summary reader while the list is left and shown again", async () => {
+    await mount(true);
+    const reads = inbox.summaryReads;
+    expect(reads).toBeInstanceOf(SummaryReads);
+
+    await act(async () => { inbox.leave(); });
+    await act(async () => { inbox.show(); });
+
+    expect(inbox.summaryReads).toBe(reads);
   });
 
   it("starts closed on a link naming a pane", async () => {

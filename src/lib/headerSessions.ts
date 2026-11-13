@@ -111,7 +111,7 @@ export function useWaitingRosters(shown: readonly Machine[], selected: Machine |
 const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle, .app-header .new-workspace-button")];
 
 /** The header's first button a closed drawer gives the focus back to: the drawer toggle, else Back to agents drawn in its place (App.tsx). */
-export const drawerReturnButton = (): HTMLElement | null =>
+const drawerReturnButton = (): HTMLElement | null =>
   document.querySelector<HTMLElement>(".app-header .drawer-toggle") ?? document.querySelector<HTMLElement>(".app-header .inbox-back");
 
 /**

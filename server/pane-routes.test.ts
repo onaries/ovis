@@ -4,7 +4,8 @@ import { closeSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandScansSettled, paneCommands, scanPaneCommands, setCommandsWait } from "./commands.ts";
-import { filePoolSize, setFilePoolOptions } from "./file-pool.ts";
+import { FileBusyError, filePoolSize, setFilePoolOptions } from "./file-pool.ts";
+import { HerdrError } from "./herdr/client.ts";
 import { HERMES_ECHO_RE } from "./dialogs/hermes.ts";
 import { registry } from "./dialogs/registry.ts";
 import { findLastIndex } from "./dialogs/shared.ts";
@@ -14,6 +15,8 @@ import { paneAgentOf, resolveAgent } from "./pane-context.ts";
 import { openCodeServiceOptions } from "./opencode-service.ts";
 import * as conversation from "./conversation.ts";
 import { requestIdContext } from "./http.ts";
+import { PANE_SUMMARY_DEADLINE_MS, PANE_SUMMARY_KEEP_MS, PANE_SUMMARY_MAX_IDS, PANE_SUMMARY_PANE_MS, type PaneSummaries } from "../shared/pane-summary.ts";
+import type { ConversationTurn } from "../shared/protocol.ts";
 
 // The real RPC client against a unix socket this test owns; only herdr's answers are synthetic.
 let root: string;
@@ -655,4 +658,306 @@ it("asks the share rule about the folder an agent's commands are listed for, as 
     // on a Windows PC a share no pane works on is refused before it is read (directories.ts expandedPath)
     expect(expanded.mock.calls).toEqual([["//host/share"]]);
   } finally { expanded.mockRestore(); }
+});
+
+const summaryUrl = (ids: string[]) => new URL(`http://x/api/pane/summary?${new URLSearchParams(ids.map((id) => ["pane_id", id]))}`);
+const askSummary = (ids: string[], method = "GET") => {
+  const url = summaryUrl(ids);
+  return handlePaneRequest(new Request(url, { method }), url, "/api/pane/summary", {});
+};
+const said = (text: string, ts: string): conversation.RecognizedConversation => ({
+  source: "claude-transcript", cursor: null, history_id: "h", version: "v", metadata: { model: null, reasoning_effort: null },
+  turns: [{ role: "user", ts, parts: [{ kind: "text", text }] } satisfies ConversationTurn],
+});
+
+it("answers each pane's last words once, reading one prompt of each", async () => {
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => said(`hello from ${paneId}`, "2026-11-12T10:00:00Z"));
+  try {
+    const response = (await askSummary(["w:p1", "w:p2", "w:p1", " "]))!;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = await response.json() as PaneSummaries;
+    expect(Number.isNaN(Date.parse(body.server_time))).toBe(false);
+    expect(body.summaries).toEqual({
+      "w:p1": { role: "user", text: "hello from w:p1", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" },
+      "w:p2": { role: "user", text: "hello from w:p2", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" },
+    });
+    expect(read.mock.calls.map((call) => [call[0], call[2]])).toEqual([["w:p1", { prompts: 1 }], ["w:p2", { prompts: 1 }]]);
+  } finally { read.mockRestore(); }
+});
+
+it("gives null for a pane with no conversation to read, beside the panes it can", async () => {
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    if (paneId === "shell") throw new conversation.ConversationUnavailable("no_session_path");
+    if (paneId === "fresh") throw new conversation.ConversationNotStarted("s1");
+    return said("fine", "2026-11-12T10:00:00Z");
+  });
+  try {
+    const body = await (await askSummary(["shell", "w:p1", "fresh"]))!.json() as PaneSummaries;
+    expect(body.summaries).toEqual({ shell: null, "w:p1": { role: "user", text: "fine", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" }, fresh: null });
+  } finally { read.mockRestore(); }
+});
+
+it("leaves out a pane whose read failed for now, beside the panes it can, and reads it anew for the next request", async () => {
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    if (paneId === "pending") throw new conversation.ConversationReadPending();
+    if (paneId === "busy") throw new FileBusyError("every file thread is busy");
+    if (paneId === "herdr") throw new HerdrError("timeout", "herdr did not answer");
+    if (paneId === "changed") throw new conversation.HistoryChanged();
+    return said("fine", "2026-11-12T10:00:00Z");
+  });
+  try {
+    const body = await (await askSummary(["pending", "busy", "w:p1", "herdr", "changed"]))!.json() as PaneSummaries;
+    expect(body.summaries).toEqual({ "w:p1": { role: "user", text: "fine", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
+    await askSummary(["pending"]);
+    expect(read.mock.calls.filter((call) => call[0] === "pending")).toHaveLength(2);
+  } finally { read.mockRestore(); }
+});
+
+it("leaves out a pane whose summary cannot be made from its turns, beside the panes it can", async () => {
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => paneId === "malformed"
+    ? { ...said("x", "2026-11-12T10:00:00Z"), turns: [{ role: "assistant", ts: null, parts: null }] as unknown as ConversationTurn[] }
+    : said("fine", "2026-11-12T10:00:00Z"));
+  try {
+    const response = (await askSummary(["malformed", "w:p1"]))!;
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as PaneSummaries).summaries).toEqual({ "w:p1": { role: "user", text: "fine", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
+  } finally { read.mockRestore(); }
+});
+
+it("refuses a summary with no pane, too many panes or another method", async () => {
+  const read = spyOn(conversation, "paneConversation");
+  const code = async (response: Response | null) => [response!.status, ((await response!.json()) as { error: { code: string } }).error.code];
+  try {
+    expect(await code(await askSummary([]))).toEqual([400, "missing_pane_id"]);
+    expect(await code(await askSummary(["", "  "]))).toEqual([400, "missing_pane_id"]);
+    expect(await code(await askSummary(Array.from({ length: PANE_SUMMARY_MAX_IDS + 1 }, (_, index) => `w:p${index}`)))).toEqual([400, "too_many_panes"]);
+    expect(await code(await askSummary(["w:p1"], "POST"))).toEqual([400, "method_not_allowed"]);
+    expect(read).not.toHaveBeenCalled();
+  } finally { read.mockRestore(); }
+});
+
+it("leaves out the panes it has no time left to read", async () => {
+  let clock = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const stuck = Promise.withResolvers<conversation.RecognizedConversation>();
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    // the first read takes all but a moment of the deadline, and the second outlasts that moment
+    if (paneId === "stuck") { clock += 5; return stuck.promise; }
+    clock += PANE_SUMMARY_DEADLINE_MS - 5;
+    return said("first", "2026-11-12T10:00:00Z");
+  });
+  try {
+    const body = await (await askSummary(["w:p1", "stuck", "w:p3"]))!.json() as PaneSummaries;
+    expect(Object.keys(body.summaries)).toEqual(["w:p1"]);
+    expect(read.mock.calls.map((call) => call[0])).toEqual(["w:p1", "stuck"]);
+  } finally {
+    // settled, so no later request finds its read still running
+    stuck.resolve(said("late", "2026-11-12T10:00:00Z"));
+    await stuck.promise;
+    read.mockRestore(); now.mockRestore();
+  }
+});
+
+it("keeps a pane id such as __proto__ as an ordinary key", async () => {
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async () => said("fine", "2026-11-12T10:00:00Z"));
+  try {
+    const body = await (await askSummary(["__proto__", "w:p1"]))!.json() as PaneSummaries;
+    expect(Object.keys(body.summaries)).toEqual(["__proto__", "w:p1"]);
+    expect(Object.getOwnPropertyDescriptor(body.summaries, "__proto__")?.value).toEqual({ role: "user", text: "fine", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" });
+  } finally { read.mockRestore(); }
+});
+
+/**
+ * The route's timers as a case runs them: the timer set once a pane's read has started is that pane's, and it runs
+ * out at once for the pane named `late` and never for any other, whose read then answers first.
+ */
+function paneTimers(late: string) {
+  const set = globalThis.setTimeout;
+  const delays: [string, number][] = [];
+  let reading = "";
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number) => {
+    delays.push([reading, ms ?? 0]);
+    return set(reading === late ? callback : () => {}, 0);
+  }) as unknown as typeof setTimeout);
+  return { delays, reads: (paneId: string) => { reading = paneId; }, restore: () => timers.mockRestore() };
+}
+
+it("leaves out a pane whose read runs past its share and reads the panes after it", async () => {
+  const slow = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("slow");
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    return paneId === "slow" ? slow.promise : said(`hello from ${paneId}`, "2026-11-12T10:00:00Z");
+  });
+  try {
+    const body = await (await askSummary(["slow", "w:p2", "w:p3"]))!.json() as PaneSummaries;
+    expect(Object.keys(body.summaries)).toEqual(["w:p2", "w:p3"]);
+    expect(timers.delays[0]).toEqual(["slow", PANE_SUMMARY_PANE_MS]);
+  } finally {
+    slow.resolve(said("late words", "2026-11-12T10:00:00Z"));
+    await slow.promise;
+    read.mockRestore(); timers.restore();
+  }
+});
+
+it("has a later request for a pane wait on the read still running for it, and starts a new read once it settled", async () => {
+  const slow = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("running");
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    return paneId === "running" ? slow.promise : said(`hello from ${paneId}`, "2026-11-12T10:00:00Z");
+  });
+  const slowReads = () => read.mock.calls.filter((call) => call[0] === "running").length;
+  try {
+    expect(Object.keys((await (await askSummary(["running", "w:p2"]))!.json() as PaneSummaries).summaries)).toEqual(["w:p2"]);
+    const second = askSummary(["running"]);
+    slow.resolve(said("late words", "2026-11-12T10:00:00Z"));
+    const body = await (await second)!.json() as PaneSummaries;
+    expect(slowReads()).toBe(1);
+    expect(body.summaries).toEqual({ running: { role: "user", text: "late words", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
+    await askSummary(["running"]);
+    expect(slowReads()).toBe(2);
+  } finally {
+    slow.resolve(said("late words", "2026-11-12T10:00:00Z"));
+    read.mockRestore(); timers.restore();
+  }
+});
+
+it("hands the result of a read a request stopped waiting for to the next request for the pane, once", async () => {
+  const slow = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("kept");
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    return paneId === "kept" ? slow.promise : said(`hello from ${paneId}`, "2026-11-12T10:00:00Z");
+  });
+  const keptReads = () => read.mock.calls.filter((call) => call[0] === "kept").length;
+  try {
+    expect(Object.keys((await (await askSummary(["kept"]))!.json() as PaneSummaries).summaries)).toEqual([]);
+    // it settles with no request waiting on it, past every microtask its settling queues
+    slow.resolve(said("words read late", "2026-11-12T10:00:00Z"));
+    await slow.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    timers.reads("none");
+    const body = await (await askSummary(["kept"]))!.json() as PaneSummaries;
+    expect(body.summaries).toEqual({ kept: { role: "user", text: "words read late", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
+    expect(keptReads()).toBe(1);
+    // handed over once: the request after it reads anew
+    await askSummary(["kept"]);
+    expect(keptReads()).toBe(2);
+  } finally {
+    slow.resolve(said("words read late", "2026-11-12T10:00:00Z"));
+    read.mockRestore(); timers.restore();
+  }
+});
+
+it("drops a kept result once PANE_SUMMARY_KEEP_MS has passed since it settled", async () => {
+  let clock = 2_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const slow = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("expired");
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    return paneId === "expired" && read.mock.calls.length === 1 ? slow.promise : said("words of a new read", "2026-11-12T10:05:00Z");
+  });
+  try {
+    await askSummary(["expired"]);
+    slow.resolve(said("words read late", "2026-11-12T10:00:00Z"));
+    await slow.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    clock += PANE_SUMMARY_KEEP_MS;
+    timers.reads("none");
+    const body = await (await askSummary(["expired"]))!.json() as PaneSummaries;
+    expect(body.summaries).toEqual({ expired: { role: "user", text: "words of a new read", at: "2026-11-12T10:05:00Z", asked_at: "2026-11-12T10:05:00Z" } });
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    slow.resolve(said("words read late", "2026-11-12T10:00:00Z"));
+    read.mockRestore(); timers.restore(); now.mockRestore();
+  }
+});
+
+it("shares a running read with a later request while it is younger than a request's time", async () => {
+  let clock = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const first = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("aged");
+  let reads = 0;
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    reads++;
+    // the first read is still running when the later requests come; the one started in its place answers at once
+    return reads === 1 ? first.promise : said("words after the turn", "2026-11-12T10:05:00Z");
+  });
+  try {
+    expect(Object.keys((await (await askSummary(["aged"]))!.json() as PaneSummaries).summaries)).toEqual([]);
+    // inside the age the running read is the one waited on
+    clock += PANE_SUMMARY_DEADLINE_MS - 1;
+    timers.reads("none");
+    const inside = askSummary(["aged"]);
+    first.resolve(said("words from mid-turn", "2026-11-12T10:00:00Z"));
+    expect((await (await inside)!.json() as PaneSummaries).summaries).toEqual({ aged: { role: "user", text: "words from mid-turn", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
+    expect(reads).toBe(1);
+  } finally {
+    first.resolve(said("words from mid-turn", "2026-11-12T10:00:00Z"));
+    read.mockRestore(); timers.restore(); now.mockRestore();
+  }
+});
+
+it("starts a new read for a request that comes after the running one has aged past a request's time", async () => {
+  let clock = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const first = Promise.withResolvers<conversation.RecognizedConversation>();
+  const second = Promise.withResolvers<conversation.RecognizedConversation>();
+  const timers = paneTimers("old");
+  let reads = 0;
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    reads++;
+    return reads === 1 ? first.promise : reads === 2 ? second.promise : said("words of a third read", "2026-11-12T10:09:00Z");
+  });
+  try {
+    expect(Object.keys((await (await askSummary(["old"]))!.json() as PaneSummaries).summaries)).toEqual([]);
+    // past the age a new read starts in the old one's place; it is still running when its request's share runs out
+    clock += PANE_SUMMARY_DEADLINE_MS;
+    expect(Object.keys((await (await askSummary(["old"]))!.json() as PaneSummaries).summaries)).toEqual([]);
+    expect(reads).toBe(2);
+    // the replaced read settles, past every microtask its settling queues: it leaves the read started in its place where it is
+    first.resolve(said("words from mid-turn", "2026-11-12T10:00:00Z"));
+    await first.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // a request inside the second read's age waits on it, starts no third, and is answered with its words
+    timers.reads("none");
+    const third = askSummary(["old"]);
+    second.resolve(said("words after the turn", "2026-11-12T10:05:00Z"));
+    const body = await (await third)!.json() as PaneSummaries;
+    expect(reads).toBe(2);
+    expect(body.summaries).toEqual({ old: { role: "user", text: "words after the turn", at: "2026-11-12T10:05:00Z", asked_at: "2026-11-12T10:05:00Z" } });
+  } finally {
+    first.resolve(said("words from mid-turn", "2026-11-12T10:00:00Z"));
+    second.resolve(said("words after the turn", "2026-11-12T10:05:00Z"));
+    await second.promise;
+    read.mockRestore(); timers.restore(); now.mockRestore();
+  }
+});
+
+it("ends the request at once when the asker goes away during a read, reading no further pane", async () => {
+  const held = Promise.withResolvers<conversation.RecognizedConversation>();
+  const asker = new AbortController();
+  const timers = paneTimers("none");
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
+    timers.reads(paneId);
+    return held.promise;
+  });
+  try {
+    const url = summaryUrl(["w:p1", "w:p2"]);
+    const answer = handlePaneRequest(new Request(url, { signal: asker.signal }), url, "/api/pane/summary", {});
+    asker.abort();
+    const body = await (await answer)!.json() as PaneSummaries;
+    expect(Object.keys(body.summaries)).toEqual([]);
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally {
+    held.resolve(said("first", "2026-11-12T10:00:00Z"));
+    await held.promise;
+    read.mockRestore(); timers.restore();
+  }
 });
