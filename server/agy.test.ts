@@ -287,3 +287,34 @@ it("starts a new assistant turn when a SYSTEM_MESSAGE wakes the planner after a 
     { role: "assistant", ts: "2026-11-09T13:09:41Z", end_ts: "2026-11-09T13:10:05Z", texts: ["Checking results.", "All done."] },
   ]);
 });
+
+it("summarizes ask_question and Path-based file tool calls", () => {
+  const turns = parseAgyTranscript(JSON.stringify({
+    step_index: 1,
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    content: "",
+    tool_calls: [{
+      name: "ask_question",
+      args: {
+        questions: [
+          { question: "Which test runner?", options: ["(Recommended) Bun test", "Vitest"] },
+          { question: "Which targets?", is_multi_select: true, options: ["Desktop", "Mobile"] },
+        ],
+      },
+    }, {
+      name: "read_file",
+      args: { Path: "/tmp/example.ts" },
+    }],
+  }));
+  expect(turns[0]?.parts[0]).toMatchObject({
+    kind: "tool",
+    name: "ask_question",
+    summary: "Which test runner? · Which targets?",
+  });
+  expect(turns[0]?.parts[1]).toMatchObject({
+    kind: "tool",
+    name: "read_file",
+    summary: "/tmp/example.ts",
+  });
+});

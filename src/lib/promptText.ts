@@ -12,7 +12,7 @@ import { t as inCurrentLanguage, type Translate } from "./i18n.ts";
  */
 export function optionName(prompt: InteractivePrompt, label: string): { text: string; recommended: boolean; words: string } {
   if (prompt.text_format === "markdown") return { text: label, recommended: false, words: shownText(parseInline(label, false)) ?? label };
-  const text = label.replace(/\s*\(recommended\)$/i, "");
+  const text = label.replace(/^\(recommended\)\s+|\s*\(recommended\)$/i, "");
   return { text, recommended: text !== label, words: text };
 }
 

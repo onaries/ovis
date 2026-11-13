@@ -351,7 +351,7 @@ export function parseAgyTranscript(text: string, path?: string): ConversationTur
       for (const call of Array.isArray(value.tool_calls) ? value.tool_calls : []) {
         const tool = record(call), input = record(tool.args);
         if (typeof tool.name !== "string") continue;
-        const mapped = { ...input, command: input.CommandLine, file_path: input.AbsolutePath ?? input.TargetFile };
+        const mapped = { ...input, command: input.CommandLine, file_path: input.Path ?? input.AbsolutePath ?? input.TargetFile };
         const part: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: tool.name, summary: toolSummary(tool.name, mapped), input: JSON.stringify(input), output: "" };
         // the ledger ties no output step to its call, so a read stays requested
         const skill = tool.name === "read_file" ? skillDocument(input.Path) : null;

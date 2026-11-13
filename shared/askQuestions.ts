@@ -25,7 +25,8 @@ export interface AskedQuestion {
   options: AskedOption[];
 }
 
-const ASK_TOOLS: ReadonlySet<string> = new Set(["ask", "ask_user", "ask_user_question", "request_user_input", "AskUserQuestion"]);
+const ASK_TOOLS: ReadonlySet<string> = new Set(["ask", "ask_user", "ask_user_question", "request_user_input", "AskUserQuestion", "ask_question"]);
+const RECOMMENDED_PREFIX = /^\(recommended\)\s+/i;
 
 const optionalText = (value: unknown): value is string | null | undefined => value == null || typeof value === "string";
 
@@ -52,7 +53,15 @@ export function askedQuestions(tool: string, args: unknown): AskedQuestion[] | n
     const rawOptions = question["options"] ?? [];
     if (!Array.isArray(rawOptions)) return null;
     const options: AskedOption[] = [];
+    let recommendedIndex: number | null = null;
     for (const item of rawOptions) {
+      if (tool === "ask_question" && typeof item === "string") {
+        const label = item.replace(RECOMMENDED_PREFIX, "");
+        if (!label.trim()) return null;
+        if (label !== item && recommendedIndex === null) recommendedIndex = options.length;
+        options.push({ label, description: null, preview: null });
+        continue;
+      }
       if (item === null || typeof item !== "object") return null;
       const option = item as Record<string, unknown>;
       if (typeof option["label"] !== "string" || !option["label"].trim() || !optionalText(option["description"]) || !optionalText(option["preview"])) return null;
@@ -62,8 +71,8 @@ export function askedQuestions(tool: string, args: unknown): AskedQuestion[] | n
     asked.push({
       header: question["header"] || null,
       question: question["question"],
-      multi: question["multi"] === true || question["multiSelect"] === true,
-      recommended: Number.isInteger(recommended) && (recommended as number) >= 0 && (recommended as number) < options.length ? recommended as number : null,
+      multi: question["multi"] === true || question["multiSelect"] === true || question["is_multi_select"] === true,
+      recommended: Number.isInteger(recommended) && (recommended as number) >= 0 && (recommended as number) < options.length ? recommended as number : recommendedIndex,
       options,
     });
   }

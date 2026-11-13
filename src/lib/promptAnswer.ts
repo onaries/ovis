@@ -10,8 +10,8 @@ import { CONFUSABLES_DATA } from "./confusables.generated.ts";
 import { t } from "./i18n.ts";
 import { optionName, promptWords } from "./promptText.ts";
 
-/** The agents whose own keys move between a form's questions (pi's tabs, Claude Code's question tabs, omo's Tab, omp's Tab, Codex's ←/→, Hermes's Tab): a move carries none of the card's edits. */
-const KEYED_STEPS = new Set(["pi", "claude", "omo", "omp", "codex", "hermes"]);
+/** The agents whose own keys move between a form's questions (pi's tabs, Claude Code's question tabs, omo's Tab, omp's Tab, Codex's ←/→, Hermes's Tab, agy's ←/→): a move carries none of the card's edits. */
+const KEYED_STEPS = new Set(["pi", "claude", "omo", "omp", "codex", "hermes", "agy"]);
 
 export type TypedAnswer = Pick<PromptAnswer, "option_index" | "option_indices" | "custom_text">;
 
@@ -61,8 +61,9 @@ const unconfused = (text: string): string => Array.from(text, (char) => confusab
 export const skeleton = (text: string): string => toCasefold(unconfused(toCasefold(toCasefold(text.normalize("NFD")).normalize("NFKD")).normalize("NFKD"))).normalize("NFKD")
   .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").replace(/[^\p{L}\p{M}\p{N}]/gu, "").normalize("NFD");
 
+/** Strips a leading or trailing `(Recommended)` tag or keycap suffix from an option label. */
 function bareLabel(label: string): string {
-  return spaced(label.replace(/\s*\((?:[a-z]|esc|recommended)\)$/i, ""));
+  return spaced(label.replace(/^\(recommended\)\s+|\s*\((?:[a-z]|esc|recommended)\)$/i, ""));
 }
 
 /** null: the prompt only takes its options, and the text names none of them. */

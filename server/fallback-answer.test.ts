@@ -72,13 +72,23 @@ test.each([
   ["copilot", "copilot-1.0.109-ask-32s", "Which color?"],
   ["grok", "grok-1.0.77-ask", "┃  Option A or option B?"],
   ["agy", "agy-1.5.6-trust", "Do you trust the contents of this project?"],
-  ["agy", "agy-1.5.6-ask", "Question 1/1: Which file would you like to create?"],
 ])("answers %s's fallback card on a screen that stands still (%s)", async (agent, name, question) => {
   await withPane(agent, "blocked", recorded(name), async (pane) => {
     const prompt = (await card())!;
     expect(prompt.fallback).toBe(true);
     expect(prompt.question).toBe(question);
     expect(await answer(prompt.id, { option_index: labels(prompt).indexOf("Enter") })).toEqual({ status: 200, code: undefined });
+    expect(pane.sent).toEqual(["enter"]);
+  });
+});
+
+// Antigravity's question has a reader of its own since (dialogs/agy.ts): its rows are the card's options, not "Enter"
+test("answers agy's question through its reader, as a card of its options", async () => {
+  await withPane("agy", "blocked", recorded("agy-1.5.6-ask"), async (pane) => {
+    const prompt = (await card())!;
+    expect(prompt.fallback).not.toBe(true);
+    expect(prompt.question).toBe("Which file would you like to create?");
+    expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
     expect(pane.sent).toEqual(["enter"]);
   });
 });

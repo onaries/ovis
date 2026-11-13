@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { ConversationTurn, InteractivePrompt } from "../../shared/protocol.ts";
 import { type Language, translate } from "./i18n.ts";
-import { approvalScope, polledPrompt, promptWords, screenWordsToShow } from "./promptText.ts";
+import { approvalScope, optionName, polledPrompt, promptWords, screenWordsToShow } from "./promptText.ts";
 
 const inLanguage = (language: Language) => (key: string, vars?: Record<string, string | number>) => translate(language, key, vars);
 
@@ -96,6 +96,12 @@ describe("a prompt card's words", () => {
     const { own_text: _, ...older } = goal;
     const words = promptWords(older, inLanguage("ko"));
     expect([words.title, words.label(0)]).toEqual(["Goal active", "Close"]);
+  });
+
+  it("strips both leading and trailing (Recommended) tags from plain option labels", () => {
+    expect(optionName(goal, "(Recommended) Bun test")).toEqual({ text: "Bun test", recommended: true, words: "Bun test" });
+    expect(optionName(goal, "Bun test (Recommended)")).toEqual({ text: "Bun test", recommended: true, words: "Bun test" });
+    expect(optionName(goal, "Vitest")).toEqual({ text: "Vitest", recommended: false, words: "Vitest" });
   });
 });
 

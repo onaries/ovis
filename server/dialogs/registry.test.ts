@@ -44,6 +44,7 @@ const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["l
   "hermes-question": ["none", "none"],
   "hermes-input": ["none", "none"],
   "hermes-approval": ["none", "none"],
+  "agy-question": ["none", "none"],
   "cmd-question": ["before-commit", "none"],
   "opencode-question": ["before-commit", "none"],
   "opencode-v1-question": ["none", "none"],
@@ -90,6 +91,7 @@ test("keeps fallback readers last for known and unknown agents", () => {
 /** The readers each agent's screen is offered to, first to last: the first that reads it gives the card. */
 const order: Record<string, readonly string[]> = {
   "": ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  agy: ["agy-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   claude: ["claude-goal", "claude-question", "claude-submit", "claude-approval", "claude-plan", "claude-confirm", "claude-model", "claude-effort", "claude-held", "omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   cmd: ["cmd-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   codex: ["codex-menu", "codex-question", "codex-async-question", "codex-approval", "codex-model", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],

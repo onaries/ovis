@@ -1,4 +1,5 @@
 /** Shared native-record rules keep paging, rendering and on-demand results consistent. */
+import { askedQuestions } from "../shared/askQuestions.ts";
 import type { ConversationPart, ConversationTurn, GoalWaitSources, OmoTaskResult } from "../shared/protocol.ts";
 import type { SubagentDetail, TaskNotification } from "./claude-subagents.ts";
 import { skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
@@ -318,6 +319,8 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
     const titles = items.map((item) => label(item["task_summary"]) ?? label(item["description"])).filter((title) => title !== null);
     if (titles.length > 0) return titles.join(" · ").slice(0, 120);
   }
+  const asked = askedQuestions(name, input);
+  if (asked !== null) return asked.map((question) => question.question).join(" · ").slice(0, 120);
   // what the agent itself said the call is for: OmO's eval `summary`, the `description` Claude
   // gives a Bash command or a subagent's prompt. Another tool's `description` is its own data.
   const said = typeof input["code"] === "string" ? label(input["summary"])
