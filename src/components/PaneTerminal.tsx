@@ -155,6 +155,8 @@ export interface PaneTerminalProps {
   role?: ClientRole;
   /** Fires with the server-confirmed role (the header toggle shows it). */
   onRoleAck?: (mode: ClientRole) => void;
+  /** this device's pairing may only watch (App's auth): the prompt card answers nothing. Not the connection's role, which the user toggles */
+  deviceWatching?: boolean;
   /** Fires on every change of the socket's connected state (the header shows it). `connectedBefore`: the
    *  socket has been connected on this page before, so a connection it waits for is a reconnect, not the first. */
   onConnectionChange?: (connected: boolean, connectedBefore: boolean) => void;
@@ -210,6 +212,7 @@ export function PaneTerminal({
   terminalFontFamily,
   colors,
   role = "interact",
+  deviceWatching = false,
   onOpenTerminal,
   peek: peekProp = null,
   onPeek,
@@ -1370,6 +1373,7 @@ export function PaneTerminal({
             onCommandScreenClosed={onCommandScreenClosed}
             onOutcomes={onChatOutcomes}
             interactive={!viewOnly && role === "interact"}
+            watching={deviceWatching}
             quotable={!secretActive}
             cwd={cwd}
             promptContext={[agentDisplayLabel(agent), workspaceLabel, cwd, machineName].filter((part): part is string => part !== null && part !== "").join(" · ")}

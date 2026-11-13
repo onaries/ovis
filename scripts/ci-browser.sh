@@ -232,6 +232,7 @@ run_script scripts/sidebar-context-ring-demo-regression.ts
 run_script scripts/sidebar-background-workspaces-demo-regression.ts
 run_script scripts/agent-helpers-fold-demo-regression.ts
 run_script scripts/sidebar-agent-tree-demo-regression.ts
+run_script scripts/sidebar-scrollbar-grip-demo-regression.ts
 run_script scripts/agent-lock-demo-regression.ts
 run_script scripts/agent-groups-demo-regression.ts
 run_script scripts/agent-state-groups-demo-regression.ts

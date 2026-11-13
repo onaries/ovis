@@ -1267,6 +1267,7 @@ export function App() {
                     renderPane={(item, itemActive, herdrSplit) => <OpenFileContext.Provider value={item ? (path) => openFile({ path, paneId: item.pane_id, machineId }) : null}>
                       <PaneTerminal
                         presentationKey={paneContentKey(machine, item, item ? lensOf(item) : slotView)}
+                        deviceWatching={auth?.role === "watch"}
                         finishEpoch={machine?.snapshot?.finish_epoch}
                         finishId={item?.finish_id}
                         title={item ? displayPaneTitle(item) : active ? selectedTitle : null}
