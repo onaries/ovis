@@ -1,17 +1,14 @@
 // The links that let a tester join the phone app tests on the beta pages (/beta/, /zh/beta/,
 // /ja/beta/, /ko/beta/). Each page ships
-// its iPhone and Android sections hidden, with a note that the link is on its way; this shows a
-// section, and hides its note, once its link is set below, so no tester meets a link that leads
-// nowhere. scripts/ovis-site.test.ts checks each link's shape. It also runs the install commands'
+// its iPhone section hidden, with a note that the link is on its way; this shows a section, and
+// hides its note, once its link is set below, so no tester meets a link that leads nowhere. The
+// Android app is on Google Play, so its section is shown as shipped. scripts/ovis-site.test.ts checks each link's shape. It also runs the install commands'
 // Copy buttons and the language picker in the header.
 (() => {
   const BETA_LINKS = {
     // iPhone: the public link of the "Ovis Beta" TestFlight group,
     // https://testflight.apple.com/join/…
     testflight: "https://testflight.apple.com/join/dCVKYRA3",
-    // Android: the Google Group whose members may join the Google Play closed test,
-    // https://groups.google.com/g/…
-    play: "https://groups.google.com/g/ovis-beta",
   };
 
   if (typeof module === "object" && module.exports) {

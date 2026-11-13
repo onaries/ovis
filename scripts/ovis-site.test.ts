@@ -11,6 +11,8 @@ import { fail, files, read, repo } from "./source-scan.ts";
 const ORIGIN = "https://ovis.sh";
 const PAGES = files("ovis-site/**/*.html");
 const HOME = "ovis-site/index.html";
+/** The Android app's Google Play page, where the home page's Google Play icons lead. */
+const PLAY = "https://play.google.com/store/apps/details?id=sh.ovis.app";
 /** Visible FAQ questions left out of the FAQPage on purpose, each with why. */
 const LEFT_OUT: Record<string, string> = {
   "How much does Ovis cost?": "its \"no analytics\" sentence is under review: the PC side sends anonymous usage counts by default",
@@ -112,7 +114,6 @@ describe("ovis.sh beta page", () => {
   /** The kind of address each phone test link is, so a link pasted into the wrong slot fails here. */
   const SHAPES: Record<string, RegExp> = {
     testflight: /^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]+$/,
-    play: /^https:\/\/groups\.google\.com\/g\/[\w.-]+$/,
   };
   const links = BETA_LINKS as Record<string, string>;
 
@@ -134,17 +135,18 @@ describe("ovis.sh beta page", () => {
     fail(offenders, "Each beta page loads /assets/beta.js and, for every key of BETA_LINKS, ships <section data-beta=\"<key>\" hidden> (with an id first, if any) holding an <a data-beta-link=\"<key>\"> with no href, plus a data-beta-pending=\"<key>\" note; beta.js shows the section and hides the note once the link is set:");
   });
 
-  it("is where the home page's App Store and Google Play icons and a phone's download button lead", () => {
+  it("is where the home page's App Store icons and a phone's download button lead, and Google Play is where Android's lead", () => {
     // each download row's icons, and the iPhone and Android buttons assets/platform.js puts on a phone
     const rows = html(HOME).split("<div class=\"dl-row\"").slice(1).map((rest) => rest.split("</div>")[0]!);
     const platform = read("ovis-site/assets/platform.js");
+    const links = [["ios", "/beta/#iphone"], ["android", PLAY]];
     fail([
       ...(rows.length === 2 ? [] : [`${HOME} has ${rows.length} download rows (<div class="dl-row">), not the hero's and the closing one`]),
-      ...rows.flatMap((row, index) => ["iphone", "android"].filter((id) => !row.includes(`<a class="dl-icon" href="/beta/#${id}"`))
-        .map((id) => `${HOME} download row ${index + 1}: no <a class="dl-icon" href="/beta/#${id}">`)),
-      ...[["ios", "iphone"], ["android", "android"]].filter(([key, id]) => !new RegExp(`^ {4}${key}: \\{.*\\bhref: "/beta/#${id}"`, "m").test(platform))
-        .map(([key, id]) => `ovis-site/assets/platform.js: BUTTONS.${key} has no href: "/beta/#${id}"`),
-    ], "The phone apps are in beta: the App Store and Google Play icons in both download rows of the home page link to /beta/#iphone and /beta/#android, and so do the iPhone and Android buttons in assets/platform.js:");
+      ...rows.flatMap((row, index) => links.filter(([, href]) => !row.includes(`<a class="dl-icon" href="${href}"`))
+        .map(([, href]) => `${HOME} download row ${index + 1}: no <a class="dl-icon" href="${href}">`)),
+      ...links.filter(([key, href]) => !platform.split("\n").some((line) => line.startsWith(`    ${key}: {`) && line.includes(`href: "${href}"`)))
+        .map(([key, href]) => `ovis-site/assets/platform.js: BUTTONS.${key} has no href: "${href}"`),
+    ], `The iPhone app is in beta and the Android app is on Google Play: the App Store icons in both download rows of the home page link to /beta/#iphone and the Google Play icons to ${PLAY}, and so do the iPhone and Android buttons in assets/platform.js:`);
   });
 
   it("has the section each home page link names", () => {

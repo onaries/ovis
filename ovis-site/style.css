@@ -115,6 +115,10 @@ details p { color: var(--muted); margin: 10px 0 0; }
 .cta { width: 100%; margin: 0; }
 /* the phone tiles line their buttons up at the bottom; the computer tiles keep theirs under the name */
 .tiles > section .cta { margin-top: auto; }
+/* Google's Play badge as Google draws it, at least 28px tall, with a quarter of its height clear around it */
+.tiles .badge { margin: auto 0 0; padding: 14px; }
+.tiles .badge a, .tiles .badge img { display: block; width: 180px; height: auto; }
+.beta .legal { font-size: 12px; }
 .cta a, .cta button { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; padding: 12px 20px; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 17px; font-weight: 600; text-decoration: none; cursor: pointer; }
 .cta a:hover, .cta button:hover { opacity: 0.88; }
 .lang-pick { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
