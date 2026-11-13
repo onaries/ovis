@@ -1209,11 +1209,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
-      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== ENTER_SENDS_STORAGE_KEY && event.key !== VOICE_ENGINE_STORAGE_KEY && event.key !== null)) return;
-      // the recognition another tab chose: audio must not keep going where this tab last sent it
-      const { shortcutOverrides, enterSends, voiceEngine } = loadSettings();
-      stored.current = { ...stored.current, shortcutOverrides, enterSends, voiceEngine };
-      setSettings((current) => ({ ...current, shortcutOverrides, enterSends, voiceEngine }));
+      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== ENTER_SENDS_STORAGE_KEY && event.key !== VOICE_ENGINE_STORAGE_KEY && event.key !== PHONE_TABS_STORAGE_KEY && event.key !== null)) return;
+      // the recognition another tab chose: audio must not keep going where this tab last sent it; the phone's tab
+      // placement is the device's, so a tab still open moves its row with the one that changed it
+      const { shortcutOverrides, enterSends, voiceEngine, phoneTabs } = loadSettings();
+      stored.current = { ...stored.current, shortcutOverrides, enterSends, voiceEngine, phoneTabs };
+      setSettings((current) => ({ ...current, shortcutOverrides, enterSends, voiceEngine, phoneTabs }));
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement, StrictMode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, SettingsProvider, useSettings, VOICE_ENGINE_STORAGE_KEY, type Settings } from "./settings.ts";
+import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, PHONE_TABS_STORAGE_KEY, SettingsProvider, useSettings, VOICE_ENGINE_STORAGE_KEY, type Settings } from "./settings.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
 
 describe("settings across tabs", () => {
@@ -292,6 +292,17 @@ describe("settings across tabs", () => {
 
     // Then this tab's next dictation uses it too, without writing anything.
     expect(settings.voiceEngine).toBe("browser");
+    expect(writes).toBe(0);
+  });
+
+  it("moves a phone's tabs where another tab placed them", async () => {
+    await open();
+    expect(settings.phoneTabs).toBe("row");
+
+    records.set(PHONE_TABS_STORAGE_KEY, JSON.stringify("header"));
+    await storage(PHONE_TABS_STORAGE_KEY);
+
+    expect(settings.phoneTabs).toBe("header");
     expect(writes).toBe(0);
   });
 

@@ -41,6 +41,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   const stored = new Map<string, string>();
   let renderer: ReactTestRenderer | undefined;
+  let media: { matches: boolean; addEventListener(): void; removeEventListener(): void };
   let requested: string[];
   let activeTab: { dataset: { tabId: string } };
 
@@ -51,7 +52,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
     activeTab = { dataset: { tabId: "w1:t1" } };
     const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
     const events = new EventTarget();
-    const media = { matches: false, addEventListener() {}, removeEventListener() {} };
+    media = { matches: false, addEventListener() {}, removeEventListener() {} };
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     define("IS_REACT_ACT_ENVIRONMENT", true);
     define("HTMLElement", class HTMLElement {});
@@ -73,11 +74,11 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function draw(offer: LayoutOffer): Promise<void> {
-    await act(async () => {
-      renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
-        createElement(TabStrip, { snapshot, workspace: snapshot.workspaces[0]!, selectedPane: snapshot.panes[0]!, onSelectPane: () => {}, onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {} }))), { createNodeMock: node });
-    });
+  async function draw(offer: LayoutOffer, workspace: WorkspaceInfo | null = snapshot.workspaces[0]!, beside?: WorkspaceInfo): Promise<void> {
+    const strip = (shown: WorkspaceInfo) => createElement(TabStrip, { snapshot, workspace: shown, selectedPane: snapshot.panes[0]!, onSelectPane: () => {}, onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {} });
+    const tree = createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
+      workspace && strip(workspace), beside && strip(beside)));
+    await act(async () => { if (renderer) renderer.update(tree); else renderer = create(tree, { createNodeMock: node }); });
   }
   const tab = () => renderer!.root.findByProps({ "data-tab-id": "w1:t1" });
   const strip = () => renderer!.root.findByProps({ role: "tablist" });
@@ -187,5 +188,89 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
       expect(renameFields()).toBe(0);
       expect(requested).toEqual(["/api/tab/rename"]);
     });
+  });
+
+  it("keeps one half's unfinished name when the split view's other half opens another workspace", async () => {
+    await draw(TUI);
+    const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+    await act(async () => tab().props.onDoubleClick());
+    await act(async () => input().props.onChange({ target: { value: "keep me" } }));
+    await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+
+    await draw(TUI, snapshot.workspaces[0]!, { ...snapshot.workspaces[0]!, workspace_id: "w-other" });
+
+    await act(async () => tab().props.onDoubleClick());
+    expect(input().props.value).toBe("keep me");
+    await withFetch(async () => act(async () => input().props.onKeyDown({ key: "Enter", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 13 } })));
+  });
+
+  it("keeps one half's unfinished name when the other half of a split on the same workspace opens another", async () => {
+    await draw(TUI, snapshot.workspaces[0]!, snapshot.workspaces[0]!);
+    const first = () => renderer!.root.findAllByProps({ "data-tab-id": "w1:t1" })[0]!;
+    const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+    await act(async () => first().props.onDoubleClick());
+    await act(async () => input().props.onChange({ target: { value: "keep me" } }));
+    await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+
+    await draw(TUI, snapshot.workspaces[0]!, { ...snapshot.workspaces[0]!, workspace_id: "w-other" });
+
+    await act(async () => first().props.onDoubleClick());
+    expect(input().props.value).toBe("keep me");
+    await withFetch(async () => act(async () => input().props.onKeyDown({ key: "Enter", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 13 } })));
+  });
+
+  it("keeps a workspace's unfinished name while its strip moves, and drops it once its last strip goes", async () => {
+    await draw(TUI);
+    const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+    await act(async () => tab().props.onDoubleClick());
+    const saved = input().props.value as string;
+    await act(async () => input().props.onChange({ target: { value: "moving" } }));
+    await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+
+    // the row moving (a turn, the placement): the strip goes and comes back in one commit
+    await draw(TUI, null, snapshot.workspaces[0]!);
+    await act(async () => tab().props.onDoubleClick());
+    expect(input().props.value).toBe("moving");
+    await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+
+    await draw(TUI, null);
+    await draw(TUI);
+    await act(async () => tab().props.onDoubleClick());
+    expect(input().props.value).toBe(saved);
+  });
+
+  it("reopens a field moved by a turn with the name just sent, before herdr confirms it", async () => {
+    await withFetch(async () => {
+      await draw(TUI);
+      const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+      await act(async () => tab().props.onDoubleClick());
+      await act(async () => input().props.onChange({ target: { value: "Sent name" } }));
+      await act(async () => input().props.onKeyDown({ key: "Enter", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 13 } }));
+      await act(async () => tab().props.onDoubleClick());
+      expect(input().props.value).toBe("Sent name");
+
+      await draw(TUI, null);
+      media.matches = true;
+      await draw(TUI);
+
+      expect(input().props.value).toBe("Sent name");
+      await act(async () => input().props.onKeyDown({ key: "Enter", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 13 } }));
+      expect(renameFields()).toBe(0);
+    });
+  });
+
+  it("leaves a tab's unfinished name behind when the strip moves to another workspace", async () => {
+    await draw(TUI);
+    const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+    await act(async () => tab().props.onDoubleClick());
+    const saved = input().props.value as string;
+    await act(async () => input().props.onChange({ target: { value: "left behind" } }));
+    await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+
+    await draw(TUI, { ...snapshot.workspaces[0]!, workspace_id: "w-other" });
+    await draw(TUI);
+
+    await act(async () => tab().props.onDoubleClick());
+    expect(input().props.value).toBe(saved);
   });
 });
