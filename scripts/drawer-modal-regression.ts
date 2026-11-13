@@ -35,10 +35,12 @@ try {
   await drawer.waitFor({ state: "visible" });
   assert.equal(await drawer.getAttribute("role"), "dialog", "the phone drawer exposes dialog semantics");
   assert.equal(await drawer.getAttribute("aria-modal"), "true", "the trapped phone drawer is modal");
-  // the header's toggle and + drawn as its top row belong to the modal for a screen reader too
+  // the header's toggle drawn as its top row belongs to the modal for a screen reader too; New workspace is the
+  // drawer's own (each PC's +, the lone Host's row), so the header draws no + over it
   const owned = (await drawer.getAttribute("aria-owns"))?.split(" ") ?? [];
-  assert.deepEqual(owned, ["drawer-toggle", "drawer-new-workspace"], "the open drawer owns the header's toggle and +");
+  assert.deepEqual(owned, ["drawer-toggle"], "the open drawer owns the header's toggle");
   for (const id of owned) assert.equal(await page.locator(`.app-header #${id}`).count(), 1, `the owned ${id} is the header's own control`);
+  assert.equal(await page.locator(".app-header .new-workspace-button").count(), 0, "the header draws no + over the open drawer");
   // a tap that opened it shows no focus ring: the drawer holds the focus itself, no control in it
   const ringless = () => page.evaluate(() => document.activeElement?.id === "workspace-drawer" && document.querySelector(":focus-visible:not(#workspace-drawer)") === null);
   assert.equal(await ringless(), true, "the opened drawer holds the focus itself, with no control's ring");
@@ -49,8 +51,8 @@ try {
   await page.keyboard.press("Tab");
   assert.equal(await page.evaluate(() => {
     const active = document.activeElement;
-    return active !== null && (active.matches(".drawer-toggle, .new-workspace-button") || active.closest("#workspace-drawer") !== null);
-  }), true, "Tab stays within the drawer and its header controls");
+    return active !== null && (active.matches(".drawer-toggle") || active.closest("#workspace-drawer") !== null);
+  }), true, "Tab stays within the drawer and the header's toggle");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Open workspace list", exact: true }).waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a closed drawer is not modal");

@@ -1507,7 +1507,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   rather than another app's policy; at `<=480px` both go with the other header pills.
 
 ### Sidebar roster row and footer
-- No top bar. The sidebar opens with the plan panel (when Settings puts it there), the PC workspace groups and a separate **Agents** list spanning the connected PCs. A workspace starts from the `+` on its PC's header (the lone Host's **New workspace** row, below), or from the **New workspace**
+- No top bar. The sidebar opens with the plan panel (when Settings puts it there), the PC workspace groups and a separate **Agents** list spanning the connected PCs. A workspace starts from the `+` on its PC's header (the lone Host's **New workspace** row, below), from the `+` beside the logo that a desktop's One line rows draw for the selected PC, or from the **New workspace**
   button in the dashed **No workspaces yet** box of an empty PC. **Add PC** lives in Settings →
   Remote PCs and in the command palette. Search, as in finding anything and acting on it (panes by
   status, path or folder, actions, plugins), lives in the command palette, as the Codex and Claude
@@ -1640,7 +1640,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   grid with the `+` in the folders' cell and its words in `--text-dim`, left out while a filter is on, while the PC is
   offline and while the empty box offers the same, and there while the PC's first roster loads; the group keeps the PC's name as its accessible name, and the
   filter neither searches nor suggests a name no row shows. The Claude and Codex apps put their New button at the top;
-  here it closes the list, so the workspaces come first. A Host has no Manage PC menu, and Add PC is in Settings and the
+  here it closes the list, so the workspaces come first. A desktop's One line rows leave the row out, since the `+`
+  beside the logo starts the workspace there; a phone's drawer (`<=768px`) keeps the row on either row height, as its
+  top row draws no `+` (the PC group header, below). A Host has no Manage PC menu, and Add PC is in Settings and the
   palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its Manage PC menu has
   no other place. No setting turns this off, since nothing is lost.
 - **Settings → Remote PCs → Show in sidebar**, and Manage PC's **Hide on this device**, hide a PC on this device (`lib/hiddenMachines.ts`,
@@ -2096,6 +2098,35 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   caret and shows on hover, focus, while its menu is open, while the PC is not connected, and always
   on touch. Connected is the dot alone; every other state is also written under the name, with the server's
   error clamped to two lines and complete in the tooltip.
+- In a phone's drawer (`<=768px`) a PC's own `+` is how the list starts a workspace on it, on a folded PC too:
+  the top row over the drawer draws no `+`. One `+` there made the workspace on the selected PC without saying
+  which, and the owner asked for it on the PC's row (before, One line rows hid each PC's `+` in the drawer). Under
+  a finger on One line rows the header ends on its rows' own trailing columns: the `+`, a `--touch-target` square,
+  is centred on their state cell (`--space-6` wide, so it reaches into the gutter), and the caret's glyph on their
+  `⋯`, the caret's `--touch-target` box ending where the `+`'s starts, so the two never share a tap and the name
+  keeps the room it had. With a mouse in a window that narrow the `+` shows on hover, as a desktop's does. Two lines
+  rows there keep their header's layout, and every width from `769px` keeps the header as it was. A `+` that is off
+  (its PC away, or a device that only watches) rests in view there wherever a finger may come, a touch screen beside
+  a mouse too (`any-pointer: coarse`), so it dims to `0.75`, not the `0.55` of a row action a pointer brings out:
+  the least round step that holds its glyph at 3:1 on the drawer's surface in all 25 shipped theme entries
+  (Catppuccin Latte and Solarized Light, the tightest, need `0.73`; `0.55` leaves 15 of them under 3:1, `0.7`
+  three). The lone Host's row is off the same way on a watching device: its `+` as dim and its words in their own
+  ink, as a menu's item that is off keeps AA, while the header over the drawer says **View only**. It follows this
+  header's own desktop form, whose actions on the PC's row are modelled on the Codex app's (above), and shows them
+  at rest since a finger has no hover. It differs from T3 Code on a phone, whose one New thread starts in the
+  current thread's project: that is what the drawer's top row did, and with several PCs it did not say which.
+- Brief (a PC's header in a phone's drawer). Primary action: fold or open the PC by its name. Priorities: which
+  PC this is, whether it is connected, then what can be done on it (manage, fold, start a workspace). Required
+  content: the monitor, the name, **Host** for the local machine, the state dot, an SSH PC's Manage button, the
+  fold's caret, the `+`. Left out on purpose: a `+` in the top row over the drawer, a word beside the `+` (its name
+  says the PC to a screen reader), the agent count, heard and not seen under a finger.
+- Layout: a PC's header over its rows in a phone's drawer - a label with trailing actions on the columns its rows
+  keep -> `badge-list` rows
+  (<https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/badge-list.md>); scroll owner:
+  `.machine-list`, the PCs' one scroller, beside the Agents' own (`.agent-list-contents`); a group, a header and a
+  row scroll nothing of their own; anti-patterns: a trailing action whose column moves with the name's length, an
+  action in the bar over the list rather than on the row it acts on, two actions that share a tap, a focus order
+  that leaves the drawn order.
 - Manage PC opens a row menu (`RowMenu`): a popover under the button on a desktop, a bottom sheet on a phone, as a
   workspace's and an agent's ⋯ do. Its head names the PC, with its state word and "over SSH" (a PC added through the relay:
   "through the relay") under the name. The items

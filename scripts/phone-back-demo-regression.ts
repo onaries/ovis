@@ -167,7 +167,8 @@ try {
       const openDialog = async (): Promise<void> => {
         await page.locator(".drawer-toggle").tap();
         await drawerOpen(page);
-        await page.locator("#drawer-new-workspace").tap();
+        // the demo's one PC is the Host, with no header of its own: New workspace is the row closing its list
+        await page.locator(".machine-list .machine-new-row").tap();
         await dialog.waitFor();
         await entryHeld(page);
       };

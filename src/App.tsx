@@ -921,7 +921,9 @@ export function App() {
           >
             {drawerOpen ? <X /> : <Menu />}
           </button>}
-          {((wideScreen && !sidebarCollapsed) || (!wideScreen && drawerOpen)) && settings.sidebarRows !== "two" && <button type="button" id="drawer-new-workspace" className="icon-button new-workspace-button" disabled={auth?.role === "watch" || selectedMachine?.state !== "connected"} aria-label={t("New workspace")} title={auth?.role === "watch" ? `${t("New workspace")} · ${t("View only")}` : t("New workspace")} onClick={() => actions.openNewSession()}>
+          {/* New workspace's + beside the logo, from 769px in one-line rows: it starts one on the selected PC. A phone's
+              drawer has none here: each PC's own row carries its +, which says which PC (MachineSidebar.tsx) */}
+          {wideScreen && !sidebarCollapsed && settings.sidebarRows !== "two" && <button type="button" className="icon-button new-workspace-button" disabled={auth?.role === "watch" || selectedMachine?.state !== "connected"} aria-label={t("New workspace")} title={auth?.role === "watch" ? `${t("New workspace")} · ${t("View only")}` : t("New workspace")} onClick={() => actions.openNewSession()}>
             <Plus aria-hidden="true" />
           </button>}
           <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={shortcutTitle(t("Command palette"), "palette")} onClick={() => openPalette()}>
@@ -1108,8 +1110,8 @@ export function App() {
       <PanePressContext.Provider value={pressPane}>
       <div className="app-body">
         <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}${sidebarPeeking ? " is-peek" : ""}`} role={drawerModal ? "dialog" : undefined} aria-modal={drawerModal ? true : undefined} tabIndex={drawerModal ? -1 : undefined} aria-label={drawerModal ? t("Workspace list") : undefined}
-          // the header's toggle and + are drawn as the open drawer's top row: a screen reader that keeps to the modal finds them in it
-          aria-owns={drawerModal ? (settings.sidebarRows !== "two" ? "drawer-toggle drawer-new-workspace" : "drawer-toggle") : undefined} ref={drawerRef} {...peekSidebarHandlers}>
+          // the header's toggle is drawn as the open drawer's top row: a screen reader that keeps to the modal finds it in it
+          aria-owns={drawerModal ? "drawer-toggle" : undefined} ref={drawerRef} {...peekSidebarHandlers}>
           {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
           {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>

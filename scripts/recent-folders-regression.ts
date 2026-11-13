@@ -120,8 +120,9 @@ try {
           await betaRow.waitFor({ state: "attached" });
           const openNew = async () => {
             if (width === 390) await page.locator('[aria-controls="workspace-drawer"]').click();
-            // one-line rows (the default): New workspace is the + in the sidebar's top row, the drawer's on a phone
-            await page.locator(".header-side .new-workspace-button").click();
+            // one-line rows (the default): New workspace is the + beside the logo, and in a phone's drawer the row
+            // closing the lone Host's list
+            await page.locator(width === 390 ? ".machine-list .machine-new-row" : ".header-side .new-workspace-button").click();
             await page.getByRole("dialog").waitFor();
           };
           await openNew();

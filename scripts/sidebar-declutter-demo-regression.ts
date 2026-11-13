@@ -1,8 +1,9 @@
 /**
  * Purpose: the sidebar when it shows one PC, and without its filter, on the real client over the demo's fixture
  * transport. A lone Host is drawn without its header and loses nothing: its workspaces start the list, it is never
- * folded (a fold stored before stays harmless), its + is in the top row in one-line rows (the logo row on a desktop,
- * the drawer's top row on a phone), and its state words stay when it is
+ * folded (a fold stored before stays harmless), in one-line rows its + is beside the logo on a desktop and the New
+ * workspace row closing its list in a phone's drawer (whose top row draws no +; off, its + dimmed, on a device that
+ * only watches), and its state words stay when it is
  * offline; one PC shown of two (Settings → Devices and PCs) looks the same, with no PCs head above it; a lone PC that
  * is not the Host keeps its header (its name and manage menu); two PCs keep both headers. Settings → Appearance →
  * Sidebar filter off (its default) leaves the Filter field out, and the command palette's Filter workspaces and agents opens and
@@ -117,8 +118,10 @@ async function capture(page: Page, scene: Scene, state: string, wholePage = fals
 
 const headers = (page: Page) => page.locator(".machine-list .machine-header");
 const newRow = (page: Page) => page.locator(".machine-list .machine-new-row");
-/** New workspace's + in one-line rows (the default): in `.header-side`, the logo row on a desktop and the drawer's top row on a phone. */
+/** New workspace's + beside the logo, a desktop's in one-line rows (the default): the top row over a phone's drawer draws none. */
 const newPlus = (page: Page) => page.locator(".header-side .new-workspace-button");
+/** Where a lone Host starts a workspace in one-line rows: the + beside the logo on a desktop, the row closing its list in a phone's drawer. */
+const newWorkspace = (page: Page, scene: Scene) => scene.phone ? newRow(page) : newPlus(page);
 const filterRow = (page: Page) => page.locator(".sidebar-filter");
 const filterFocused = (page: Page) => page.evaluate(() => document.activeElement?.classList.contains("sidebar-filter-input") ?? false);
 /** Where the focus is after the field went: never the body, so a keyboard keeps its place. */
@@ -127,8 +130,9 @@ const shownWorkspaces = (page: Page) => page.evaluate(() => [...document.querySe
 
 /**
  * The phone's open drawer and the keyboard: it opens with the focus on its first control, never the filter's field,
- * which would raise the phone's keyboard on every open; Tab goes round the drawer and the header's + and toggle drawn
- * over its top row, so Shift+Tab reaches both and Tab still reaches the field; Escape closes it, the focus on its toggle.
+ * which would raise the phone's keyboard on every open; Tab goes round the drawer and the header's toggle drawn
+ * over its top row, so Shift+Tab reaches it and Tab still reaches the field; no + is found up there; Escape closes
+ * it, the focus on its toggle.
  */
 async function drawerKeyboard(page: Page): Promise<void> {
   const focused = () => page.evaluate(() => {
@@ -140,15 +144,16 @@ async function drawerKeyboard(page: Page): Promise<void> {
     return active.classList.contains("drawer-toggle") ? "toggle" : active.className || active.tagName;
   });
   assert.equal(await focused(), "drawer", "the opened drawer holds the focus on a control, not on the filter's field");
-  // bounded by the drawer's own stops and the header's two: the demo's roster alone has some twenty rows' controls
-  const limit = await page.locator("#workspace-drawer").evaluate((drawer) => drawer.querySelectorAll("button, input, select, textarea, a[href], [tabindex]").length) + 3;
+  // bounded by the drawer's own stops and the header's one: the demo's roster alone has some twenty rows' controls
+  const limit = await page.locator("#workspace-drawer").evaluate((drawer) => drawer.querySelectorAll("button, input, select, textarea, a[href], [tabindex]").length) + 2;
   const back: string[] = [];
   while (back.at(-1) !== "toggle" && back.length < limit) { await page.keyboard.press("Shift+Tab"); back.push(await focused()); }
-  assert.deepEqual(back.slice(-2), ["plus", "toggle"], `Shift+Tab from the drawer reaches the header's + and then its toggle: ${back.join(" > ")}`);
+  assert.equal(back.at(-1), "toggle", `Shift+Tab from the drawer reaches the header's toggle: ${back.join(" > ")}`);
   const ahead: string[] = [];
   while (ahead.at(-1) !== "filter" && ahead.length < limit) { await page.keyboard.press("Tab"); ahead.push(await focused()); }
-  assert.ok(ahead[0] === "plus" && ["drawer", "filter"].includes(ahead[1] ?? ""), `Tab from the toggle goes to the + and on into the drawer: ${ahead.join(" > ")}`);
+  assert.ok(["drawer", "filter"].includes(ahead[0] ?? ""), `Tab from the toggle goes on into the drawer: ${ahead.join(" > ")}`);
   assert.equal(ahead.at(-1), "filter", `Tab still reaches the filter's field: ${ahead.join(" > ")}`);
+  assert.ok(![...back, ...ahead].includes("plus"), `the keyboard finds no + in the top row over the drawer: ${[...back, ...ahead].join(" > ")}`);
   // Escape puts the drawer away and gives the focus back to the toggle that opened it; the drawer comes out again
   await page.keyboard.press("Escape");
   await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
@@ -164,27 +169,34 @@ async function loneHost(browser: Browser, scene: Scene): Promise<void> {
   try {
     // the group is drawn (newPage waited for it), and its header, were there one, with it
     assert.equal(await headers(page).count(), 0, `${sceneName(scene)}: a lone Host is drawn without its header`);
-    // one-line rows (the default) put its + in the top row: the logo row on a desktop, the drawer's top row on a phone
-    const plus = newPlus(page);
-    await plus.waitFor();
+    // one-line rows (the default): a desktop starts a workspace from the + beside its logo, a phone's drawer from the
+    // row closing the Host's list
+    const entry = newWorkspace(page, scene);
+    await entry.waitFor();
     const LABELS = await rosterLabels(page);
     assert.equal(await page.locator('section.machine-group[aria-label="PC workstation"]').count(), 1, "the group still names its PC to a screen reader");
     assert.deepEqual(await shownWorkspaces(page), LABELS, "its workspaces start the list, unfolded, whatever fold was stored");
     const first = await page.locator(".machine-list .workspace-group").first().boundingBox();
     const list = await page.locator(".machine-list").boundingBox();
     assert.ok(first && list && first.y - list.y < 16, `the first workspace row is the list's first row (${first?.y} vs ${list?.y})`);
-    // the compact rows (the default) draw it as its + alone in the top row, named for a screen reader and in its tooltip, with no list row
-    assert.equal((await plus.innerText()).trim(), "");
-    assert.equal(await plus.getAttribute("aria-label"), "New workspace");
-    assert.equal(await plus.getAttribute("title"), "New workspace");
     if (scene.phone) {
-      const box = await plus.boundingBox();
-      assert.ok(box && box.width >= 44 && box.height >= 44, `the phone drawer's + is at least 44x44 (${box?.width}x${box?.height})`);
+      // the top row over the drawer draws no +: the row is the list's last, under its last workspace, a finger's
+      // height, and says what it does in words
+      assert.equal(await newPlus(page).count(), 0, "a phone's drawer draws no + in its top row");
+      const row = await entry.boundingBox(), last = await page.locator(".machine-list .workspace-header").last().boundingBox();
+      assert.ok(row && last && row.y >= last.y + last.height - 1, `the New workspace row closes the list (${row?.y} under ${last && last.y + last.height})`);
+      assert.ok(row.height >= 44, `the phone drawer's New workspace row is a finger's 44 px tall (${row.height})`);
+      assert.notEqual((await entry.innerText()).trim(), "", "the row says what it does in words");
       await drawerKeyboard(page);
+    } else {
+      // the + alone, named for a screen reader and in its tooltip, with no list row
+      assert.equal((await entry.innerText()).trim(), "");
+      assert.equal(await entry.getAttribute("aria-label"), "New workspace");
+      assert.equal(await entry.getAttribute("title"), "New workspace");
+      assert.equal(await newRow(page).count(), 0, "a desktop's one-line list draws no New workspace row");
     }
-    assert.equal(await newRow(page).count(), 0, "one-line list draws no New workspace row");
     await capture(page, scene, "lone-host");
-    await plus.click();
+    await entry.click();
     const dialog = page.getByRole("dialog", { name: /^New workspace/ });
     await dialog.waitFor();
     await page.keyboard.press("Escape");
@@ -195,12 +207,28 @@ async function loneHost(browser: Browser, scene: Scene): Promise<void> {
     }
     await page.locator(".sidebar-filter-input").fill(LABELS[0]!);
     await page.locator(".sidebar-filter-clear").waitFor();
-    assert.equal(await newRow(page).count(), 0, "a filtered one-line list draws no New workspace row");
+    assert.equal(await newRow(page).count(), 0, "a filtered list draws no New workspace row");
     assert.ok((await shownWorkspaces(page)).includes(LABELS[0]!), "the filter still finds the lone Host's rows");
     await page.locator(".sidebar-filter-clear").click();
-    await plus.waitFor();
+    await entry.waitFor();
     assert.deepEqual(errors, []);
-    console.log(`PASS ${sceneName(scene)}: a lone Host has no header, never folds, and its + is in the top row`);
+    console.log(`PASS ${sceneName(scene)}: a lone Host has no header, never folds, and starts a workspace from ${scene.phone ? "the row closing its list" : "the + beside the logo"}`);
+  } finally { await context.close(); }
+}
+
+/** A device that only watches, in a phone's drawer: the lone Host keeps its New workspace row, off, its + dimmed, and the header over the drawer says why. */
+async function loneHostWatching(browser: Browser, scene: Scene): Promise<void> {
+  const { context, page, errors } = await newPage(browser, scene, "demo_devices=watch");
+  try {
+    const row = newRow(page);
+    await row.waitFor();
+    assert.equal(await row.isDisabled(), true, "a watching device's New workspace row is off");
+    const mark = Number(await row.locator(".sidebar-mark").evaluate((mark) => getComputedStyle(mark).opacity));
+    assert.ok(mark < 1, `its + is dimmed (${mark})`);
+    assert.equal(await page.locator(".app-header .context-watch").isVisible(), true, "the header over the drawer says the device only watches");
+    await capture(page, scene, "lone-host-watching");
+    assert.deepEqual(errors, []);
+    console.log(`PASS ${sceneName(scene)}: a watching device's lone Host keeps its New workspace row, off`);
   } finally { await context.close(); }
 }
 
@@ -233,8 +261,8 @@ async function twoPcs(browser: Browser, scene: Scene): Promise<void> {
   {
     const { context, page, errors } = await newPage(browser, scene, "pcs=2", { "ovis:hidden-pcs": JSON.stringify(["work"]) });
     try {
-      await newPlus(page).waitFor();
-      assert.equal(await newRow(page).count(), 0, "one-line list draws no New workspace row");
+      await newWorkspace(page, scene).waitFor();
+      assert.equal(await (scene.phone ? newPlus(page) : newRow(page)).count(), 0, scene.phone ? "a phone's drawer draws no + in its top row" : "a desktop's one-line list draws no New workspace row");
       assert.equal(await headers(page).count(), 0, "the Host shown alone of two has no header");
       assert.equal(await page.locator(".pcs-sidebar > :not(.machine-list)").count(), 0, "no PCs head or hidden count above the list");
       await capture(page, scene, "host-shown-of-two");
@@ -299,14 +327,13 @@ async function filterHidden(browser: Browser, scene: Scene): Promise<void> {
       await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
       await page.locator(".sidebar.is-open").waitFor();
     }
-    await newPlus(page).waitFor();
+    await newWorkspace(page, scene).waitFor();
     const LABELS = await rosterLabels(page);
     assert.equal(await filterRow(page).count(), 0, `${sceneName(scene)}: the filter row is out`);
     await capture(page, scene, "filter-off");
     if (scene.phone) {
       await page.getByRole("button", { name: "Close workspace list", exact: true }).click();
       await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
-      assert.equal(await newPlus(page).count(), 0, "closed drawer removes the phone's + from the top row");
     }
     await paletteFilter(page);
     if (scene.phone) await page.locator(".sidebar.is-open").waitFor();
@@ -445,7 +472,7 @@ async function filterSetting(browser: Browser, scene: Scene): Promise<void> {
       await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
       await page.locator(".sidebar.is-open").waitFor();
     }
-    await newPlus(page).waitFor();
+    await newWorkspace(page, scene).waitFor();
     assert.equal(await filterRow(page).count(), 0, "out by default");
     assert.equal(await page.evaluate(() => localStorage.getItem("ovis:sidebar-filter-shown")), null, "with nothing stored");
     await page.locator(".sidebar-footer-settings").click();
@@ -496,6 +523,7 @@ try {
       for (const phone of [false, true]) for (const theme of ["dark", "light"] as const) {
         const scene: Scene = { phone, theme };
         await loneHost(browser, scene);
+        if (phone) await loneHostWatching(browser, scene);
         await loneHostOffline(browser, scene);
         await twoPcs(browser, scene);
         await filterHidden(browser, scene);

@@ -107,8 +107,8 @@ export function useWaitingRosters(shown: readonly Machine[], selected: Machine |
   }, [shown, selected, status]);
 }
 
-/** The header's controls drawn over the open drawer, its top row: the toggle that closes it and New workspace's +. */
-const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle, .app-header .new-workspace-button")];
+/** The header's control drawn over the open drawer, its top row: the toggle that closes it. */
+const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle")];
 
 /** The header's first button a closed drawer gives the focus back to: the drawer toggle, else Back to agents drawn in its place (App.tsx). */
 const drawerReturnButton = (): HTMLElement | null =>
@@ -116,7 +116,7 @@ const drawerReturnButton = (): HTMLElement | null =>
 
 /**
  * A phone's open drawer is a dialog over the pane (App.tsx gives it the role): Tab goes round its own controls
- * and the header's toggle and + drawn over it (its top row), the pane column is inert under it, and the focus
+ * and the header's toggle drawn over it (its top row), the pane column is inert under it, and the focus
  * goes back to the header toggle that opened it when it closes. It opens with the focus on its first control
  * that takes no typing: the filter's field would raise the keyboard on every open. Only a header control takes
  * the focus back: a terminal the drawer was swiped open over would raise the keyboard; a focus left in the
