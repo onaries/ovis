@@ -1,4 +1,4 @@
-import { Children, cloneElement, createContext, Fragment, isValidElement, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Children, cloneElement, createContext, Fragment, isValidElement, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, Minus, Plus, RotateCcw, type LucideIcon } from "lucide-react";
 
@@ -553,13 +553,35 @@ export function SettingsSelect({ className, children, ...props }: ComponentProps
 /** `name`: what a screen reader and a test call the button when its short label is shared with another control nearby */
 export interface SegmentedOption<T extends string> { value: T; label: string; name?: string }
 
-/** One of a few short choices, all in sight. Five or more go in a select instead. */
+/**
+ * One of a few short choices, all in sight. Five or more go in a select instead. The track is told how many options it
+ * holds and how wide its widest label is drawn (`--segmented-count`, `--segmented-widest`): where the control has its
+ * row's whole line (a phone's stacked row, SettingsControls.css) the stylesheet lays the options out from the two, so a
+ * label that does not fit its share of the line is never cut or laid over its neighbour. A label names itself in
+ * `data-label`: there the stylesheet keeps the room its chosen weight takes, so choosing it changes no width.
+ */
 export function Segmented<T extends string>({ label, value, options, onChange, disabled }: { label: string; value: T; options: readonly SegmentedOption<T>[]; onChange: (value: T) => void; disabled?: boolean }) {
   const sentence = useContext(SettingsRowSentence);
+  const track = useRef<HTMLDivElement>(null);
+  const labels = options.map((option) => option.label).join("\n");
+  // each label's own box, as the browser lays it out, before the frame that first shows it and again whenever it
+  // changes (the language, the text size, the faces arriving, the weight of the chosen one). The labels keep their
+  // size whatever the track does with it, so the measuring never feeds itself
+  useLayoutEffect(() => {
+    const node = track.current;
+    if (node === null) return;
+    const widths = new Map<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) widths.set(entry.target, entry.borderBoxSize[0]?.inlineSize ?? entry.contentRect.width);
+      node.style.setProperty("--segmented-widest", `${Math.max(0, ...widths.values())}px`);
+    });
+    for (const face of node.querySelectorAll(":scope > button > span")) observer.observe(face);
+    return () => observer.disconnect();
+  }, [labels]);
   return (
-    <div className="segmented settings-segmented" role="group" aria-label={label} aria-describedby={sentence}>
+    <div ref={track} className="segmented settings-segmented" role="group" aria-label={label} aria-describedby={sentence} style={{ "--segmented-count": options.length } as CSSProperties}>
       {options.map((option) => (
-        <button key={option.value} type="button" aria-pressed={value === option.value} aria-label={option.name} disabled={disabled} onClick={() => onChange(option.value)}>{option.label}</button>
+        <button key={option.value} type="button" aria-pressed={value === option.value} aria-label={option.name} disabled={disabled} onClick={() => onChange(option.value)}><span data-label={option.label}>{option.label}</span></button>
       ))}
     </div>
   );

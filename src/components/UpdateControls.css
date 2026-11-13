@@ -11,13 +11,16 @@
   overflow-wrap: anywhere;
 }
 
-/* the bare update row: version, state and button wrap inside the row, never clip (G-013) */
-.settings-updates .settings-row {
+/* the bare update rows (Ovis's and herdr's): version, state and button wrap inside the row, never clip (G-013). On a
+   phone a fact keeps its width (SettingsDialog.css), so the button goes under it rather than out of the row */
+.settings-updates .settings-row,
+.settings-herdr-update .settings-row {
   flex-wrap: wrap;
   row-gap: var(--space-2);
 }
 
 .settings-updates .settings-row > .settings-fact {
+  flex-shrink: 1;
   max-width: none;
   overflow-wrap: normal;
 }

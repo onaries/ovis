@@ -761,6 +761,16 @@
   overflow-wrap: anywhere;
 }
 
+/* on a phone a fact keeps its own width up to its 45% and the label's text takes what is left: a row shrinks its
+   children by their widths, so a fact beside a sentence-long description lost almost all of it and broke one letter
+   to a line. A word breaks only where it alone is wider than the 45% */
+@media (max-width: 640px) {
+  .settings-fact {
+    flex-shrink: 0;
+    overflow-wrap: break-word;
+  }
+}
+
 /* Access is read, not operated: its text takes reading sizes (14 px on a desktop; 18 and 15 on a
    phone), scoped to this group so the other settings keep their scale */
 [data-section="access"] :is(.settings-label, .settings-description) {

@@ -3357,8 +3357,12 @@ button {
   border-style: dashed;
 }
 
-/* segmented control: one selected option, the rest quiet */
+/* segmented control: one selected option, the rest quiet. The chosen option's edge is --segmented-chosen-shadow,
+   which a variant sets here on the track: on a finger's device the option's own box is its hit box, taller than the
+   track, and its ::before draws the pill (below), so a shadow or a fill a variant writes on the option itself is
+   drawn around that hit box, outside the track */
 .segmented {
+  --segmented-chosen-shadow: inset 0 0 0 var(--hairline) var(--border-strong);
   display: inline-flex;
   align-items: center;
   gap: var(--space-half);
@@ -3397,7 +3401,7 @@ button {
   background: var(--bg-hover);
   color: var(--text-strong);
   font-weight: var(--fw-selected);
-  box-shadow: inset 0 0 0 var(--hairline) var(--border-strong);
+  box-shadow: var(--segmented-chosen-shadow);
 }
 
 /* the chosen lens carries the selection color on its glyph, like the rail does in the list */
@@ -3831,7 +3835,7 @@ button {
 
   .segmented > button[aria-pressed="true"]::before {
     background: var(--bg-hover);
-    box-shadow: inset 0 0 0 var(--hairline) var(--border-strong);
+    box-shadow: var(--segmented-chosen-shadow);
   }
 }
 

@@ -963,7 +963,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--status-bar-h` | `28px` | — | Desktop status bar height |
 | `--pane-bar-h` | `30px` | — | Split pane header bar height |
 | `--split-hit-w` | `8px` | — | Split divider hit band |
-| `--segmented-inset` | `6px` | — | What the segmented track takes from `--control-h` above and below an option (its `2px` padding and the hairline, both sides): an option is `--control-h` less this, and its touch expander grows from that height to `--touch-target` |
+| `--segmented-inset` | `6px` | — | What the segmented track takes from `--control-h` above and below an option (its `2px` padding and the hairline, both sides): an option is `--control-h` less this, and on a coarse pointer so is the pill inside its `--touch-target` hit box |
 | `--touch-target` | `44px` | — | Coarse-pointer minimum: every control a finger can reach is at least this in both dimensions |
 | `--pointer-target` | `24px` | — | Fine-pointer minimum hit area: a glyph button under `--control-h` (the chat's copy and format buttons, an attachment tile's X) keeps its look and reaches it through an invisible `::before` expander |
 | `--touch-target-header` | `44px` | — | The phone header's controls (`<=768px`) |
@@ -1191,9 +1191,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Used for Chat/Terminal, theme and density. It is not a generic tab list.
 - An option's glyph is `--relay-control-icon-size` (`16px`), the size of a `.btn`'s glyph.
 - An option is `--control-h` less `--segmented-inset` tall, so the track is `--control-h`. On a coarse
-  pointer the track keeps its height; each option is at least `--touch-target` wide, so neighbours
-  never share a tap, and reaches `--touch-target` tall through an invisible `::before` expander sized
-  from that same difference, as the palette's filter chips do.
+  pointer the track keeps its height; each option's own box is its hit box, `--touch-target` tall and
+  at least as wide, so neighbours never share a tap, and its `::before` draws the pill inside that box
+  at the option's height.
+- The chosen option's edge is the track's `--segmented-chosen-shadow`: a hairline ring of
+  `--border-strong`, in Settings the thumb's `--shadow-thumb`, and there a ring of `--text` where the
+  device asks for more contrast. The stylesheet draws it on the box that is the pill, the option under
+  a mouse and its `::before` under a finger, so a variant sets the property on its track and never a
+  shadow or a fill on the option itself: under a finger that is drawn around the hit box, `5px` out
+  of the track above and below. Settings did so from 0.5.2, and every chosen option on a phone wore a
+  second outline.
 - The header's Chat/Terminal switch from `769px` drops the track and the glyphs: two words, the
   chosen one on the hover fill. At `<=768px` it keeps the track; at `<=560px` it is glyphs only.
   On a phone (`<=768px`) its options draw at the density's option height (`--control-h` less
@@ -4334,13 +4341,37 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   About opens with one dim line saying what it holds
   (`.settings-page-note`, G-173, after Codex's settings panes); About stays sentence-free. On a phone a control that needs the line
   (three or more segments, a text field, or a long sentence above it) goes under its label at
-  the card's width, its segments sharing it equally; the rest stay on the label's line. A
+  the card's width, its segments sharing it equally; the rest stay on the label's line. Where the
+  widest label does not fit its share with `--space-1` on each side (Agents order's four phrases on
+  a `360px` phone), the segments go two to a row, each row shared equally (four make two rows of
+  two, three make two and one), as the relay's PC filter wraps; where it does not fit half the line
+  either, one to a row. The rows stand `--space-2` apart under a mouse and a whole hit box apart
+  under a finger (`--touch-target` less the pill's height, `16px`), so no tap is shared between two
+  rows and a keyboard's focus ring on one row stays clear of the next. `Segmented` measures its
+  labels as they are drawn (`--segmented-widest`) and the stylesheet steps from that, so a longer
+  translation and the largest interface text wrap the same way, and whatever was measured an option
+  is never narrower than its label. Each label keeps the room its chosen weight takes, chosen or
+  not (the chosen one is heavier, and in Latin text wider), so a tap never changes how many rows
+  the segments take. A label is never shrunk (`--fs-sm` is already the `12px` floor
+  when compact), cut with an ellipsis (the cut takes the word that tells two choices apart), broken
+  inside a word (Hangul breaks between any two syllables) or scrolled sideways (a segmented control
+  shows all its choices at once). The equal segments follow iOS's segmented control and T3 Code's
+  phone app; past them this differs from all three it was compared with: iOS and Paseo keep one
+  line by sizing each segment to its label (`apportionsSegmentWidthsByContent`), which leaves four
+  phrases a few pixels apart on a phone, and T3 Code lets a label wrap inside its segment. A
   condition that applies right now (Keep screen on without HTTPS) is one more line under the
   sentence, in `--text` (`.settings-condition`), and absent otherwise. A block's explanation is
   one dim sentence at rest with an accent "Details" word after a middle dot (`.settings-details`,
   a `details` whose `summary` is the sentence); the conditions and exceptions open under it. On
   coarse pointers an invisible expander gives that line the touch target without changing its
   height.
+- Layout: a stacked row's segmented control - options whose labels do not fit one line -> a
+  `switcher` whose wrap point is the widest label as measured, two to a row before one
+  (<https://github.com/changeroa/StyleGallery/blob/main/patterns/split-sidebar/switcher.md>); scroll
+  owner: `.settings-body`, the page's one scroller, and the control scrolls nothing of its own;
+  anti-patterns: options in a sideways scroller, a label cut or shrunk to keep one line, one width
+  at which every such control wraps whatever its labels are, three options on a row with the
+  fourth alone under them.
 - On a page drawn without sentences, a row's sentence shows on demand (#3275; `useRowSentence` and
   `RowSentence` in `components/SettingsControls.tsx`). A mouse resting `450ms` on the row, or the
   keyboard's focus on its control, draws it over the page (`.settings-help`): the relay map's tooltip
