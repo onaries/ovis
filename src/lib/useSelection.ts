@@ -145,8 +145,8 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
   linkTick: number;
   /** panes a tab move has on its way to another workspace (paneStorageId): their selection waits for the move */
   movingPanes: RefObject<Set<string>>;
-  /** told of every pick (a row, the palette, a link, an alert, a new pane), never of the app's own fallback */
-  onPick?: () => void;
+  /** told of every pick (a row, the palette, a link, an alert, a new pane), never of the app's own fallback; `paneId` is the pane it named, null for a PC alone */
+  onPick?: (paneId: string | null) => void;
 }) {
   const onPickRef = useRef(onPick); onPickRef.current = onPick;
   const selectedMachineRef = useRef(selectedMachineId);
@@ -155,7 +155,7 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
   const picks = useRef(0);
   const selectTarget = useCallback((machineId: string, paneId: string | null, view?: PaneView) => {
     picks.current += 1;
-    onPickRef.current?.();
+    onPickRef.current?.(paneId);
     // Only another PC mounts a new terminal (and socket), which reports its own state. A pane
     // on the same PC keeps the connected socket, which never reports again: resetting here
     // left the header on "reconnecting" after every pane switch.

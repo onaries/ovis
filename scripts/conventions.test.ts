@@ -34,6 +34,21 @@ describe("imports", () => {
   });
 });
 
+describe("the frontend build", () => {
+  const BUILD_SCRIPTS = ["vite.config.ts", "scripts/build-xterm.ts", "scripts/compressed-assets.ts", "scripts/service-worker-build.ts", "scripts/theme-bootstrap-build.ts", "scripts/shell-build.ts", "scripts/build-cache.ts"];
+
+  it("imports nothing from server/ or relay/", () => {
+    const offenders = BUILD_SCRIPTS.flatMap((file) => {
+      const code = stripComments(read(file));
+      return [...code.matchAll(SPECIFIER)].flatMap((match) => {
+        const specifier = match[1] ?? match[2] ?? match[3]!;
+        return /(?:^|\/)(?:server|relay)\//.test(specifier) ? [`${file}:${lineOf(code, match.index)}: ${specifier}`] : [];
+      });
+    });
+    fail(offenders, "The frontend build scripts import nothing from server/ or relay/ (they would load the server's environment): put what both need in shared/ (shared/web-policy.ts) and import it from there.");
+  });
+});
+
 describe("fixed sleeps", () => {
   // A ratchet: scripts/fixed-sleeps.json is every file's count of fixed sleeps when this test was
   // added (see scripts/fixed-sleeps.ts for what counts). A file may lose sleeps, never gain one,

@@ -7,14 +7,14 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  VOICE_DEFAULTS, VOICE_FORM, VOICE_KEYWORD_MAX_CHARS, VOICE_KEYWORDS_MAX, VOICE_MAX_AUDIO_BYTES,
-  type VoiceErrorCode, type VoiceEvent, type VoiceMode, type VoiceStatus,
+  ELEVENLABS_VOICE_DEFAULTS, VOICE_DEFAULTS, VOICE_FORM, VOICE_KEYWORD_MAX_CHARS, VOICE_KEYWORDS_MAX, VOICE_MAX_AUDIO_BYTES,
+  type VoiceErrorCode, type VoiceEvent, type VoiceMode, type VoiceProvider, type VoiceStatus,
 } from "../shared/voice.ts";
 import { errorResponse, isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 
 const ENV_KEY = "OVIS_OPENAI_API_KEY";
 const ENV_BASE_URL = "OVIS_OPENAI_BASE_URL";
-const FIELDS = ["api_key", "base_url", "transcribe_model", "polish_model"] as const;
+const FIELDS = ["provider", "api_key", "base_url", "transcribe_model", "polish_model"] as const;
 type Field = typeof FIELDS[number];
 type VoiceFile = Partial<Record<Field, string>>;
 
@@ -242,12 +242,15 @@ export class VoiceService {
   private settings(file: VoiceFile) {
     const envBase = text(this.env[ENV_BASE_URL]);
     const envKey = text(this.env[ENV_KEY]);
+    const provider: VoiceProvider = !envKey && file.provider === "elevenlabs" ? "elevenlabs" : "openai";
+    const defaults = provider === "elevenlabs" ? ELEVENLABS_VOICE_DEFAULTS : VOICE_DEFAULTS;
     // an env key goes only where the env (or the default) says: a stored base_url never receives it
     const storedBase = envKey ? undefined : file.base_url;
     return {
+      provider,
       key: envKey ?? file.api_key ?? null,
-      base: envBase ? envBase.replace(/\/+$/, "") : storedBase ?? VOICE_DEFAULTS.base_url,
-      transcribeModel: file.transcribe_model ?? VOICE_DEFAULTS.transcribe_model,
+      base: provider === "openai" && envBase ? envBase.replace(/\/+$/, "") : storedBase ?? defaults.base_url,
+      transcribeModel: file.transcribe_model ?? defaults.transcribe_model,
       polishModel: file.polish_model ?? VOICE_DEFAULTS.polish_model,
     };
   }
@@ -256,6 +259,7 @@ export class VoiceService {
     const file = this.read();
     const current = this.settings(file);
     return {
+      provider: current.provider,
       configured: current.key !== null,
       source: text(this.env[ENV_KEY]) ? "env" : file.api_key ? "file" : null,
       base_url: current.base,
@@ -270,6 +274,15 @@ export class VoiceService {
     const extra = Object.keys(change).find((field) => !(FIELDS as readonly string[]).includes(field));
     if (extra !== undefined) throw invalid(`Unknown field ${extra}`);
     const next = this.read();
+    if (change["provider"] !== undefined) {
+      if (change["provider"] !== "openai" && change["provider"] !== "elevenlabs") throw invalid("Unknown voice provider");
+      if (text(this.env[ENV_KEY])) throw new VoiceError("key_from_env", 409, `${ENV_KEY} sets the voice provider on the server`);
+      if (change["provider"] !== (next.provider ?? "openai")) {
+        if (next.api_key && typeof change["api_key"] !== "string") throw invalid("Send api_key when changing the voice provider");
+        delete next.base_url;
+        delete next.transcribe_model;
+      }
+    }
     // A saved key is only ever sent where it was saved for: moving it to another server takes the
     // key again, so a client that can write settings cannot send someone's key elsewhere.
     if (change["base_url"] !== undefined) {
@@ -295,24 +308,33 @@ export class VoiceService {
    * the provider's requests are dropped too.
    */
   async transcribe(clip: VoiceClip, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
-    const { key, base, transcribeModel, polishModel } = this.settings(this.read());
-    if (!key) throw new VoiceError("voice_not_configured", 409, "Set an OpenAI API key for voice input");
+    const { provider, key, base, transcribeModel, polishModel } = this.settings(this.read());
+    if (!key) throw new VoiceError("voice_not_configured", 409, "Set an API key for voice input");
     const cancelled = new AbortController();
     const upstream = AbortSignal.any([signal, cancelled.signal]);
     const form = new FormData();
     form.append("file", new File([clip.audio], clip.filename, { type: clip.audio.type }));
-    form.append("model", transcribeModel);
-    form.append("stream", "true");
-    for (const language of clip.languages) form.append("languages[]", language);
-    // hints only fill the room the required fields leave, first ones first: a pane with many
-    // slash commands would otherwise make the provider refuse the whole recording
-    const room = Math.max(0, PROVIDER_FORM_FIELDS_MAX - ([...form.keys()].length + 1));
-    for (const keyword of clip.keywords.slice(0, room)) form.append("keywords[]", keyword);
-    form.append("prompt", PROMPTS[clip.mode]);
+    if (provider === "elevenlabs") {
+      form.append("model_id", transcribeModel);
+      form.append("language_code", clip.languages[0] ?? DEFAULT_LANGUAGE);
+      form.append("tag_audio_events", "false");
+      for (const keyword of clip.keywords) form.append("keyterms", keyword);
+    } else {
+      form.append("model", transcribeModel);
+      form.append("stream", "true");
+      for (const language of clip.languages) form.append("languages[]", language);
+      // hints only fill the room the required fields leave, first ones first: a pane with many
+      // slash commands would otherwise make the provider refuse the whole recording
+      const room = Math.max(0, PROVIDER_FORM_FIELDS_MAX - ([...form.keys()].length + 1));
+      for (const keyword of clip.keywords.slice(0, room)) form.append("keywords[]", keyword);
+      form.append("prompt", PROMPTS[clip.mode]);
+    }
 
     let response: Response;
     try {
-      response = await this.fetch(`${base}/audio/transcriptions`, { method: "POST", headers: { authorization: `Bearer ${key}` }, body: form, signal: upstream });
+      response = await this.fetch(`${base}${provider === "elevenlabs" ? "/speech-to-text" : "/audio/transcriptions"}`, {
+        method: "POST", headers: provider === "elevenlabs" ? { "xi-api-key": key } : { authorization: `Bearer ${key}` }, body: form, signal: upstream,
+      });
     } catch (error) {
       throw new VoiceError("provider_error", 502, scrub(`Could not reach the provider: ${error instanceof Error ? error.message : String(error)}`, key));
     }
@@ -336,7 +358,7 @@ export class VoiceService {
           return;
         }
         send({ type: "done", text: transcript });
-        if (clip.polish && transcript.trim()) {
+        if (provider === "openai" && clip.polish && transcript.trim()) {
           try {
             send({ type: "polished", text: await this.polish(base, key, polishModel, clip.mode, transcript, upstream) });
           } catch (error) {
@@ -391,7 +413,7 @@ export async function handleVoiceRequest(request: Request, pathname: string, ser
     setRequestRoute(pathname);
     if (request.method !== "POST") return jsonResponse({ error: { code: "method_not_allowed", message: "Use POST /api/voice/transcribe" } }, 405, { allow: "POST" });
     try {
-      if (!service.status().configured) throw new VoiceError("voice_not_configured", 409, "Set an OpenAI API key for voice input");
+      if (!service.status().configured) throw new VoiceError("voice_not_configured", 409, "Set an API key for voice input");
       const limit = VOICE_MAX_AUDIO_BYTES + FORM_SLACK_BYTES;
       if (Number(request.headers.get("content-length") ?? 0) > limit) throw tooLarge();
       // a chunked body names no length: it is counted as it arrives and dropped past the limit

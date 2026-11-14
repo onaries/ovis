@@ -318,6 +318,7 @@ bun scripts/unconfirmed-input-demo-regression.ts # typing the socket took but th
 bun scripts/terminal-keyboard-demo-regression.ts # the key bar's Show/Hide keyboard control: current-mode focus, measured state, Keyboard only from the key bar (inputmode=none until Show), Fold the key bar (the row folded under the line, Terminal keys, held modifiers let go on a fold), composition refusal, observe/held/offline/ended; `--serve-ios` only serves the build on loopback for a Simulator
 bun scripts/droplet-demo-regression.ts        # real-app alerts below the header, keyboard and landscape
 bun scripts/phone-safe-area-demo-regression.ts # sheets, dialogs and menus clear of emulated safe-area insets: upright, short and landscape
+bun scripts/phone-back-demo-regression.ts # a phone's Back at 390 and on its side (844x390): it closes the drawer, a row's menu over it, New workspace and the lists inside it one at a time, Files after a file closed by its X or by Back and Add PC opened as Settings closed, never the app or the pane with them open, and no history entry is added with no tap behind it
 bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centred on a desktop, docked on a phone
 bun scripts/reply-comments-demo-regression.ts # comments on a reply (#511): the floating Comment moves nothing, one chip, the next message carries them for an agent alone, a slash command leaves them; 1280 and 390, Codex palette in UI_EVIDENCE_DIR
 bun scripts/chat-select-quote-demo-regression.ts # Quote on a chat selection: Quote first and Comment second, the words go in the message box as a `> ` quote after the draft, it takes the keyboard, quotes stack, nothing is sent until Send, then for an agent alone; 1280 and 390, Codex palette in UI_EVIDENCE_DIR
@@ -335,6 +336,7 @@ bun scripts/sidebar-split-access-demo-regression.ts # divider review regressions
 bun scripts/sidebar-peek-demo-regression.ts # Settings → Show the sidebar on hover (#2588): off by default; on, the collapsed sidebar's toggle hover shows it over the pane at 1280 without moving the pane or the focus, the trip in keeps it, a row opens its pane, a field focused by keyboard and a row dragged in it hold it, an empty filter's Escape and leaving or Escape hide it, a click keeps it open; a phone's drawer unchanged at 390; light and dark screenshots in UI_EVIDENCE_DIR
 bun scripts/sidebar-heads-demo-regression.ts # no PCs head (also for a lone Host), and the Agents head counts and always shows its caret, open and folded, in both orders; a PC header's agent count traded for its actions on hover and keyboard focus, actions always under a finger, a press on the name folding it; folded PCs one row each; each list fading only at an edge with rows past it, none in forced colors; synthetic screenshots at 390 and 1280 in UI_EVIDENCE_DIR
 bun scripts/sidebar-activity-demo-regression.ts # Agents order Activity and pins: blocked pinned, recency, Pin agent / Unpin agent and Pin workspace / Unpin workspace from a right-click and the context-menu key, the ⋯ on a phone, and a finish opened here drawn as ready until the next one
+bun scripts/phone-inbox-demo-regression.ts # Settings → Agent inbox on a phone at 390 in light and dark: the list as the first screen, INPUT/RUN/DONE rows and filters, search, a thread and Back to agents keeping the filter and scroll, the system Back and Forward, the drawer, New workspace, reloads, a cold link, a watching device, the setting off, 1280 unchanged, the Settings row, the drawer's focus return; screenshots in UI_EVIDENCE_DIR
 bun scripts/hide-pc-demo-regression.ts       # Remote PCs → Show in sidebar at 390 and 1440 on two demo PCs: a hidden PC leaves the sidebar, Agents and palette, the selection moves, the last PC stays, a reload keeps it, its link still opens, Settings shows it again; on three PCs at 390 and 1280, light and dark, no PCs head or hidden count, the list starting the section, and Settings listing the hidden ones off, showing one again and keeping the last PC shown on
 bun scripts/pc-load-demo-regression.ts       # Devices and PCs → PC load in the status bar on three demo PCs at 390 and 1280: on by default, the selected PC's load in a desktop's status bar, none in the sidebar or a phone's drawer, none for a herdr-core machine, no ask while off, the choice in its own key; screenshots in UI_EVIDENCE_DIR
 bun scripts/sidebar-filter-demo-regression.ts # the roster's label filter on two demo PCs: fuzzy matches with their ancestors, the selection kept as context, pins and folds untouched, a live and an offline roster, the drawer and a reload clearing it; screenshots at 390 and 1440 in UI_EVIDENCE_DIR
@@ -750,9 +752,10 @@ on `main`, or on manual dispatches from `main`. A completed CI run only builds a
 succeeded for a push from this repository; PR runs and forks cannot publish. It builds that CI run's
 head SHA without running validation again. Manual dispatches run reusable CI validation and the site
 build in parallel against the dispatch SHA, and deployment requires both to succeed.
-Deployments are serialized. Immediately before deploying,
-the workflow checks that the validated SHA is still the latest `main` commit; it fails closed if it is
-stale or that check cannot be completed. This does not change the separate Release workflow.
+Deployments are serialized. A `current` job, with no environment, first checks that the validated SHA
+is still the latest `main` commit: when `main` has moved on, the run deploys nothing, records no
+deployment and ends green with a notice. The deploy job checks again immediately before deploying and
+fails if `main` moved on in between; both fail closed when the check cannot be completed. This does not change the separate Release workflow.
 The standalone `main` CI supplies that validation. Its push runs share one concurrency group: the
 running one finishes, and a newer push cancels the one still waiting, so a burst of merges runs
 main's checks at most twice and the newest run covers the merges in between. The Website workflow
@@ -882,8 +885,55 @@ scripts/pty-sidecar.ts install` (herdr's plugin build, each update installed fro
 `install.sh`) puts the binary for its PC in `bin/ovis-pty-sidecar` only when the release's crate
 tree matches the checkout and the SHA-256 matches; otherwise that install runs the Node sidecar where
 the PC has Node, and mirrors its panes where it has none.
-A release without them gets them from **Actions → Attach the Rust PTY host** with its tag. Then it
-attaches the signed Ovis for Mac `Ovis.dmg` to the release, or skips that with a notice while the
+A release without them gets them from **Actions → Attach the Rust PTY host** with its tag.
+
+It also builds the server as one compiled binary per platform (`server-binary`, on the same runners as the
+rest of the release, `bun scripts/build-server.ts release`): `ovis-server-linux-x64`, `-linux-arm64`,
+`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, with `ovis-server.json` (the version, the git trees of
+`server/` and `shared/`, each file's SHA-256), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
+signature over the manifest's exact bytes. `server-binary-sign` signs on GitHub's runner: beside the key run only Bun,
+installed by the SHA-pinned `oven-sh/setup-bun`, and `scripts/server-manifest.ts`, which uses Node's built-ins; none
+of the repository's dependencies is installed there. It then verifies the folder for the version being released.
+`server-binary-attest` attests the files, and `publish` verifies them again for that version and attaches each by
+name, refusing a folder that holds anything else. The signature vouches for whatever `server-binary` built.
+
+`bun scripts/build-server.ts verify <dir> --public-key <base64> --expect-version <X.Y.Z>` checks a downloaded set, and
+stops at the first part that fails, with one line naming it (exit 1):
+- the folder holds exactly the five binaries, the manifest, its signature and the sums file;
+- the signature over the manifest's bytes (both the signature and the key in standard base64, nothing around them);
+- the manifest in its canonical form: exactly its fields and the five platforms, no duplicate key;
+- the version, when `--expect-version` is given;
+- each binary's SHA-256 (a mismatch names its platform), and the sums file, which is required and must list exactly the
+  manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
+
+A signature alone does not stop a downgrade: an older release signed by the same key verifies too. Every consumer (the
+installers, the updater, a fleet machine: todos 6, 7, 28 and 59 of the relay-fleet plan) passes the version it asked
+for, as the release job does. Remote PC bundles and the desktop app carry the same binary with what runs beside it
+(`scripts/server-artifact.ts`), and no server sources. The builds are reproducible with the same Bun: CI pins Bun 1.4.2,
+so CI's hashes differ from ones built with another Bun.
+
+### The server binary's signing key
+
+The private key is the secret `OVIS_SERVER_SIGNING_KEY` of the GitHub environment `release-signing`, whose
+deployment branches are `main` alone. Only a workflow run for `main` whose job names that environment can read
+it, and only `server-binary-sign` does: it is not a repository secret, and `production` (the deploy jobs'
+environment) never holds it. Without the environment or its secret, `server-binary-sign` fails with an error naming
+the secret, and `publish`, which needs it, does not run: no tag and no release are made, and nothing is published
+unsigned. In a fork the job is skipped, and so is `publish`.
+
+The owner sets it up once, before the first release that signs, on a Linux or macOS PC they trust (`keygen` refuses
+to run on Windows, where a file mode does not keep the key to its owner):
+1. `bun scripts/build-server.ts keygen <folder>` writes `<folder>/ovis-server-signing-key.pem` (readable by them
+   alone) and prints only the public key.
+2. Create the environment `release-signing` with deployment branches limited to `main` (Settings → Environments →
+   New environment; Deployment branches and tags: Selected branches and tags, add `main`).
+3. `gh secret set OVIS_SERVER_SIGNING_KEY --env release-signing --repo devswha/ovis < <folder>/ovis-server-signing-key.pem`
+   (the key is read from the file, never typed on a command line).
+4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. Once a
+   release pins it in the binary, replacing the key strands the installs that took it, so losing the private key means
+   no further verified update reaches them.
+
+Then the Release run attaches the signed Ovis for Mac `Ovis.dmg` to the release, or skips that with a notice while the
 signing secrets are unset ([app/mac/README.md](../app/mac/README.md#releases)), and Ovis for Windows'
 `Ovis.exe` ([app/windows/README.md](../app/windows/README.md#releases)); the release becomes GitHub's
 latest only once it has both. A red `mac-dmg` or `windows-app` job leaves the release published: run

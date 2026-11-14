@@ -138,6 +138,8 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *                                          terminal lens is the pane's screen, repainted; /api/bridge tells the same herdr), auth: HealthAuth,
  *                                          web_ui: { boot_id: string, revision: string | null, server_id?: string (its relay ID,
  *                                          authenticated only, where it has one: Machine.server_id) },
+ *                                          version?: string (this server's own version, package.json's, which the compiled
+ *                                          binary carries from its build; authenticated only),
  *                                          security?: SecuritySummary (authenticated only, no-store),
  *                                          herdr_core?: HerdrCoreFacts (shared/machines.ts; authenticated only, absent until
  *                                          the server's first look for hc has ended), herdr_runtime?: HerdrRuntimeFacts (a driving owner
@@ -534,7 +536,7 @@ export interface ApiError {
 
 export type { PaneFindMatch, PaneFindRequest, PaneFindResponse } from "./find.ts";
 
-export type { UsageProviderId, UsageWindow, UsageResets, UsageCredits, UsageProblem, ProviderUsage, UsageReport, MissingCommand, StatuslineState } from "./usage.ts";
+export type { UsageProviderId, UsageWindow, UsageResets, UsageCredits, UsageProblem, UsageRecorder, UsageRecorded, ProviderUsage, UsageReport, MissingCommand, StatuslineState } from "./usage.ts";
 
 export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 
@@ -862,6 +864,16 @@ export interface ConversationResponse {
    * with the flag may help.
    */
   hint?: "copilot_ui_server";
+  /**
+   * On a scrollback answer: why the pane's conversation could not be read, where the reason is one the
+   * chat can put in plain words. `not_found`: the agent has not recorded a conversation the reader can
+   * tie to this pane (normal before its first message). `no_reader`: no reader for this pane's program
+   * (a plain shell reads so too; the chat tells them apart by the pane's agent). `unreadable`: the file it
+   * was read from is gone, or could not be read. `no_folder`: herdr gave the pane
+   * no folder. `no_integration`: an agent whose session only herdr's integration for it reports (OpenCode, Grok),
+   * and that integration is not installed on this PC. Absent for any other reason, and from older bridges.
+   */
+  unavailable?: "not_found" | "no_reader" | "unreadable" | "no_folder" | "no_integration";
   /**
    * Where the first turn sits in the transcript: pass it as `before` for the page
    * of turns before these (with `since`, never reaching back past that cursor), or

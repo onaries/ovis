@@ -23,12 +23,16 @@ const PROMPT = "Enter passphrase for key '/tmp/key': ";
  * was read, the last await before the final checks of the paste; `afterPaste` once the paste was written. Both may
  * replace what the pane shows or runs, as another process or a prompt can between a check and herdr's write.
  */
-async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0 }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
+async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0, boxCheck = false }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
+  /** skill mode: run GJC's box check (composer.ts freeAgentInput) on `screen`, its viewport read answered with `screen` too */ boxCheck?: boolean;
   /** once the message is queued (or held), before the agent's turn ends and the queue is drained (or before its Send now) */ beforeDrain?: (pane: Pane) => void;
   /** after that drain; `turn` is one more turn of the agent, ended, and the drain its end brings */ afterDrain?: (pane: Pane, turn: () => Promise<void>) => Promise<void>;
   /** how many more messages are queued behind the first */ behind?: number }) {
   spyOn(pi, "piTranscriptPath").mockResolvedValue(null);
   if (mode === "claude") { spyOn(claude, "claudeForegroundSession").mockResolvedValue("session-a"); spyOn(composer, "freeClaudeBox").mockResolvedValue(undefined as never); }
+  // the skill mode's pane runs gjc, whose box the send now reads first (composer.ts freeAgentInput): these tests count the
+  // skill key's own screen reads, so that check is left out here (agent-input-send.test.ts covers it)
+  if (mode === "skill" && !boxCheck) spyOn(composer, "freeAgentInput").mockResolvedValue(undefined);
   if (mode === "skill") { spyOn(prompt, "prepareCommandSend").mockReturnValue({} as never); spyOn(prompt, "bindCommandProcess").mockImplementation(() => {}); spyOn(opencode, "startOpenCodeWatch").mockReturnValue(null); }
   const shown: Pane = { birth: 1_000 as number | null, screen, foreground: [{ pid: 41001, name: "gjc", argv: ["gjc"] }] };
   spyOn(processStart, "processStartedAtAsync").mockImplementation(async () => shown.birth);
@@ -41,7 +45,8 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   let visible = 0;
   const selected = readFileSync(join(import.meta.dir, "../fixtures/opencode-autocomplete-2.0.32-ansi-first-selected.ansi"), "utf8");
   spyOn(client, "paneRead").mockImplementation(async (options) => {
-    if (mode !== "skill" || options.source !== "visible") {
+    // the box check's viewport read comes before any of the skill key's (`boxCheck`)
+    if (mode !== "skill" || options.source !== "visible" || (boxCheck && visible++ === 0)) {
       const text = shown.screen;
       shown.onScreenRead?.();
       return { text } as Awaited<ReturnType<typeof client.paneRead>>;
@@ -63,7 +68,7 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
     writes.push(keys.join("+"));
   });
 
-  const agent = mode === "skill" || mode === "missing" ? "gjc" : mode === "codex-queued" ? "codex" : mode;
+  const agent = mode === "skill" || mode === "missing" ? "gjc" : mode === "codex-queued" ? "codex" : mode === "devin-queued" ? "devin" : mode;
   const pane = { pane_id: "p", terminal_id: "p", workspace_id: "w", tab_id: "t", agent, agent_status: "working", cwd: "/tmp", focused: false, revision: 0 } as HerdrPane;
   const frames: ServerMessage[] = [];
   told = frames;
@@ -108,9 +113,21 @@ let told: ServerMessage[] = [];
 const listed = (): Array<[string, string | undefined, string | undefined]> => told.flatMap((frame) => frame.type === "pending-messages" ? [frame.messages] : []).at(-1)
   ?.map((message) => [message.state, message.error?.code, message.error?.message]) ?? [];
 /** `codex-queued`: a message queued to a Codex pane and drained once it is idle (`codex` is a held one's Send now) */
-type Mode = "gjc" | "claude" | "pi" | "codex" | "codex-queued" | "skill" | "missing";
+type Mode = "gjc" | "claude" | "pi" | "codex" | "codex-queued" | "devin-queued" | "skill" | "missing";
 /** `onScreenRead`: as a read of the live screen is answered, after its text was taken */
 interface Pane { birth: number | null; screen: string; foreground: Array<{ pid: number; name: string; argv: string[] }>; onProcessRead?: () => void; onScreenRead?: () => void }
+
+it("holds a queued message rather than pasting it over text typed in GJC's box (composer.ts freeAgentInput)", async () => {
+  const typedBox = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/gjc/draft-typed-119.ansi"), "utf8");
+  expect(await drain({ screen: typedBox })).toEqual([]);
+  expect(listed()[0]?.slice(0, 2)).toEqual(["held", "input_draft"]);
+});
+
+it("holds a queued message with an OpenCode skill rather than typing it over text typed in GJC's box", async () => {
+  const typedBox = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/gjc/draft-typed-119.ansi"), "utf8");
+  expect(await drain({ mode: "skill", boxCheck: true, screen: typedBox })).toEqual([]);
+  expect(listed()[0]?.slice(0, 2)).toEqual(["held", "input_draft"]);
+});
 
 it("types nothing into another process that took the agent's PID before the paste", async () => {
   expect(await drain({ after: (pane) => { pane.birth = 5_000; } })).toEqual([]);
@@ -252,6 +269,26 @@ it("refuses to queue a message while one of Codex's own screens is up, as with a
 it("types no queued message into a screen of Codex's own that opens during the last checks before the paste, and holds it", async () => {
   expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, after: (pane) => { pane.screen = CODEX_OWN_SCREENS["/rename's field"]; } })).toEqual([]);
   expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+// Devin's folder trust (Devin 3000.12.43), which herdr reports as Devin at rest: a paste and its Enter would pick "Yes, trust"
+const DEVIN_TRUST = readFileSync(join(import.meta.dir, "../fixtures/devin-3000.12.43-trust.txt"), "utf8");
+const DEVIN_COMPOSER = readFileSync(join(import.meta.dir, "../fixtures/devin-3000.12.43-composer.txt"), "utf8");
+const HELD_FOR_PICKER: ReturnType<typeof listed> = [["held", "agent_blocked", composer.AGENT_PICKER_MESSAGE]];
+
+it("pastes a queued message into Devin's composer and sends it", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER })).toEqual(["paste", "Enter"]);
+});
+
+it("types no queued message into Devin's folder trust when the turn ends with it up, and holds the message with that reason", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER, beforeDrain: (pane) => { pane.screen = DEVIN_TRUST; },
+    afterDrain: async (pane, turn) => { pane.screen = DEVIN_COMPOSER; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_PICKER);
+});
+
+it("types no queued message into Devin's folder trust that comes up during the last checks before the paste", async () => {
+  expect(await drain({ mode: "devin-queued", screen: DEVIN_COMPOSER, after: (pane) => { pane.screen = DEVIN_TRUST; } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_PICKER);
 });
 
 it("still checks the process a queued Codex message was for after that screen read: another one at its PID gets nothing", async () => {

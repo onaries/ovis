@@ -11,6 +11,7 @@ export const USAGE_ZH: Record<string, string> = {
   "Searches": "搜索",
   "Remove {name}?": "移除 {name}？",
   "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "要从 Ovis 移除此账号吗？CLI 登录状态和凭据会保留在这台电脑上，可在“已从 Ovis 移除”中点击“恢复”找回。",
+  "Remove this account from Ovis? {tool} keeps its record of it, and Restore under Removed from Ovis brings it back.": "要从 Ovis 移除此账号吗？{tool} 的记录会保留，可在“已从 Ovis 移除”中点击“恢复”找回。",
   "Removed from Ovis": "已从 Ovis 移除",
   "Restore": "恢复",
   "Restore {name}": "恢复 {name}",
@@ -98,4 +99,7 @@ export const USAGE_ZH: Record<string, string> = {
   "Limit resets": "限额重置",
   "Expires in {time}": "{time}后过期",
   "{n} left": "剩余 {n} 次",
+  "Recorded by {tool}": "{tool} 的记录",
+  "Recorded by {tool}, {when}": "{tool} 的记录，{when}",
+  "It may have changed since.": "之后可能已有变化。",
 };

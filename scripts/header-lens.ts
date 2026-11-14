@@ -9,8 +9,12 @@ export type Lens = "chat" | "terminal";
 
 /** Opens `lens` from the header, by a click or a finger's tap; a phone's button is left alone when `lens` is shown. */
 export async function openLens(page: Page, lens: Lens, how: "click" | "tap" = "click"): Promise<void> {
-  const toggle = page.locator(".app-header .lens-toggle");
-  if ((await toggle.count()) > 0) {
+  // The header draws one control or the other by the page's width (App.tsx, SHEET_QUERY) and redraws it a frame after
+  // a resize: the one to use follows the width the page has now, not what is drawn at that moment (just after a
+  // rotation back to a phone the wide switch is still there, and goes while it is clicked)
+  if (await page.evaluate(() => matchMedia("(max-width: 640px)").matches)) {
+    const toggle = page.locator(".app-header .lens-toggle");
+    await toggle.waitFor();
     if ((await toggle.getAttribute("data-view")) !== lens) await toggle[how]();
     return;
   }

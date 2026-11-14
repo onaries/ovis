@@ -294,7 +294,7 @@ it("answers a session pi has not written yet as an empty conversation, then foll
   expect(written.turns[0]!.parts).toEqual([{ kind: "text", text: "First prompt" }]);
   // a transcript read and then removed is missing, not a conversation not begun
   rmSync(fresh);
-  expect(await read(target)).toEqual({ source: "scrollback", turns: [] });
+  expect(await read(target)).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
 });
 
 it("distinguishes unwritten sessions with the same filename in different folders", async () => {
@@ -311,12 +311,12 @@ it("distinguishes unwritten sessions with the same filename in different folders
   writeFileSync(fresh, turns("Fresh prompt", "Fresh answer"));
   expect((await read(target)).turns[0]!.parts).toEqual([{ kind: "text", text: "Fresh prompt" }]);
   rmSync(fresh);
-  expect(await read(target)).toEqual({ source: "scrollback", turns: [] });
+  expect(await read(target)).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
   // Another spelling of the same directory must not make a removed transcript unwritten again.
   const alias = join(sessionDir, "alias-project");
   symlinkSync(other, alias, "dir");
   await reportSession(join(alias, "shared-name.jsonl"), target);
-  expect(await read(target)).toEqual({ source: "scrollback", turns: [] });
+  expect(await read(target)).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
 });
 
 it("falls back to the scrollback when the reported path leaves the store", async () => {
@@ -325,5 +325,5 @@ it("falls back to the scrollback when the reported path leaves the store", async
   await reportSession(outside);
   const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ source: "scrollback", turns: [] });
+  expect(await response.json()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
 });

@@ -43,7 +43,8 @@ function watchablePane(paneId: unknown): paneId is string {
   return typeof paneId === "string" && paneId.length <= 256 && paneId.trim() !== "" && !paneId.trim().startsWith("-") && !/[\u0000-\u001f\u007f]/.test(paneId);
 }
 
-export function createSocket({ clients, present, stopped, admit, setRole, watchable, terminalHistory, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime, browserSnapshot, countVisit, drainOutput, frames }: {
+export function createSocket({ clients, present, stopped, admit, setRole, watchable, terminalHistory, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime, browserSnapshot, countVisit, drainOutput, frames, onActive }: {
+  onActive?: () => void;
   clients: Set<Client>;
   present: Set<Client>;
   stopped: () => boolean;
@@ -182,6 +183,7 @@ export function createSocket({ clients, present, stopped, admit, setRole, watcha
       const presence = presenceOf(raw);
       if (presence === true) {
         present.add(client);
+        onActive?.();
         if (!client.data.relay) countVisit(undefined, { surface: client.data.surface, ingress: client.data.ingress });
       } else if (presence === false) present.delete(client);
       if (client.data.relay) { client.data.relay.message(raw); return; }

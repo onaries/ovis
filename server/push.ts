@@ -168,6 +168,8 @@ export function classifyFailure(status: number | null): PushDeliveryFailure {
 }
 
 export interface PushService {
+  /** An app window came into use: pending unattended alerts are no longer news. */
+  viewed?(): void;
   publicKey(): string;
   /** `parseSubscription` with this service's endpoint rule: what POST /api/push/subscribe accepts */
   parse(value: unknown): PushSubscriptionRecord | null;
@@ -245,7 +247,7 @@ export interface PushServiceOptions {
   /** a pane's alert reached one device (the push service took it); not the test push or a pairing notice */
   onAlertDelivered?: () => void;
   /** Settings → Alerts → Also send to (server/alert-webhook.ts): told the alerts it chose, with the same waits and holds as a device */
-  webhook?: Pick<AlertWebhook, "prefs" | "wants" | "generation" | "send">;
+  webhook?: Pick<AlertWebhook, "prefs" | "wants" | "generation" | "send" | "delay">;
 }
 
 export { defaultStateDir } from "./update-state.ts";
@@ -1025,8 +1027,9 @@ export function createPushService(options: PushServiceOptions): PushService {
         const delay = delayFor(prefs, status, worked);
         if (delay !== null) groups.set(delay, [...(groups.get(delay) ?? []), subscription]);
       }
-      const hookPrefs = options.webhook?.prefs() ?? null;
-      const hookDelay = hookPrefs === null ? null : delayFor(hookPrefs, status, worked);
+      const hookPrefs = options.inUse?.() ? null : options.webhook?.prefs() ?? null;
+      const hookWait = hookPrefs === null ? null : delayFor(hookPrefs, status, worked);
+      const hookDelay = hookWait === null ? null : Math.max(hookWait, options.webhook?.delay?.() ?? 0);
       if (hookDelay !== null && !groups.has(hookDelay)) groups.set(hookDelay, []);
       if (groups.size === 0) return;
       // the destination the alert arose for: one set before the timer fires was not there to be told
@@ -1073,11 +1076,14 @@ export function createPushService(options: PushServiceOptions): PushService {
         const prefs = subscription.alerts ?? DEFAULT_ALERTS;
         return alertKindAllowed(prefs, "error") && alertPcAllowed(prefs, ...pcKeys(machineId));
       });
-      const hooked = options.webhook?.wants("error") === true;
+      const hooked = !options.inUse?.() && options.webhook?.wants("error") === true;
       if (to.length === 0 && !hooked) return;
       const hookAt = options.webhook?.generation();
       // it waits like a question does: a retry at the desk meanwhile is the pane's next change, which calls it off
-      schedule(key, machineId, paneId, new Map([[timing.short, to]]), async (group, silenced) => {
+      const hookDelay = Math.max(timing.short, options.webhook?.delay?.() ?? 0);
+      const groups = new Map([[timing.short, to]]);
+      if (hooked && !groups.has(hookDelay)) groups.set(hookDelay, []);
+      schedule(key, machineId, paneId, groups, async (group, silenced, delay) => {
         if (options.inUse?.() || muted(machineId, paneId)) return;
         const { title } = await lookUp(key, machineId, paneId);
         if (options.inUse?.() || silenced() || muted(machineId, paneId)) return;
@@ -1085,7 +1091,7 @@ export function createPushService(options: PushServiceOptions): PushService {
           const current = store().get(subscription.endpoint);
           return current && current.device_id === subscription.device_id && wants(current, "error", machineId) ? [current] : [];
         });
-        const hook = options.webhook?.wants("error") === true;
+        const hook = delay === hookDelay && options.webhook?.wants("error") === true;
         if (live.length === 0 && !hook) return;
         const message = failedMessage(paneId, title);
         if (hook) tellWebhook(key, machineId, paneId, message, hookAt);
@@ -1109,9 +1115,23 @@ export function createPushService(options: PushServiceOptions): PushService {
       if ((to.length === 0 && !hook) || options.inUse?.()) return;
       // the pane may already be gone from herdr: the seeded title is what is left
       const message = endedMessage(paneId, titles.get(key) ?? paneId);
-      if (hook) tellWebhook(key, machineId, paneId, message);
+      if (hook) {
+        const delay = options.webhook?.delay?.() ?? 0;
+        if (delay === 0) tellWebhook(key, machineId, paneId, message);
+        else {
+          const generation = options.webhook?.generation();
+          schedule(key, machineId, paneId, new Map([[delay, []]]), async () => {
+            if (!options.inUse?.() && !muted(machineId, paneId)) tellWebhook(key, machineId, paneId, message, generation);
+          });
+        }
+      }
       if (to.length === 0) return;
       await broadcast({ ...message, ...where(key, machineId), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
+    },
+
+    viewed() {
+      for (const key of [...waiting.keys(), ...hooked.keys()]) callOff(key);
+      hooked.clear();
     },
 
     mutesChanged() {

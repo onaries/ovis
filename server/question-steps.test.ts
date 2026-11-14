@@ -839,4 +839,183 @@ describe("the answer route moves between questions, one key at a time, each seen
       expect(pane.sent).toEqual([]);
     });
   });
+
+  test("agy: Next sends →, Back sends ←, and answers single, custom write-in, and multi-select questions", async () => {
+    const agySingle = (at: number, cursor = 0, answered = -1, writeIn: string | null = null): string => {
+      const q = at === 0
+        ? ["Question 1/2: Which test runner should we use?", ["(Recommended) Bun test", "Vitest"]]
+        : ["Question 2/2: Which environment?", ["Staging", "Production"]];
+      const rows = [...q[1]!, "Write-in..."].map((label, idx) => {
+        const mark = idx === cursor ? "▸ " : "  ";
+        const check = idx === answered ? "✓ " : "";
+        return `${mark}${idx + 1}. ${check}${label}`;
+      });
+      if (writeIn !== null) {
+        return `Question\n────────────────────────────────────────\n\n${q[0]}\n\n${rows.join("\n")}\n\n  Your answer:\n  > ${writeIn}\n\nenter Submit · esc Back\n`;
+      }
+      const nav = [
+        "↑/↓ Navigate",
+        ...(at > 0 ? ["← Back"] : []),
+        ...(at < 1 ? ["→ Next"] : []),
+        cursor === q[1]!.length ? "enter Write-in" : at === 1 ? "enter Submit All" : "enter Submit",
+        "esc Skip",
+      ].join(" · ");
+      return `Question\n────────────────────────────────────────\n\n${q[0]}\n\n${rows.join("\n")}\n\n${nav}\n`;
+    };
+
+    const first = parseInteractivePrompt("agy", agySingle(0, 0, 1));
+    expect(first).toMatchObject({
+      agent: "agy",
+      kind: "question",
+      title: "Question 1 of 2",
+      question: "Which test runner should we use?",
+      options: [{ label: "(Recommended) Bun test", description: null }, { label: "Vitest", description: null }],
+      multi_select: false,
+      custom_option_index: 2,
+      default_option_index: 1,
+      can_step_next: true,
+    });
+    expect(first?.can_step_back ?? false).toBe(false);
+
+    await withPane("agy", agySingle(0), async (pane) => {
+      let at = 0;
+      let cursor = 0;
+      let writeIn: string | null = null;
+      pane.onSent = (key) => {
+        if (key === "right") { at = 1; cursor = 0; writeIn = null; }
+        else if (key === "left") { at = 0; cursor = 0; writeIn = null; }
+        else if (key === "down") cursor += 1;
+        else if (key === "up") cursor = Math.max(0, cursor - 1);
+        else if (key === "enter" && cursor === 2 && writeIn === null) writeIn = "";
+        else if (key.startsWith("text:") && writeIn !== null) writeIn += key.slice(5);
+        else if (key === "enter" && writeIn !== null) writeIn = null;
+        pane.screen = agySingle(at, cursor, -1, writeIn);
+      };
+      expect(await move((await card()).id, { step_next: true })).toEqual({ status: 200, code: undefined });
+      expect((await card()).question).toBe("Which environment?");
+      expect(await move((await card()).id, { step_back: true })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["right", "left"]);
+
+      pane.sent.length = 0;
+      expect(await move((await card()).id, { custom_text: "abc\rdef" })).toEqual({ status: 400, code: "invalid_answer" });
+      expect(await move((await card()).id, { custom_text: "abc\u001bdef" })).toEqual({ status: 400, code: "invalid_answer" });
+      expect(pane.sent).toEqual([]);
+
+      expect(await move((await card()).id, { custom_text: "deno\ntest" })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "down", "enter", "text:deno test", "enter"]);
+
+      // If the write-in editor closes before Enter submits, the final Enter is refused.
+      pane.sent.length = 0;
+      at = 0;
+      cursor = 0;
+      writeIn = null;
+      pane.screen = agySingle(0);
+      pane.onSent = (key) => {
+        if (key === "down") cursor += 1;
+        else if (key === "enter" && cursor === 2 && writeIn === null) writeIn = "";
+        else if (key.startsWith("text:")) writeIn = null;
+        pane.screen = agySingle(at, cursor, -1, writeIn);
+      };
+      expect(await move((await card()).id, { custom_text: "deno test" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down", "down", "enter", "text:deno test"]);
+
+      // A write-in editor that opens holding text (typed in the terminal or from another device) takes none of the answer.
+      pane.sent.length = 0;
+      cursor = 0;
+      writeIn = null;
+      pane.screen = agySingle(0);
+      pane.onSent = (key) => {
+        if (key === "down") cursor += 1;
+        else if (key === "enter" && cursor === 2 && writeIn === null) writeIn = "foo";
+        else if (key.startsWith("text:") && writeIn !== null) writeIn += key.slice(5);
+        else if (key === "enter" && writeIn !== null) writeIn = null;
+        pane.screen = agySingle(at, cursor, -1, writeIn);
+      };
+      expect(await move((await card()).id, { custom_text: "bar" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down", "down", "enter"]);
+
+      // And one that swallowed the typed text is not submitted empty.
+      pane.sent.length = 0;
+      cursor = 0;
+      writeIn = null;
+      pane.screen = agySingle(0);
+      pane.onSent = (key) => {
+        if (key === "down") cursor += 1;
+        else if (key === "enter" && cursor === 2 && writeIn === null) writeIn = "";
+        else if (key === "enter" && writeIn !== null) writeIn = null;
+        pane.screen = agySingle(at, cursor, -1, writeIn);
+      };
+      expect(await move((await card()).id, { custom_text: "bar" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down", "down", "enter", "text:bar"]);
+    });
+
+    const agyMulti = (cursor: number, checked: number[], writeIn: string | null = null): string => {
+      const choices = ["Desktop", "Mobile", "Web"];
+      const rows = [
+        ...choices.map((label, idx) => `${idx === cursor ? "▸ " : "  "}${idx + 1}. [${checked.includes(idx) ? "x" : " "}] ${label}`),
+        `${cursor === choices.length ? "▸ " : "  "}4. Write-in...`,
+      ];
+      if (writeIn !== null) {
+        return `Question\n────────────────────────────────────────\n\nQuestion 1/1: Which targets?\n\n${rows.join("\n")}\n\n  Your answer:\n  > ${writeIn}\n\nenter Submit · esc Back\n`;
+      }
+      const enterLabel = cursor === choices.length ? "enter Write-in" : "enter Submit";
+      return `Question\n────────────────────────────────────────\n\nQuestion 1/1: Which targets?\n\n${rows.join("\n")}\n\n↑/↓ Navigate · space Toggle · ${enterLabel} · esc Skip\n`;
+    };
+
+    await withPane("agy", agyMulti(3, [0]), async (pane) => {
+      let cursor = 3;
+      const checked = new Set([0]);
+      let writeIn: string | null = null;
+      pane.onSent = (key) => {
+        if (key === "down") cursor += 1;
+        else if (key === "up") cursor = Math.max(0, cursor - 1);
+        else if (key === "space") {
+          if (!checked.delete(cursor)) checked.add(cursor);
+        } else if (key === "enter" && cursor === 3 && writeIn === null) writeIn = "";
+        else if (key.startsWith("text:") && writeIn !== null) writeIn += key.slice(5);
+        else if (key === "enter" && writeIn !== null) writeIn = null;
+        pane.screen = agyMulti(cursor, [...checked], writeIn);
+      };
+      const prompt = await card();
+      expect(prompt).toMatchObject({
+        title: "Question",
+        multi_select: true,
+        checks_with_text: true,
+        custom_option_index: 3,
+        default_option_indices: [0],
+      });
+      expect(await move(prompt.id, { option_indices: [0, 2] })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["up", "space", "enter"]);
+
+      pane.sent.length = 0;
+      cursor = 3;
+      checked.clear();
+      checked.add(0);
+      writeIn = null;
+      pane.screen = agyMulti(cursor, [...checked]);
+      expect(await move((await card()).id, { option_indices: [0, 2], custom_text: "CLI" })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["up", "space", "down", "enter", "text:CLI", "enter"]);
+    });
+
+    const writeInOpen = [
+      "Question",
+      "────────────────────────────────────────",
+      "",
+      "Question 1/1: Which test runner should we use?",
+      "",
+      "  1. (Recommended) Bun test",
+      "  2. Vitest",
+      "▸ 3. Write-in...",
+      "",
+      "  Your answer:",
+      "  > ",
+      "",
+      "enter Submit · esc Back",
+    ].join("\n");
+    await withPane("agy", writeInOpen, async () => {
+      const url = new URL("http://127.0.0.1/api/pane/prompt?pane_id=p_1");
+      const response = (await (await handlePromptRequest(new Request(url), url, {}))!.json()) as { prompt: InteractivePrompt | null };
+      expect(response.prompt).toBeNull();
+    });
+  });
 });

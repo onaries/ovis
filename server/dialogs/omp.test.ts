@@ -70,6 +70,34 @@ describe("omp Ask under omp's status row (#1644)", () => {
   });
 });
 
+// omp 18.14.0's Ask over two questions (multi-select, single-select) and its review, recorded at 119 columns in the isolated
+// herdr test session with a fake model provider, in the unicode and the Nerd Font symbol presets (`symbolPreset: nerd`). The
+// nerd preset draws the footer's keys and the option markers as Nerd Font icons: `󱁐 toggle · 󰌑 next` (#3282).
+const preset = (name: string) =>
+  readFileSync(new URL(`../fixtures/omp-ask-18.14.0-${name}.txt`, import.meta.url), "utf8");
+
+describe("omp Ask in the Nerd Font symbol preset (#3282)", () => {
+  it("reads each state as the unicode preset's, and answers it with the same keys", () => {
+    for (const state of ["multi", "single", "review"]) {
+      const nerd = parseInteractivePrompt("omp", preset(`nerd-${state}`));
+      const unicode = parseInteractivePrompt("omp", preset(`unicode-${state}`));
+      expect(unicode, state).not.toBeNull();
+      expect(card(preset(`nerd-${state}`)), state).toEqual(card(preset(`unicode-${state}`)));
+      const parsed = parsedByPublicPrompt.get(nerd!)!;
+      expect(promptTailIsActive(parsed, preset(`nerd-${state}`)), state).toBe(true);
+      expect(promptTailIsActive(parsed, `${preset(`nerd-${state}`).trimEnd()}\n Fixture output after the panel.\n`), state).toBe(false);
+    }
+    const multi = (name: string) => answerKeys(parseInteractivePrompt("omp", preset(name))!, { option_indices: [0, 2] });
+    expect(multi("nerd-multi")).toEqual(multi("unicode-multi"));
+    const single = (name: string) => answerKeys(parseInteractivePrompt("omp", preset(name))!, { option_index: 1 });
+    expect(single("nerd-single")).toEqual(single("unicode-single"));
+    const submit = (name: string) => answerKeys(parseInteractivePrompt("omp", preset(name))!, { option_index: 0 });
+    expect(submit("nerd-review")).toEqual(submit("unicode-review"));
+    expect(card(preset("nerd-multi"))).toMatchObject({ question: "Which synthetic targets should be checked?", multi_select: true,
+      options: [{ label: "Desktop" }, { label: "Phone" }, { label: "Tablet" }] });
+  });
+});
+
 // omp's tool approval, recorded in an isolated omp home with a fake model provider that runs `bash ls -la`
 // (`write` under --approval-mode=always-ask-cached for the grants), at 119 and 57 columns, in each symbol
 // preset; the recording's temporary path is replaced by one as long (#2059)

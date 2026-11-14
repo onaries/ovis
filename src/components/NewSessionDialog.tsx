@@ -31,6 +31,7 @@ import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { focusInOtherModal, nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { catchTypeAhead } from "../lib/typeAhead.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { passingFolder, recentDirectories } from "../lib/recent-directories.ts";
 import { serverIdOfPath } from "../lib/shellMode.ts";
 
@@ -215,6 +216,12 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   useEffect(() => { if (open) made.current = false; }, [open]);
   const surface = useFocusTrap<HTMLFormElement>(open, { initialFocus: firstFieldRef, shouldRestore: () => !made.current });
   useSheetSwipe(surface, pending ? null : onClose);
+  // Back closes the dialog as Escape does, and not while it is starting what was asked for. Opened from a
+  // sheet's item (the palette, a tab's sheet) it takes that sheet's entry, and the address it writes stays on it
+  usePhoneSheetBack(() => { if (pending) return false; onClose(); }, open);
+  // the folder browser and the setup of another agent are steps inside the dialog: Back takes each back first
+  usePhoneSheetBack(() => setBrowsing(false), open && browsing);
+  usePhoneSheetBack(() => setAdding(false), open && adding && !watching);
   const defaultCwdRef = useRef(defaultCwd);
   defaultCwdRef.current = defaultCwd;
   const prefillRef = useRef(prefill);

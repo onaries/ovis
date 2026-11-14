@@ -69,7 +69,8 @@ interface Layout {
   card: Box;
   input: Box;
   transcript: Box;
-  cardTop: boolean;
+  /** what is drawn 4 px under the card's top when it is not the card itself, else null */
+  overCard: string | null;
   queue: Box | null;
   cap: number;
   scrolls: boolean;
@@ -99,7 +100,14 @@ const layoutOf = (page: Page): Promise<Layout> => page.evaluate(() => {
     input: box(document.querySelector(".composer-surface")!),
     // the transcript's visible box: its scroller keeps its padding and is clipped by this one
     transcript: box(document.querySelector(".terminal-surface")!),
-    cardTop: (() => { const rect = card.getBoundingClientRect(); return document.elementFromPoint(rect.left + rect.width / 2, rect.top + 4)?.closest(".prompt-card") === card; })(),
+    overCard: (() => {
+      const rect = card.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 4);
+      if (hit?.closest(".prompt-card") === card) return null;
+      // named for the failure: the element and the nearest ancestor with a class, so a CI log says what covered it
+      const named = hit?.closest<HTMLElement>("[class]");
+      return hit ? `${hit.tagName.toLowerCase()}.${String(hit.className)} in ${named?.tagName.toLowerCase()}.${String(named?.className)}` : "nothing";
+    })(),
     queue: queue === null ? null : box(queue),
     cap: Math.max(app * 0.6, 240),
     scrolls: card.scrollHeight > card.clientHeight + 1,
@@ -322,7 +330,7 @@ try {
         assert.ok(layout.input.top - layout.card.bottom <= 24, `${label}: nothing stands between them (${layout.input.top - layout.card.bottom}px)`);
         assert.ok(Math.abs(layout.card.left - layout.input.left) <= 1 && Math.abs(layout.card.right - layout.input.right) <= 1, `${label}: one column (${layout.card.left}–${layout.card.right} over ${layout.input.left}–${layout.input.right})`);
         assert.ok(layout.transcript.bottom <= layout.card.top + 1, `${label}: the transcript ends over the card`);
-        assert.equal(layout.cardTop, true, `${label}: nothing of the transcript is painted over the card`);
+        assert.equal(layout.overCard, null, `${label}: nothing of the transcript is painted over the card (over it: ${layout.overCard})`);
         assert.ok(layout.card.bottom - layout.card.top <= layout.cap + 1, `${label}: the card keeps to its height (${layout.card.bottom - layout.card.top} of ${layout.cap})`);
         assert.equal(layout.pageScrolls, false, `${label}: the page itself does not scroll`);
         assert.deepEqual(layout.badge?.text, "input needed", `${label}: the badge is still read`);

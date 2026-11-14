@@ -42,20 +42,41 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
   }
 }
 
-function watch(page: Page): { sent: Sent[]; ready: Set<string> } {
+/**
+ * What the page sends a pane, as the browser's frame events report it (they can come later than the shell's output on a
+ * busy machine), and how many input and keys frames have been heard in all: the page counts what it sends itself
+ * (sentByPage), so a check can wait until everything sent so far, an unexpected extra frame included, has been heard.
+ */
+function watch(page: Page): { sent: Sent[]; ready: Set<string>; heard: { count: number } } {
   const sent: Sent[] = [];
   const ready = new Set<string>();
+  const heard = { count: 0 };
+  void page.addInitScript(() => {
+    const qa = window as unknown as { sentByPage: number };
+    qa.sentByPage = 0;
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      // only a frame that leaves is counted: a send on a socket still connecting throws, and one on a closing or closed
+      // socket is dropped, and neither ever reaches the browser's frame events the check counts against
+      const open = this.readyState === WebSocket.OPEN;
+      const result = send.call(this, data);
+      if (open && typeof data === "string") {
+        try { const type = (JSON.parse(data) as { type?: string }).type; if (type === "input" || type === "keys") qa.sentByPage += 1; } catch { /* not JSON */ }
+      }
+      return result;
+    };
+  });
   page.on("websocket", (socket) => {
     socket.on("framesent", ({ payload }) => {
       const message = JSON.parse(String(payload));
-      if (message.type === "input" || message.type === "keys") sent.push(message);
+      if (message.type === "input" || message.type === "keys") { sent.push(message); heard.count += 1; }
     });
     socket.on("framereceived", ({ payload }) => {
       const message = JSON.parse(String(payload));
       if (message.type === "input-ready" && message.ready !== false) ready.add(message.pane_id);
     });
   });
-  return { sent, ready };
+  return { sent, ready, heard };
 }
 
 const textOf = (sent: Sent[], paneId: string): string => sent.filter((message) => message.pane_id === paneId && !MOUSE_REPORT.test(message.text ?? ""))
@@ -98,7 +119,7 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
     page.setDefaultTimeout(10_000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const { sent, ready } = watch(page);
+    const { sent, ready, heard } = watch(page);
     let held: Route | null = null;
     if (item.holdCreate) await page.route("**/api/**tab/create", (route) => { held = route; });
     await page.goto(`${origin}/?pane=${encodeURIComponent(first)}`);
@@ -117,8 +138,22 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
     const lines = async () => (await paneRead({ paneId: second!, source: "recent", lines: 30, stripAnsi: true })).text.split("\n").map((line) => line.trim());
     if (item.ran !== null) {
       const ran = item.ran;
-      await until(async () => (await lines()).includes(ran), `${item.name}: the new tab ran the command typed ahead`);
-      if (item.sent !== undefined) assert.equal(textOf(sent, second!), item.sent, `${item.name}: every key reaches the new tab, in order`);
+      await until(async () => (await lines()).includes(ran), `${item.name}: the new tab ran the command typed ahead`).catch(async (error: unknown) => {
+        // CI has seen this time out without saying why: what the page sent the new tab, and whether it held the keys
+        const held = await page.getByRole("button", { name: "Discard held input", exact: true }).count();
+        throw new Error(`${(error as Error).message}; sent to it: ${JSON.stringify(textOf(sent, second!))}, held for review: ${held > 0}, its last lines: ${JSON.stringify((await lines()).filter(Boolean).slice(-4))}`);
+      });
+      if (item.sent !== undefined) {
+        // the shell's line is read through herdr, the page's frames through the browser's own events, which can come
+        // later on a busy machine: what the page sent is read once every frame it has sent by now has been heard
+        const expected = item.sent;
+        // everything the page has sent by now is heard first, an extra frame included, so the comparison sees it
+        const sentByPage = await page.evaluate(() => (window as unknown as { sentByPage: number }).sentByPage);
+        await until(() => heard.count >= sentByPage, `${item.name}: the page's frames for the new tab are all heard`).catch((error: unknown) => {
+          throw new Error(`${(error as Error).message}; expected ${JSON.stringify(expected)}, heard ${JSON.stringify(textOf(sent, second!))}`);
+        });
+        assert.equal(textOf(sent, second!), expected, `${item.name}: every key reaches the new tab, in order`);
+      }
     } else {
       // held for review as typing offline is: the new tab offers it with Send and Discard
       const frame = page.locator(`[data-layout-pane=${JSON.stringify(second!)}]`);

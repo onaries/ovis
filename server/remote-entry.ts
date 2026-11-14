@@ -2,6 +2,7 @@
 // herdr owns the terminal processes and no disconnect should terminate their work.
 import "./adopt-legacy-env.ts";
 import { createServer } from "./index.ts";
+import { ROOT } from "./entries.ts";
 import { bridgeIdentity, descriptorLive, descriptorPath, registerBridge } from "./bridge.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
 import { parseProcessLine, refusedSocket, staleMarker } from "./herdr-marker.ts";
@@ -14,11 +15,32 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { chosenHerdrSocketStatus, discoverHerdrSessions, validHerdrSocket } from "./herdr-discovery.ts";
 
+// What setup asks the installed runtime before a bridge runs (server/remote-host.ts): the bundle carries no sources a
+// `bun -e` could import, so the answers come from this entry, and nothing below runs for them
+const [request, socketArgument, ...extra] = process.argv.slice(2);
+const REMOTE_USAGE = "usage: ovis-server remote [--discover | --socket-status <herdr socket>]\n  with no argument: the bridge for the herdr session HERDR_REMOTE_SESSION names, started over SSH";
+if (request === "--help") {
+  console.log(REMOTE_USAGE);
+  process.exit(0);
+}
+if (request === "--discover" && socketArgument === undefined) {
+  console.log(JSON.stringify(await discoverHerdrSessions()));
+  process.exit(0);
+}
+if (request === "--socket-status" && socketArgument !== undefined && extra.length === 0) {
+  console.log(await chosenHerdrSocketStatus(socketArgument));
+  process.exit(0);
+}
+if (request !== undefined) {
+  console.error(REMOTE_USAGE);
+  process.exit(2);
+}
+
 process.env["OVIS_REMOTE"] = "1";
 const windows = process.platform === "win32";
 // the transcript readers find agent stores under $HOME, which Windows does not set
 if (windows && !process.env["HOME"]) process.env["HOME"] = homedir();
-const bundle = join(import.meta.dir, "..");
+const bundle = ROOT;
 process.env["PATH"] = `${join(bundle, "bin")}${delimiter}${process.env["PATH"] ?? "/usr/bin:/bin"}`;
 const session = process.env["HERDR_REMOTE_SESSION"];
 // herdr puts its sockets under XDG_CONFIG_HOME when it is set (GitHub's Linux runners and some

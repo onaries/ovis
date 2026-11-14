@@ -79,14 +79,11 @@ jobs:
           branch: cla-signatures
           allowlist: devswha,*[bot],web-flow
           custom-notsigned-prcomment: |
-            Thank you for your contribution! Before we can merge this PR, every commit author needs to sign our [Contributor License Agreement (CLA)](https://github.com/devswha/ovis/blob/main/CLA.md).
+            Thanks for your contribution!
 
-            **To sign the CLA**, comment on this PR with:
-            ```
-            I have read the CLA Document and I hereby sign the CLA
-            ```
+            Before we can merge it, each commit author needs to sign our [Contributor License Agreement](https://github.com/devswha/ovis/blob/main/CLA.md) once. Signing means you keep the copyright in your work and give the maintainer a license to use, change and distribute it, under any license terms.
 
-            You sign once, and it covers your later pull requests. Comment `recheck` to run the check again.
+            To sign, comment on this pull request with the line below, exactly as written. You sign once, and it covers all your later pull requests here.
           custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
           custom-allsigned-prcomment: All contributors have signed the CLA. Thank you!
           lock-pullrequest-aftermerge: false

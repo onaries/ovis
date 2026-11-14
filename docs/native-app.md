@@ -185,6 +185,16 @@ What is there:
   to every page, the client included.
 - A PC joins the list of PCs only once a page of it has loaded, so an address that never
   answered, or answered with an HTTP error, is not kept.
+- On Android an address typed, scanned or picked from the list is first asked whether it is Ovis
+  (`PCStore.check`, through the `check` option of `HerdrShell.open`): its
+  `/api/health?scope=bridge`, which every Ovis since 0.1 answers with `ok` and `auth`, or the
+  hosted app's `<meta name="ovis-shell">` on that answer or on its page. It is "not Ovis" only when
+  its page loads while its `/api/health` answers 200 or 404 with something else. A redirect (a
+  sign-in in front of the PC) and an answer that does not tell (401, 403 or 429 from a proxy or WAF,
+  502 from `tailscale serve` while Ovis is stopped) are left to the WebView, as before. For up to 20 seconds the connect screen says what it
+  opens, with Cancel; an address that is not Ovis, refuses, is not found or does not answer stays
+  on the connect screen with why (`openFailure()` in `shell.js`). A relay link and the account's
+  front page open without it. The iOS app opens at once, as before.
 - A PC paired over the Ovis relay opens from its pairing link, scanned or pasted:
   `https://app.ovis.sh/s/<server_id>/#offer=...` (`relayLink()` in `shell.js`). Only the hosted
   shell's origin may carry an offer: one on any other origin is refused on the connect screen,
@@ -382,8 +392,27 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   (`PCStore.sameOrigin`). A sign-in's steps and the redirects of the first load are judged before it.
   Opening or leaving a PC starts the activity again, so the next page is a first load and the
   old WebView goes with the old activity.
+- Until the PC answers, a native cover over the WebView says which PC is opening and offers
+  Change PC, as on iOS. After 20 seconds (`PCStore.ANSWER_SECONDS`, counted from Open on the connect
+  screen when it checked the address first, with at least 5 s left for the page) the app stops the load and
+  shows `error.html`, which says the PC did not answer and that a home network address does not
+  open over mobile data or another Wi-Fi; Chromium alone waits about two minutes. The first page
+  of a PC saved by its origin is checked once more (`PCStore.check`, with the WebView's cookies):
+  one that answers but not as Ovis is not kept and gives way to `error.html`, which has Change PC,
+  so a PC saved before that check (or one whose port another server took) never traps the app.
 - `onPause` flushes WebView cookies. Without it, a pairing made a moment before the app was
   swiped away was lost: the next start asked for pairing again.
+- Back goes to the page first. The page keeps a history entry for everything open over it (a
+  sheet, a dialog, a menu, the workspace list: `src/lib/sheetHistory.ts`) and for each pane it
+  moved to, so `MainActivity` keeps an `OnBackPressedCallback` on while the WebView's history has
+  an entry of the same place behind the page shown (the PC's pages, or the app's own before a PC
+  is chosen: `PCStore.pageTakesBack`, told again on every `doUpdateVisitedHistory`), and its Back
+  is `goBack()`: the page closes what is open, or shows the pane before, and the demo goes back to
+  the connect screen. With no such entry (the first page with nothing open, a sign-in in front of
+  the PC, `error.html`) the callback is off and Back is the system's: it leaves the app, with
+  Android's own predictive-back animation, and no second press is asked for. Before this every
+  Back left the app, whatever was open. The iOS app has no Back: the edge swipe is the page's (it
+  opens the workspace list), and WKWebView's back-forward swipe stays off.
 - `HerdrShellPlugin` and `PCStore` (SharedPreferences) mirror the iOS plugin and store. As on
   iOS, a pairing link stays in memory until a PC page loads.
 - Capacitor injects its bridge only into the PC's origin, so `error.html`, served from the app

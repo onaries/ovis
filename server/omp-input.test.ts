@@ -123,6 +123,21 @@ describe("omp's predicted next prompt", () => {
     expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}open the PR${RESET}`, rule, status))).toBe("open the PR");
   });
 
+  test("a pi prediction that begins like another shape's gutter keeps it (#3643)", () => {
+    const rule = `${fg(61, 66, 74)}${"─".repeat(118)}${RESET}`;
+    expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}| continue${RESET}`, rule, status))).toBe("| continue");
+    // a claude-shape row whose `❯ ` is drawn in the prediction's own color reads past it: blanked whole, that row
+    // would read as pi's (#3643)
+    expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}\u001b[38;5;244mopen the PR${RESET}`, rule, status))).toBe("open the PR");
+    // and its empty composer's right-aligned hint is no prediction, nor read from the `❯ ` on. omp draws the hint's
+    // key (⇧⇥) in its accent; here all of it is in the dim, the case where only the `❯ ` reading could take it
+    expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}${" ".repeat(80)}\u001b[38;5;244mShift+Tab effort${RESET}`, rule, status))).toBeNull();
+    // a pi prediction starting like another shape's gutter is offered whole: blanked, no shape's empty row is left
+    for (const cap of ["+ ", "▐ ", "▎ ", "╰─ "]) expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}${cap}check the diff${RESET}`, rule, status)), cap).toBe(`${cap}check the diff`);
+    // the box's IME-safe gutter, drawn in its border color, is still no part of the prediction
+    expect(parseOmpSuggestion(screen(`${fg(61, 66, 74)}╭─ π > GPT-6.1 Sol ${"─".repeat(90)}╮${RESET}`, `${fg(61, 66, 74)}│ ${RESET}${DARK_DIM}open the PR${RESET}`, `${fg(61, 66, 74)}╰${"─".repeat(116)}╯${RESET}`))).toBe("open the PR");
+  });
+
   test("nothing while text is typed: omp paints it in its contrast-safe fallback for the theme's text", () => {
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}hello typed text${RESET}`)))).toBeNull();
     expect(parseOmpSuggestion(screen(status, band(`${fg(0, 0, 0)}hello typed text${RESET}`)))).toBeNull();
@@ -151,6 +166,12 @@ describe("omp's predicted next prompt", () => {
     expect(parseOmpSuggestion(screen(status, band(`\u001b[1m${fg(126, 87, 194)}/skill:review${RESET}`)))).toBeNull();
     // a 256-color cell a theme's accent also maps to
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;60mhello typed text${RESET}`)))).toBeNull();
+    // a typed model @mention, which omp 18.14 draws bold in statusLineModel: six built-in themes map that to the cells 59
+    // and 248 without truecolor, another theme's dim; a prediction in those cells is never bold (#3643)
+    for (const cell of [59, 248]) {
+      expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;${cell}m\u001b[1m◆ opus-5.5\u001b[22m\u001b[39m${RESET}`)))).toBeNull();
+      expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;${cell}mopen the PR${RESET}`)))).toBe("open the PR");
+    }
   });
 
   test("nothing for a queue draft's header, drawn in the same dim over the draft's blank first row", () => {

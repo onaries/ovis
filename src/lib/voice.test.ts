@@ -383,13 +383,14 @@ describe("createVoiceEngine", () => {
   }
   class FakeRecorder {
     static made: FakeRecorder[] = [];
+    static emitStart = true;
     state = "inactive";
     mimeType = "audio/webm";
     ondataavailable: ((event: { data: Blob }) => void) | null = null;
     onstart: (() => void) | null = null;
     onstop: (() => void) | null = null;
     constructor(readonly stream: FakeStream) { FakeRecorder.made.push(this); }
-    start() { this.state = "recording"; this.onstart?.(); }
+    start() { this.state = "recording"; if (FakeRecorder.emitStart) this.onstart?.(); }
     stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["audio"]) }); this.onstop?.(); }
   }
   class FakeSpeech {
@@ -422,6 +423,7 @@ describe("createVoiceEngine", () => {
     uploads = [];
     uploadedLanguages = [];
     FakeRecorder.made = [];
+    FakeRecorder.emitStart = true;
     FakeSpeech.made = [];
     for (const name of GLOBALS) saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
     saved.set("mediaDevices", Object.getOwnPropertyDescriptor(navigator, "mediaDevices"));
@@ -495,6 +497,18 @@ describe("createVoiceEngine", () => {
       const idle = reached("idle");
       uploads[0]!(new Response('{"type":"done","text":"teszt"}\n'));
       await idle;
+    } finally { voice.cancel(); }
+  });
+
+  it("leaves preparing when a silent recorder has not emitted start", async () => {
+    FakeRecorder.emitStart = false;
+    const { voice, states } = engine();
+    try {
+      voice.press();
+      micRequests[0]!(new FakeStream());
+      await drain();
+      frames.pop()!(performance.now() + 1000);
+      expect(states.at(-1)).toBe("recording");
     } finally { voice.cancel(); }
   });
 

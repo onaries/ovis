@@ -104,6 +104,9 @@ try {
       await page.goto(url());
       await page.locator(".conn-live").waitFor({ state: "attached" });
       await page.locator(".pane-frame.is-current .chat-turn").first().waitFor();
+      // the demo ends this turn 4.5 s after load (site/demo/transport.ts) and adds its final answer to it: search the
+      // conversation as it is after that, never across it
+      await page.locator(".pane-frame.is-current .chat-turn").getByText("6 tests pass.", { exact: false }).first().waitFor();
 
       await paneMenu(page, width);
       if (evidence) await page.screenshot({ path: join(evidence, `conversation-search-menu-${width}.png`) });
@@ -113,7 +116,7 @@ try {
       await dialog.getByText("Searched the whole conversation.").waitFor();
       // the agent's answers and the user's message; the commentary before the tools is work, and no tool's output counts
       assert.deepEqual(await dialog.locator(".conversation-search-snippet").allTextContents(), [
-        "Adding a payments_idempotent_replays_total counter next to the existing request metrics.",
+        "Adding a payments_idempotent_replays_total counter next to the existing request metrics. Added payments_idempotent_replays_total, incremented where a stored response is replayed, and exposed…",
         "Nice. Now add a metric for replayed requests.",
         "…colliding. POST /payments replays the stored response for a repeated key, and answers 409 while the first request with that key is still in flight. A repeated key with a different body is…",
       ]);

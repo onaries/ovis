@@ -1,7 +1,7 @@
 /**
  * Simplified Chinese for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx.
+ * components/SidebarSplit.tsx, components/AgentInbox.tsx.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_ZH: Record<string, string> = {
@@ -32,6 +32,10 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Loading agents…": "正在加载代理…",
   "Herdr workspaces": "herdr 工作区",
   "No agents running": "没有运行中的代理",
+  "Search agents": "搜索 Agent",
+  "Clear search": "清除搜索",
+  "Filter agents by state": "按状态筛选 Agent",
+  "No agents match": "没有匹配的 Agent",
   "Expand worktrees of {name}": "展开 {name} 的工作树",
   "Collapse worktrees of {name}": "折叠 {name} 的工作树",
   "Agents: {names}": "代理：{names}",

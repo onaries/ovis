@@ -47,7 +47,7 @@ import { authorizedTranscript } from "./transcript-store.ts";
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, herdrSocketPath, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, type HistorySegment, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, parseCodexTranscript, readRange } from "./codex.ts";
+import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, type HistorySegment, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, paneCodexProcess, parseCodexTranscript, readRange } from "./codex.ts";
 import { awaited, CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, darwinProcess, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, jobClaude, processClaudeConfigDir, windowsShellClaude } from "./claude-store.ts";
@@ -68,7 +68,7 @@ import { AGY_CATALOG_BYTES, AgyUnavailable, agyCatalogOffThread, agyDatabasePath
 import { agyFreshSession, resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
 import { FileBusyError } from "./file-pool.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
-import { resolveMuseSession } from "./muse-store.ts";
+import { MuseLogUnreadable, resolveMuseSession } from "./muse-store.ts";
 import { LettaUnavailable, lettaToolOutputOffThread, parseLettaTranscript } from "./letta.ts";
 import { programName } from "./agent-identity.ts";
 import { lettaLocalSettings, resolveLettaTranscript } from "./letta-store.ts";
@@ -93,7 +93,6 @@ import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, t
 import { copilotSetAside } from "./copilot.ts";
 import { DevinLockMissing, devinLockProof, devinSessionForPane, isDevinProcess, type DevinLockProof } from "./devin-session.ts";
 import { userHome } from "./user-home.ts";
-import { kiroCodexProcess } from "./kiro-terminal.ts";
 import { manualCodexTranscript } from "./codex-manual.ts";
 
 export { isOmoProcess } from "./omo.ts";
@@ -1682,10 +1681,37 @@ const JOB_PROCESSES = 256;
  * process below it (JOB_DEPTH levels, JOB_PROCESSES processes, each once), and each one's state and command line.
  * Ctrl+Z stops the job's whole process group, so the agent itself is stopped even when a launcher (`npx opencode`,
  * `sh -c 'opencode; …'`) is the shell's child. `pid`, when known, is the agent process the pane was verified with:
- * only it counts, not another stopped copy of the agent. Without /proc (macOS), or a process gone meanwhile,
- * nothing is found.
+ * only it counts, not another stopped copy of the agent, and it is followed up its parents to the shell instead, so
+ * a shell with more processes than the walk reads still finds it. Without /proc (macOS), or a process gone
+ * meanwhile, nothing is found.
  */
 export async function stoppedAgentJob(shellPid: number, agent: string, { pid = null, proc = "/proc" }: { pid?: number | null; proc?: string } = {}): Promise<boolean> {
+  /** `pid (comm) state ppid …`: the command name may itself hold ") ", the fields follow its last one */
+  const stat = async (process: string): Promise<{ name: string; state: string; parent: string } | null> => {
+    const text = await readFile(`${proc}/${process}/stat`, "utf8").catch(() => "");
+    const open = text.indexOf("(");
+    const close = text.lastIndexOf(")");
+    if (open < 0 || close < open) return null;
+    const [state = "", parent = ""] = text.slice(close + 2).split(" ");
+    return { name: text.slice(open + 1, close), state, parent };
+  };
+  const isAgent = async (process: string, name: string): Promise<boolean> => {
+    const argv = (await readFile(`${proc}/${process}/cmdline`, "utf8").catch(() => "")).split("\0").filter(Boolean);
+    // its process name too, which herdr labels the pane by: a script named after the agent runs under its shell
+    return programName(name) === agent || agentProcesses([{ argv, name }], agent).length > 0;
+  };
+  if (pid !== null) {
+    const own = await stat(String(pid));
+    if (own?.state !== "T" || !await isAgent(String(pid), own.name)) return false;
+    let parent = own.parent;
+    for (let depth = 0; depth < JOB_DEPTH; depth++) {
+      if (parent === String(shellPid)) return true;
+      const next = await stat(parent);
+      if (next === null || next.parent === parent) return false;
+      parent = next.parent;
+    }
+    return false;
+  }
   const seen = new Set([String(shellPid)]);
   let level = [String(shellPid)];
   for (let depth = 0; depth < JOB_DEPTH && level.length > 0; depth++) {
@@ -1697,16 +1723,8 @@ export async function stoppedAgentJob(shellPid: number, agent: string, { pid = n
         if (seen.has(child) || seen.size > JOB_PROCESSES) continue;
         seen.add(child);
         next.push(child);
-        if (pid !== null && child !== String(pid)) continue;
-        const stat = await readFile(`${proc}/${child}/stat`, "utf8").catch(() => "");
-        // `pid (comm) state …`: the command name may itself hold ") ", the state follows its last one
-        const open = stat.indexOf("(");
-        const close = stat.lastIndexOf(")");
-        if (open < 0 || close < open || stat[close + 2] !== "T") continue;
-        const name = stat.slice(open + 1, close);
-        const argv = (await readFile(`${proc}/${child}/cmdline`, "utf8").catch(() => "")).split("\0").filter(Boolean);
-        // its process name too, which herdr labels the pane by: a script named after the agent runs under its shell
-        if (programName(name) === agent || agentProcesses([{ argv, name }], agent).length > 0) return true;
+        const found = await stat(child);
+        if (found?.state === "T" && await isAgent(child, found.name)) return true;
       }
     }
     level = next;
@@ -2226,7 +2244,7 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       agent = "kiro";
       if (known === undefined) known = (info?.process_info as KnownProcesses) ?? null;
     }
-    else if (await kiroCodexProcess(info?.process_info as ProcessInfo | undefined) !== null) agent = "codex";
+    else if (await paneCodexProcess(paneId, (info?.process_info as ProcessInfo | undefined) ?? null) !== null) agent = "codex";
   }
   if (agent === "omo" || agent === "pi" || agent === "claude") {
     // Herdr may retain Pi's identity after the same pane starts agy.
@@ -2255,7 +2273,10 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       return { source: "grok-transcript", path: found };
     }
     if (agent === "muse") {
-      const path = await resolveMuseSession(pane, museData, known);
+      const path = await resolveMuseSession(pane, museData, known).catch((error: unknown) => {
+        if (error instanceof MuseLogUnreadable) throw new ConversationUnavailable("transcript_unreadable");
+        throw error;
+      });
       if (path === null) throw new ConversationUnavailable("no_session_path");
       return { source: "muse-transcript", path };
     }

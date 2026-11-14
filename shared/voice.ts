@@ -5,9 +5,11 @@
  */
 
 export type VoiceMode = "chat" | "terminal";
+export type VoiceProvider = "openai" | "elevenlabs";
 
 /** GET /api/voice and the answer to PUT /api/voice/config. */
 export interface VoiceStatus {
+  provider: VoiceProvider;
   /** a key is set: the server can transcribe */
   configured: boolean;
   /** where the key comes from; an env key cannot be changed from the app */
@@ -24,6 +26,7 @@ export interface VoiceStatus {
  * sets the key: a key is not sent to a server other than the one it was saved for.
  */
 export interface VoiceConfigUpdate {
+  provider?: VoiceProvider;
   api_key?: string | null;
   base_url?: string | null;
   transcribe_model?: string | null;
@@ -70,7 +73,13 @@ export const VOICE_KEYWORDS_MAX = 50;
 export const VOICE_KEYWORD_MAX_CHARS = 80;
 
 export const VOICE_DEFAULTS = {
+  provider: "openai",
   base_url: "https://api.openai.com/v1",
   transcribe_model: "gpt-transcribe",
   polish_model: "gpt-6-luna",
+} as const;
+
+export const ELEVENLABS_VOICE_DEFAULTS = {
+  base_url: "https://api.elevenlabs.io/v1",
+  transcribe_model: "scribe_v2",
 } as const;

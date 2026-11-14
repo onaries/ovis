@@ -19,12 +19,13 @@ import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http
 import { claudePlanFile } from "./claude-plan.ts";
 import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
-import { registry } from "./dialogs/registry.ts";
+import { agentPickerWaits, registry, SCREEN_READ_AGENTS } from "./dialogs/registry.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, type PromptDraft, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, own, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
 import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
 import { CODEX_WORKING_RE, codexFooterLine, codexRuntimeError } from "./dialogs/codex.ts";
 import { LETTA_SEARCH_MAX, lettaPick, lettaSearchShown } from "./dialogs/letta.ts";
+import { agyCustomEditorMatches, agySameQuestion, parseAgyQuestion } from "./dialogs/agy.ts";
 import { sameText } from "./dialogs/omo.ts";
 import { OMP_REVIEW_HINT_RE, OMP_TABS_HINT_RE } from "./dialogs/omp.ts";
 import { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
@@ -44,7 +45,7 @@ export { removedInvisible } from "./dialogs/claude.ts";
 export { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
 export type { OmoAsk } from "./dialogs/shared.ts";
 export { parseFallbackPrompt } from "./dialogs/fallback.ts";
-export { CLAUDE_CLEAR_INPUT_KEYS, INPUT_BOX_SHOWN_CHARS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, historyEndShowsLive, isClaudeHeld, parseClaudeSuggestion, shownInputBox, viewportShowsLive } from "./claude-input.ts";
+export { CLAUDE_CLEAR_INPUT_KEYS, INPUT_BOX_SHOWN_CHARS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeSendAnywayBox, claudeInputBoxText, foldedPlaceholder, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, historyEndShowsLive, isClaudeHeld, parseClaudeSuggestion, shownInputBox, viewportShowsLive } from "./claude-input.ts";
 export { hermesInputDraft } from "./hermes-input.ts";
 export { OpenCodePromptState } from "./opencode-prompt.ts";
 export { openOmoAsks, pendingOmoAsk } from "./omo-questions.ts";
@@ -513,12 +514,14 @@ export function parseInteractivePrompt(agent: string, screen: string, omoAsk: Om
 
 class InvalidAnswer extends Error {}
 
+/** Computes the sequence of terminal keys and text steps needed to answer `prompt` with `answer`. */
 export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer, "option_index" | "option_indices" | "custom_text">): AnswerStep[] {
   const parsed = parsedByPublicPrompt.get(prompt);
   if (!parsed) throw new InvalidAnswer("The prompt was not produced by parseInteractivePrompt.");
   if (parsed.piQuestionnaireInput !== undefined) throw new InvalidAnswer("Finish or cancel the terminal-owned questionnaire draft in the terminal.");
+  const combined = Boolean(parsed.checks_with_text && parsed.multi_select && answer.option_indices !== undefined && answer.custom_text !== undefined && answer.option_index === undefined);
   const supplied = [answer.option_index !== undefined, answer.option_indices !== undefined, answer.custom_text !== undefined].filter(Boolean).length;
-  if (supplied !== 1) throw new InvalidAnswer("Exactly one answer is required.");
+  if (supplied !== 1 && !combined) throw new InvalidAnswer("Exactly one answer is required.");
 
   if (answer.custom_text !== undefined) {
     if (typeof answer.custom_text !== "string") throw new InvalidAnswer("Custom text must be a string.");
@@ -526,6 +529,9 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
     // question, review, or composer. Validate before trimming and before any navigation.
     if ((parsed.responder === "pi-ask-question" || parsed.responder === "pi-questionnaire-question") && /[\u0000-\u001f\u007f-\u009f]/.test(answer.custom_text)) {
       throw new InvalidAnswer("Pi custom answers must be one line without control characters.");
+    }
+    if (parsed.responder === "agy-question" && (/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/.test(answer.custom_text))) {
+      throw new InvalidAnswer("Custom text contains unsupported control characters.");
     }
     // Letta's model search takes each character as a key: a control one is a command there (Enter picks, Esc closes
     // the picker), and one past U+FFFF (or half of one) is not the one unit a key of Letta's search holds (dialogs/letta.ts)
@@ -536,14 +542,25 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
       throw new InvalidAnswer(`A model search holds at most ${LETTA_SEARCH_MAX} characters.`);
     }
     const text = answer.custom_text.trim();
-    if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question")) throw new InvalidAnswer("This prompt does not accept a custom answer.");
+    if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question" && !parsed.checks_with_text)) throw new InvalidAnswer("This prompt does not accept a custom answer.");
+    let picked: number[] | undefined;
+    if (answer.option_indices !== undefined) {
+      if (!Array.isArray(answer.option_indices)) throw new InvalidAnswer("Option indices must be an array.");
+      picked = [...new Set(answer.option_indices)];
+      if (picked.some((choice) => !Number.isInteger(choice) || choice < 0 || choice >= parsed.options.length)) {
+        throw new InvalidAnswer("An option index is outside the displayed range.");
+      }
+      // ticks with typed text are sent only by a card whose own steps take both (agy's write-in); any other card that
+      // says it takes them (pi-ask's form, answered through its bridge) would type the text and drop the ticks
+      if (!parsed.customSteps) throw new InvalidAnswer("This prompt does not take ticks and typed text together.");
+    }
     if (parsed.responder === "fallback-gjc-menu") {
       if (/[\r\n]/.test(text)) throw new InvalidAnswer("Use the terminal for a multiline GJC custom answer.");
       if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) throw new InvalidAnswer("Custom text contains unsupported control characters.");
       // GJC handles bracketed paste atomically without /, @ or # autocomplete, as in core/pending.ts.
       return [...keySteps([...navigationKeys(parsed.customMenuIndex - parsed.selectedIndex), KEY.enter]), { text: `\u001b[200~${text}\u001b[201~` }, ...keySteps([KEY.enter])];
     }
-    if (parsed.customSteps) return parsed.customSteps(text);
+    if (parsed.customSteps) return parsed.customSteps(text, picked);
     // Claude's multiple choice: typing into the row ticks it, and Enter on Submit, the row under
     // it, sends the choice (→ in the row would move the text's cursor; measured on 2.1.301)
     if (parsed.multi_select) return [...keySteps(navigationKeys(parsed.customMenuIndex - parsed.selectedIndex)), { text }, ...keySteps([KEY.down, KEY.enter])];
@@ -787,8 +804,12 @@ async function fallbackCard(paneId: string, agent: string, status: string | unde
   // show immediately; only an unrecognized screen waits for this bounded settling window.
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   // a pi pane gets no generic card (readKnownPrompt says so through suppressFallback)
-  if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) return null;
+  if (known.prompt !== null || known.suppressFallback || !agent || settling) return null;
+  // herdr reports some agents at rest under a picker of their own (their folder trust at start): read only for agents
+  // no reader knows, the one pass that may show the card while herdr says no answer is waited for
+  if (status !== "blocked" && SCREEN_READ_AGENTS.has(agent)) return null;
   const screen = known.screen ?? await liveScreen(paneId);
+  if (status !== "blocked" && !agentPickerWaits(agent, screen)) return null;
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
   // (registry.waits); Claude's own input box (a `❯` or bash `!` row between the last two rules)
@@ -981,6 +1002,7 @@ async function withOmpMarkdown(paneId: string, cwd: string, prompt: InteractiveP
   return { prompt: markdown ? ompMarkdownPrompt(bound, open) : bound, unverified: unverified ?? called.unverified, rebind };
 }
 
+/** Reads a known interactive prompt from a pane's native state or live terminal screen. */
 async function readKnownPrompt(
   paneId: string,
   pane: { cwd?: string | null; agent_status?: string; agent_session?: HerdrPane["agent_session"] },
@@ -1145,7 +1167,9 @@ async function readKnownPrompt(
     return { prompt: publicPrompt(parsed) };
   }
 
-  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", "letta", ""].includes(agent)) return { prompt: null };
+  // Antigravity's question has a reader (dialogs/agy.ts); its other screens, the folder trust at start among them, stay
+  // with the fallback card and the picker guard, so it is named here and not in SCREEN_READ_AGENTS
+  if (!SCREEN_READ_AGENTS.has(agent) && agent !== "agy") return { prompt: null };
   const piTranscript = agent === "pi" ? await piTranscriptPath(paneId).catch(() => null) : null;
   // pi-ask's ask_user form, as the web UI's pi extension reports it: answered through pi-ask, never keys
   if (piTranscript && "path" in piTranscript) {
@@ -1226,9 +1250,9 @@ async function readKnownPrompt(
     return parseInteractivePrompt(agent, drawn, omoAsks[0] ?? null, omoTrusted, omoAsks, held, pane.agent_status === "working");
   };
   let prompt = piNative ? publicPrompt(piNative) : parseDrawn(screen);
-  // Letta's own pickers only (dialogs/letta.ts): any other Letta screen keeps the card it had, the
-  // generic one while herdr reports it blocked
-  if (agent === "letta" && prompt && !parsedByPublicPrompt.get(prompt)?.responder.startsWith("letta-")) prompt = null;
+  // Letta's and agy's own dialogs only (dialogs/letta.ts, dialogs/agy.ts): any other screen keeps the
+  // card it had, the generic one while herdr reports it blocked
+  if ((agent === "letta" || agent === "agy") && prompt && !parsedByPublicPrompt.get(prompt)?.responder.startsWith(`${agent}-`)) prompt = null;
   let rebind = (card: InteractivePrompt): InteractivePrompt => card;
   if (prompt && agent === "omp") {
     const read = await withOmpMarkdown(paneId, pane.cwd ?? "", prompt, markdown, ompBindings);
@@ -1494,6 +1518,7 @@ const SUGGESTION_PARSERS: Readonly<Record<string, (ansi: string) => string | nul
   omp: parseOmpSuggestion,
 };
 
+/** Handles `GET /api/pane/prompt` and `POST /api/pane/prompt/answer` requests. */
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {
   if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer") return null;
   setRequestRoute(url.pathname);
@@ -1617,7 +1642,18 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         const read = await Promise.race([reading, Bun.sleep(Math.max(0, readUntil - Date.now())).then(() => null)]);
         const shown = read?.prompt ? parsedByPublicPrompt.get(read.prompt) ?? null : null;
         const settled = read?.settled ? parsedByPublicPrompt.get(read.settled) ?? null : null;
-        if (!read || read.inputUnverified || Date.now() > readUntil || !same(shown, read.screen ?? "", settled)) throw new KeyRefused();
+        // an agent no reader knows (Grok, Copilot, Antigravity, Devin...) gets no screen from readKnownPrompt: a card
+        // checked on the screen alone reads it here, as fallbackCard drew it, or it would be compared with nothing
+        // a stale read (an OpenCode lookup another session overtook) authorizes nothing: it is refused before any
+        // comparison, as an empty screen could make the same generic card as the one the answer was read for
+        if (read?.stale) throw new KeyRefused();
+        const readsLive = read?.screen === undefined && screenOnly && parsedPrompt?.responder.startsWith("fallback") === true;
+        const screen = read?.screen ?? (read && readsLive
+          ? await Promise.race([liveScreen(body.pane_id).catch(() => null), Bun.sleep(Math.max(0, readUntil - Date.now())).then(() => null)])
+          : null);
+        // that read awaited too: a request given up meanwhile sends nothing (the asking itself is checked by `same`)
+        if (readsLive && request.signal.aborted) throw new KeyRefused();
+        if (!read || read.inputUnverified || Date.now() > readUntil || !same(shown, screen ?? "", settled)) throw new KeyRefused();
         // pi's select and confirm compare by the dialog drawn, which pi leaves on the screen when it ends, and a
         // dialog moved off its first row has no card to compare: pi must still hold the pane after this read too
         if ((parsedPrompt?.responder === "pi-question" || parsedPrompt?.responder === "pi-confirm") && !(await piOwnsInput(body.pane_id))) throw new KeyRefused();
@@ -2038,7 +2074,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const dialog = parsePiDialog(screen, true);
             return dialog?.id === parsed.id && dialog.selectedIndex === cursor && promptTailIsActive(dialog, screen);
           }
-          return shown?.id === parsed.id && shown.selectedIndex === cursor && ticked(shown)
+          if (shown === null || !(responder === "agy-question" ? agySameQuestion(shown, parsed) : shown.id === parsed.id)) return false;
+          return shown.selectedIndex === cursor && ticked(shown)
             && (responder !== "pi-questionnaire-question" || shown.piQuestionnaireInput === undefined);
         };
         /**
@@ -2078,19 +2115,25 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // a fallback card is the screen's own (readPrompt draws it when no reader knows the screen): the same card by
           // what it asks and offers, whatever else ticked on the screen since (a spinner, a timer, a token count)
           if (responder.startsWith("fallback")) {
+            if (!asks()) return false;
             const card = parsedByPublicPrompt.get(parseFallbackPrompt(agent, screen));
             return card?.id === parsed.id && (!onCursor || card.selectedIndex === cursor);
           }
-          return shown?.id === parsed.id && shown.question === parsed.question && shown.ompCall === parsed.ompCall
+          // an Antigravity multiple choice's id reads its ticks, which this answer's own Spaces change (ticked checks them)
+          if (shown === null || !(responder === "agy-question" ? agySameQuestion(shown, parsed) : shown.id === parsed.id)) return false;
+          return shown.question === parsed.question && shown.ompCall === parsed.ompCall
             && shown.nativeSteps?.index === parsed.nativeSteps?.index
             && (!onCursor || (shown.selectedIndex === cursor && ticked(shown) && (settled === null || (settled.selectedIndex === cursor && ticked(settled)))));
         };
-        // Hermes's multi-select: every key, the ticks after the first and the Enter that locks them, is on the same
+        // Hermes's and agy's multi-select: every key, the ticks after the first and the Enter that locks them, is on the same
         // question, so each is checked against it as the first was, with the rows ticked as this answer's own Spaces left them
-        const togglesInPlace = responder === "hermes-question" && body.option_indices !== undefined;
+        let agyWriteInOpened = false;
+        const togglesInPlace = (): boolean =>
+          (responder === "hermes-question" && body.option_indices !== undefined)
+          || (responder === "agy-question" && parsed.multi_select && !agyWriteInOpened);
         const ticks = new Set(parsed.checkedOptionIndices);
         function ticked(shown: ParsedPrompt): boolean {
-          return !togglesInPlace || (shown.checkedOptionIndices.length === ticks.size && shown.checkedOptionIndices.every((index) => ticks.has(index)));
+          return !togglesInPlace() || (shown.checkedOptionIndices.length === ticks.size && shown.checkedOptionIndices.every((index) => ticks.has(index)));
         }
         const sendStep = async (step: AnswerStep, move: boolean, more: boolean): Promise<void> => {
           const write = async (): Promise<void> => {
@@ -2113,7 +2156,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // Letta's search: each key after the first is looked for as the first was, in the picker showing the search
           // the keys before it left (customEditorReady waited for that drawing); a picker closed meanwhile gets none
           const lettaTyping = committed && responder === "letta-model" && body.custom_text !== undefined;
-          if (!committed || togglesInPlace || lettaTyping) {
+          if (!committed || togglesInPlace() || lettaTyping) {
             // every key up to the answer's first one that cannot be undone, that one included: the question as asked
             const onCursor = !move && (step.keys?.every((key) => key === KEY.enter || key === KEY.space) ?? false);
             const { written } = await verifyThenSend(look, guardUntil, Date.now() + SETTLE_MS,
@@ -2167,6 +2210,21 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             }
             return false;
           }
+          if (responder === "agy-question") {
+            while (asks() && !request.signal.aborted && Date.now() < deadline) {
+              const read = await Promise.race([
+                paneRead({ paneId: body.pane_id, source: "detection" }),
+                Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null),
+              ]);
+              if (!read || !asks() || request.signal.aborted || Date.now() >= deadline) return false;
+              if (agyCustomEditorMatches(read.text, parsed, ticks, draft)) return true;
+              if (customTyped) return false;
+              const before = parseAgyQuestion(read.text);
+              if (!agySameQuestion(before, parsed) || before.selectedIndex !== parsed.customMenuIndex || !ticked(before)) return false;
+              await Bun.sleep(50);
+            }
+            return false;
+          }
           while (asks() && !request.signal.aborted && Date.now() < deadline) {
             const read = await Promise.race([
               paneRead({ paneId: body.pane_id, source: "detection" }),
@@ -2203,7 +2261,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const move = step.keys?.every((key) => key === KEY.up || key === KEY.down || (sideways && (key === KEY.left || key === KEY.right))) ?? false;
             // the asking ended under the answer: no further key, whatever the screen shows
             if (!asks()) return promptChanged();
-            if ((responder === "fallback-gjc-menu" || responder === "pi-ask-question" || responder === "pi-questionnaire-question") && body.custom_text !== undefined && committed) {
+            if ((responder === "fallback-gjc-menu" || responder === "pi-ask-question" || responder === "pi-questionnaire-question" || (responder === "agy-question" && agyWriteInOpened)) && body.custom_text !== undefined && committed) {
               if (!(await customEditorReady(customTyped ? body.custom_text.trim() : ""))) return promptChanged();
               if (step.text !== undefined) customTyped = true;
             }
@@ -2211,24 +2269,25 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             if (responder === "letta-model" && body.custom_text !== undefined && committed && !(await customEditorReady(lettaSearch))) return promptChanged();
             // GJC's selector can close under the answer: its composer must not take the moves.
             if (move && walked && (list || reader?.reread === "each-move" || responder === "fallback-gjc-menu") && !(await onRow())) return promptChanged();
-            if (!move && (!committed || togglesInPlace)) {
+            if (!move && (!committed || togglesInPlace())) {
               // The first irreversible step goes only once the menu shows the expected cursor.
               // Later keys follow as before: the menu itself changes under them. Hermes's ticks and
               // Enter after the first tick wait for the cursor and the ticks the last keys left.
-              if ((moved || (togglesInPlace && committed)) && !(await onRow())) return promptChanged();
+              if ((moved || (togglesInPlace() && committed)) && !(await onRow())) return promptChanged();
               if (request.signal.aborted) return promptChanged();
             }
             // herdr may press the key and lose its reply; a possibly pressed key ends the asking.
             const key: AnswerStep | null = step.pick ? (seen as ParsedPrompt | null)?.rowKey ?? null : step;
             if (key === null) return promptChanged();
             await sendStep(key, move, index < steps.length - 1);
+            if (responder === "agy-question" && body.custom_text !== undefined && !move && key.keys?.includes(KEY.enter)) agyWriteInOpened = true;
             if (key.text !== undefined) lettaSearch += key.text;
             for (const pressed of key.keys ?? []) if (pressed === KEY.backspace) lettaSearch = lettaSearch.slice(0, -1);
             if (move) {
               moved = true;
               walked = true;
               for (const key of step.keys!) cursor = key === KEY.down || key === KEY.right ? cursor + 1 : Math.max(0, cursor - 1);
-            } else if (togglesInPlace && step.keys?.length === 1 && step.keys[0] === KEY.space) {
+            } else if (togglesInPlace() && step.keys?.length === 1 && step.keys[0] === KEY.space) {
               if (!ticks.delete(cursor)) ticks.add(cursor);
             }
           }

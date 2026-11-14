@@ -2,7 +2,7 @@
 // the Ovis relay, with offers made the way a PC makes them (shared/relay-offer.ts).
 import { describe, expect, it } from "bun:test";
 // @ts-expect-error app/web is plain JavaScript the app carries as is, without types
-import { APP_ORIGIN, parseAddress, relayLink } from "../app/web/shell.js";
+import { APP_ORIGIN, loopbackHost, openFailure, parseAddress, relayLink, tailnetHost } from "../app/web/shell.js";
 import { exportPublicKey, generateKeyPair } from "../shared/relay-e2ee.ts";
 import { encodeOffer } from "../shared/relay-offer.ts";
 
@@ -65,6 +65,34 @@ describe("relay pairing links", () => {
   it("leaves a PC's own address to open as before", () => {
     for (const text of ["https://pc.tail1234.ts.net", "100.64.0.1:7421/?pair=123456", "https://pc.example.com/#settings"]) {
       expect([text, link(text)]).toEqual([text, null]);
+    }
+  });
+});
+
+describe("why an address did not open", () => {
+  it("tells this phone's own addresses, which never reach the PC", () => {
+    for (const text of ["localhost:17531", "http://127.0.0.1:17531", "http://127.1.2.3/", "http://[::1]:7317", "https://app.localhost"]) {
+      expect([text, loopbackHost(parseAddress(text).hostname)]).toEqual([text, true]);
+    }
+    for (const text of ["192.168.0.10:7317", "https://my-pc.tail1234.ts.net", "http://128.0.0.1/"]) {
+      expect([text, loopbackHost(parseAddress(text).hostname)]).toEqual([text, false]);
+    }
+  });
+
+  it("tells Tailscale addresses as error.html does", () => {
+    for (const text of ["100.64.0.1:7317", "100.127.255.1", "https://pc.tail1234.ts.net", "http://[fd7a:115c:a1e0::1]:7317"]) {
+      expect([text, tailnetHost(parseAddress(text).hostname)]).toEqual([text, true]);
+    }
+    for (const text of ["100.63.0.1", "100.128.0.1", "192.168.0.10", "https://ts.net.example.com"]) {
+      expect([text, tailnetHost(parseAddress(text).hostname)]).toEqual([text, false]);
+    }
+  });
+
+  it("says nothing for a cancelled open and something for every other refusal", () => {
+    const url = parseAddress("192.168.77.20:7317");
+    expect(openFailure(url, "cancelled", "Cancelled")).toBe("");
+    for (const code of ["not-ovis", "refused", "timeout", "unknown-host", "no-answer", undefined]) {
+      expect([code, openFailure(url, code, "x").length > 0]).toEqual([code, true]);
     }
   });
 });

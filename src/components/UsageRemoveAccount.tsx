@@ -3,7 +3,7 @@ import { Trash2 } from "lucide-react";
 import type { ProviderUsage } from "../../shared/protocol.ts";
 import { ApiError, removeUsageAccount, restoreUsageAccount } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
-import { PROVIDER_NAME, usageName } from "../lib/usage.ts";
+import { PROVIDER_NAME, RECORDER_NAME, usageName } from "../lib/usage.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** Forget a list entry, not a CLI credential: Restore under Removed from Ovis, or its next followed sign-in, brings it back. */
@@ -16,8 +16,11 @@ export function UsageRemoveAccount({ usage }: { readonly usage: ProviderUsage })
     <button ref={trigger} type="button" className="icon-button" aria-label={t("Remove {name}", { name })} title={t("Remove {name}", { name })} onClick={() => setConfirm(true)}>
       <Trash2 aria-hidden="true" />
     </button>
+    {/* an account known from another tool's record alone has no sign-in of this PC's to speak of: the record is what stays */}
     {confirm && <ConfirmDialog title={t("Remove {name}?", { name })}
-      body={t("Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.")}
+      body={usage.recorded?.signed_in === false
+        ? t("Remove this account from Ovis? {tool} keeps its record of it, and Restore under Removed from Ovis brings it back.", { tool: RECORDER_NAME[usage.recorded.by] })
+        : t("Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.")}
       confirmLabel={t("Remove")} onClose={() => setConfirm(false)} onConfirm={async () => {
         const parent = trigger.current?.closest<HTMLElement>("[data-section]");
         await removeUsageAccount(usage.key);

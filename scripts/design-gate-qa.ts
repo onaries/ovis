@@ -283,6 +283,8 @@ interface Surface {
   pane?: string;
   /** No pane in the address: the app as a first run draws it. */
   plain?: boolean;
+  /** What the page shows once it has loaded, when not the setup guide or the connection chip. */
+  ready?: string;
   query?: string;
   /** The lens the pane opens in (chat by default). */
   view?: "chat" | "terminal";
@@ -453,6 +455,11 @@ const SURFACES: Surface[] = [
     run: async (page) => { await page.locator(".sidebar-shell").first().waitFor({ state: "visible" }); await settle(page); },
   },
   { id: "drawer-open", only: "phone", pane: panes.api, run: openDrawer },
+  {
+    id: "phone-inbox", only: "phone", plain: true, ready: ".agent-inbox", storage: { "ovis:phone-inbox": "true" },
+    // the list also stands while it says Loading agents…: measured once a row is drawn
+    run: async (page) => { await page.locator(".agent-inbox .inbox-item").first().waitFor(); await settle(page); },
+  },
   {
     id: "held-messages", pane: panes.web,
     storage: {
@@ -1122,7 +1129,7 @@ async function visit(browser: Browser, origin: string, surface: Surface, viewpor
     try {
       const url = surface.plain ? `${origin}${PREFIX}` : `${origin}${PREFIX}?pane=${encodeURIComponent(surface.pane ?? panes.api)}&view=${surface.view ?? "chat"}${surface.query ?? ""}`;
       await page.goto(url);
-      await page.locator(surface.plain ? ".setup-guide, .setup-welcome, .conn-live" : ".conn-live").first().waitFor({ state: "attached", timeout: 20_000 });
+      await page.locator(surface.ready ?? (surface.plain ? ".setup-guide, .setup-welcome, .conn-live" : ".conn-live")).first().waitFor({ state: "attached", timeout: 20_000 });
       await appFaces(page, "가나다");
       await surface.run?.(page, env);
       if (SELF_TEST) await page.addStyleTag({ content: SELF_TEST_CSS });

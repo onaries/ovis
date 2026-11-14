@@ -164,10 +164,10 @@ async function fetchBundle(platform: string, signal: AbortSignal, options: Insta
 
 export const posixHost: RemoteHost = {
   kind: "posix",
-  bundleDescription: "Private web bridge bundle (Bun, Node and node-pty; no build tools needed)",
+  bundleDescription: "Private web bridge bundle (the Ovis server, Node and node-pty; no build tools needed)",
   logHint: "~/.config/herdr-web-ui/bridges/bridge.log",
   async inspect(ssh, session, socket) {
-    const inspection = await ssh.run(REMOTE_PATH + `printf '%s\\n' "$(uname -s)" "$(uname -m)" "$(cd -P "$HOME" && pwd -P)" "\${XDG_CONFIG_HOME:-$HOME/.config}" "$(command -v herdr || true)"; test -x "$HOME/${BUNDLE_DIR}/bin/bun" && printf 'bundle-ready\\n' || true; for d in "$HOME/.local/share/herdr-web-ui/remote-v"*; do if test -x "$d/bin/bun"; then printf 'bundle-older\\n'; break; fi; done; for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`);
+    const inspection = await ssh.run(REMOTE_PATH + `printf '%s\\n' "$(uname -s)" "$(uname -m)" "$(cd -P "$HOME" && pwd -P)" "\${XDG_CONFIG_HOME:-$HOME/.config}" "$(command -v herdr || true)"; test -x "$HOME/${BUNDLE_DIR}/ovis-server" && printf 'bundle-ready\\n' || true; for d in "$HOME/.local/share/herdr-web-ui/remote-v"*; do if test -x "$d/ovis-server" || test -x "$d/bin/bun"; then printf 'bundle-older\\n'; break; fi; done; for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`);
     const [os, arch, home, xdgConfig, herdrPath, ...lines] = inspection.split("\n");
     if (!["Linux", "Darwin"].includes(os ?? "") || !["x86_64", "aarch64", "arm64"].includes(arch ?? "")) throw new Error(UNSUPPORTED_HOST);
     if (!home?.startsWith("/")) throw new Error("The SSH account's home directory ($HOME) could not be read on this PC");
@@ -195,7 +195,7 @@ export const posixHost: RemoteHost = {
     const { asset, input } = await fetchBundle(platform, signal, options);
     // Verify on BOTH hosts, extract into staging and atomically rename. No user-wide
     // Bun/Node/herdr installation is changed; the complete runtime lives in this dir.
-    await ssh.run(`set -eu; umask 077; base="$HOME/.local/share/herdr-web-ui"; mkdir -p "$base"; ${POSIX_INSTALL_LOCK} tmp=$(mktemp -d "$base/install.XXXXXX"); trap 'rm -rf "$tmp"; ${POSIX_INSTALL_RELEASE}' EXIT HUP INT TERM; if command -v timeout >/dev/null; then timeout ${INSTALL_UPLOAD_TIMEOUT_S} cat > "$tmp/bundle.tgz"; else cat > "$tmp/bundle.tgz"; fi; if command -v sha256sum >/dev/null; then actual=$(sha256sum "$tmp/bundle.tgz" | cut -d ' ' -f 1); else actual=$(shasum -a 256 "$tmp/bundle.tgz" | cut -d ' ' -f 1); fi; test "$actual" = ${shellQuote(asset.sha256)}; mkdir "$tmp/runtime"; tar xzf "$tmp/bundle.tgz" -C "$tmp/runtime"; test -x "$tmp/runtime/bin/bun"; test -x "$tmp/runtime/bin/node"; test -x "$tmp/runtime/bin/herdr"; "$tmp/runtime/bin/bun" --version; "$tmp/runtime/bin/herdr" --version; "$tmp/runtime/bin/node" "$tmp/runtime/server/pty/smoke.mjs"; release="$HOME/${BUNDLE_DIR}-${asset.sha256.slice(0, 16)}"; if test ! -d "$release"; then mv "$tmp/runtime" "$release"; fi; ln -s "$release" "$tmp/current"; if test -d "$HOME/${BUNDLE_DIR}" && test ! -L "$HOME/${BUNDLE_DIR}"; then mv "$HOME/${BUNDLE_DIR}" "$HOME/${BUNDLE_DIR}-legacy-$(date +%s)"; fi; "$release/bin/bun" -e 'require("node:fs").renameSync(process.argv[1], process.argv[2])' "$tmp/current" "$HOME/${BUNDLE_DIR}"`, input, 30 * 60_000);
+    await ssh.run(`set -eu; umask 077; base="$HOME/.local/share/herdr-web-ui"; mkdir -p "$base"; ${POSIX_INSTALL_LOCK} tmp=$(mktemp -d "$base/install.XXXXXX"); trap 'rm -rf "$tmp"; ${POSIX_INSTALL_RELEASE}' EXIT HUP INT TERM; if command -v timeout >/dev/null; then timeout ${INSTALL_UPLOAD_TIMEOUT_S} cat > "$tmp/bundle.tgz"; else cat > "$tmp/bundle.tgz"; fi; if command -v sha256sum >/dev/null; then actual=$(sha256sum "$tmp/bundle.tgz" | cut -d ' ' -f 1); else actual=$(shasum -a 256 "$tmp/bundle.tgz" | cut -d ' ' -f 1); fi; test "$actual" = ${shellQuote(asset.sha256)}; mkdir "$tmp/runtime"; tar xzf "$tmp/bundle.tgz" -C "$tmp/runtime"; test -x "$tmp/runtime/ovis-server"; test -x "$tmp/runtime/bin/node"; test -x "$tmp/runtime/bin/herdr"; "$tmp/runtime/ovis-server" remote --help >/dev/null; "$tmp/runtime/bin/herdr" --version; "$tmp/runtime/bin/node" "$tmp/runtime/pty-smoke.mjs"; release="$HOME/${BUNDLE_DIR}-${asset.sha256.slice(0, 16)}"; if test ! -d "$release"; then mv "$tmp/runtime" "$release"; fi; ln -s "$release" "$tmp/current"; if test -d "$HOME/${BUNDLE_DIR}" && test ! -L "$HOME/${BUNDLE_DIR}"; then mv "$HOME/${BUNDLE_DIR}" "$HOME/${BUNDLE_DIR}-legacy-$(date +%s)"; fi; BUN_BE_BUN=1 "$release/ovis-server" -e 'require("node:fs").renameSync(process.argv[1], process.argv[2])' "$tmp/current" "$HOME/${BUNDLE_DIR}"`, input, 30 * 60_000);
   },
   stop: async (ssh, pid) => { await ssh.run(`kill -TERM ${pid}`); },
   async start(ssh, { session, herdrPath, inspection, herdr_socket, start_new_herdr }) {
@@ -203,7 +203,7 @@ export const posixHost: RemoteHost = {
     const remoteHerdr = shellQuote(herdrPath || `${inspection.home}/${BUNDLE_DIR}/bin/herdr`);
     if (herdr_socket !== undefined && !validHerdrSocket(herdr_socket)) throw new Error("Invalid herdr socket path");
     inspection.startupResult = `${inspection.registryDir}/startup-${randomUUID()}.result`;
-    await ssh.run(REMOTE_PATH + `umask 077; mkdir -p "$HOME/.config/herdr-web-ui/bridges"; HERDR_REMOTE_SESSION=${shellQuote(session ?? "")} HERDR_REMOTE_SOCKET=${shellQuote(herdr_socket ?? "")} HERDR_REMOTE_START_NEW=${shellQuote(start_new_herdr ? "1" : "")} HERDR_REMOTE_RESULT=${shellQuote(inspection.startupResult)} OVIS_HERDR_BIN=${remoteHerdr} HERDR_WEB_HERDR_BIN=${remoteHerdr} nohup "$HOME/${BUNDLE_DIR}/bin/bun" "$HOME/${BUNDLE_DIR}/server/remote-entry.ts" </dev/null >>"$HOME/.config/herdr-web-ui/bridges/bridge.log" 2>&1 &`);
+    await ssh.run(REMOTE_PATH + `umask 077; mkdir -p "$HOME/.config/herdr-web-ui/bridges"; HERDR_REMOTE_SESSION=${shellQuote(session ?? "")} HERDR_REMOTE_SOCKET=${shellQuote(herdr_socket ?? "")} HERDR_REMOTE_START_NEW=${shellQuote(start_new_herdr ? "1" : "")} HERDR_REMOTE_RESULT=${shellQuote(inspection.startupResult)} OVIS_HERDR_BIN=${remoteHerdr} HERDR_WEB_HERDR_BIN=${remoteHerdr} nohup "$HOME/${BUNDLE_DIR}/ovis-server" remote </dev/null >>"$HOME/.config/herdr-web-ui/bridges/bridge.log" 2>&1 &`);
   },
   async foundSessions(ssh, inspection) {
     if (!inspection.startupResult) return null;
@@ -217,16 +217,16 @@ export const posixHost: RemoteHost = {
     return { gone, sessions: gone && Array.isArray(result.sessions) && result.sessions.length === 0 ? [] : parseFoundHerdrSessions(result.sessions) };
   },
   async discoverSessions(ssh, inspection) {
-    const script = `import { discoverHerdrSessions } from ${JSON.stringify(inspection.runtimeDir + "/server/herdr-discovery.ts")}; console.log(JSON.stringify(await discoverHerdrSessions()));`;
+    const server = shellQuote(inspection.runtimeDir + "/ovis-server");
     // at most 256 sessions of a few hundred bytes each: an answer past the cap is stopped and refused, never parsed
-    const text = await ssh.run(`if test -x ${shellQuote(inspection.runtimeDir + "/bin/bun")}; then ${shellQuote(inspection.runtimeDir + "/bin/bun")} -e ${shellQuote(script)}; else printf '[]'; fi`, undefined, undefined, DISCOVERY_OUTPUT_BYTES);
+    const text = await ssh.run(`if test -x ${server}; then ${server} remote --discover; else printf '[]'; fi`, undefined, undefined, DISCOVERY_OUTPUT_BYTES);
     const sessions: unknown = JSON.parse(text);
     return Array.isArray(sessions) && sessions.length === 0 ? [] : parseFoundHerdrSessions(sessions);
   },
   async chosenSocketStatus(ssh, inspection, socket) {
     // the installed bundle holds the rule; an older or missing one cannot say
     if (!inspection.bundleReady || !validHerdrSocket(socket)) return null;
-    const status = (await ssh.run(REMOTE_PATH + `HERDR_CHECK_SOCKET=${shellQuote(socket)} "$HOME/${BUNDLE_DIR}/bin/bun" -e 'const { chosenHerdrSocketStatus } = await import(process.env.HOME + "/${BUNDLE_DIR}/server/herdr-discovery.ts"); console.log(await chosenHerdrSocketStatus(process.env.HERDR_CHECK_SOCKET))' 2>/dev/null || true`)).trim();
+    const status = (await ssh.run(REMOTE_PATH + `"$HOME/${BUNDLE_DIR}/ovis-server" remote --socket-status ${shellQuote(socket)} 2>/dev/null || true`)).trim();
     return status === "usable" || status === "gone" || status === "refused" ? status : null;
   },
   async descriptors(ssh) {
@@ -265,7 +265,7 @@ const WINDOWS_DESCRIPTORS = `if (Test-Path -LiteralPath "${WINDOWS_REGISTRY}") {
 
 export const windowsHost: RemoteHost = {
   kind: "windows",
-  bundleDescription: "Private web bridge bundle (Bun only: herdr owns every terminal on Windows)",
+  bundleDescription: "Private web bridge bundle (the Ovis server only: herdr owns every terminal on Windows)",
   logHint: "%USERPROFILE%\\.config\\herdr-web-ui\\bridges\\bridge.log (bridge-<session>.log for a named session)",
   async inspect(ssh, session) {
     const inspection = await ssh.runPowerShell([
@@ -275,8 +275,8 @@ export const windowsHost: RemoteHost = {
       "$herdr = \"$env:LOCALAPPDATA\\Programs\\Herdr\\bin\\herdr.exe\"",
       "if (-not (Test-Path $herdr)) { $herdr = (Get-Command herdr.exe -ErrorAction SilentlyContinue).Source }",
       "Write-Output 'Windows'; Write-Output $env:PROCESSOR_ARCHITECTURE; Write-Output $env:USERPROFILE; Write-Output $env:APPDATA; if ($env:XDG_CONFIG_HOME) { Write-Output $env:XDG_CONFIG_HOME } else { Write-Output '' }; Write-Output $env:LOCALAPPDATA; Write-Output \"$herdr\"",
-      `if (Test-Path "${WINDOWS_BUNDLE}\\bin\\bun.exe") { Write-Output 'bundle-ready' }`,
-      `if (Get-ChildItem "${WINDOWS_BUNDLE_BASE}" -Directory -Filter 'remote-v*' -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\\bin\\bun.exe" }) { Write-Output 'bundle-older' }`,
+      `if (Test-Path "${WINDOWS_BUNDLE}\\ovis-server.exe") { Write-Output 'bundle-ready' }`,
+      `if (Get-ChildItem "${WINDOWS_BUNDLE_BASE}" -Directory -Filter 'remote-v*' -ErrorAction SilentlyContinue | Where-Object { (Test-Path "$($_.FullName)\\ovis-server.exe") -or (Test-Path "$($_.FullName)\\bin\\bun.exe") }) { Write-Output 'bundle-older' }`,
       WINDOWS_DESCRIPTORS,
     ].join("\n"));
     const [os, arch, home, appData, xdgConfigHome, localAppData, herdrPath, ...lines] = inspection.split("\n");
@@ -360,7 +360,7 @@ export const windowsHost: RemoteHost = {
         "  New-Item -ItemType Directory \"$tmp\\runtime\" | Out-Null",
         // Git's GNU tar on PATH interprets a drive-letter archive as a remote host.
         "  & \"$env:SystemRoot\\System32\\tar.exe\" -xzf \"$tmp\\bundle.tgz\" -C \"$tmp\\runtime\"; if ($LASTEXITCODE -ne 0) { throw 'Bundle extraction failed' }",
-        "  & \"$tmp\\runtime\\bin\\bun.exe\" --version | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Bundled Bun does not run on this PC' }",
+        "  & \"$tmp\\runtime\\ovis-server.exe\" remote --help | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'The bundled Ovis server does not run on this PC' }",
         `  $release = "${release}"`,
         "  if (-not (Test-Path $release)) { Move-Item \"$tmp\\runtime\" $release }",
         `  $current = "${WINDOWS_BUNDLE}"`,
@@ -408,7 +408,7 @@ export const windowsHost: RemoteHost = {
       `cd /d "${cmdValue(inspection.home)}" || exit /b 1`,
       // the log beside this launcher (%~dp0, the folder it was started in): the registry's resolved folder, never the
       // legacy path, whose migration junction cmd.exe refuses to traverse when an SSH session started it
-      `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\remote-entry.ts`)}" >> "%~dp0${cmdValue(files.log)}" 2>&1`,
+      `"${cmdValue(`${inspection.runtimeDir}\\ovis-server.exe`)}" remote >> "%~dp0${cmdValue(files.log)}" 2>&1`,
     ];
     await ssh.runPowerShell([
       "$ErrorActionPreference = 'Stop'",

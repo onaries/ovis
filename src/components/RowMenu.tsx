@@ -17,7 +17,7 @@ import "./RowMenu.css";
 import { useT } from "../lib/i18n.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { SHEET_QUERY, useSheetSwipe } from "../lib/sheets.ts";
-import { useSheetHistory } from "../lib/sheetHistory.ts";
+import { BACK_QUERY, useSheetHistory } from "../lib/sheetHistory.ts";
 import { typeAheadFocused } from "../lib/typeAhead.ts";
 import { safeAreaInsets } from "../lib/safeArea.ts";
 
@@ -90,8 +90,8 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   // items' first letters, as a native menu is (G-160)
   const typed = useRef<{ text: string; at: number }>({ text: "", at: 0 });
   useSheetSwipe(surface, sheet ? onClose : null);
-  // Back closes the sheet, not the pane under it
-  useSheetHistory(sheet, onClose);
+  // Back closes the menu, not the pane under it: a phone's sheet, and the popover of a wider screen worked by touch
+  useSheetHistory(useMediaQuery(BACK_QUERY), onClose);
   const [place, setPlace] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   // where the button was when the menu was placed: a scroll that leaves it there is not a reason to close
   const placedAt = useRef<{ top: number; left: number } | null>(null);

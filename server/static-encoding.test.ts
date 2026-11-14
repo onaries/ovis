@@ -12,9 +12,11 @@ const WASM = Buffer.concat([Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x0
 // source into an owned fixture rather than replacing the checkout's built client.
 async function fixture(check: (serve: (path: string, encoding?: string | null) => Promise<Response>) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "herdr-static-encoding-"));
-  mkdirSync(join(root, "server")); mkdirSync(join(root, "dist", "assets"), { recursive: true });
+  mkdirSync(join(root, "server")); mkdirSync(join(root, "shared")); mkdirSync(join(root, "dist", "assets"), { recursive: true });
   const body = 'console.log("synthetic static file");\n';
-  writeFileSync(join(root, "server", "static.ts"), readFileSync(join(import.meta.dir, "static.ts")));
+  // static.ts finds dist/ through entries.ts, beside it
+  for (const file of ["static.ts", "entries.ts"]) writeFileSync(join(root, "server", file), readFileSync(join(import.meta.dir, file)));
+  writeFileSync(join(root, "shared", "web-policy.ts"), readFileSync(join(import.meta.dir, "..", "shared", "web-policy.ts")));
   writeFileSync(join(root, "dist", "index.html"), "<html>fixture shell</html>");
   writeFileSync(join(root, "dist", "sw.js"), body);
   writeFileSync(join(root, "dist", "assets", "legacy.js"), body);
@@ -29,8 +31,15 @@ async function fixture(check: (serve: (path: string, encoding?: string | null) =
   const gzipOnly = join(root, "dist", "assets", "gzip-only.js");
   writeFileSync(gzipOnly, body);
   writeFileSync(`${gzipOnly}.gz`, gzipSync(body));
+  // entries.ts reads OVIS_ASSETS once, as it loads: one exported in the environment the tests run in would have
+  // this copy serve that folder instead of the fixture's own dist/
+  const exported = process.env["OVIS_ASSETS"];
+  delete process.env["OVIS_ASSETS"];
   try { await check((await import(join(root, "server", "static.ts"))).serveStatic); }
-  finally { rmSync(root, { recursive: true, force: true }); }
+  finally {
+    if (exported !== undefined) process.env["OVIS_ASSETS"] = exported;
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 test("serves compressed immutable scripts with original MIME and encoding-specific bytes", () => fixture(async serve => {

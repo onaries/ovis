@@ -15,6 +15,7 @@ const worktreesAsked: string[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
 const textAsked: { method: string; body: string; authorization: string | null; contentType: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
+const catalogAsked: string[] = [];
 const remote = Bun.serve({
   port: 0,
   fetch(request) {
@@ -51,6 +52,10 @@ const remote = Bun.serve({
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
       return Response.json({ icon: null });
+    }
+    if (path === "/api/agent-catalog") {
+      catalogAsked.push(new URL(request.url).search);
+      return Response.json({ platform: "macos", agents: [] });
     }
     if (path === "/api/pane/prompt") {
       const search = new URL(request.url).searchParams;
@@ -93,6 +98,13 @@ describe("PC proxy", () => {
     expect(await unchanged.text()).toBe("");
     expect(asked).toEqual([null, "\"v1\""]);
   });
+});
+
+it("never has a PC run its shell profile again for a watching device's Check again: the PC sees this server's full token", async () => {
+  const url = "http://127.0.0.1/api/machines/pc1/agent-catalog?recheck=1";
+  expect((await handleMachineRequest(new Request(url), manager, undefined, undefined, true)).status).toBe(200);
+  expect((await handleMachineRequest(new Request(url), manager, undefined, undefined, false)).status).toBe(200);
+  expect(catalogAsked).toEqual(["", "?recheck=1"]);
 });
 
 it("never forwards a PC's session history to a watching device, nor a route spelled with a trailing, doubled or encoded slash", async () => {

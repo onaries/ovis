@@ -18,6 +18,22 @@ function socket(stopped: boolean) {
   return { handler, client, ended };
 }
 
+it("calls off unattended alerts when a browser reports active presence", async () => {
+  const viewed = spyOn({ viewed() {} }, "viewed");
+  const handler = createSocket({
+    clients: new Set(), present: new Set(), stopped: () => false, admit: () => true, setRole() {}, watchable: () => false, terminalHistory: () => true,
+    watchPane() {}, unwatchPane() {}, end() {}, holdPending() {}, attachments: new Map(),
+    clientSnapshot: async () => ({}) as SessionSnapshot, herdrLifetime: () => undefined, browserSnapshot: snapshot => snapshot,
+    countVisit() {}, drainOutput() {}, frames: {} as never, onActive: viewed,
+  });
+  const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: () => 1, close() {} };
+  await handler.message!(client, JSON.stringify({ type: "presence", active: false }));
+  expect(viewed).toHaveBeenCalledTimes(0);
+  await handler.message!(client, JSON.stringify({ type: "presence", active: true }));
+  expect(viewed).toHaveBeenCalledTimes(1);
+  viewed.mockRestore();
+});
+
 it("tells a new connection its features before its snapshot, which waits on herdr, and even when that read fails", async () => {
   for (const outcome of ["read", "failed"] as const) {
     let settle: (snapshot: SessionSnapshot) => void = () => {};

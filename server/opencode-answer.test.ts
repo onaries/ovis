@@ -342,6 +342,30 @@ describe("OpenCode answer ordering", () => {
     });
   });
 
+  // The generic card of an OpenCode pane with no form, drawn from its empty screen: the read before the key finds the
+  // lookup overtaken by another session (stale). It has no screen, and the same empty screen would make the same card,
+  // so it must refuse outright: the key would go to the new session unchecked (merge-pass review of #3745)
+  it("sends no key when the lookup right before the key is overtaken by another session", async () => {
+    await fixture(async (f) => {
+      f.forms = [];
+      const prompt = await f.read();
+      expect(prompt.fallback).toBe(true);
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      // the answer's first lookup is answered at once; the next one, the read before the key, waits for the new session
+      f.listing = async () => {
+        f.listing = async () => { entered.resolve(); await release.promise; return Response.json([]); };
+        return Response.json([]);
+      };
+      const answering = f.answer(prompt, { option_index: prompt.options.findIndex((option) => option.label === "Enter") });
+      await entered.promise;
+      f.session = "ses_fixture02";
+      await f.read();
+      release.resolve();
+      expect((await answering).status).toBe(409);
+    });
+  });
+
   it("does not return an empty card for a lookup superseded by another session", async () => {
     await fixture(async (f) => {
       await f.read();

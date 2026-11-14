@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync } from "node:fs";
 
-import type { ConversationMetadata, ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationMetadata, ConversationResponse, ConversationTurn } from "../shared/protocol.ts";
 
 /**
  * A transcript is read a page at a time, the newest page re-read on every append
@@ -45,6 +45,20 @@ export class ConversationUnavailable extends Error {
   constructor(reason: string, readonly screen?: ConversationMetadata, readonly diagnostic?: typeof UNAVAILABLE_DIAGNOSTICS[number], readonly hint?: "copilot_ui_server") {
     super(reason);
     this.name = "ConversationUnavailable";
+  }
+}
+
+/** Why a pane's conversation could not be read, as the chat can say it (ConversationResponse.unavailable); undefined where it has no words for it. */
+export function unavailableReason(error: ConversationUnavailable): ConversationResponse["unavailable"] {
+  if (error.diagnostic === "agent_cwd_missing") return "no_folder";
+  // Copilot's own stages (a log cut or rewritten, a peer, an API refusal) are no "not recorded yet"
+  if (error.diagnostic !== undefined) return undefined;
+  switch (error.message) {
+    case "no_session_id": case "no_session_path": return "not_found";
+    case "no_recognized_transcript": return "no_reader";
+    // a file gone, and a file whose records no reader could take (Muse, Grok, Letta, Agy), alike
+    case "transcript_missing": case "transcript_unreadable": case "branch_unreadable": return "unreadable";
+    default: return undefined;
   }
 }
 

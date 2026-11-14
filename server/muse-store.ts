@@ -4,7 +4,7 @@
  * session directory it opens (`pid=<pid>`, and `host=<host>` on recent builds) and never deletes
  * it; a session the TUI switches away from ends its log with `session.end`.
  */
-import { closeSync, type Dir, fstatSync, opendirSync, openSync, readSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, type Dir, fstatSync, opendirSync, openSync, readSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
@@ -115,7 +115,16 @@ function heldLog(dir: string, owners: readonly MuseOwner[], host: string): strin
     held = fresh.some((owner) => owner.pid === named.pid);
   } catch { return null; }
   const log = join(dir, "session.jsonl");
-  return held && museSessionLive(log) ? log : null;
+  if (!held) return null;
+  if (museSessionLive(log)) return log;
+  // the lock names this pane's Muse, and its log is there but cannot be read: no session yet is not what that is
+  try { accessSync(log, constants.R_OK); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new MuseLogUnreadable(); }
+  return null;
+}
+
+/** The session log this pane's Muse holds is there, and cannot be read (its mode, its owner). */
+export class MuseLogUnreadable extends Error {
+  constructor() { super("Muse session log is unreadable"); this.name = "MuseLogUnreadable"; }
 }
 
 /**
@@ -173,5 +182,8 @@ export async function resolveMuseSession(pane: HerdrPane, data = defaultMuseData
     const owners = (await Promise.all(pids.map(async (pid) => ({ pid, startedAt: await processStartUpperBoundAsync(pid) }))))
       .filter((owner): owner is MuseOwner => owner.startedAt !== null);
     return owners.length === 0 ? null : museSessionFor(data, owners);
-  } catch { return null; }
+  } catch (error) {
+    if (error instanceof MuseLogUnreadable) throw error;
+    return null;
+  }
 }

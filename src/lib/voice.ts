@@ -604,6 +604,9 @@ export function createVoiceEngine(io: EngineIO) {
       }
       if (warmTimer !== null) clearTimeout(warmTimer);
       warmTimer = null;
+      // Opening the microphone can suspend WebAudio during a permission or OS interruption.
+      if (audio && audio.context.state !== "running") await audio.context.resume();
+      if (take !== current) return;
       if (audio && audio.stream !== stream) {
         audio.source?.disconnect();
         audio.source = audio.context.createMediaStreamSource(stream);
@@ -622,8 +625,9 @@ export function createVoiceEngine(io: EngineIO) {
       }
       current.recorder = recorder;
       recorder.ondataavailable = (event) => { if (event.data.size > 0) current.chunks.push(event.data); };
-      recorder.onstart = () => { current.recorderAt = performance.now(); };
       recorder.start(1000);
+      // A gated silent stream may not emit start until it receives audio packets.
+      current.recorderAt = performance.now();
       if (current.gate) recorder.pause();
     } catch (error) {
       if (take !== current) return;

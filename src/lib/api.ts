@@ -916,6 +916,8 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
 export interface HealthInfo {
   ok: boolean;
   herdr: HerdrIdentity;
+  /** this Ovis server's version (`0.5.3`), authenticated only; absent from an older server */
+  version?: string;
   /** `server_id`: this PC's relay ID, told to an authenticated browser where the PC has one; absent from an older server */
   web_ui?: { boot_id: string | null; revision: string | null; server_id?: string };
   /** Absent only on a server that predates the token gate. */
@@ -1230,7 +1232,7 @@ export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]>
 }
 
 /** GET /api/agent-catalog: every agent Ovis can install, with that PC's commands and what it has installed. */
-export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal): Promise<AgentCatalogResponse> {
+export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal, recheck = false): Promise<AgentCatalogResponse> {
   // bounded to 30 s, so a read that never answers ends and Check again can try again; joined by
   // hand, as verifySourceBoot's: AbortSignal.any needs Safari 17.4
   const bounded = new AbortController();
@@ -1239,7 +1241,8 @@ export async function fetchAgentCatalog(machineId = "local", signal?: AbortSigna
   if (signal?.aborted) end();
   else signal?.addEventListener("abort", end, { once: true });
   try {
-    return await getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal: bounded.signal, cache: "no-store" });
+    // recheck (Check again): that PC reads its shells' PATH afresh first; an older one ignores it
+    return await getJson<AgentCatalogResponse>(`${machinePath(machineId, "agent-catalog")}${recheck ? "?recheck=1" : ""}`, { signal: bounded.signal, cache: "no-store" });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", end);

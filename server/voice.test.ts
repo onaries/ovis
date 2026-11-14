@@ -83,7 +83,7 @@ describe("voice config", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({
-      configured: false, source: null, base_url: "https://api.openai.com/v1", transcribe_model: "gpt-transcribe", polish_model: "gpt-6-luna",
+      provider: "openai", configured: false, source: null, base_url: "https://api.openai.com/v1", transcribe_model: "gpt-transcribe", polish_model: "gpt-6-luna",
     } satisfies VoiceStatus);
   });
 
@@ -137,6 +137,16 @@ describe("voice config", () => {
     expect(readFileSync(join(stateDir, "voice.json"), "utf8")).not.toContain(KEY);
   });
 
+  it("requires a new key for a provider change and resets the old provider defaults", async () => {
+    const voice = service();
+    await put(voice, { api_key: KEY, base_url: "https://example.invalid/v1", transcribe_model: "custom" });
+    expect((await put(voice, { provider: "elevenlabs" })).status).toBe(400);
+    const changed = await put(voice, { provider: "elevenlabs", api_key: "eleven-test" });
+    expect(await changed.json()).toMatchObject({ provider: "elevenlabs", base_url: "https://api.elevenlabs.io/v1", transcribe_model: "scribe_v2" });
+    expect((await put(service({ OVIS_OPENAI_API_KEY: KEY }), { provider: "elevenlabs", api_key: "eleven-test" })).status).toBe(409);
+    expect((await put(voice, { provider: "unknown" })).status).toBe(400);
+  });
+
   it("refuses a base_url that is not http(s) and a wrong method", async () => {
     const voice = service();
     const response = await put(voice, { base_url: "ftp://example.com" });
@@ -149,6 +159,24 @@ describe("voice config", () => {
 });
 
 describe("voice transcribe", () => {
+  it("transcribes through ElevenLabs without sending its key to text polishing", async () => {
+    const voice = service();
+    await put(voice, { provider: "elevenlabs", api_key: KEY });
+    handler = (url, init) => {
+      expect(url).toBe("https://api.elevenlabs.io/v1/speech-to-text");
+      expect(new Headers(init.headers).get("xi-api-key")).toBe(KEY);
+      expect(new Headers(init.headers).has("authorization")).toBe(false);
+      const form = init.body as FormData;
+      expect(form.get("model_id")).toBe("scribe_v2");
+      expect(form.get("language_code")).toBe("ko");
+      expect(form.getAll("keyterms")).toEqual(["Ovis"]);
+      expect(form.has("stream")).toBe(false);
+      return Response.json({ text: "Ovis 실행해 줘" });
+    };
+    expect(await events(await transcribe(voice, clipForm({ polish: "1", keywords: '["Ovis"]' })))).toEqual([{ type: "done", text: "Ovis 실행해 줘" }]);
+    expect(requests).toHaveLength(1);
+  });
+
   it("refuses without a key", async () => {
     const response = await transcribe(service(), clipForm());
     expect(response.status).toBe(409);

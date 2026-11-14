@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { version } from "../package.json";
 import type { PcInstallFailure, PcInstallJob, SshTarget } from "../shared/machines.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
@@ -177,7 +177,7 @@ export function installPlanFor(fix: InstallPlan["mode"] | undefined, host: "posi
 let release: string | undefined;
 /** this app's own release (`v0.5.1`): what the installer installs, so both ends speak one bundle version */
 export function appRelease(): string {
-  return release ??= `v${(JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version}`;
+  return release ??= `v${version}`;
 }
 
 class InstallFailed extends Error { constructor(readonly code: PcInstallFailure, message: string) { super(message); } }

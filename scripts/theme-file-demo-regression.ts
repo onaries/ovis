@@ -56,6 +56,21 @@ async function open(browser: Browser, width: number, scheme: Scheme): Promise<{ 
   return { page, errors, close: () => context.close() };
 }
 
+/**
+ * page.waitForFunction, whose timeout names what it waited for and what the page then showed: CI's stack loses the
+ * line that waited, and a 30 s timeout alone does not say which of the waits below it was
+ */
+async function waitDrawn<Arg>(page: Page, predicate: (arg: Arg) => unknown, arg?: Arg, step?: string): Promise<void> {
+  try { await page.waitForFunction(predicate, arg as Arg); }
+  catch (error) {
+    // a page that no longer answers leaves the snapshot pending: it gets two seconds, then the timeout is thrown with none
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const snapshot = page.evaluate(() => ({ palette: document.documentElement.dataset["palette"] ?? null, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(), rows: localStorage.getItem("ovis:custom-theme-rows") !== null, cards: document.querySelectorAll('.settings-dialog [data-theme-card^="custom:"]').length })).catch(() => null);
+    const state = await Promise.race([snapshot, new Promise<null>((resolve) => { deadline = setTimeout(() => resolve(null), 2_000); })]).finally(() => clearTimeout(deadline));
+    throw new Error(`${(error as Error).message}; ${step ? `at ${step}, ` : ""}waiting for ${String(predicate).replace(/\s+/g, " ").slice(0, 160)} with ${JSON.stringify(arg ?? null)}; the page showed ${JSON.stringify(state)}`, { cause: error });
+  }
+}
+
 let origin = "";
 try {
   await buildDemoApp(app);
@@ -104,7 +119,7 @@ try {
 
             // the example of docs/themes.md: both sides, so both are chosen and the one drawn now changes at once
             await picker.setInputFiles(file("lamplight.json", EXAMPLE));
-            await page.waitForFunction(() => document.documentElement.dataset["palette"] === "custom");
+            await waitDrawn(page, () => document.documentElement.dataset["palette"] === "custom", undefined, "the example file's import");
             await dialog.getByRole("status").filter({ hasText: "Imported Lamplight." }).waitFor();
             const want = deriveTheme(example.theme[scheme]!).vars;
             for (const role of ["bg", "bg-elevated", "text", "text-dim", "accent", "notice", "notice-tint", "term-bg", "syntax-keyword"] as const) {
@@ -117,7 +132,7 @@ try {
             assert.equal((await cards.first().innerText()).trim(), "Lamplight");
             assert.equal(await dialog.locator('[data-theme-card][aria-checked="true"]').count(), 1, `${where}: one card is checked`);
             assert.equal(await dialog.getByRole("list", { name: "Imported themes" }).getByRole("listitem").count(), 1);
-            await page.waitForFunction(() => localStorage.getItem("ovis:custom-theme-rows") !== null);
+            await waitDrawn(page, () => localStorage.getItem("ovis:custom-theme-rows") !== null);
             const saved = await stored(page);
             assert.equal(saved.inMain, false, `${where}: kept in its own key, out of ovis:settings`);
             assert.deepEqual(saved.list?.themes.map((theme) => theme.name), ["Lamplight"]);
@@ -130,7 +145,7 @@ try {
             // the next launch: the boot script alone, with the app's own scripts held back, draws the imported colours
             await page.route("**/*.js", (route) => route.request().url().includes("theme-bootstrap") ? route.continue() : route.abort());
             await page.goto(address(), { waitUntil: "domcontentloaded" });
-            await page.waitForFunction(() => document.documentElement.dataset["palette"] !== undefined);
+            await waitDrawn(page, () => document.documentElement.dataset["palette"] !== undefined);
             assert.equal(await palette(page), "custom", `${where}: the boot script draws the imported theme`);
             assert.equal(await inline(page, "--bg"), want.bg, `${where}: in its own colours, before the app has run`);
             assert.equal(await inline(page, "--text"), want.text);
@@ -144,7 +159,7 @@ try {
 
             // the file edited and imported again: the same card in its new colours, not a second one
             await picker.setInputFiles(file("lamplight.json", EXAMPLE.replace(example.theme[scheme]!.base00, "#123456")));
-            await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === "#123456");
+            await waitDrawn(page, () => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === "#123456");
             assert.equal(await cards.count(), 1, `${where}: an edited file takes its earlier self's place`);
             assert.equal(await cards.first().getAttribute("aria-checked"), "true");
             assert.deepEqual((await stored(page)).list?.themes.map((theme) => theme.name), ["Lamplight"]);
@@ -153,20 +168,20 @@ try {
             await dialog.getByRole("alert").filter({ hasText: "That file is not valid JSON." }).waitFor();
             assert.equal(await token(page, "--bg"), "#123456");
             await picker.setInputFiles(file("lamplight.json", EXAMPLE));
-            await page.waitForFunction((bg) => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === bg, want.bg);
+            await waitDrawn(page, (bg) => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === bg, want.bg);
             assert.equal(await cards.count(), 1);
 
             // a built-in card takes the side back, the imported card takes it again
             const first = dialog.locator('[data-theme-card]:not([data-theme-card^="custom:"])').first();
             const firstId = await first.getAttribute("data-theme-card");
             await first.click();
-            await page.waitForFunction((id) => document.documentElement.dataset["palette"] === id, firstId);
+            await waitDrawn(page, (id) => document.documentElement.dataset["palette"] === id, firstId);
             assert.equal(await inline(page, "--bg"), "", `${where}: a built-in theme leaves none of the imported colours on the document`);
             assert.equal(await cards.first().getAttribute("aria-checked"), "false");
             assert.equal((await stored(page)).list?.[scheme], null, `${where}: the side draws no imported theme`);
             assert.ok((await stored(page)).list?.[other] !== null, `${where}: the other side keeps its own`);
             await cards.first().click();
-            await page.waitForFunction(() => document.documentElement.dataset["palette"] === "custom");
+            await waitDrawn(page, () => document.documentElement.dataset["palette"] === "custom", undefined, "picking the imported theme again");
             assert.equal(await token(page, "--bg"), want.bg);
 
             // a Base16 scheme as published, one side: it goes to that side, and the picker shows that side's cards
@@ -179,7 +194,7 @@ try {
             const after = await stored(page);
             assert.notEqual(after.list?.dark, after.list?.light, `${where}: the light side keeps the theme it had`);
             if (scheme === "dark") {
-              await page.waitForFunction((bg) => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === bg, "#1b2b34");
+              await waitDrawn(page, (bg) => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === bg, "#1b2b34");
             } else {
               assert.equal(await token(page, "--bg"), want.bg, `${where}: a dark scheme does not change the light side drawn now`);
             }
@@ -188,11 +203,11 @@ try {
             // a second theme of the same name with other sides is its own theme, and the two say their sides
             const lone = JSON.stringify({ name: "Lamplight", dark: example.theme.dark });
             await picker.setInputFiles(file("lamplight-dark.json", lone));
-            await page.waitForFunction(() => document.querySelectorAll('.settings-dialog [data-theme-card^="custom:"]').length === 3);
+            await waitDrawn(page, () => document.querySelectorAll('.settings-dialog [data-theme-card^="custom:"]').length === 3);
             assert.deepEqual((await cards.allInnerTexts()).map((text) => text.trim()).sort(), ["Harbor Night", "Lamplight · Dark", "Lamplight · Dark · Light"]);
             assert.equal(await dialog.getByRole("button", { name: "Remove theme Lamplight · Dark · Light", exact: true }).count(), 1);
             await dialog.getByRole("button", { name: "Remove theme Lamplight · Dark", exact: true }).click();
-            await page.waitForFunction(() => document.querySelectorAll('.settings-dialog [data-theme-card^="custom:"]').length === 2);
+            await waitDrawn(page, () => document.querySelectorAll('.settings-dialog [data-theme-card^="custom:"]').length === 2);
             assert.deepEqual((await cards.allInnerTexts()).map((text) => text.trim()).sort(), ["Harbor Night", "Lamplight"], `${where}: alone again, the name stands by itself`);
             // YAML that holds two sides is refused, and told why
             await picker.setInputFiles(file("two.yaml", 'name: "Two"\ndark:\n  base00: "101010"\n  base05: "e0e0e0"\nlight:\n  base00: "ffffff"\n  base05: "202020"\n'));
@@ -202,11 +217,11 @@ try {
             // Remove: the cards go, and a side that drew one is its built-in theme again
             await dialog.getByRole("button", { name: "Remove theme Harbor Night", exact: true }).click();
             await dialog.getByRole("button", { name: "Remove theme Lamplight", exact: true }).click();
-            await page.waitForFunction(() => document.documentElement.dataset["palette"] !== "custom");
+            await waitDrawn(page, () => document.documentElement.dataset["palette"] !== "custom");
             assert.equal(await cards.count(), 0);
             assert.equal(await dialog.getByRole("list", { name: "Imported themes" }).count(), 0);
             assert.equal(await inline(page, "--bg"), "");
-            await page.waitForFunction(() => localStorage.getItem("ovis:custom-theme-rows") === null);
+            await waitDrawn(page, () => localStorage.getItem("ovis:custom-theme-rows") === null);
             assert.deepEqual(await stored(page), { list: { themes: [], dark: null, light: null }, rows: [], inMain: false });
             assert.equal(await dialog.locator('[data-theme-card][aria-checked="true"]').count(), 1, `${where}: a built-in card is checked again`);
             assert.deepEqual(errors, []);

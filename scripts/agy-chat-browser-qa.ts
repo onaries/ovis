@@ -105,9 +105,11 @@ try {
   await activity.waitFor({ state: "detached" });
   assert.equal(await log.getByText("Remove this active prompt", { exact: true }).count(), 0);
   db.exec("DROP TABLE steps");
-  await log.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).waitFor();
+  // the store gone: the reason the PC knows, in place of the general line
+  await log.locator(".chat-unavailable-reason").getByText(/couldn't find or read the file .* keeps this conversation in/u).waitFor();
+  assert.equal(await log.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS Agy desktop/mobile recorded thinking, native activity, live tools, completion, late results, rewind and unavailable-chat notice");
+  console.log("PASS Agy desktop/mobile recorded thinking, native activity, live tools, completion, late results, rewind and unavailable-chat reason");
 } finally {
   const errors: unknown[] = [];
   try { await browser?.close(); } catch (error) { errors.push(error); }

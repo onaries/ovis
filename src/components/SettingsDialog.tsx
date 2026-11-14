@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, CheckCheck, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageCircleQuestionMark, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, OctagonX, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, ShieldAlert, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Timer, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
+import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, CheckCheck, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Inbox, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageCircleQuestionMark, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, OctagonX, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, ShieldAlert, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Timer, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -18,7 +18,7 @@ import { herdrKeys, loadHerdrUi } from "../lib/herdrUi.ts";
 import { HERDR_PREFIX_ACTIONS, type HerdrKeys, type HerdrPrefixAction } from "../../shared/herdr-keys.ts";
 import { WEB_LINK_TARGETS } from "../lib/webPanel.ts";
 import { FILE_OPEN_TARGETS } from "../lib/filePresentation.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, VOICE_ENGINES, enterSendsOn, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, VOICE_ENGINES, enterSendsOn, phoneInboxOn, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
 import { isThemeId, pickTheme, rowFor, THEME_IDS, type DrawnTheme, type Mode, type ThemeId } from "../lib/themes.ts";
 import { chosenTheme, customRow, customRowId, type CustomTheme } from "../lib/customThemes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT, type Translate } from "../lib/i18n.ts";
@@ -47,7 +47,7 @@ import type { PushActionResult } from "../lib/pushHealth.ts";
 import type { HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import type { SecurityFacts } from "../lib/useAccess.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
-import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
+import { ELEVENLABS_VOICE_DEFAULTS, VOICE_DEFAULTS, type VoiceConfigUpdate, type VoiceProvider, type VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { DevicesPanel } from "./DevicesPanel.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -575,7 +575,7 @@ function AppearancePage() {
       </SettingsRow>}
     </SettingsGroup>
 
-    <SettingsFold kind="more" keys={["autoTabNames", "sidebarFilter", "sidebarPeek", "sidebarBackgroundWorkspaces", "sidebarContext", "sidebarAgentTree", "foldHelpers", "agentMarks", "statusIndicators", "fileFontSize"]}>
+    <SettingsFold kind="more" keys={["autoTabNames", "sidebarFilter", "sidebarPeek", "phoneInbox", "sidebarBackgroundWorkspaces", "sidebarContext", "sidebarAgentTree", "foldHelpers", "agentMarks", "statusIndicators", "fileFontSize"]}>
       <SettingsGroup title={t("Sidebar")} section="sidebar-more">
         <SettingsRow icon={Tag} label={t("Name tabs from the first message")} description={t("A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}
           condition={<span className="settings-condition">{t("Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}</span>} reset={["autoTabNames"]}>
@@ -586,6 +586,9 @@ function AppearancePage() {
         </SettingsRow>
         <SettingsRow icon={MousePointer2} label={t("Show the sidebar on hover")} description={t("On this device, while the sidebar is hidden, resting the mouse on its button shows it over the pane until the mouse leaves. Click the button to keep it open.")}>
           <Toggle label={t("Show the sidebar on hover")} checked={settings.sidebarPeek} onChange={(sidebarPeek) => update({ sidebarPeek })} />
+        </SettingsRow>
+        <SettingsRow icon={Inbox} label={t("Agent inbox on a phone")} description={t("On this device, a phone-width window that opens with no pane in its address shows the list of agents, the ones that need you first; from a pane, the header's Back opens it. A tap opens the agent's chat, and Back returns to the list.")} keywords="inbox phone mobile first screen agents list">
+          <Toggle label={t("Agent inbox on a phone")} checked={phoneInboxOn(settings)} onChange={(phoneInbox) => update({ phoneInbox })} />
         </SettingsRow>
         <SettingsRow icon={Layers} label={t("Background workspaces apart")} description={t("On this device, workspaces a tool tagged role=background (herdr workspace report-metadata --token role=background) stand after the others under a folded Background workspaces heading. The open one, and one whose agent asks a question, stay in sight.")}>
           <Toggle label={t("Background workspaces apart")} checked={settings.sidebarBackgroundWorkspaces} onChange={(sidebarBackgroundWorkspaces) => update({ sidebarBackgroundWorkspaces })} />
@@ -961,6 +964,7 @@ function VoiceMore() {
   const [hasVoiceKey, setHasVoiceKey] = useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
   const [voiceModel, setVoiceModel] = useState("");
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProvider>("openai");
   const voiceKeyField = useCallback((field: HTMLInputElement | null) => {
     voiceKeyRef.current = field;
     return () => { voiceKeyRef.current = null; setHasVoiceKey(false); };
@@ -969,6 +973,7 @@ function VoiceMore() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   useEffect(() => { fetchVoiceStatus().then((status) => {
     setVoice(status);
+    setVoiceProvider(status.provider);
     setVoiceBaseUrl(status.base_url);
     setVoiceModel(status.transcribe_model);
   }, () => setVoice(null)); }, []);
@@ -981,6 +986,7 @@ function VoiceMore() {
       setHasVoiceKey(false);
       setVoiceError(null);
       setVoice(saved);
+      setVoiceProvider(saved.provider);
       setVoiceBaseUrl(saved.base_url);
       setVoiceModel(saved.transcribe_model);
       window.dispatchEvent(new Event(VOICE_CONFIG_EVENT));
@@ -989,7 +995,8 @@ function VoiceMore() {
   };
   const baseChanged = voice !== null && voiceBaseUrl.trim() !== voice.base_url;
   const modelChanged = voice !== null && voiceModel.trim() !== voice.transcribe_model;
-  const needsKey = baseChanged && voice?.configured && !hasVoiceKey;
+  const providerChanged = voice !== null && voiceProvider !== voice.provider;
+  const needsKey = (baseChanged || providerChanged) && voice?.configured && !hasVoiceKey;
   return (
     <>
       {settings.voiceInput !== "off" && <>
@@ -1001,7 +1008,7 @@ function VoiceMore() {
             <Segmented label={t("Speech recognition")} value={settings.voiceEngine} onChange={(voiceEngine) => update({ voiceEngine })} options={VOICE_ENGINES.map((voiceEngine) => ({ value: voiceEngine, label: t(voiceEngine === "auto" ? "Auto" : voiceEngine === "browser" ? "Browser" : "API key") }))} />
           </SettingsRow>
         </SettingsGroup>
-        {settings.voiceEngine !== "browser" && (
+        {settings.voiceEngine !== "browser" && voiceProvider === "openai" && (
           <SettingsGroup section="tidy-dictation">
             <SettingsRow icon={WandSparkles} label={t("Tidy dictated text")} description={t("Drops fillers and fixes spacing; code and paths stay as spoken. Where it is off, the text stays exactly as transcribed.")} wide>
               <Segmented label={t("Tidy dictated text")} value={settings.voicePolishChat ? (settings.voicePolishTerminal ? "both" : "chat") : settings.voicePolishTerminal ? "terminal" : "off"} onChange={(where) => update({ voicePolishChat: where === "chat" || where === "both", voicePolishTerminal: where === "terminal" || where === "both" })} options={[{ value: "off", label: t("Off") }, { value: "chat", label: t("Chat") }, { value: "terminal", label: t("Terminal") }, { value: "both", label: t("Both") }] as const} />
@@ -1022,21 +1029,38 @@ function VoiceMore() {
               if (voiceBusy || needsKey || !voiceBaseUrl.trim() || !voiceModel.trim()) return;
               const key = voiceKeyRef.current?.value.trim();
               void changeVoiceConfig({
+                ...(providerChanged ? { provider: voiceProvider } : {}),
                 transcribe_model: voiceModel.trim(),
                 ...(baseChanged ? { base_url: voiceBaseUrl.trim() } : {}),
                 ...(key ? { api_key: key } : {}),
               });
             }}>
+              <label className="voice-provider-field" htmlFor="settings-voice-provider">
+                <span className="settings-label">{t("STT provider")}</span>
+                <select id="settings-voice-provider" aria-label={t("STT provider")} className="input" value={voiceProvider} disabled={voiceBusy || voice.source === "env"} onChange={(event) => {
+                  const provider = event.target.value === "elevenlabs" ? "elevenlabs" : "openai";
+                  const defaults = provider === "elevenlabs" ? ELEVENLABS_VOICE_DEFAULTS : VOICE_DEFAULTS;
+                  setVoiceProvider(provider);
+                  setVoiceBaseUrl(defaults.base_url);
+                  setVoiceModel(defaults.transcribe_model);
+                  if (voiceKeyRef.current) voiceKeyRef.current.value = "";
+                  setHasVoiceKey(false);
+                }}>
+                  <option value="openai">OpenAI</option>
+                  <option value="elevenlabs">ElevenLabs</option>
+                </select>
+              </label>
+              {voiceProvider === "elevenlabs" && <p className="settings-hint">{t("ElevenLabs transcribes with Scribe. Text tidying is unavailable.")}</p>}
               <label className="voice-provider-field">
                 <span className="settings-label">{t("API address")}</span>
                 <input className="input" type="url" value={voiceBaseUrl} required disabled={voiceBusy || voice.source === "env"} autoComplete="off" spellCheck={false} autoCapitalize="off" onChange={(event) => setVoiceBaseUrl(event.target.value)} />
               </label>
-              <p className="settings-hint">{t(voice.source === "env" ? "The API address is set by OVIS_OPENAI_BASE_URL on this PC." : "Use an OpenAI-compatible API address, including /v1 when required.")}</p>
+              <p className="settings-hint">{t(voice.source === "env" ? "The API address is set by OVIS_OPENAI_BASE_URL on this PC." : voiceProvider === "elevenlabs" ? "Use the ElevenLabs API address, including /v1." : "Use an OpenAI-compatible API address, including /v1 when required.")}</p>
               <label className="voice-provider-field">
                 <span className="settings-label">{t("STT model")}</span>
                 <input className="input" value={voiceModel} required disabled={voiceBusy} autoComplete="off" spellCheck={false} autoCapitalize="off" onChange={(event) => setVoiceModel(event.target.value)} />
               </label>
-              {needsKey && <p className="settings-hint">{t("Re-enter the API key when changing the API address.")}</p>}
+              {needsKey && <p className="settings-hint">{t("Re-enter the API key when changing the provider or API address.")}</p>}
               <div className="voice-key">
               {voice.source !== "env" && <input
                 ref={voiceKeyField}
@@ -1051,7 +1075,7 @@ function VoiceMore() {
                 autoCorrect="off"
                 onChange={(event) => setHasVoiceKey(event.target.value.trim().length > 0)}
               />}
-              <button type="submit" className="btn voice-key-save" disabled={voiceBusy || !voiceBaseUrl.trim() || !voiceModel.trim() || needsKey || !(baseChanged || modelChanged || hasVoiceKey)}>{t("Save")}</button>
+              <button type="submit" className="btn voice-key-save" disabled={voiceBusy || !voiceBaseUrl.trim() || !voiceModel.trim() || needsKey || !(providerChanged || baseChanged || modelChanged || hasVoiceKey)}>{t("Save")}</button>
               {voice.source !== "env" && <button type="button" className="btn btn-ghost voice-key-remove" disabled={voiceBusy || !voice.configured} onClick={() => void changeVoiceConfig({ api_key: null })}>{t("Remove key")}</button>}
               </div>
             </form>
@@ -1151,13 +1175,16 @@ function ShortcutsPage() {
           // a chord the browser or the terminal also uses says so on its row, a default one too: the list's
           // " — Reserved" alone did not say whose it is (G-112)
           const rowText = recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : confirming ? riskText(confirming.risk, compactKeys(bindingDisplayKeys(confirming.value))) : selectedRisk ? riskText(selectedRisk, compactKeys(displayedKeys)) : undefined;
+          // a terminal app's close key is the browser's tab close, which Record refuses (exactChordRefusal); and
+          // the two closes differ: the tab's leaves the pane running, the pane's ends it
+          const help = shortcut.id === "close-pane" ? t("{key} closes the browser tab, so it cannot be used here: record another key. Closing a browser tab only disconnects this view; Close pane stops what runs in the pane.", { key: platformIsMac ? "⌘W" : "Ctrl+W" }) : undefined;
           const resetShortcut = (): void => {
             const next = { ...settings.shortcutOverrides };
             delete next[shortcut.id];
             update({ shortcutOverrides: next });
           };
           return (
-            <SettingsRow key={shortcut.id} label={t(shortcut.label)} onReset={Object.hasOwn(settings.shortcutOverrides, shortcut.id) && !shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides) ? resetShortcut : undefined} held={recording?.id === shortcut.id || confirming !== null} wide={!listedOnly(shortcut.id)} description={rowText === undefined ? undefined : <span role="status">{rowText}</span>}>
+            <SettingsRow key={shortcut.id} label={t(shortcut.label)} onReset={Object.hasOwn(settings.shortcutOverrides, shortcut.id) && !shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides) ? resetShortcut : undefined} held={recording?.id === shortcut.id || confirming !== null} wide={!listedOnly(shortcut.id)} description={rowText === undefined ? help : <span role="status">{rowText}</span>}>
               {listedOnly(shortcut.id) ? <span className="settings-keys">{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span> : (
                 <span className="settings-shortcut-control">
                 <button type="button" className="btn settings-shortcut-record" ref={(button) => { if (button) recordButtons.current.set(shortcut.id, button); else recordButtons.current.delete(shortcut.id); }} aria-pressed={recording?.id === shortcut.id} aria-label={t("Record shortcut for {name}", { name: t(shortcut.label) })} onClick={() => { setPending(null); setRecording(recording?.id === shortcut.id ? null : { id: shortcut.id, problem: null }); }}>{recording?.id === shortcut.id ? t("Press keys…") : t("Record")}</button>
@@ -1852,6 +1879,12 @@ function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntim
             <span className="settings-label-line"><Globe className="settings-row-icon" aria-hidden="true" /><a className="settings-link" href="https://ovis.sh/" target="_blank" rel="noreferrer">ovis.sh</a></span>
           </div>
           <a className="btn" href="https://github.com/devswha/ovis" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <span className="settings-label-line"><MessagesSquare className="settings-row-icon" aria-hidden="true" />{t("Questions and chat")}</span>
+          </div>
+          <a className="btn" href="https://ovis.sh/discord" target="_blank" rel="noreferrer">{t("Join Discord")}</a>
         </div>
       </SettingsGroup>
     </SettingsBare.Provider>

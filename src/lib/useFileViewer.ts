@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { outsideSettings } from "./settingsHistory.ts";
-import { FILE_PREVIEW_KEY, WEB_PANEL_BELOW_KEY, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
+import { FILE_PREVIEW_KEY, WEB_PANEL_BELOW_KEY, sheetStep, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
 import type { FilePresentation } from "./filePresentation.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 
@@ -39,6 +39,8 @@ export function useFileViewer() {
 
   useEffect(() => {
     const onPop = (event: PopStateEvent): void => {
+      // the entry Back closed the file off, gone onto again by the file list that takes it: no file to show again
+      if (sheetStep.taking(event)) return;
       closing.current = false;
       // Forward restores the preview with its original PC/pane, including after reload.
       const preview = previewFromState(event.state);

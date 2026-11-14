@@ -14,6 +14,7 @@ export const ALERT_WEBHOOK_PRESETS = ["ntfy", "slack", "discord", "telegram", "j
 export type AlertWebhookPreset = (typeof ALERT_WEBHOOK_PRESETS)[number];
 
 export interface AlertWebhookView {
+  delay_ms?: number;
   configured: boolean;
   preset: AlertWebhookPreset | null;
   /** the URL or token, masked: enough to recognise it, not to use it */
@@ -31,6 +32,8 @@ export interface AlertWebhookView {
 }
 
 export interface AlertWebhookSave {
+  /** Minimum wait before an unattended pane alert reaches this destination. */
+  delay_ms?: number;
   preset: AlertWebhookPreset;
   /** the webhook or ntfy topic URL; absent keeps the one saved (same preset only) */
   url?: string;

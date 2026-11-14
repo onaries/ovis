@@ -23,9 +23,11 @@ function codexQueue(exitsOnRead: boolean) {
   spyOn(native, "openCodeSkillsToType").mockImplementation(async (_pane, sent) => ({ sent, skills: [] }));
   spyOn(native, "startOpenCodeWatch").mockReturnValue(null);
   spyOn(herdr, "agentPrompt").mockImplementation(async () => { throw new herdr.HerdrError("agent_blocked", "questions collapsed"); });
-  spyOn(herdr, "paneRead").mockImplementation(async () => {
+  spyOn(herdr, "paneRead").mockImplementation(async (options) => {
     if (exitsOnRead) alive = false;
-    return { text: QUEUE_SCREEN } as Awaited<ReturnType<typeof herdr.paneRead>>;
+    // with colours (the box's read before the send, composer.ts freeAgentInput), Codex's placeholder is dim
+    const text = options.format === "ansi" ? QUEUE_SCREEN.replace("Ask Codex to do anything", "\u001b[2mAsk Codex to do anything\u001b[0m") : QUEUE_SCREEN;
+    return { text } as Awaited<ReturnType<typeof herdr.paneRead>>;
   });
   spyOn(herdr, "paneSendText").mockImplementation(async (_pane, data) => { writes.push(data); });
   spyOn(herdr, "paneSendKeys").mockImplementation(async (_pane, keys) => { writes.push(keys.join("+")); });

@@ -525,6 +525,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       const watchedPrompt = readOnly && path === "pane/prompt";
       const target = new URL(`${endpoint.url}/api/${path}${url.search}`);
       if (watchedPrompt) target.searchParams.set("plan", "0");
+      // nor has it the PC run its shell profile again: the PC sees this server's full token, not the watch
+      if (readOnly && path === "agent-catalog") target.searchParams.delete("recheck");
       const untrack = manager.trackTerminal(id, () => abort.abort());
       // a move's PC reads its roster again once the move is confirmed, so its receipt is soon shown
       const moved = path === "workspace/move" && request.method === "POST" ? manager.refreshAfterMove(id) : null;

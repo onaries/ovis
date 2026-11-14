@@ -10,7 +10,7 @@
  * skill the same way, and stops at the sender's own refusal.
  */
 import { afterAll, beforeAll, expect, it, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
@@ -76,14 +76,38 @@ afterAll(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/**
+ * The pane's foreground processes, each with where it waits in the kernel and what it holds open, for a failure: a
+ * pane that never drew anything is blocked from its start, and this names the process and the file it waits on.
+ */
+async function paneProcesses(pane: string, cwd: string): Promise<string> {
+  const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid?: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: pane }).catch((error: unknown) => ({ error: String(error) }));
+  const processes = "process_info" in info ? info.process_info?.foreground_processes ?? [] : [];
+  const read = (path: string): string => { try { return readFileSync(path, "utf8").trim(); } catch { return "?"; } };
+  const held = (pid: number): string[] => { try { return readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`); } catch { return "?"; } }); } catch { return []; } };
+  const config = join(cwd, "opencode.json");
+  // whoever else waits in a FIFO's open or holds the folder's opencode.json: herdr's own detection among them
+  const waiting = (() => { try { return readdirSync("/proc").filter((name) => /^\d+$/.test(name)); } catch { return []; } })()
+    .map(Number)
+    // a process blocked opening a FIFO with no writer waits in wait_for_partner and holds no fd on it yet
+    .filter((pid) => { const wchan = read(`/proc/${pid}/wchan`); return wchan === "wait_for_partner" || wchan.includes("fifo") || held(pid).includes(config); })
+    .slice(0, 20)
+    // any process on the machine can match: its name only, never its arguments, which may carry a secret
+    .map((pid) => ({ pid, name: read(`/proc/${pid}/comm`), wchan: read(`/proc/${pid}/wchan`) }));
+  const pane_processes = "error" in info ? info : processes.map(({ pid, argv }) => ({ pid, argv, wchan: pid === undefined ? null : read(`/proc/${pid}/wchan`), fds: pid === undefined ? [] : held(pid) }));
+  return JSON.stringify({ pane_processes, waiting });
+}
+
 /** A new OpenCode pane (the stand-in), its session reported or not, in `state`. */
 async function openCodePane(label: string, session: string | null, cwd: string, state: "working" | "idle"): Promise<string> {
   const created = await workspaceCreate({ cwd, label: `ovis-test-opencode-first-${label}` });
   workspaces.push(created.workspace.workspace_id);
   const pane = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: pane, text: `exec ${standIn} ${label}\n` });
-  for (const deadline = Date.now() + 10_000; (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent !== "opencode";) {
-    if (Date.now() > deadline) throw new Error("the OpenCode stand-in did not start");
+  let seen: unknown;
+  for (const deadline = Date.now() + 10_000; (seen = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane))?.agent !== "opencode";) {
+    // what herdr last said of the pane, so a CI failure tells a slow start from a stand-in that never ran
+    if (Date.now() > deadline) throw new Error(`the OpenCode stand-in did not start: ${JSON.stringify(seen)} ${await paneProcesses(pane, cwd)}`);
     await Bun.sleep(50);
   }
   if (session) await herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:opencode", agent: "opencode", agent_session_id: session, session_start_source: "select" });

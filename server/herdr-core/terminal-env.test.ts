@@ -28,6 +28,14 @@ it.skipIf(win)("gives a terminal the login shell's environment in colour, withou
   for (const name of ["NO_COLOR", "SSH_AUTH_SOCK", "AGENT_SESSION_VAR", "PORT", "OVIS_TOKEN", "HERDR_PANE_ID", "HC_TERMINAL_ID", "PWD", "OLDPWD", "SHLVL", "_"]) expect(env).not.toHaveProperty(name);
 });
 
+it.skipIf(win)("never hands a terminal BUN_BE_BUN, which the compiled server sets to run its own probe as Bun", async () => {
+  // regression: the probe printed its own BUN_BE_BUN=1 back as the login's, and a Bun-compiled program started in such
+  // a pane (Claude Code's native build, this server's own binary) then ran as plain `bun` instead of itself
+  const env = await loginTerminalEnv({ env: fromAgent(homeWith("export BUN_BE_BUN=1 GH_TOKEN=from-profile\n")), shell: "/bin/sh" });
+  expect(env).not.toHaveProperty("BUN_BE_BUN");
+  expect(env["GH_TOKEN"]).toBe("from-profile");
+});
+
 it.skipIf(win)("keeps NO_COLOR when the user's own login sets it", async () => {
   const env = await loginTerminalEnv({ env: fromAgent(homeWith("export NO_COLOR=yes\n")), shell: "/bin/sh" });
   expect(env["NO_COLOR"]).toBe("yes");

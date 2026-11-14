@@ -2170,6 +2170,14 @@ button {
   letter-spacing: var(--tracking-tight);
 }
 
+/* the mark's own span is a box too, as in the tab strip, the sidebar and the composer: an inline
+   span sits its SVG on the text baseline of a line box taller than the mark, which lifts the logo
+   above the header's other icons */
+.context-title .agent-mark {
+  display: inline-flex;
+  flex: none;
+}
+
 /* the header note's sentence (.header-note-text, App.tsx) is cut like the title it stands in for; its
    own class keeps .context-title-text on the pane title alone (the browser checks measure it) */
 .context-title-text,
@@ -3038,7 +3046,8 @@ button {
   }
 
   /* stretched over the header's top inset and its bottom rule, so the sidebar's surface is
-     one piece from the window's top down */
+     one piece from the window's top down; padded by both, so its buttons stay centred on the
+     header's other controls */
   .app:not(.sidebar-collapsed) .header-side {
     display: flex;
     flex: 0 0 var(--sidebar-shown-w);
@@ -3046,7 +3055,7 @@ button {
     align-self: stretch;
     justify-content: space-between;
     margin: calc(-1 * env(safe-area-inset-top, 0px)) var(--space-2) calc(-1 * var(--hairline)) 0;
-    padding: env(safe-area-inset-top, 0px) var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-left, 0px));
+    padding: env(safe-area-inset-top, 0px) var(--space-3) var(--hairline) calc(var(--space-3) + env(safe-area-inset-left, 0px));
     border-right: var(--hairline) solid var(--divider);
     background: var(--bg-nav);
   }

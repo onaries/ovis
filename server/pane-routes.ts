@@ -10,13 +10,13 @@ import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneDocuments, paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
-import { copilotRecoverable } from "./conversation-shared.ts";
+import { copilotRecoverable, unavailableReason } from "./conversation-shared.ts";
 import { MAX_SEARCH_QUERY, searchPattern, type ConversationSearchResponse } from "../shared/conversation-search.ts";
 import { searchConversationPages } from "./conversation-search.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
-import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneMoveBeside, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
+import { agentRename, HerdrError, integrationList, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneGet, paneMoveBeside, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
 import { ompScreenContext } from "./omp-status.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
@@ -26,6 +26,45 @@ import { expandedDirectory } from "./directories.ts";
 import { ConversationDiagnostics } from "./conversation-diagnostics.ts";
 
 const conversationDiagnostics = new ConversationDiagnostics();
+
+/** The agents whose chat herdr's integration alone binds, by the session it reports (opencode.ts, grok-store.ts). */
+const INTEGRATION_BOUND = new Set(["opencode", "grok"]);
+/**
+ * The agents a conversation reader exists for (conversation.ts resolveTranscript): a pane of one that is not read
+ * (a label that does not match its process, a Devin pane with no matching session) is no "Ovis can't read it yet".
+ */
+const READ_AGENTS = new Set(["claude", "codex", "pi", "omp", "omo", "gjc", "dsh", "dsh-tui", "kiro", "copilot", "grok", "agy", "muse", "letta", "kimi", "kimi-code", "devin", "opencode", "hermes", "cmd"]);
+/** each look on a chat's fallback poll is short (the chat's read gives up at 15 s), and the list read again only now and then */
+const LOOK_MS = 2000;
+const INTEGRATION_LIST_TTL_MS = 30_000;
+let integrations: { at: number; list: Promise<Awaited<ReturnType<typeof integrationList>>> } | null = null;
+
+/**
+ * The reason told for a pane, where the pane's agent changes it: `no_reader` only for an agent no reader exists for;
+ * `no_integration` for `not_found` in a pane of an agent whose session only herdr's integration reports, with none
+ * reported and that integration not installed (then none ever is, and installing it is what the user can do). A
+ * failed look says nothing more: no reason rather than a wrong one, or the plainer one.
+ */
+async function paneReason(paneId: string, reason: ReturnType<typeof unavailableReason>): Promise<ReturnType<typeof unavailableReason>> {
+  if (reason !== "not_found" && reason !== "no_reader" && reason !== "unreadable") return reason;
+  try {
+    const pane = await paneGet(paneId, undefined, LOOK_MS);
+    const agent = typeof pane.agent === "string" ? pane.agent : null;
+    // Copilot's reader says what it waits out and what the user can change itself (recovery, hint): a page read
+    // that failed once may answer at the next poll, where a reason line would come and go
+    if (agent === "copilot") return undefined;
+    if (reason === "unreadable") return reason;
+    if (reason === "no_reader") return agent === null || READ_AGENTS.has(agent) ? undefined : reason;
+    if (agent === null || !INTEGRATION_BOUND.has(agent) || pane.agent_session) return reason;
+    if (integrations === null || performance.now() - integrations.at > INTEGRATION_LIST_TTL_MS) {
+      integrations = { at: performance.now(), list: integrationList(undefined, LOOK_MS) };
+      integrations.list.catch(() => { integrations = null; });
+    }
+    return (await integrations.list).some((integration) => integration.target === agent && integration.state === "not_installed") ? "no_integration" : reason;
+  } catch {
+    return reason === "no_reader" ? undefined : reason;
+  }
+}
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -342,7 +381,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       if (error instanceof ConversationUnavailable) {
         conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
         const recovery = page.history_id !== undefined && copilotRecoverable(error.diagnostic) ? { recovery: "waiting" } : {};
-        return jsonResponse({ source: "scrollback", turns: [], ...recovery, ...(error.hint ? { hint: error.hint } : {}), ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+        const unavailable = await paneReason(paneId, unavailableReason(error));
+        return jsonResponse({ source: "scrollback", turns: [], ...recovery, ...(error.hint ? { hint: error.hint } : {}), ...(unavailable ? { unavailable } : {}), ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
       }
       return errorResponse(error);
     }

@@ -79,9 +79,9 @@ it("says the transcript file's size on the newest page only, and again once it g
 describe("an agent the shell stopped as a job", () => {
   // Given /proc as Linux lays it out: each of the shell's threads lists its children, each child its state and argv.
   const proc = mkdtempSync(join(tmpdir(), "stopped-job-proc-"));
-  const child = (pid: number, comm: string, state: string, argv: string[]) => {
+  const child = (pid: number, comm: string, state: string, argv: string[], parent = 41000) => {
     mkdirSync(join(proc, String(pid)), { recursive: true });
-    writeFileSync(join(proc, String(pid), "stat"), `${pid} (${comm}) ${state} 41000 ${pid} 41000 34816 41000 4194304`);
+    writeFileSync(join(proc, String(pid), "stat"), `${pid} (${comm}) ${state} ${parent} ${pid} 41000 34816 41000 4194304`);
     writeFileSync(join(proc, String(pid), "cmdline"), argv.map((word) => `${word}\0`).join(""));
   };
   const shell = (pid: number, threads: Record<string, number[]>) => {
@@ -116,6 +116,13 @@ describe("an agent the shell stopped as a job", () => {
   child(48001, "sh", "T", ["sh"]);
   shell(48000, { "48000": [48001] });
   shell(48001, { "48001": [48000, 48001] });
+  // a shell with more processes than the walk reads, the stopped OpenCode under a launcher listed last
+  const crowd = Array.from({ length: 300 }, (_, index) => 49100 + index);
+  for (const pid of crowd) child(pid, "sleep", "S", ["sleep", "600"], 49000);
+  child(49001, "sh", "T", ["sh", "-c", "opencode"], 49000);
+  child(49002, "opencode", "T", ["/usr/bin/opencode"], 49001);
+  shell(49000, { "49000": [...crowd, 49001] });
+  shell(49001, { "49001": [49002] });
   afterAll(() => rmSync(proc, { recursive: true, force: true }));
 
   it.each([
@@ -138,6 +145,14 @@ describe("an agent the shell stopped as a job", () => {
   ])("counts only the pane's own OpenCode process once it is known, when $case", async ({ pid, found }) => {
     // When / Then
     expect(await stoppedAgentJob(41000, "opencode", { proc, pid })).toBe(found);
+  });
+
+  it.each([
+    { shell: 49000, found: true, case: "it is below that shell, past more processes than the walk reads" },
+    { shell: 41000, found: false, case: "it is below another shell" },
+  ])("follows the pane's own OpenCode up to the shell when $case", async ({ shell, found }) => {
+    // When / Then
+    expect(await stoppedAgentJob(shell, "opencode", { proc, pid: 49002 })).toBe(found);
   });
 });
 

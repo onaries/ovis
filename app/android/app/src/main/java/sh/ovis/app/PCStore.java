@@ -83,6 +83,28 @@ final class PCStore {
     /** Why the PC's page failed, for the error page: WebView's reason, or the HTTP status it answered. */
     static volatile String failure;
 
+    /** What kind of failure that was, when the app itself found it: "timeout" (no answer in ANSWER_SECONDS) or "not-ovis"; else null. */
+    static volatile String failureKind;
+
+    /** Sets the failure the error page shows, and its kind (failureKind), which may be null. */
+    static void fail(String reason, String kind) {
+        failure = reason;
+        failureKind = kind;
+    }
+
+    /** How long the app waits for an address to answer, from Open on the connect screen to the PC's first page (MainActivity's cover), as the iOS app's cover waits. */
+    static final int ANSWER_SECONDS = 20;
+
+    /**
+     * When (SystemClock.elapsedRealtime) the open being checked on the connect screen runs out of
+     * ANSWER_SECONDS, which MainActivity's cover takes over so the check and the first page share one
+     * limit; 0 for an open that started in the activity.
+     */
+    static volatile long answerBy;
+
+    /** The least the first page gets after a check that used most of the limit: an Ovis that answered is given time to send its page. */
+    static final long PAGE_FLOOR_MS = 5000;
+
     /** Redirects in a row that made another origin the PC (MainActivity), so two servers that redirect to each other stop. */
     static volatile int redirects;
 
@@ -180,14 +202,30 @@ final class PCStore {
     }
 
     /** Puts the PC `key` first in the saved PCs: a page of it has loaded, so an address that never answered is not kept. */
-    static void remember(Context context, String key) {
+    static synchronized void remember(Context context, String key) {
         List<String> list = saved(context);
         list.remove(key);
         list.add(0, key);
         setSaved(context, list);
     }
 
-    static void forget(Context context, String key) {
+    /** Counts forgets, and when each PC was forgotten last, so a check that began before a forget does not save that PC again. */
+    private static long forgets;
+    private static final Map<String, Long> forgottenAt = new java.util.HashMap<>();
+
+    /** The forget count now, for rememberUnlessForgotten. */
+    static synchronized long forgetCount() {
+        return forgets;
+    }
+
+    /** remember, unless the PC `key` was forgotten after the count `since` (forgetCount) was taken. */
+    static synchronized void rememberUnlessForgotten(Context context, String key, long since) {
+        Long at = forgottenAt.get(key);
+        if (at == null || at <= since) remember(context, key);
+    }
+
+    static synchronized void forget(Context context, String key) {
+        forgottenAt.put(key, ++forgets);
         List<String> list = saved(context);
         list.remove(key);
         setSaved(context, list);
@@ -221,6 +259,23 @@ final class PCStore {
         if (scope.isEmpty() || scope.equals("/")) return true;
         String path = cleanPath(rawPath(url));
         return path != null && cleanPath(scope) != null && scope.endsWith("/") && (path.endsWith("/") ? path : path + "/").startsWith(scope);
+    }
+
+    /** Whether the PC `key` is a scope (a relay PC on the hosted app) rather than a whole origin. */
+    static boolean scoped(String key) {
+        String scope = rawPath(key);
+        return !scope.isEmpty() && !scope.equals("/");
+    }
+
+    /**
+     * Whether Back is the page's to take: the page shown (`here`) is a page of `place` (a PC's key,
+     * or the app's own origin before one is chosen), and so is the entry behind it (`before`), where
+     * the page keeps what Back returns to: the state under a sheet or a dialog, the pane before. The
+     * first page of the place, a sign-in in front of a PC and the app's error page over a PC that
+     * did not answer have no such entry: there Back leaves the app.
+     */
+    static boolean pageTakesBack(String here, String before, String place) {
+        return here != null && before != null && belongs(here, place) && belongs(before, place);
     }
 
     /**
@@ -341,6 +396,168 @@ final class PCStore {
             && version instanceof BigInteger
             && ((BigInteger) version).compareTo(BigInteger.valueOf(MIN_BRIDGE_PROTOCOL)) >= 0
             && ((BigInteger) version).compareTo(BigInteger.valueOf(MAX_BRIDGE_PROTOCOL)) <= 0;
+    }
+
+    /**
+     * The connect screen's opens while they are checked (HerdrShellPlugin.open): each gets a ticket,
+     * and only the latest one, not cancelled since, may still open its PC. Lock it to act on a ticket.
+     */
+    static final class Openings {
+        private int last;
+
+        synchronized int start() {
+            return ++last;
+        }
+
+        /** Cancel, or the screen gone: no open started before this goes on. */
+        synchronized void cancel() {
+            last++;
+        }
+
+        synchronized boolean current(int ticket) {
+            return ticket == last;
+        }
+    }
+
+    /** What check found an address to be. */
+    static final class Check {
+        /**
+         * "ovis" (an Ovis server, of any version, or the hosted app), "in-front" (its /api/health
+         * redirected: a sign-in in front of the PC or another address, which the WebView then judges),
+         * "unsure" (an answer that does not tell, such as 403 or 502, which the WebView then judges),
+         * "not-ovis" (a web server whose page loads while its /api/health is not Ovis's), or why no
+         * answer came: "refused", "timeout", "unknown-host" or "no-answer".
+         */
+        final String kind;
+        /** The answer that was not Ovis ("HTTP 404"), or the error when no answer came; null otherwise. */
+        final String detail;
+
+        Check(String kind, String detail) {
+            this.kind = kind;
+            this.detail = detail;
+        }
+
+        /** Whether the app opens the address: it is Ovis, or something in front of it decides. */
+        boolean opens() {
+            return kind.equals("ovis") || kind.equals("in-front") || kind.equals("unsure");
+        }
+    }
+
+    /**
+     * Whether `url` is Ovis, before the app opens it as a PC or keeps it: asks its origin's
+     * `/api/health?scope=bridge`, which every Ovis since 0.1 answers to anyone with `ok` and `auth`
+     * (older ones without `bridge_protocol`, so this is looser than answersAsOvis, which decides
+     * which origin gets the bridge). A redirect is left to the WebView, as a sign-in in front of the PC
+     * (Cloudflare Access) answers so. The hosted app (app.ovis.sh, or a copy of it) has no
+     * /api/health: its page says what it is (`<meta name="ovis-shell">`, scripts/shell-build.ts), on
+     * the answer itself where every path serves it, else on `url`'s own page (its path only, never a
+     * pairing link's code). `cookies` (the WebView's for the origin, or null) go with both requests.
+     * Gives up after `budgetMs` in all. Blocks: never call it on the main thread.
+     */
+    static Check check(String url, String cookies, long budgetMs) {
+        String origin = origin(url);
+        if (origin == null) return new Check("no-answer", "not an http or https address");
+        long deadline = System.nanoTime() + budgetMs * 1_000_000L;
+        Answer health;
+        try {
+            health = fetch(origin + "/api/health?scope=bridge", cookies, deadline);
+        } catch (IOException failed) {
+            return new Check(failureKind(failed, deadline), String.valueOf(failed.getMessage()));
+        }
+        if (health.status >= 300 && health.status < 400) return new Check("in-front", null);
+        if (health.status == 200 && (answersAsServer(health.body) || hostedApp(health.body))) return new Check("ovis", null);
+        // only an answer that tells: Ovis stopped behind tailscale serve answers 502, a proxy or WAF may
+        // answer the probe 401, 403 or 429 where the WebView gets in
+        if (health.status != 200 && health.status != 404) return new Check("unsure", "HTTP " + health.status);
+        Answer page;
+        try {
+            page = fetch(origin + cleanStart(url), cookies, deadline);
+        } catch (IOException noPage) {
+            return new Check("unsure", null);
+        }
+        if (page.status == 200 && hostedApp(page.body)) return new Check("ovis", null);
+        // a page that loads without being Ovis, beside a health answer that is not Ovis's
+        if (page.status == 200) return new Check("not-ovis", health.status == 200 ? null : "HTTP " + health.status);
+        return new Check("unsure", "HTTP " + health.status);
+    }
+
+    /** Whether `body` is /api/health as any Ovis server gives it: a JSON object with `ok` true and an `auth` object. */
+    static boolean answersAsServer(String body) {
+        Object answer;
+        try {
+            answer = json(body);
+        } catch (IllegalArgumentException notJson) {
+            return false;
+        }
+        return answer instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) answer).get("ok")) && ((Map<?, ?>) answer).get("auth") instanceof Map;
+    }
+
+    private static final Pattern SHELL_META = Pattern.compile("<meta\\s+name=\"ovis-shell\"", Pattern.CASE_INSENSITIVE);
+
+    /** Whether `body` is the hosted app's page. */
+    static boolean hostedApp(String body) {
+        return SHELL_META.matcher(body).find();
+    }
+
+    /** `url`'s path alone ("/" when it has none): the page to ask, without a pairing link's code. */
+    private static String cleanStart(String url) {
+        String path = rawPath(url);
+        return path.isEmpty() ? "/" : path;
+    }
+
+    /** Why no answer came: the connection refused, no answer before the deadline, a name not found, or anything else. */
+    static String failureKind(IOException failed, long deadline) {
+        if (failed instanceof java.net.UnknownHostException) return "unknown-host";
+        if (failed instanceof java.net.SocketTimeoutException || System.nanoTime() >= deadline) return "timeout";
+        // a connection that fails before the timeout was refused: Android's HttpURLConnection says only
+        // "Failed to connect to /host:port", with no cause; a host or network that cannot be reached (a
+        // PC that is off) says so here or in a cause
+        if (!(failed instanceof java.net.ConnectException)) return "no-answer";
+        for (Throwable cause = failed; cause != null; cause = cause.getCause()) {
+            String message = String.valueOf(cause.getMessage());
+            if (cause instanceof java.net.NoRouteToHostException || message.contains("UNREACH") || message.contains("No route")) return "no-answer";
+        }
+        return "refused";
+    }
+
+    private static final class Answer {
+        final int status;
+        final String body;
+
+        Answer(int status, String body) {
+            this.status = status;
+            this.body = body;
+        }
+    }
+
+    /** A GET of `url`, its redirects not followed, and the first PROBE_MAX_BYTES of its body; ended at `deadline`. */
+    private static Answer fetch(String url, String cookies, long deadline) throws IOException {
+        // rounded up, so the disconnect comes at the deadline or after it, and failureKind reads it as a timeout
+        long left = (deadline - System.nanoTime() + 999_999L) / 1_000_000L;
+        if (left <= 0) throw new java.net.SocketTimeoutException("no answer in time");
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        ScheduledFuture<?> stop = PROBE_DEADLINE.schedule(connection::disconnect, left, TimeUnit.MILLISECONDS);
+        try {
+            connection.setInstanceFollowRedirects(false);
+            connection.setUseCaches(false);
+            connection.setConnectTimeout((int) left);
+            connection.setReadTimeout((int) left);
+            if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
+            int status = connection.getResponseCode();
+            if (status != 200) return new Answer(status, "");
+            try (InputStream in = connection.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                for (int read; out.size() < PROBE_MAX_BYTES && (read = in.read(buffer)) != -1; ) {
+                    out.write(buffer, 0, read);
+                    if (System.nanoTime() > deadline) throw new java.net.SocketTimeoutException("answer too slow");
+                }
+                return new Answer(status, new String(out.toByteArray(), StandardCharsets.UTF_8));
+            }
+        } finally {
+            stop.cancel(false);
+            connection.disconnect();
+        }
     }
 
     /**

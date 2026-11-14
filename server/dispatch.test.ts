@@ -1,5 +1,5 @@
 import { expect, it, spyOn } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleRequest, type ServerContext } from "./dispatch.ts";
@@ -293,4 +293,31 @@ it("marks a socket that only the open LAN let in, one relayed to another PC too,
     app.stop(); endpoint.mockRestore(); upstream.stop(true);
     rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+it("tells the server's built version to a signed-in client only", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-dispatch-version-"));
+  const ping = spyOn(herdr, "ping").mockResolvedValue({ version: "fixture", protocol: 22, terminal_attach: false, terminal_mirror: true });
+  const built = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "owner-token", tailscaleOwner: null, machines: false, sidecar: false });
+  try {
+    const ctx: ServerContext = { ...app.context, requestIP: () => ({ address: "127.0.0.1" }), timeout() {}, upgrade() { throw new Error("Unexpected WebSocket upgrade"); } };
+    const health = async (headers: Record<string, string>, scope = "") =>
+      (await (await handleRequest(new Request(`http://127.0.0.1:${app.port}/api/health${scope}`, { headers: { host: `127.0.0.1:${app.port}`, ...headers } }), ctx))!.json()) as { auth: { authenticated: boolean; role?: string }; version?: unknown };
+    const owner = await health({ authorization: "Bearer owner-token" });
+    expect(owner.auth).toMatchObject({ authenticated: true, role: "drive" });
+    expect(owner.version).toBe(built);
+    const store = app.context.services.devices;
+    const watching = store.pair(store.startPairing().code, "Watcher", "watch");
+    if (!watching) throw new Error("Fixture pairing failed");
+    const watcher = await health({ cookie: `ovis_device=${watching.token}` });
+    expect(watcher.auth).toMatchObject({ authenticated: true, role: "watch" });
+    expect(watcher.version).toBe(built);
+    for (const headers of [{}, { authorization: "Bearer wrong" }] as Record<string, string>[]) {
+      const stranger = await health(headers);
+      expect(stranger.auth.authenticated).toBe(false);
+      expect(stranger).not.toHaveProperty("version");
+    }
+    expect(await health({}, "?scope=bridge")).not.toHaveProperty("version");
+  } finally { app.stop(); ping.mockRestore(); rmSync(stateDir, { recursive: true, force: true }); }
 });

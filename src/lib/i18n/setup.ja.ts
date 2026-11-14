@@ -22,6 +22,7 @@ export const SETUP_JA: Record<string, string> = {
   "Show details": "詳細を表示",
   "Agents you can install": "インストールできるエージェント",
   "No other agents to install here.": "ここにインストールできるほかのエージェントはありません。",
+  "An agent your shell's startup file (.zshrc) puts on PATH may be missing here: Ovis could not read that PATH. Check again reads it once more.": "シェルの起動ファイル（.zshrc）が PATH に追加するエージェントは、ここに表示されないことがあります。Ovis はその PATH を読み取れませんでした。再確認でもう一度読み取ります。",
   "None on this PC yet.": "このPCにはまだありません。",
   "Ovis cannot tell which agents this PC has. Install them from a terminal on it.": "OvisはこのPCにどのエージェントがあるか分かりません。このPCのターミナルからインストールしてください。",
   "Ovis needs {version} or later.": "Ovisには{version}以降が必要です。",
@@ -78,4 +79,5 @@ export const SETUP_JA: Record<string, string> = {
   "Show {name}": "{name} を表示",
   "Cannot check": "確認できません",
   "Manual install": "手動でインストール",
+  "Old record": "古い記録",
 };

@@ -3,9 +3,9 @@ import { ompComposerPromptRow } from "./dialogs/omp.ts";
 /**
  * One character of a screen row as herdr's ANSI read draws it: its foreground (null for the terminal's own,
  * `38;2;r;g;b` or `38;5;n` for an extended one, the code for one of the 16 named ones), and whether it is dim,
- * inverse and blinking.
+ * inverse, blinking and bold.
  */
-interface Cell { char: string; fg: string | null; dim: boolean; inverse: boolean; blink: boolean }
+interface Cell { char: string; fg: string | null; dim: boolean; inverse: boolean; blink: boolean; bold: boolean }
 
 /**
  * A row's characters with the attributes they are drawn in. Only SGR changes them; other escapes are dropped.
@@ -18,8 +18,9 @@ function rowCells(row: string): Cell[] {
   let dim = false;
   let inverse = false;
   let blink = false;
+  let bold = false;
   let offset = 0;
-  const add = (text: string): void => { for (const char of text) cells.push({ char, fg, dim, inverse, blink }); };
+  const add = (text: string): void => { for (const char of text) cells.push({ char, fg, dim, inverse, blink, bold }); };
   const escape = /\u001b(?:\[([0-?]*)[ -/]*([@-~])|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
   for (const match of row.matchAll(escape)) {
     if (match.index > offset) add(row.slice(offset, match.index));
@@ -41,11 +42,12 @@ function rowCells(row: string): Cell[] {
           index += take;
         }
         if (code === 38) fg = color.length === 4 || (color.length === 2 && color[0] === 5) ? `38;${color.join(";")}` : null;
-      } else if (code === 0) { fg = null; dim = false; inverse = false; blink = false; }
+      } else if (code === 0) { fg = null; dim = false; inverse = false; blink = false; bold = false; }
       else if (code === 39) fg = null;
       else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) fg = String(code);
+      else if (code === 1) bold = true;
       else if (code === 2) dim = true;
-      else if (code === 22) dim = false;
+      else if (code === 22) { dim = false; bold = false; }
       else if (code === 5 || code === 6) blink = true;
       else if (code === 25) blink = false;
       else if (code === 7) inverse = true;
@@ -81,9 +83,13 @@ const OMP_DIM_TRUECOLOR = new Set([
 ]);
 const OMP_DIM_256 = new Set([58, 59, 102, 103, 241, 242, 243, 244, 245, 246, 248, 250]);
 
-/** Whether a cell is drawn in a built-in omp theme's `dim` and in no color omp paints typed text in. */
+/**
+ * Whether a cell is drawn in a built-in omp theme's `dim` and in no color omp paints typed text in. omp draws a typed
+ * skill or model @mention bold, in a color that can be another theme's `dim` (statusLineModel: cells 59 and 248 in six
+ * built-in themes), and a prediction never bold (#3643).
+ */
 function ompGhostDrawn(cell: Cell): boolean {
-  if (cell.inverse || cell.fg === null) return false;
+  if (cell.inverse || cell.bold || cell.fg === null) return false;
   const codes = cell.fg.split(";").map(Number);
   if (codes[1] === 5) return OMP_DIM_256.has(codes[2]!);
   if (codes[1] !== 2) return false;
@@ -203,13 +209,23 @@ export function parseOmpSuggestion(ansi: string): string | null {
   const { cells, raw } = screenRows(ansi);
   const rows = filledRows(raw);
   for (const row of rows.slice(-4).reverse()) {
+    const lead = leadingBlanks(cells[row]!);
     const gutter = Array.from(OMP_GUTTER_RE.exec(raw[row]!)![0]).length;
-    const ghost = ghostFrom(cells[row]!, gutter, ompGhostDrawn, true);
-    if (ghost === null || OMP_QUEUE_HEADER_RE.test(ghost.text)) continue;
-    const blanked = raw.slice();
-    blanked[row] = withoutGhost(cells[row]!, ghost);
-    if (ompComposerPromptRow(blanked.map((line) => line.trim()), blanked) !== row) continue;
-    return suggestionWords(ghost.text);
+    // pi's row has no gutter, so a prediction there may begin like the box's IME-safe gutter (`| `): with that gutter,
+    // read from the row's first character first, and let the empty row of the shape on screen tell which it is (#3643).
+    // Any other gutter is read past first, and from the first character only when that finds nothing (a pi prediction
+    // starting `+ `, `▐ `, `▎ ` or `╰─ `: no shape's empty row is left once those are blanked), except `❯ `: a
+    // claude-shape row with it blanked is pi's empty row, so a dim `❯ ` would come back in the prediction
+    const pipe = /^[|│] $/u.test(raw[row]!.slice(lead, gutter));
+    const prompt = raw[row]!.slice(lead, gutter) === "❯ ";
+    for (const start of gutter <= lead ? [gutter] : pipe ? [lead, gutter] : prompt ? [gutter] : [gutter, lead]) {
+      const ghost = ghostFrom(cells[row]!, start, ompGhostDrawn, true);
+      if (ghost === null || OMP_QUEUE_HEADER_RE.test(ghost.text)) continue;
+      const blanked = raw.slice();
+      blanked[row] = withoutGhost(cells[row]!, ghost);
+      if (ompComposerPromptRow(blanked.map((line) => line.trim()), blanked) !== row) continue;
+      return suggestionWords(ghost.text);
+    }
   }
   return null;
 }

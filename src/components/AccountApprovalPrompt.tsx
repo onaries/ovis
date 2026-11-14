@@ -16,6 +16,7 @@ import type { RemotePairingRequest } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
 import { objectParticle } from "../lib/koreanParticle.ts";
 import { useSettings } from "../lib/settings.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 
 export interface AccountApprovalPromptProps {
@@ -76,6 +77,9 @@ export function AccountApprovalCard({ request, pcName, pcCount, asker, onDecide 
     catch (reason: unknown) { setError(reason instanceof Error ? reason.message : String(reason)); setBusy(false); }
   };
 
+  // Back answers nothing: the request shows by itself, and a Back meant for what was on the screen a
+  // moment before must neither deny it nor close what lies under it. Deny and Approve are its ways out
+  usePhoneSheetBack(() => false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || busy) return;

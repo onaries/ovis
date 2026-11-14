@@ -9,10 +9,14 @@
 </head>
 <body>
   <main>
-    <h1 data-ko="PC에 연결할 수 없습니다">Can't reach your PC</h1>
+    <h1 id="title" data-ko="PC에 연결할 수 없습니다">Can't reach your PC</h1>
     <p id="what">The app could not open it.</p>
     <p class="error" id="reason"></p>
     <p id="tailscale" hidden data-ko="Tailscale 주소입니다. 이 휴대폰에서 Tailscale이 꺼져 있을 수 있습니다. Tailscale 앱에서 연결을 켠 뒤 다시 시도를 누르세요.">This is a Tailscale address, and Tailscale may be off on this phone. Turn it on in the Tailscale app, then tap Try again.</p>
+    <p id="not-ovis" hidden data-ko="이 주소는 응답하지만 Ovis가 아닙니다. 다른 웹 서버이거나, 앱이 열 수 없는 herdr 자체입니다. PC 바꾸기를 누르고, PC의 Ovis에서 설정 → 폰 및 기기에 표시된 주소를 여세요.">This address answers, but it is not Ovis: another web server, or herdr itself, which the app cannot open. Tap Change PC and open the address Ovis shows under Settings → Phone &amp; devices on the PC.</p>
+    <p id="refused" hidden data-ko="그 주소에서 기다리는 것이 없습니다. PC에서 Ovis가 실행 중이어야 하고(herdr만으로는 안 됩니다), Ovis는 기본으로 PC 자신(127.0.0.1)에서만 기다립니다. PC의 Ovis에서 설정 → 폰 및 기기에 표시된 주소를 여세요.">Nothing listens at that address. Ovis has to run on the PC (herdr alone is not enough), and by default it listens only on the PC itself (127.0.0.1). Open the address Ovis shows under Settings → Phone &amp; devices on the PC.</p>
+    <p id="loopback" hidden data-ko="휴대폰에서 localhost와 127.0.0.1은 PC가 아니라 휴대폰 자신입니다.">On a phone, localhost and 127.0.0.1 are the phone itself, not your PC.</p>
+    <p id="network" hidden data-ko="PC가 꺼져 있거나 이 휴대폰에서 닿지 않을 수 있습니다. 집 네트워크 주소는 모바일 데이터나 다른 Wi-Fi에서 열리지 않고, PC의 방화벽이 포트를 막을 수도 있습니다.">The PC may be off, or out of this phone's reach: a home network address does not open over mobile data or another Wi-Fi, and a firewall on the PC can block the port.</p>
     <p id="relay" hidden data-ko="이 PC는 Ovis 릴레이를 거쳐 열립니다. 릴레이에 연결할 수 없었습니다. 이 휴대폰이 인터넷에 연결되어 있는지 확인한 뒤 다시 시도를 누르세요.">This PC opens through the Ovis relay. The relay could not be reached: check that this phone is online, then tap Try again.</p>
     <p id="check" data-ko="PC가 켜져 있는지, 거기서 Ovis가 실행 중인지, 이 휴대폰이 PC에 닿을 수 있는지(Tailscale이면 둘 다 같은 tailnet에 있는지) 확인하세요.">Check that the PC is on, that Ovis runs there, and that this phone can reach it (on Tailscale, both in the same tailnet).</p>
     <div class="row">
@@ -61,10 +65,22 @@
     if (relay && state.name) {
       document.getElementById("what").textContent = korean ? `앱이 ${state.name}을(를) 열지 못했습니다.` : `The app could not open ${state.name}.`;
     }
+    // why it failed, when the app or WebView says: not Ovis, nothing listening, or no answer
+    const failure = state.failure ?? "";
+    const notOvis = state.kind === "not-ovis";
+    const refused = !relay && /ERR_CONNECTION_REFUSED/.test(failure);
+    const unreached = !relay && (state.kind === "timeout" || /ERR_(CONNECTION_TIMED_OUT|TIMED_OUT|ADDRESS_UNREACHABLE)/.test(failure));
+    if (notOvis) document.getElementById("title").textContent = korean ? "Ovis가 아닙니다" : "This is not Ovis";
+    document.getElementById("not-ovis").hidden = !notOvis;
+    document.getElementById("refused").hidden = !refused;
+    // whatever the reason (iOS reports a refusal in its own words, with no kind): on a phone, an
+    // address of the phone itself never reaches the PC
+    document.getElementById("loopback").hidden = relay || !(host === "localhost" || host.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(host) || host === "::1");
+    document.getElementById("network").hidden = !unreached;
     document.getElementById("relay").hidden = !relay;
-    document.getElementById("check").hidden = relay;
+    document.getElementById("check").hidden = relay || notOvis || refused || unreached;
     const ipv4 = host.match(/^100\.(\d+)\.\d+\.\d+$/);
-    document.getElementById("tailscale").hidden = relay || /^HTTP \d{3}\b/.test(state.failure ?? "") || !(host.endsWith(".ts.net") || (ipv4 && Number(ipv4[1]) >= 64 && Number(ipv4[1]) <= 127) || host.startsWith("fd7a:115c:a1e0:"));
+    document.getElementById("tailscale").hidden = relay || notOvis || refused || /^HTTP \d{3}\b/.test(state.failure ?? "") || !(host.endsWith(".ts.net") || (ipv4 && Number(ipv4[1]) >= 64 && Number(ipv4[1]) <= 127) || host.startsWith("fd7a:115c:a1e0:"));
   </script>
 </body>
 </html>

@@ -20,7 +20,7 @@ async function fileAction(scope: Locator | Page, name: string): Promise<Locator>
   await item.waitFor();
   return item;
 }
-import { sheetsSettled } from "./sheets-settled.ts";
+import { sheetEntryLeft, sheetsSettled } from "./sheets-settled.ts";
 import { runMoreItem } from "./header-more.ts";
 import type { Machine } from "../shared/protocol.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -196,6 +196,17 @@ let otherWorkspace: string | undefined;
 let sideWorkspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+
+/**
+ * A history state without the marks of a dialog's own entry (lib/sheetHistory.ts). This page is
+ * worked by touch, where a dialog holds an entry while it is up: the entry it opened over reads
+ * the same as the dialog's own once these are left out.
+ */
+const unmarked = (state: unknown): unknown => {
+  if (state === null || typeof state !== "object") return state;
+  const { "ovis:sheet": _sheet, "ovis:sheet-under": _under, ...rest } = state as Record<string, unknown>;
+  return rest;
+};
 
 try {
   // An unborn repository is enough for Changes to show the untracked file; no fixture commit.
@@ -398,6 +409,8 @@ try {
   assert.equal(await narrowGuide.count(), 1, "Escape closes the More menu, not the file");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "More", "and gives the focus back to More");
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "mobile-markdown-320.png") });
+  // the menu's own entry goes first: a Back pressed before that would leave it, with the file still up
+  await sheetEntryLeft(page);
   await page.goBack();
   await narrowGuide.waitFor({ state: "hidden" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -832,7 +845,8 @@ try {
   await filesDialog.waitFor({ state: "detached" });
   await panel.getByRole("button", { name: "Close file", exact: true }).click();
   await panel.waitFor({ state: "detached" });
-  assert.deepEqual(await page.evaluate(() => history.state), beforeMediaDiff, "moving a stacked popup to the panel hands off the diff entry; one Close returns to its opener");
+  // Files, the diff's opener, closed as the file docked: the history is on the entry Files opened over
+  assert.deepEqual(unmarked(await page.evaluate(() => history.state)), unmarked(beforeMediaDiff), "moving a stacked popup to the panel hands off the diff entry; one Close returns to its opener");
   // two clicks on Show beside the pane before the first has landed (or a text file's automatic
   // move in the same moment) collapse the stack once, not twice: a second pair of steps would
   // land on the pane moves above and open the file a second time
@@ -848,7 +862,7 @@ try {
   await mediaDiff.waitFor({ state: "detached" });
   await panel.getByRole("button", { name: "Close file", exact: true }).click();
   await panel.waitFor({ state: "detached" });
-  assert.deepEqual(await page.evaluate(() => ({ state: history.state, pane: new URLSearchParams(location.search).get("pane") })), { state: beforeMediaDiff, pane }, "two clicks collapse once: one Close returns to the diff's opener, on the same pane");
+  assert.deepEqual(await page.evaluate(() => ({ state: history.state, pane: new URLSearchParams(location.search).get("pane") })).then(({ state, pane }) => ({ state: unmarked(state), pane })), { state: unmarked(beforeMediaDiff), pane }, "two clicks collapse once: one Close returns to the diff's opener, on the same pane");
   await openFiles(page);
   await filesDialog.getByRole("button", { name: "Changes", exact: true }).click();
   await filesDialog.locator(".repo-change").filter({ hasText: "preview.webm" }).click();
@@ -858,7 +872,9 @@ try {
   await filesDialog.getByRole("button", { name: "Close files", exact: true }).click();
   await filesDialog.waitFor({ state: "detached" });
   console.log("PASS a wide video handoff stacks above the diff and Close file returns to the diff, also after two clicks");
-  // back over the two pane moves, so the steps after this one start from the pane's own entry
+  // back over the two pane moves, so the steps after this one start from the pane's own entry,
+  // once Files, closed by its button, is off its own
+  await sheetEntryLeft(page);
   await page.goBack();
   await page.waitForFunction((paneId) => new URLSearchParams(location.search).get("pane") === paneId, otherPane);
   await page.goBack();
@@ -1004,7 +1020,12 @@ try {
     await page.setViewportSize({ width, height: 800 });
     await openFiles(page);
     await filesDialog.getByRole("button", { name: "Changes", exact: true }).click();
-    const beforeDiff = await page.evaluate(() => ({ state: history.state, url: location.href }));
+    // Files is up, and on this touch screen holds an entry of its own: where the history is, without a dialog's marks
+    const whereNow = async (): Promise<{ state: unknown; url: string }> => {
+      const { state, url } = await page.evaluate(() => ({ state: history.state as unknown, url: location.href }));
+      return { state: unmarked(state), url };
+    };
+    const beforeDiff = await whereNow();
     await filesDialog.locator(".repo-change").filter({ hasText: "notes.txt" }).click();
     const diff = page.locator(".repo-diff-viewer");
     await diff.waitFor();
@@ -1038,7 +1059,8 @@ try {
     await close.click();
     await panel.waitFor({ state: "detached" });
     assert.equal(await diff.count(), 0, "one Close file does not uncover the diff");
-    assert.deepEqual(await page.evaluate(() => ({ state: history.state, url: location.href })), beforeDiff, "one Close file returns to where the diff opened");
+    // Files closed as the file took the diff's place: the history is on the entry Files opened over
+    assert.deepEqual(await whereNow(), beforeDiff, "one Close file returns to where the diff opened");
     await page.goForward();
     await panel.getByText("File preview history regression", { exact: true }).waitFor();
     await page.reload();
@@ -1046,7 +1068,7 @@ try {
     assert.equal(await page.locator(".repo-diff-scrim, .files-dialog").count(), 0, "reload restores only the file panel");
     await page.goBack();
     await panel.waitFor({ state: "detached" });
-    assert.deepEqual(await page.evaluate(() => ({ state: history.state, url: location.href })), beforeDiff, "one Back consumes the handed-off entry after reload");
+    assert.deepEqual(await whereNow(), beforeDiff, "one Back consumes the handed-off entry after reload");
     console.log(`PASS real App ${width}px diff -> readable file closes both dialogs, exposes Close file, replaces history, reloads, and consumes one Close/Back without a stale diff`);
   }
   await page.setViewportSize({ width: 390, height: 844 });

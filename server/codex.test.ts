@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
-import { codexCallFailed, codexHistoryTail, CodexStoreChanged, openCodexStore, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, footedShortTranscript, footedTailTranscript, withoutVerbatimPrefix } from "./codex.ts";
+import { codexCallFailed, codexLastTurnEnd, codexTurnEnd, codexHistoryTail, CodexStoreChanged, openCodexStore, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, footedShortTranscript, footedTailTranscript, withoutVerbatimPrefix } from "./codex.ts";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { splitTurn } from "../src/lib/workBlocks.ts";
 import rolloutHeaders from "./fixtures/codex-rollout-headers.json";
@@ -1033,6 +1033,13 @@ describe("Codex rollout resolution", () => {
   const answered = (...texts: string[]) => jsonl(message("user", asked), ...texts.map((text) => message("assistant", text)));
   const bullets = (...texts: string[]) => [`› ${asked}`, ...texts.map((text) => `• ${text}`)].join("\n");
 
+  it("still ties a session to its screen after failed turns, whose errors Codex shows in its own words", () => {
+    const failedTurn = jsonl(message("user", "Retry"), event({ type: "task_complete", turn_id: "t", last_agent_message: null, error: { message: "You've hit your usage limit." } }));
+    const candidates = [{ path: "short", text: `${shortRollout}\n${failedTurn}\n${failedTurn}` }, { path: "other", text: jsonl(message("assistant", answer, "final_answer")) }];
+    const screen = [...shortScreen, "› Retry", "■ You've hit your usage limit.", "› Retry", "■ You've hit your usage limit."].join("\n\n");
+    expect(matchShortCodexAnswers(screen, candidates)).toBe("short");
+  });
+
   it("reads a session whose answers are all short by its newest answers shown together, in order", () => {
     const candidates = [
       { path: "short", text: shortRollout },
@@ -1873,5 +1880,55 @@ describe("a Codex pane whose last answer the screen never shows whole (#3262 cas
     expect(footedTailTranscript(codexTurnScreen(null, tail).replace("  Worked for 12s • 7:05 PM", ""), candidates, owners)).toBeNull();
     expect(footedTailTranscript(codexTurnScreen(null, tail).replace("› Ask Codex to do anything", "› and then"), candidates, owners)).toBeNull();
     expect(footedTailTranscript(codexTurnScreen(null, tail.slice(-1)), candidates, owners)).toBeNull();
+  });
+});
+
+describe("a Codex turn that ended in an error", () => {
+  // codex-cli 0.167.0 at its usage limit, as recorded: the turn ends on task_complete with an error and no answer
+  const recorded = readFileSync(new URL("./fixtures/codex-usage-limit-0.167.0-rollout.jsonl", import.meta.url), "utf8");
+
+  it("shows the error Codex recorded under the message, as a failed request", () => {
+    const turns = parseCodexTranscript(recorded);
+    expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
+    expect(turns[1]!.parts).toEqual([{ kind: "text", failed: true,
+      text: "Error: You\u2019ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 13th, 2026 6:05 PM." }]);
+  });
+
+  it("takes no error of a sub-agent's turn for this turn's, though the read began after this turn did", () => {
+    const sub = jsonl(event({ type: "task_complete", turn_id: "sub", root_turn_id: "main", last_agent_message: null, error: { message: "Sub-agent failed" } }));
+    expect(codexTurnEnd(`${sub}\n`)).toBeNull();
+  });
+
+  it("shows no error another turn's end recorded under this one", () => {
+    const started = event({ type: "task_started", turn_id: "main" });
+    const other = event({ type: "task_complete", turn_id: "subagent", last_agent_message: null, error: { message: "Sub-agent failed" } });
+    expect(JSON.stringify(parseCodexTranscript(jsonl(started, message("user", "Hi"), other)))).not.toContain("Sub-agent failed");
+  });
+
+  it("adds nothing for a turn that ended well or was interrupted", () => {
+    const done = event({ type: "task_complete", last_agent_message: "Done", error: null });
+    expect(parseCodexTranscript(jsonl(message("user", "Hi"), message("assistant", "Done"), done)).at(-1)!.parts).toEqual([{ kind: "text", text: "Done" }]);
+    expect(parseCodexTranscript(jsonl(message("user", "Hi"), event({ type: "turn_aborted", reason: "interrupted" })))).toHaveLength(1);
+  });
+
+  it("tells whether the rollout's last ended turn failed, from the file's end", async () => {
+    expect(codexTurnEnd(recorded)).toBe("failed");
+    const done = jsonl(event({ type: "task_complete", last_agent_message: "Done", error: null }));
+    // a later turn that answered, or was interrupted, is no failure
+    expect(codexTurnEnd(`${recorded}${done}\n`)).toBe("answered");
+    expect(codexTurnEnd(`${recorded}${jsonl(event({ type: "turn_aborted", reason: "interrupted" }))}\n`)).toBe("answered");
+    // a retry under way after the failure, its end not written yet: no failure (yet)
+    expect(codexTurnEnd(`${recorded}${jsonl(event({ type: "task_started", turn_id: "next" }))}\n`)).toBe("running");
+    // another turn's end after this one's (a sub-agent's) is not this turn's
+    const started = jsonl(event({ type: "task_started", turn_id: "main" }), event({ type: "task_complete", turn_id: "main", last_agent_message: "Done", error: null }));
+    expect(codexTurnEnd(`${started}\n${jsonl(event({ type: "task_complete", turn_id: "sub", last_agent_message: null, error: { message: "Sub-agent failed" } }))}\n`)).toBe("answered");
+    const dir = mkdtempSync(join(tmpdir(), "codex-failed-"));
+    try {
+      const path = join(dir, "rollout.jsonl");
+      writeFileSync(path, `${"x".repeat(4096)}\n${recorded}`);
+      expect(await codexLastTurnEnd(path, 2048)).toBe("failed");
+      appendFileSync(path, `${done}\n`);
+      expect(await codexLastTurnEnd(path, 2048)).toBe("answered");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

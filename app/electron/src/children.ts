@@ -1,6 +1,6 @@
 /**
  * The two programs the desktop app runs: herdr-core (`hc`), which owns the terminals, and the Ovis
- * server on the bundled Bun, which serves the window. Nothing here imports Electron, so the
+ * server, compiled into one binary (scripts/server-artifact.ts), which serves the window. Nothing here imports Electron, so the
  * tests run it under Bun.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -30,12 +30,14 @@ export function withoutInherited(command: string, args: string[], bash = "/bin/b
 export interface Layout {
   bun: string;
   hc: string;
+  /** the server's folder, and its binary in it */
   server: string;
+  serverBinary: string;
 }
 
 export function layout(root: string, platform: NodeJS.Platform = process.platform): Layout {
   const exe = platform === "win32" ? ".exe" : "";
-  return { bun: join(root, "bin", `bun${exe}`), hc: join(root, "bin", `herdr-core${exe}`), server: join(root, "server") };
+  return { bun: join(root, "bin", `bun${exe}`), hc: join(root, "bin", `herdr-core${exe}`), server: join(root, "server"), serverBinary: join(root, "server", `ovis-server${exe}`) };
 }
 
 /** hc's session for the app's own core, apart from the `default` one another hc client may run. */
@@ -178,7 +180,7 @@ const LISTENING = /^Ovis listening on (http:\/\/\S+)$/m;
  * first or says nothing within `timeoutMs`, with the end of its output.
  */
 export function startServer(layout: Layout, env: Env, log: WriteStream, timeoutMs = 60_000, onSpawn?: (child: ChildProcess) => void): Promise<RunningServer> {
-  const [command, args] = withoutInherited(layout.bun, [join(layout.server, "server", "index.ts")]);
+  const [command, args] = withoutInherited(layout.serverBinary, ["serve"]);
   const child = spawn(command, args, { cwd: layout.server, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   if (child.pid !== undefined) onSpawn?.(child);
   const exited = new Promise<number | null>((resolve) => {
@@ -264,7 +266,10 @@ export async function choosePort(saved: number | null): Promise<number> {
 /** What the app keeps between runs, in `desktop.json` of its data folder. */
 export interface Saved {
   port: number | null;
-  /** the server it ran last, so a run after a crash can end one left behind; `started` is its start time (`ps -o lstart=`) */
+  /**
+   * the server it ran last, so a run after a crash can end one left behind; `started` is its start time (`ps -o lstart=`).
+   * `bun` is the program it ran: the server's binary, or the bundled Bun of an app from before the binary.
+   */
   server: { pid: number; bun: string; started: string | null } | null;
 }
 
@@ -292,6 +297,8 @@ export interface ProcessProbe {
   started: (pid: number) => Promise<string | null>;
 }
 
+const SERVES = /^"? serve$/;
+
 /**
  * Ends the server an earlier run left behind (the app was killed before it could stop it), so two
  * never share one state folder. Only the same process is ended: it still runs this app's Bun on its
@@ -304,7 +311,8 @@ export async function endLeftover(saved: Saved["server"], probe: ProcessProbe = 
   // Windows writes the program's path in quotes when it has a space in it: `"C:\…\bun.exe" …`
   if (line === null) return false;
   const command = line.startsWith('"') ? line.slice(1) : line;
-  if (!command.startsWith(saved.bun) || !command.includes(join("server", "index.ts"))) return false;
+  // the binary's `serve`, or the server's source on Bun as an app from before the binary ran it
+  if (!command.startsWith(saved.bun) || !(SERVES.test(command.slice(saved.bun.length)) || command.includes(join("server", "index.ts")))) return false;
   // without a start time it cannot be told from another process that got the pid since: left alone
   if (saved.started === null || await probe.started(saved.pid) !== saved.started) return false;
   try { process.kill(saved.pid, "SIGTERM"); } catch { return false; }

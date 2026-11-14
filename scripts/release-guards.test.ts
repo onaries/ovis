@@ -35,7 +35,7 @@ describe("bundleProblems", () => {
   });
 
   it("counts what the bundle runs, not its tests, docs or fixtures", () => {
-    expect(["server/index.ts", "shared/machines.ts", "integrations/gjc.ts", "bun.lock", "patches/x.patch", "scripts/build-remote-bundle.ts", "scripts/install-gjc-integration.ts", "scripts/install-pi-integration.ts", "integrations/pi-ask.ts", "scripts/pty-sidecar.ts", "crates/pty-sidecar/src/main.rs", "crates/pty-sidecar/Cargo.lock"].every(bundleInput)).toBe(true);
+    expect(["server/index.ts", "shared/machines.ts", "integrations/gjc.ts", "bun.lock", "patches/x.patch", "scripts/build-remote-bundle.ts", "scripts/server-artifact.ts", "scripts/install-gjc-integration.ts", "scripts/install-pi-integration.ts", "integrations/pi-ask.ts", "scripts/pty-sidecar.ts", "crates/pty-sidecar/src/main.rs", "crates/pty-sidecar/Cargo.lock"].every(bundleInput)).toBe(true);
     expect(["server/index.test.ts", "integrations/gjc.test.ts", "scripts/install-gjc-integration.test.ts", "scripts/install-pi-integration.test.ts", "server/AGENTS.md", "server/fixtures/a.json", "src/App.tsx", "serverless.ts", "scripts/release-notes.ts", "crates/pty-sidecar/README.md"].some(bundleInput)).toBe(false);
   });
 });

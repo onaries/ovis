@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrError, herdrRpc, paneGet, paneProcessInfo, paneRead, paneSendKeys, paneSendText, sessionSnapshot, subscribeEvents, type EventFrame, paneClose, paneMoveBeside, paneMoveToNewTab, tabClose, tabCreate, tabRename, workspaceClose, workspaceCreate, workspaceRename, agentManifests, agentStart, ping, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "../herdr/client.ts";
 import { claudeInputDraft, viewportShowsLive } from "../claude-input.ts";
-import { type AdapterOptions, paintedScreen, type SeenObserver, startHerdrCoreAdapter } from "./adapter.ts";
+import { type AdapterOptions, paintedScreen, type SeenObserver, sessionLabeler, startHerdrCoreAdapter } from "./adapter.ts";
 import { SeenMarker } from "./seen-label.ts";
 import { encodeFrame, FRAME_CLOSE, FRAME_DATA, HcConnection, HcError, type HcTransport, makeFrameReader } from "./connection.ts";
 import { MachineScopedConnection } from "./machine-scope.ts";
@@ -198,7 +198,21 @@ describe("herdr-core adapter", () => {
     const second = await startHerdrCoreAdapter(hc, join(dir, "second.sock"));
     cleanups.push(() => { second.stop(); rmSync(dir, { recursive: true, force: true }); });
     expect(await herdrRpc("agent.get", { target: "project-agy" }, second.socketPath)).toMatchObject({ agent: { pane_id: "t1", name: "project-agy" } });
-    await herdrRpc("agent.prompt", { target: "project-agy", text: "fixture prompt" }, second.socketPath);
+    const cli = async (...args: string[]) => {
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "../../scripts/ovis-agent.ts"), ...args], {
+        env: { ...process.env, OVIS_AGENT_SOCKET: second.socketPath }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      const [out, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      return { out, error, exit };
+    };
+    const found = await cli("get", "project-agy");
+    expect(found.exit).toBe(0);
+    expect(JSON.parse(found.out)).toMatchObject({ agent: { pane_id: "t1", name: "project-agy" } });
+    const listed = await cli("list");
+    expect(listed.exit).toBe(0);
+    expect(JSON.parse(listed.out).agents).toContainEqual(expect.objectContaining({ name: "project-agy" }));
+    expect((await cli("send", "project-agy")).exit).toBe(2);
+    expect((await cli("send", "project-agy", "fixture prompt")).exit).toBe(0);
     expect(cores.flatMap((core) => core.calls).filter((call) => call.method === "terminal.send")).toEqual([
       { method: "terminal.send", params: { terminal: "t1", text: "fixture prompt" } },
     ]);
@@ -206,6 +220,8 @@ describe("herdr-core adapter", () => {
     await herdrRpc("agent.rename", { target: "project-agy", name: null }, socket);
     expect((await sessionSnapshot(second.socketPath)).agents.find((agent) => agent.pane_id === "t1")?.name).toBeNull();
     await expect(herdrRpc("agent.get", { target: "project-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+    expect((await cli("send", "project-agy", "must not send")).exit).toBe(1);
+    expect(cores.flatMap((core) => core.calls).filter((call) => call.method === "terminal.send")).toHaveLength(1);
   });
 
   it("does not inherit a call name after process replacement, terminal reuse or an unreadable process", async () => {
@@ -821,6 +837,83 @@ it("asks for a fresh snapshot when a report's kind, message or progress changes,
     expect(await session()).toBeNull();
     t1.status = opencode("idle");
     expect(await session()).toBeNull();
+  });
+
+  it("keeps an OpenCode pane's named sessions in its label, so a pane resting through a restart of Ovis still shows its session", async () => {
+    const opencode = (state: string) => ({ app: "opencode", state });
+    const reported = (value: string) => ({ agent: "opencode", source: "herdr:opencode", kind: "id", value });
+    const t1 = terminal("t1", { title: "OC | first", status: opencode("working"), records: { ses_first: opencode("working") } });
+    const t2 = terminal("t2", { title: "OC | second", status: opencode("idle"), labels: { "ovis.opencode": "ses_first ses_second" } });
+    const t3 = terminal("t3", { title: "OC | third", status: null, labels: { "ovis.opencode": "ses_third" } });
+    const terminals = [t1, t2, t3];
+    const written: unknown[] = [];
+    const waits: { count: number; resolve: () => void }[] = [];
+    const writes = (count: number) => new Promise<void>((resolve) => { if (written.length >= count) resolve(); else waits.push({ count, resolve }); });
+    const { socket } = await setup(terminals, {
+      "terminal.label": (params) => {
+        written.push(params);
+        for (const wait of waits) if (written.length >= wait.count) wait.resolve();
+        return terminals.find((entry) => entry.address === params["terminal"])!;
+      },
+    });
+    const sessions = async () => (await sessionSnapshot(socket)).panes.map((pane) => pane.agent_session ?? null);
+    // a session reported while this server ran is written down; one resting since before it started is read back
+    expect(await sessions()).toEqual([reported("ses_first"), reported("ses_second"), null]);
+    await writes(2);
+    expect(written).toEqual([{ terminal: "t1", labels: { "ovis.opencode": "ses_first" } }, { terminal: "t3", labels: { "ovis.opencode": "" } }]);
+    // once OpenCode is gone the label goes too, and a terminal seen without it never reads its label
+    t1.status = null;
+    expect(await sessions()).toEqual([null, reported("ses_second"), null]);
+    await writes(3);
+    expect(written.at(-1)).toEqual({ terminal: "t1", labels: { "ovis.opencode": "" } });
+    t3.status = opencode("idle");
+    t3.labels = { "ovis.opencode": "ses_third" };
+    expect((await sessions())[2]).toBeNull();
+  });
+
+  it("keeps in the label every session the pane can still be bound to, not only the newest", async () => {
+    // regression: the label kept the newest 8 of the 32 sessions a terminal's candidates hold, so a pane still showing an
+    // older one bound to it until Ovis restarted, and showed "Conversation unavailable" after
+    const opencode = (state: string) => ({ app: "opencode", state });
+    const t1 = terminal("t1", { title: "OC | first", status: opencode("working"), records: {} });
+    const written: Record<string, unknown>[] = [];
+    const waits: { count: number; resolve: () => void }[] = [];
+    const writes = (count: number) => new Promise<void>((resolve) => { if (written.length >= count) resolve(); else waits.push({ count, resolve }); });
+    const { socket } = await setup([t1], {
+      "terminal.label": (params) => {
+        written.push(params);
+        for (const wait of waits) if (written.length >= wait.count) wait.resolve();
+        return t1;
+      },
+    });
+    // nine sessions report work in the terminal, one after the other, each seen by a snapshot
+    const named = Array.from({ length: 9 }, (_, index) => `ses_${index}`);
+    for (const id of named) {
+      t1.records = { [id]: opencode("working") };
+      await sessionSnapshot(socket);
+    }
+    await writes(9);
+    expect(written.at(-1)).toEqual({ terminal: "t1", labels: { "ovis.opencode": named.join(" ") } });
+  });
+
+  it("drops an OpenCode label write still queued once stopped, so none opens a line to hc after the server closed it", async () => {
+    const written: unknown[] = [];
+    const first = Promise.withResolvers<void>();
+    const labels = sessionLabeler({
+      call: (async (_method: string, params: unknown) => {
+        written.push(params);
+        if (written.length === 1) await first.promise;
+      }) as unknown as HcConnection["call"],
+    });
+    labels.label("t1", "", ["ses_first"]);
+    labels.label("t1", "", ["ses_first", "ses_second"]);
+    await Promise.resolve();
+    expect(written).toEqual([{ terminal: "t1", labels: { "ovis.opencode": "ses_first" } }]);
+    labels.stop();
+    first.resolve();
+    labels.label("t2", "", ["ses_third"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(written).toHaveLength(1);
   });
 
   it("remembers an OpenCode session a status event named, for a turn that ended before any snapshot", async () => {

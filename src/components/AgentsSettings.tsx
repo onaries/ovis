@@ -5,7 +5,7 @@
  * install, and how the plan limits are shown. It took the place of Subscription usage and Agent
  * integrations: every control of those two pages is here.
  */
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarClock, Check, ChevronDown, ChevronRight, ChevronUp, Compass, Cpu, Eye, EyeOff, Gauge, History, KeyRound, Network, Plus, RotateCw, Shield, ShieldCheck, SquareTerminal, Users, Zap } from "lucide-react";
 
 import type { AgentCatalogRow } from "../../shared/agent-catalog.ts";
@@ -20,10 +20,11 @@ import { ApiError, cliProxyRequest, fetchAgentCatalog } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { loadIntegrations, outcomeFor, type IntegrationsResult } from "../lib/integrations.ts";
+import { lastSeen } from "../lib/lastSeen.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useSettings } from "../lib/settings.ts";
 import { openSetupGuide } from "../lib/setupGuide.ts";
-import { canSignInAgain, glanceWindow, isHubAccount, meterText, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, glanceWindow, isHubAccount, isSignIn, meterText, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, recordedBy, recordedNote, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { AgentTile } from "./AgentTile.tsx";
@@ -187,16 +188,28 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
     {ordered.map((usage, index) => {
       const name = usageName(usage);
       const hidden = settings.usageHidden.includes(usage.key);
-      const status = usage.problem === null ? t("Signed in") : {
+      // another tool's record is no sign-in Ovis holds: its row names that tool, and its status says how long ago it
+      // read, as an old record once the tool stopped. Where this PC holds a sign-in of the account too, the status
+      // stays the sign-in's and that age is among the facts of the line
+      const recordOnly = !isSignIn(usage);
+      const age = usage.recorded ? [...(usage.recorded.stale ? [t("Old record")] : []), lastSeen(usage.checked_at)] : [];
+      const status = recordOnly ? age.join(" · ") : usage.problem === null ? t("Signed in") : {
         expired: t("Expired"), failed: t("Failed"), rate_limited: t("Failed"), locked: t("Failed"),
       }[usage.problem];
       const limit = glanceWindow(usage, settings.usageGlance);
+      const facts = [
+        recordedBy(usage) ?? (isHubAccount(usage) ? t("Hub") : t("This PC")),
+        ...(recordOnly ? [] : age),
+        usage.plan,
+        limit ? `${windowLabel(limit)} ${meterText(limit, settings.usageCount)}` : null,
+      ].filter((fact): fact is string => Boolean(fact));
       return <li key={usage.key} className={`usage-accounts-row${hidden ? " is-hidden" : ""}`}>
         <div className="usage-account-identity">
           <span className="usage-accounts-account" title={usage.account ?? undefined}>{usage.account ?? PROVIDER_NAME[id]}</span>
           <span className="usage-account-meta">
-            <span>{isHubAccount(usage) ? t("Hub") : t("This PC")}{usage.plan ? ` · ${usage.plan}` : ""}{limit ? ` · ${windowLabel(limit)} ${meterText(limit, settings.usageCount)}` : ""}</span>
-            <span className={`usage-account-status${usage.problem ? " has-problem" : ""}`}>{status}</span>
+            {/* each fact wraps whole while it fits a line of its own: a phone's row breaks between two, not inside "Session 69% left" */}
+            <span>{facts.map((fact, nth) => <Fragment key={nth}>{nth > 0 && " "}<span className="usage-account-fact">{fact}{nth < facts.length - 1 && " ·"}</span></Fragment>)}</span>
+            <span className={`usage-account-status${usage.problem ? " has-problem" : ""}${recordOnly ? " is-recorded" : ""}`} title={recordedNote(usage, Date.now())?.join("\n")}>{status}</span>
           </span>
           {onLocalLogin && canSignInAgain(usage) && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} onFollow={onFollow} />}
         </div>
@@ -255,12 +268,14 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
   const { agent, provider, accounts } = entry;
   const line = stateLine(entry, read, t);
   const again = read && !watching ? accounts.filter(canSignInAgain) : [];
+  // an account another tool recorded is listed here, but the agent itself is still to be signed in
+  const signedIn = accounts.filter(isSignIn);
   const detailsId = `agents-details-${agent.id}`;
   // the one sign-in it lacks is a tap away while the row is shut; open, the list below has its own
   // without the command it is read with, a sign-in would not show here either: the note says what to install instead
-  const action = open || watching || !read || provider === null || (entry.missing !== null && accounts.length === 0) ? null
+  const action = open || watching || !read || provider === null || (entry.missing !== null && signedIn.length === 0) ? null
     : again.length === 1 ? <UsageSignInAgain usage={again[0]!} onStarted={onLocalLogin} onFollow={onFollow} />
-      : accounts.length === 0 ? <button type="button" className="btn agents-row-action" aria-label={t("Sign in to {agent}", { agent: agent.name })} onClick={() => provider === "claude" || provider === "codex" ? onFollow({ provider, default: true }) : onAddAccount(provider)}><KeyRound aria-hidden="true" /><span className="agents-row-action-label">{t("Sign in")}</span></button>
+      : signedIn.length === 0 ? <button type="button" className="btn agents-row-action" aria-label={t("Sign in to {agent}", { agent: agent.name })} onClick={() => provider === "claude" || provider === "codex" ? onFollow({ provider, default: true }) : onAddAccount(provider)}><KeyRound aria-hidden="true" /><span className="agents-row-action-label">{t("Sign in")}</span></button>
         : null;
   const signIn = agent.sign_in;
   const { settings } = useSettings();
@@ -349,7 +364,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const local = machineId === "local";
 
   // the PC's catalog: each Check again, and each install that finished, reads it again
-  const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[] } | null>(null);
+  const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[]; pathProblem: string | null } | null>(null);
   const [catalogError, setCatalogError] = useState<UserError | null>(null);
   const [reads, setReads] = useState(0);
   // a read under way: Check again says so and takes no second press until it lands (G-113)
@@ -361,8 +376,9 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
     const abort = new AbortController();
     setCatalogError(null);
     setChecking(true);
-    fetchAgentCatalog(machineId, abort.signal).then(
-      (answer) => setCatalog({ machineId, agents: answer.agents }),
+    // every read after the first (Check again, a finished install) has the PC read its shells' PATH again
+    fetchAgentCatalog(machineId, abort.signal, reads > 0).then(
+      (answer) => setCatalog({ machineId, agents: answer.agents, pathProblem: answer.path_problem ?? null }),
       (reason: unknown) => {
         if (abort.signal.aborted) return;
         // a PC on an Ovis from before the catalog answers 404 for it
@@ -439,6 +455,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
           <button type="button" ref={checkAgain} className="btn btn-ghost agents-check-again" aria-disabled={checking || undefined} aria-busy={checking || undefined} onClick={() => { if (!checking) setReads((count) => count + 1); }}><RotateCw aria-hidden="true" />{t(checking ? "Checking…" : "Check again")}</button>
         </SectionHead>
         {/* a failed read, the first or a Check again: the rows the last good one gave stay, with the error beside them */}
+        {catalog !== null && catalog.machineId === machineId && catalog.pathProblem !== null && <p className="settings-hint agents-note" role="status">{t("An agent your shell's startup file (.zshrc) puts on PATH may be missing here: Ovis could not read that PATH. Check again reads it once more.")}<br /><code>{catalog.pathProblem}</code></p>}
         {catalogError !== null && <p className="settings-hint agents-note" role="alert">{catalogError.message}{catalogError.detail !== null && <><br /><code>{catalogError.detail}</code></>}</p>}
         {agents === null ? catalogError === null && <div className="settings-card"><p className="settings-item settings-hint" role="status">{t("Loading…")}</p></div>
           : page === null ? null

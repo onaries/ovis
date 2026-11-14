@@ -37,6 +37,7 @@ terminal (`hc label`, `terminal.label`; a label set to the empty string is remov
 | `ovis.workspace` | the workspace's name | Ovis, on each terminal of a renamed workspace |
 | `ovis.tab` | the tab's name | Ovis, on each terminal of a renamed tab |
 | `ovis.pane` | the pane's name (else the terminal's own `name`) | Ovis, on a renamed pane |
+| `ovis.opencode` | the OpenCode sessions the terminal reported, newest last, space separated | Ovis, while OpenCode runs there; removed once it is gone |
 
 `ovis.*` labels hold only small facts about one terminal. Approvals, prompt answers and
 conversations stay outside hc. Agent call names use the document described below.
@@ -92,6 +93,15 @@ Core 0.1.17 cannot rename its native terminal names after launch. Ovis's compati
 implements `agent.rename`, `agent.list`, `agent.get` and `agent.prompt` using the separate
 `ovis.agent-names` document. These aliases work through that socket, not in raw `hc get` or
 `hc send` commands. Display names in `ovis.pane` remain independent.
+
+Use `bun scripts/ovis-agent.ts list`, `bun scripts/ovis-agent.ts get review`, or
+`bun scripts/ovis-agent.ts send review "Please check the change"` from this checkout to
+address Ovis call names. The command uses the running Ovis compatibility socket and its
+process-owner checks; it does not change hc. `OVIS_STATE_DIR` selects the server's state
+directory, or `OVIS_AGENT_SOCKET` selects its socket explicitly. Ovis must be running.
+To expose it as `ovis-agent` on a Unix shell, make the script executable and link it into a
+directory on PATH. Run the same `list`, `get` and `send` subcommands through that link.
+`hc label` changes metadata only, so a label named `name` does not create a native call name.
 
 The schema-1 document stores `bindings`, each with `terminal`, `created` (terminal creation
 time), `pid`, `start` (kernel process start identity), `agent` and `name`. Names use Herdr's

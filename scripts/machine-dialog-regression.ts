@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import type { SetupJob, SetupRequest } from "../shared/machines.ts";
+import { sheetEntryLeft } from "./sheets-settled.ts";
 
 // Render the real dialog against synthetic setup responses. No SSH host or herdr is used.
 const repo = join(import.meta.dir, "..");
@@ -64,6 +65,9 @@ try {
           });
           await page.goto(`http://127.0.0.1:${server.port}/`);
           const dialog = page.getByRole("dialog", { name: "Add PC", exact: true });
+          // a phone's dialog holds a history entry and steps off it a moment after it closes: a reload asked
+          // for before that step lands is dropped by it (net::ERR_ABORTED)
+          const reload = async (): Promise<void> => { if (await dialog.count() === 0) await sheetEntryLeft(page); await page.reload(); };
           const destination = dialog.getByRole("textbox", { name: "SSH alias or user@address", exact: true });
           await destination.fill("fixture-only");
           await destination.press("Enter");
@@ -115,7 +119,7 @@ try {
               }
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload();
+            await reload();
             await destination.fill("fixture-only");
             await destination.press("Enter");
             await dialog.getByRole("button", { name: choice, exact: true }).waitFor();
@@ -156,7 +160,7 @@ try {
               }
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload(); await destination.fill("fixture-only"); await destination.press("Enter");
+            await reload(); await destination.fill("fixture-only"); await destination.press("Enter");
             await dialog.getByRole("button", { name: choice, exact: true }).click();
             await dialog.getByText("Attempt failed", { exact: true }).waitFor();
             assert.equal(selected.length, 2);
@@ -189,7 +193,7 @@ try {
               }
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload(); await destination.fill("fixture-only"); await destination.press("Enter");
+            await reload(); await destination.fill("fixture-only"); await destination.press("Enter");
             await dialog.getByRole("button", { name: "Use Ovis on this PC (herdr-core)", exact: true }).click();
             await dialog.locator(".machine-action strong").filter({ hasText: "Start Ovis on that PC, or start a new herdr here" }).waitFor();
             const shots = join(process.env.UI_EVIDENCE_DIR || join(repo, "evidence"), "found-herdr"); mkdirSync(shots, { recursive: true });
@@ -220,7 +224,7 @@ try {
               }
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload(); await destination.fill("fixture-only");
+            await reload(); await destination.fill("fixture-only");
             const requested = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/machines/setup");
             const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/machines/setup");
             await destination.press("Enter");
@@ -245,7 +249,7 @@ try {
               } else job = { ...job!, phase: "failed", step: "Polled session choices", action_required: "choose_herdr", found_herdr_sessions: [{ socket_path: "/home/fixture/.config/herdr/herdr.sock", label: "Default session" }] };
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload(); await destination.fill("fixture-only");
+            await reload(); await destination.fill("fixture-only");
             const requested = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/machines/setup");
             await destination.press("Enter"); await requested;
             await destination.fill("another-pc"); release();
@@ -268,7 +272,7 @@ try {
               }
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
             });
-            await page.reload();
+            await reload();
             await destination.fill("fixture-only");
             await destination.press("Enter");
             if (decision === "early_close") await dialog.getByText("Keep this dialog open until the PC connects.", { exact: true }).waitFor();

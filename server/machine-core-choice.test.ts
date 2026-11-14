@@ -92,9 +92,9 @@ it.each(["connect", "default bridge", "default herdr", "default herdr chosen", "
   if (!herdr) sessions.length = 0;
   if (beside) sessions.push({ socket_path: bridge.socket_path, label: "Default session" } as typeof sessions[number]);
   const runtimeDir = join(dir, "runtime");
-  mkdirSync(join(runtimeDir, "bin"), { recursive: true });
-  symlinkSync(process.execPath, join(runtimeDir, "bin/bun"));
-  symlinkSync(import.meta.dir, join(runtimeDir, "server"));
+  mkdirSync(runtimeDir, { recursive: true });
+  // the bundle's server, as setup asks it: `ovis-server remote <request>`, run here from this checkout's entry
+  writeFileSync(join(runtimeDir, "ovis-server"), `#!/bin/sh\nshift\nexec "${process.execPath}" "${join(import.meta.dir, "remote-entry.ts")}" "$@"\n`, { mode: 0o755 });
   const relays: ReturnType<typeof Bun.serve>[] = [];
   let selected = false, starts = 0, installs = 0, answering = !quiet.includes(outcome) && outcome !== "unanswered, no bundle";
   // what the last bridge start was asked for

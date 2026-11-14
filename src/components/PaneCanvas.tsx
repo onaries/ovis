@@ -217,10 +217,25 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     const made = await api.splitPane(target.pane_id, direction, true);
     if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(made.pane_id);
   };
+  // a close herdr has not yet taken out of the roster, by workspace: until then the roster still counts
+  // the pane, so a second close there (another press of a bound key) would take the workspace's last pane
+  // without asking, or ask herdr for the same pane again; it waits for the roster instead
+  const closingIn = useRef(new Map<string, string>());
+  useEffect(() => {
+    for (const [workspace, paneId] of closingIn.current) if (!snapshot?.panes.some((item) => item.pane_id === paneId)) closingIn.current.delete(workspace);
+  }, [snapshot]);
+  const closePane = async (target: HerdrPane): Promise<void> => {
+    closingIn.current.set(target.workspace_id, target.pane_id);
+    try { await api.closePane(target.pane_id); } catch (reason) {
+      if (closingIn.current.get(target.workspace_id) === target.pane_id) closingIn.current.delete(target.workspace_id);
+      throw reason;
+    }
+  };
   const requestClose = (target: HerdrPane): void => {
+    if (closingIn.current.has(target.workspace_id)) return;
     const inWorkspace = snapshot?.panes.filter((item) => item.workspace_id === target.workspace_id).length ?? 1;
     if (inWorkspace === 1 || target.agent_status === "working" || target.agent_status === "blocked") setClosing(target);
-    else run(() => api.closePane(target.pane_id));
+    else run(() => closePane(target));
   };
   // the pane's zoom item and its title's zoom button: the mode the item names, never a toggle (lib/layoutMap.ts)
   const zoom = (target: HerdrPane): void => run(async () => {
@@ -539,7 +554,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
       }} />}
     {closing && <ConfirmDialog title={t("Close pane {name}?", { name: displayPaneTitle(closing) })}
       body={t("The pane's running processes will stop. Closing its last pane also closes the workspace.")}
-      confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { await api.closePane(closing.pane_id); setClosing(null); onChanged(); }} />}
+      confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { await closePane(closing); setClosing(null); onChanged(); }} />}
   </div></PaneSubmitContext.Provider>;
 }
 

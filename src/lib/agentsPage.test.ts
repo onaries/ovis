@@ -75,6 +75,22 @@ describe("signInState", () => {
     expect(signInState("claude", [account("claude", "claude:a"), account("claude", "claude:b", "expired")], true)).toEqual({ kind: "problem", count: 2, problems: 1 });
   });
 
+  it("takes another tool's record of an account as no sign-in of the agent: it is that tool's", () => {
+    const recorded: ProviderUsage = { ...account("claude", "claude:r"), checked_at: "2026-09-29T12:00:00Z", recorded: { by: "omp", stale: false, signed_in: false } };
+    expect(signInState("claude", [recorded], true)).toEqual({ kind: "none" });
+    expect(signInState("claude", [recorded], true, "secret-tool")).toEqual({ kind: "unreadable", command: "secret-tool" });
+    expect(signInState("claude", [account("claude", "claude:a"), recorded], true)).toEqual({ kind: "signed-in", count: 1, account: "claude:a" });
+    expect(signInState("claude", [account("claude", "claude:a", "expired"), recorded], true)).toEqual({ kind: "problem", count: 1, problems: 1 });
+  });
+
+  it("keeps counting this PC's own sign-in while another tool's record stands in for its numbers", () => {
+    const standIn = (problem: ProviderUsage["problem"] = null): ProviderUsage =>
+      ({ ...account("claude", "claude:a", problem), checked_at: "2026-09-29T12:00:00Z", recorded: { by: "omp", stale: false, signed_in: true } });
+    expect(signInState("claude", [standIn()], true)).toEqual({ kind: "signed-in", count: 1, account: "claude:a" });
+    expect(signInState("claude", [standIn("expired")], true)).toEqual({ kind: "problem", count: 1, problems: 1 });
+    expect(signInState("claude", [standIn("rate_limited"), account("claude", "claude:b")], true)).toEqual({ kind: "problem", count: 2, problems: 1 });
+  });
+
   it("names the missing command rather than no sign-in when the server could not look", () => {
     expect(signInState("antigravity", [], true, "secret-tool")).toEqual({ kind: "unreadable", command: "secret-tool" });
     expect(signInState("antigravity", [account("antigravity", "antigravity:a")], true, "secret-tool")).toEqual({ kind: "signed-in", count: 1, account: "antigravity:a" });

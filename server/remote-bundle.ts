@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { ROOT } from "./entries.ts";
 import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
 
 export interface BundleManifest {
@@ -15,7 +16,7 @@ export async function bundleManifestSource(platform: string, options: BundleSour
   if (configured) return configured;
   // Development installs can distribute locally built runtimes without publishing
   // a release. Resolve beside this server, never against its launch directory.
-  const local = join(options.directory ?? join(import.meta.dir, "..", "remote-bundles"), `manifest-${platform}.json`);
+  const local = join(options.directory ?? join(ROOT, "remote-bundles"), `manifest-${platform}.json`);
   try { await access(local); return local; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   return `https://github.com/devswha/ovis/releases/download/remote-v${REMOTE_BUNDLE_VERSION}/manifest.json`;

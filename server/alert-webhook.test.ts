@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -96,7 +96,7 @@ describe("alert webhook presets", () => {
     expect(ntfy!.headers.get("priority")).toBe("high");
     expect(telegram!.path).toBe("/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ/sendMessage");
     expect(JSON.parse(telegram!.body)).toEqual({ chat_id: "-1001", text: "Work PC · codex: waiting for your input\nhttps://pc.tail.ts.net:7421/?machine=pc-b&pane=w1%3Ap1&view=chat", disable_web_page_preview: true });
-    expect(JSON.parse(json!.body)).toEqual({ type: "alert", kind: "input", text: "Work PC · codex: waiting for your input", title: "codex", body: "waiting for your input", pc: "Work PC", pane_id: "w1:p1", workspace_id: "w1", url: link });
+    expect(JSON.parse(json!.body)).toEqual({ type: "alert", kind: "input", text: `Work PC · codex: waiting for your input\n${link}`, title: "codex", body: "waiting for your input", pc: "Work PC", pane_id: "w1:p1", workspace_id: "w1", url: link });
   });
 
   it("keeps the secret owner-only on disk and answers it only masked", () => {
@@ -274,6 +274,61 @@ describe("web push alerts reach the webhook", () => {
     return { pane_id: paneId, agent_status: status, terminal_title: "codex", focused: false, revision: 0, tab_id: "t1", terminal_id: "term_1", workspace_id: "w1" };
   }
 
+  it("waits five minutes for the webhook and cancels an alert viewed or answered before delivery", async () => {
+    const hook = webhook();
+    hook.save({ preset: "json", url: destination.url(), delay_ms: 300_000, alerts: { input: true, done: "always", error: true } }, "https://ovis.example");
+    expect(webhook().view().delay_ms).toBe(300_000);
+    expect(() => hook.save({ preset: "json", delay_ms: -1 }, undefined)).toThrow();
+    expect(() => hook.save({ preset: "json", delay_ms: 3_600_001 }, undefined)).toThrow();
+    const held = new Map<object, () => void>();
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    const set = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== 300_000) return realSet(callback, ms, ...args);
+      const handle = {};
+      held.set(handle, () => callback(...args));
+      return handle;
+    }) as never);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: unknown) => {
+      if (!held.delete(handle as object)) realClear(handle as Parameters<typeof clearTimeout>[0]);
+    }) as never);
+    const push = createPushService({ stateDir, webhook: hook, timing: { short: 0, long: 0, longTurn: 0 } });
+    push.seed([pane("w1:p1", "working")]);
+    const fire = async () => {
+      const callbacks = [...held.values()];
+      held.clear();
+      callbacks.forEach(run => run());
+      await push.settled();
+      await hook.settled();
+    };
+    try {
+      await push.onStatus("w1:p1", "blocked");
+      expect(destination.received).toHaveLength(0);
+      expect(held.size).toBe(1);
+      push.viewed?.();
+      await fire();
+      expect(destination.received).toHaveLength(0);
+      await push.onStatus("w1:p1", "working");
+      await push.onStatus("w1:p1", "blocked");
+      await push.onStatus("w1:p1", "working");
+      await fire();
+      expect(destination.received).toHaveLength(0);
+      await push.onStatus("w1:p1", "done");
+      expect(held.size).toBe(1);
+      await fire();
+      expect(destination.received.map(post => JSON.parse(post.body).kind)).toEqual(["done"]);
+      await push.onEnded("w1:p1");
+      expect(destination.received).toHaveLength(1);
+      expect(held.size).toBe(1);
+      await fire();
+      expect(destination.received.map(post => JSON.parse(post.body).kind)).toEqual(["done", "ended"]);
+      await push.onFailed("w1:p1");
+      expect(held.size).toBe(1);
+      await fire();
+      expect(destination.received.map(post => JSON.parse(post.body).kind)).toEqual(["done", "ended", "error"]);
+    } finally { push.viewed?.(); set.mockRestore(); clear.mockRestore(); }
+  });
+
   it("tells the destination the alerts it chose, as push tells a device, and nothing while the app is in use", async () => {
     const hook = webhook();
     hook.save({ preset: "json", url: destination.url() }, "https://pc.example");
@@ -288,7 +343,7 @@ describe("web push alerts reach the webhook", () => {
     await step(() => push.onEnded("w1:p1"));
     const kinds = destination.received.map((post) => JSON.parse(post.body));
     expect(kinds.map((post) => post.kind)).toEqual(["input", "done", "ended"]);
-    expect(kinds[0]).toMatchObject({ text: "Work PC · codex: waiting for your input", url: "https://pc.example/?pane=w1%3Ap1&view=chat" });
+    expect(kinds[0]).toMatchObject({ text: "Work PC · codex: waiting for your input\nhttps://pc.example/?pane=w1%3Ap1&view=chat", url: "https://pc.example/?pane=w1%3Ap1&view=chat" });
 
     // its own choices, not a device's: finishes off
     hook.save({ preset: "json", alerts: { input: true, done: "off" } }, undefined);

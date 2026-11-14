@@ -1,6 +1,7 @@
 import type { AgentCatalogRow } from "../../shared/agent-catalog.ts";
 import type { AgentIntegration, MissingCommand, ProviderUsage, UsageProviderId } from "../../shared/protocol.ts";
 import { agentSections } from "./agentList.ts";
+import { isSignIn } from "./usage.ts";
 
 /** One installed agent on Settings → Agents, with what Ovis knows of it on the PC shown. */
 export interface AgentsPageRow {
@@ -84,8 +85,10 @@ export type SignInState =
 
 export function signInState(provider: UsageProviderId | null, accounts: readonly ProviderUsage[], read: boolean, missing: string | null = null): SignInState {
   if (provider === null || !read) return { kind: "unknown" };
-  if (accounts.length === 0) return missing === null ? { kind: "none" } : { kind: "unreadable", command: missing };
-  const problems = accounts.filter((usage) => usage.problem !== null).length;
-  if (problems > 0) return { kind: "problem", count: accounts.length, problems };
-  return { kind: "signed-in", count: accounts.length, account: accounts.length === 1 ? accounts[0]!.account : null };
+  // an account known only from another tool's record is listed with the accounts, but it is no sign-in of this agent's
+  const signIns = accounts.filter(isSignIn);
+  if (signIns.length === 0) return missing === null ? { kind: "none" } : { kind: "unreadable", command: missing };
+  const problems = signIns.filter((usage) => usage.problem !== null).length;
+  if (problems > 0) return { kind: "problem", count: signIns.length, problems };
+  return { kind: "signed-in", count: signIns.length, account: signIns.length === 1 ? signIns[0]!.account : null };
 }

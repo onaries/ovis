@@ -144,20 +144,22 @@ describe("Pages deployment gate", () => {
   });
 
   it("skips the deploy job, not the run, when main moved on while it built", () => {
-    const current = pageJob("current");
-    const deploy = pageJob("deploy");
+    type Job = { if?: string; needs?: string[]; environment?: unknown; permissions?: Record<string, string>; outputs?: Record<string, string>; "continue-on-error"?: unknown; steps?: { "continue-on-error"?: unknown }[] };
+    const { jobs } = Bun.YAML.parse(pages) as { jobs: Record<string, Job> };
+    const { current, deploy, build } = jobs as Record<"current" | "deploy" | "build", Job>;
     // the check runs where no deployment is recorded: only the deploy job names the environment
-    expect(current).not.toContain("environment:");
-    expect(current).not.toContain("pages: write");
-    expect(current).toMatch(/needs:\s*\[validate, build\]/);
-    expect(current).toContain("stale: ${{ steps.current.outputs.stale }}");
-    expect(deploy).toMatch(/needs:\s*\[validate, build, current\]/);
-    expect(deploy).toContain("needs.current.result == 'success' && needs.current.outputs.stale == 'false'");
-    expect(deploy).toContain("environment:");
+    expect(current.environment).toBeUndefined();
+    expect(current.permissions).toEqual({ contents: "read" });
+    expect(current.needs).toEqual(["validate", "build"]);
+    expect(current.outputs?.stale).toBe("${{ steps.current.outputs.stale }}");
+    expect(deploy.needs).toEqual(["validate", "build", "current"]);
+    expect(deploy.if).toContain("needs.current.result == 'success' && needs.current.outputs.stale == 'false'");
+    expect(deploy.environment).toBeDefined();
     // a broken site build still fails the run: both jobs wait for it and nothing lets the build pass on an error
-    expect(current).toContain("needs.build.result == 'success'");
-    expect(deploy).toContain("needs.build.result == 'success'");
-    expect(pageJob("build")).not.toContain("continue-on-error");
+    expect(current.if).toContain("needs.build.result == 'success'");
+    expect(deploy.if).toContain("needs.build.result == 'success'");
+    expect(build["continue-on-error"]).toBeUndefined();
+    expect(build.steps?.some((step) => step["continue-on-error"] !== undefined)).toBe(false);
   });
 
   it("summarizes the validated, built, and deployed source SHAs", () => {

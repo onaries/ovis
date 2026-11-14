@@ -4,11 +4,14 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, parse, type PlatformPath, relative as relativePath, resolve, sep } from "node:path";
 
 import type { FileInfo, FileKind } from "../shared/protocol.ts";
+import { pagePolicy } from "../shared/web-policy.ts";
 import { fileTask } from "./file-pool.ts";
 import type { OpenedFile, RenderedPage } from "./file-tasks.ts";
 import { filesNamed } from "./files.ts";
 import { jsonResponse } from "./http.ts";
 import { otherHostsShare } from "./windows-share.ts";
+
+export { pagePolicy };
 
 /**
  * Opening a file from the browser: the files agents write (a screenshot, a demo video, a
@@ -221,38 +224,6 @@ export function fileInfo(path: string): FileInfo | null {
   const mime = Bun.file(path).type.split(";")[0] || "application/octet-stream";
   return { path, name: basename(path), size: stat.size, modified: stat.mtime.toISOString(), mime, kind: kindOf(mime, path) };
 }
-
-/**
- * An HTML page drawn as a page (the report or chart an agent wrote): its own script runs, but in
- * a sandbox without `allow-same-origin`, so it has no origin, no cookie and no storage of this
- * app's, and with no `connect-src` it cannot fetch, open a socket or beacon anything, here or
- * anywhere. It may load pictures, styles, fonts and scripts from https (a page made with a chart
- * library from a CDN draws as it does in any browser), but nothing from this server: an image
- * that loads or fails would tell it which of this PC's files exist. Only this app may frame it.
- * What it takes from its own folder (a screenshot beside the report, its stylesheet and script)
- * is put into the page before it is sent (`pageWithLocalFiles`), so it still asks for nothing.
- * The one exception is a video or sound too large to put into it, which plays from
- * `mediaSource` (`PAGE_MEDIA_PATH`): that path answers only the addresses this render gave out,
- * and only to the client that rendered it.
- * The hosted shell's render host (`/s/<id>/~render`, scripts/shell-build.ts) carries this same
- * policy with no media source, as its Pages `_headers`; no hash or nonce is ever added to it,
- * since a hash in `script-src` would make browsers ignore `'unsafe-inline'` and block the page's
- * own inline scripts.
- */
-export const pagePolicy = (mediaSource: string | null): string => [
-  "sandbox allow-scripts",
-  "default-src 'none'",
-  // nothing from the web either: the page holds its own folder's files (below), and a script that
-  // could reach any https URL could send them there
-  "script-src 'unsafe-inline' 'unsafe-eval' data:",
-  "style-src 'unsafe-inline' data:",
-  "img-src data: blob:",
-  mediaSource === null ? "media-src data: blob:" : `media-src data: blob: ${mediaSource}`,
-  "font-src data:",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'self'",
-].join("; ");
 
 /** A page's own files are put into it up to these sizes; a larger one is left as the page names it. */
 const EMBED_FILE_BYTES = 8 * 1024 * 1024;

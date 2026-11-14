@@ -327,7 +327,10 @@ export function projectDsh(text: string, identity: string, expectedSession?: str
         const ts = time(row); if (ts) assistant.end_ts = ts;
         if (data?.reason?.kind === "completed") {
           const part = [...assistant.parts].reverse().find((p) => p.kind === "text"); if (part?.kind === "text") part.phase = "final_answer";
-        } else assistant.parts.push({ kind: "notice", text: `Turn ended: ${typeof data?.reason?.kind === "string" ? data.reason.kind : "unknown"}` });
+        } else if (data?.reason?.kind === "error" && typeof data.reason.error?.message === "string" && data.reason.error.message.trim() !== "") {
+          // the provider's own words (a usage limit, no balance): the failed request every reader shows
+          assistant.parts.push({ kind: "text", text: `Error: ${data.reason.error.message}`, failed: true });
+        } else assistant.parts.push({ kind: "notice", source: "dsh-turn-end", text: `Turn ended: ${typeof data?.reason?.kind === "string" ? data.reason.kind : "unknown"}` });
       }
       assistant = undefined;
     } else if (row.surfaceOp !== undefined && row.type !== "system/message" && row.type !== "developer/message") {

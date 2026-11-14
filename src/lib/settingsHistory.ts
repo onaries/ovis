@@ -133,8 +133,9 @@ function rewind(by: number): void {
     if (request.reopened) request.claim = false;
   }, LANDING_MS);
   // a sheet opened inside Settings closed a moment ago (Connect a phone, once the phone paired) and
-  // its entry, which copies the Settings entry under it, is still the current one: step over it too
-  window.history.go(-by - (sheetStep.takeLeaving(window.history.state) ? 1 : 0));
+  // its entry, which copies the Settings entry under it, is still the current one: step over it too.
+  // So is that entry when a sheet opened as Settings closes took it (Add PC, from Add a connection)
+  window.history.go(-by - (sheetStep.goingBack(window.history.state) ? 1 : 0));
 }
 
 function reconcile(): void {

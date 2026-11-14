@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { CLAUDE_FOLDED_DRAFT_MESSAGE } from "../shared/submit-outcome.ts";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1323,6 +1324,107 @@ describe("WebSocket submit", () => {
     }
   }, 30_000);
 
+  it.each([
+    ["a folded paste", "\u276f [Pasted text #1 +12 lines]", 120],
+    ["a folded paste after typed words", "\u276f look at this [Pasted text #2 +40 lines] and fix it", 122],
+    ["an image", "\u276f [Image #1]", 124],
+    // Claude wraps its box at the pane's width, also inside a placeholder
+    ["a folded paste wrapped over two rows", "\u276f look at this [Pasted text\r\n  #2 +40 lines] and fix it", 126],
+    // a box narrower than the placeholder's words: the wrap cuts one in two
+    ["a folded paste wrapped inside a word", "\u276f [Pasted te\r\n  xt #1 +12 lines]", 128],
+    // wrapped twice, inside a word and between two
+    ["a folded paste wrapped over three rows", "\u276f [Pasted te\r\n  xt #1 +12\r\n  lines]", 134],
+    // Claude's placeholder for a paste it cut short
+    ["a truncated paste", "\u276f [...Truncated text #1 +40 lines...]", 136],
+  ] as const)("offers no send anyway over a box holding %s, whose lines the user cannot see, and refuses one (#3563)", async (_name, box, id) => {
+    const socket = await Socket.connect();
+    const screen = mockClaudeInput(agent.pane, claudeInputScreen(box));
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    const sendText = spyOn(herdr, "paneSendText").mockResolvedValue(undefined);
+    const sendKeys = spyOn(herdr, "paneSendKeys").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id, pane_id: agent.pane, text: "chat", payload: "chat" });
+      const refused = await socket.result(id);
+      // its own message, for the composer's note saying why nothing can be sent over it
+      expect(refused).toMatchObject({ ok: false, code: "input_draft", message: CLAUDE_FOLDED_DRAFT_MESSAGE });
+      expect(refused.box).toBeUndefined();
+      expect(refused.draft).toBeUndefined();
+      // no refusal showed a box to send anyway over
+      socket.send({ type: "submit", id: id + 1, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
+      expect(await socket.result(id + 1)).toMatchObject({ ok: false, code: "pending_target_changed" });
+      expect(prompt).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendKeys).not.toHaveBeenCalled();
+    } finally {
+      sendKeys.mockRestore(); sendText.mockRestore(); prompt.mockRestore();
+      screen.scroll.mockRestore(); screen.read.mockRestore(); socket.close();
+    }
+  }, 30_000);
+
+  it("offers send anyway over typed words that only look like the start of a placeholder", async () => {
+    const socket = await Socket.connect();
+    const screen = mockClaudeInput(agent.pane, claudeInputScreen("! echo [Image #1"));
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id: 130, pane_id: agent.pane, text: "chat", payload: "chat" });
+      expect(await socket.result(130)).toMatchObject({ ok: false, code: "input_draft", box: "! echo [Image #1" });
+      socket.send({ type: "submit", id: 131, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
+      expect(await socket.result(131)).toMatchObject({ ok: true });
+      expect(prompt).toHaveBeenCalledTimes(1);
+    } finally {
+      prompt.mockRestore();
+      screen.scroll.mockRestore(); screen.read.mockRestore(); socket.close();
+    }
+  }, 30_000);
+
+  it("offers no send anyway over a folded paste read while the terminal is scrolled and the screen moves (#3563)", async () => {
+    const socket = await Socket.connect();
+    const folded = claudeInputScreen("\u276f [Pasted text #1 +12 lines]");
+    let colored = 0;
+    const originalRead = herdr.paneRead;
+    // the history's end reads differently each time: nothing proves the box, which is refused as it reads
+    const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
+      const result = await originalRead(options, socketPath);
+      if (options.paneId !== agent.pane) return result;
+      return { ...result, text: options.format === "ansi" ? `${folded}\u001b[2m${colored++}\u001b[0m` : folded };
+    });
+    const scroll = spyOn(herdr, "paneScrollInfo").mockResolvedValue({ offset_from_bottom: 5, max_offset_from_bottom: 30, viewport_rows: 3 });
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id: 132, pane_id: agent.pane, text: "chat", payload: "chat" });
+      const refused = await socket.result(132);
+      expect(refused).toMatchObject({ ok: false, code: "input_draft", message: CLAUDE_FOLDED_DRAFT_MESSAGE });
+      expect(refused.box).toBeUndefined();
+      socket.send({ type: "submit", id: 133, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
+      expect(await socket.result(133)).toMatchObject({ ok: false, code: "pending_target_changed" });
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore(); scroll.mockRestore(); read.mockRestore(); socket.close();
+    }
+  }, 30_000);
+
+  it("refuses send anyway when a folded paste is in the box by the time it is confirmed, and offers none again", async () => {
+    const socket = await Socket.connect();
+    let shown = claudeInputScreen("! ls");
+    const screen = mockClaudeInput(agent.pane, () => shown);
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id: 113, pane_id: agent.pane, text: "chat", payload: "chat" });
+      expect(await socket.result(113)).toMatchObject({ ok: false, code: "input_draft", box: "! ls" });
+      shown = claudeInputScreen("\u276f [Pasted text #1 +12 lines]");
+      socket.send({ type: "submit", id: 114, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
+      const refused = await socket.result(114);
+      expect(refused).toMatchObject({ ok: false, code: "input_draft" });
+      expect(refused.box).toBeUndefined();
+      socket.send({ type: "submit", id: 115, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
+      expect(await socket.result(115)).toMatchObject({ ok: false, code: "pending_target_changed" });
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore();
+      screen.scroll.mockRestore(); screen.read.mockRestore(); socket.close();
+    }
+  }, 30_000);
+
   it("refuses send anyway when the box changed past what the note shows", async () => {
     const socket = await Socket.connect();
     let shown = claudeInputScreen("! " + "x".repeat(220) + " OLD");
@@ -1831,7 +1933,7 @@ describe("WebSocket submit", () => {
     }
   }, 30_000);
 
-  it("preserves immediate non-Claude chat sends without reading the terminal input box", async () => {
+  it("preserves immediate non-Claude chat sends without reading Claude's input box: Codex's own screens and composer only", async () => {
     const socket = await Socket.connect();
     const originalRead = herdr.paneRead;
     const read = spyOn(herdr, "paneRead").mockImplementation((options, socketPath) => originalRead(options, socketPath));
@@ -1840,8 +1942,9 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 30, pane_id: codex.pane, text: "follow up", payload: paste("follow up") });
       expect(await socket.result(30)).toMatchObject({ ok: true, pane_id: codex.pane });
       expect(prompt).toHaveBeenCalledWith(codex.pane, "follow up", undefined, expect.any(Function));
-      // Codex's live screen once, for one of its own screens over the composer (composer.ts freeCodexInput); no box is read
-      expect(read.mock.calls.map(([options]) => [options.paneId, options.source])).toEqual([[codex.pane, "detection"]]);
+      // the viewport's colours, then Codex's live screen once, for one of its own screens over the composer and for
+      // typed text in it (composer.ts freeAgentInput)
+      expect(read.mock.calls.map(([options]) => [options.paneId, options.source])).toEqual([[codex.pane, "visible"], [codex.pane, "detection"]]);
     } finally {
       prompt.mockRestore();
       read.mockRestore();
@@ -1967,7 +2070,8 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 20, pane_id: codexApproval.pane, text: "y", payload: "y" });
       expect(await socket.result(20)).toMatchObject({ ok: false, code: "agent_blocked" });
       expect(chunks(codexApproval).slice(from)).toEqual([]);
-      expect(read.mock.calls.filter(([options]) => options.paneId === codexApproval.pane).map(([options]) => options.source)).toEqual(["detection"]);
+      // the viewport's colours, then the live screen the approval is read on (composer.ts freeAgentInput); never the scrollback
+      expect(read.mock.calls.filter(([options]) => options.paneId === codexApproval.pane).map(([options]) => options.source)).toEqual(["visible", "detection"]);
     } finally {
       read.mockRestore();
       socket.close();
@@ -1987,9 +2091,9 @@ describe("WebSocket submit", () => {
       expect(await socket.result(21)).toMatchObject({ ok: true });
       await received(codex, from, 1);
       expect(typed(codex, from)).toBe(`${paste("follow up")}\r`);
-      // the live screen twice, never the viewport: before herdr is written to (one of Codex's own screens gets nothing),
-      // and after herdr's refusal, for the collapsed queue
-      expect(read.mock.calls.filter(([options]) => options.paneId === codex.pane).map(([options]) => options.source)).toEqual(["detection", "detection"]);
+      // the live screen twice, after the viewport's colours: before herdr is written to (one of Codex's own screens gets
+      // nothing, nor typed text in its composer: freeAgentInput), and after herdr's refusal, for the collapsed queue
+      expect(read.mock.calls.filter(([options]) => options.paneId === codex.pane).map(([options]) => options.source)).toEqual(["visible", "detection", "detection"]);
     } finally {
       read.mockRestore();
       socket.close();

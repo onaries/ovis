@@ -64,6 +64,9 @@
 .pane-frame-zoom { color: inherit; pointer-events: auto; }
 /* Close takes the corner beside it; the wider gap keeps a press meant for Zoom off it */
 .pane-frame-close { color: inherit; pointer-events: auto; margin-inline-start: var(--space-2); }
+/* a split's divider reaches half its width into the panes beside it (.pane-divider): the head's buttons
+   stay above it, so a tap on their edge is theirs, not the divider's (#3564) */
+.pane-frame-menu, .pane-frame-zoom, .pane-frame-close { position: relative; z-index: calc(var(--z-banner) + 1); }
 .pane-frame-body { flex: 1; min-width: 0; min-height: 0; position: relative; }
 /* A lone pane's head floats over the terminal's top right corner, where a full-screen program may
    draw a control of its own (Claude Code's diff panel close): only its ellipsis takes a press. Under

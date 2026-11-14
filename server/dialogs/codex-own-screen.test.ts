@@ -83,7 +83,36 @@ describe("codexOwnScreenOpen", () => {
       "  reverse-i-search: fix",
       // the transcript's pager, as 0.167 drew it with `[tui] fullscreen_transcript = false` (seen, not recorded)
       "^space select\n ↑/↓ to scroll · pgup/pgdn to page · home/end to jump\n q close · f3 find · esc browse prompts",
+      // its prompt browser (esc in that pager), where Enter rewinds the conversation: its footer begins with a word, and a
+      // narrower pane shortens it to one row instead of wrapping it, as 0.167.0 to 0.167.2 drew it at 100, 80, 60, 50,
+      // 40, 30 and 20 columns (seen, not recorded)
+      "Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · ^t details · ↵ rewind · esc back",
+      "Browsing · ↑↓/jk scroll · ←→/hl prompts · ^t details · ↵ rewind · esc back",
+      "Browsing · ↑↓/jk ←→/hl · ^t details · ↵ rewind · esc back",
+      "Browsing · ↑↓/jk ←→/hl · ↵ rewind · esc",
+      "Browsing · ↵ rewind · esc back",
+      "Browsing · esc back",
+      "Browsing · esc",
     ]) expect(codexOwnScreenOpen(under("  Some list", "› 1. First", "  2. Second", footer)), footer).toBeTrue();
+    // the prompt browser's footer begins its row, so a line of the transcript ending in `·` over it is no status line
+    expect(codexOwnScreenOpen(["› earlier prompt", "  note ·", "Browsing · esc back"].join("\n")), "under a line ending in ·").toBeTrue();
+    // the same browser under the composer, the footer where the hint row was (the `prompt_navigation` snapshot in
+    // Codex 0.167.1's own tests, codex-rs/tui/src/app/snapshots)
+    expect(codexOwnScreenOpen(["› first question", "", "› second question", "", "› Ask Codex to do anything", "", "  gpt-test default · /tmp/project",
+      "  Browsing · ↑↓/jk scroll · ←→/hl prompts · ⌃t details · ↵ rewind · esc back"].join("\n")), "under the composer").toBeTrue();
+  });
+
+  it("reads the prompt browser's label alone as its footer only on a screen as narrow as the panes Codex draws it in", () => {
+    // 0.167.2 at 15 and at 10 columns (seen, not recorded): the transcript's last rows, then the label
+    const at15 = ["/ T R A N S C R", "  >_ OpenAI Co…", "     …atch/proj", "› hello narrow", "  check", "■ Conversation", "interrupted -",
+      "use /feedback", "if something", "went wrong", "Browsing"].join("\n");
+    expect(codexOwnScreenOpen(at15)).toBeTrue();
+    expect(codexOwnScreenOpen(["d - use /", "feedback", "if", "something", "went wrong", "Browsing"].join("\n"))).toBeTrue();
+    // rows are measured in columns: four flags are eight of them, in sixteen code units
+    expect(codexOwnScreenOpen(["› hello", "🇺🇸🇺🇸🇺🇸🇺🇸", "Browsing"].join("\n"))).toBeTrue();
+    // a wider screen whose last row is the word: there the footer would say more
+    expect(codexOwnScreenOpen(under("• The view was called", "  Browsing"))).toBeFalse();
+    expect(codexOwnScreenOpen(at15.replace("went wrong", "went wrong, as the log above shows"))).toBeFalse();
   });
 
   it("leaves the composer alone, with whatever it and the conversation above it show", () => {
@@ -107,11 +136,15 @@ describe("codexOwnScreenOpen", () => {
         "  esc again to edit previous message   ctrl + c to exit", "  ctrl + t to view transcript"),
       "under an answer that quotes a list's footer": under("• Run /model. You will see:", "  enter select · esc back", "", COMPOSER),
       "with a draft that quotes one": under("› the footer said", "  enter select · esc back", "  GPT-6-Astra default fast · main"),
+      "with a draft of the prompt browser's footer": under("› Browsing · ↵ rewind · esc back", "  GPT-6-Astra default fast · main"),
       // a thread or a folder named like a key hint is an item of the status line, beside the model
       "a status line naming a thread like a hint": under("› Ask Codex to do anything", "  GPT-6-Astra default · main · esc back"),
       // and one a narrow pane cut at its `·` goes on in the next row, which is no footer of its own
       "a status line wrapped before such a name": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  esc cancel"),
       "a status line wrapped before a name that leaves nothing": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  enter save"),
+      // a thread named like the prompt browser's footer, or like its label alone, is the status line's end too
+      "a status line wrapped before a name like the prompt browser's footer": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  Browsing · esc back"),
+      "a narrow status line wrapped before the prompt browser's label": ["› hi", "  GPT-6 ·", "  main ·", "  Browsing"].join("\n"),
       "an empty screen": "",
       "a shell prompt": "user@host:~/proj$ ",
     })) expect(codexOwnScreenOpen(screen), name).toBeFalse();

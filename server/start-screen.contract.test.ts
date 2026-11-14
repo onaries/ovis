@@ -90,18 +90,18 @@ const read = async (paneId: string): Promise<ConversationResponse> => {
 
 it("carries the model a Codex without a session states with the scrollback standing in", async () => {
   expect(await read(codexPane)).toEqual({
-    source: "scrollback", turns: [], screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" },
+    source: "scrollback", turns: [], unavailable: "not_found", screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" },
   });
 });
 
 it("names no model while the terminal is scrolled up to an older Codex frame, and the live one once back at the bottom", async () => {
   // scrolled up, the viewport is history and nothing proves the live screen: no model, not the old one
-  expect(await read(scrolledPane)).toEqual({ source: "scrollback", turns: [] });
+  expect(await read(scrolledPane)).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
   // the read moved nothing: the terminal stays where it was scrolled to
   expect((await paneScrollInfo(scrolledPane))?.offset_from_bottom).toBe(scrolledTop);
   expect((await paneScroll(scrolledPane, 0))?.offset_from_bottom).toBe(0);
   expect(await read(scrolledPane)).toEqual({
-    source: "scrollback", turns: [], screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" },
+    source: "scrollback", turns: [], unavailable: "not_found", screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" },
   });
 });
 

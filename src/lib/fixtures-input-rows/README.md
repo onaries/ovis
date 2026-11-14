@@ -27,6 +27,32 @@ Screens opened to list the account's own sessions, usage, MCP servers or status 
 gjc `/sessions` open, Devin `/status` and `/mcp`, agy `/resume` and `/usage`) are not here. The
 scratch folder paths under the temporary directory are kept.
 
+## `pi/draft-*`, `omo/draft-*`: the chat send's draft check
+
+Recorded 2026-11-12 in an isolated herdr session (herdr 0.9.5, 119 columns by 40 rows) for the chat send's
+check of text typed into an agent's own box (`shared/input-row.ts` `typedDraft`), read by
+`src/lib/inputRow.test.ts` and `server/core/agent-input-send.test.ts`. pi 1.4.0 (no model signed in) and OmO
+5.1.69 ran in a scratch folder with `PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 SENPI_OMO_LOCAL_UPDATE=0`, so neither
+looked for an update. Each screen is `herdr pane read --source visible --format ansi`:
+`draft-empty` at rest, `draft-typed` with `leftover draft` typed into the box, `draft-slash` with `/mo` typed and
+the command list open. Redacted: the shell's user name and host read `tester0` and `host000`, at their width.
+
+## `<agent>/draft-*` for gjc, muse, qwen, cline and dsh-tui: the chat send's draft check
+
+Recorded 2026-11-12 in the agent lab (`~/.dori-sa/agent-lab`, its own HOME and pinned installs, update checks off)
+inside an isolated herdr session (herdr 0.9.5, 119 columns by 40 rows), read by `src/lib/inputRow.test.ts` and
+`server/core/agent-input-send.test.ts`: gjc 0.18.12, Muse Code 1.4.14, Qwen Code 0.27.2, cline 3.0.74 and dsh-tui
+0.19.0, each with its default theme. Same three states as above (`draft-empty`, `draft-typed` with `leftover draft`,
+`draft-slash` with `/mo` and the command list open), same redactions. Only gjc's box is read by the terminal peek too.
+
+## `<agent>/draft-*` for letta, maki, kimi, gemini and kilo
+
+Recorded 2026-11-12 in the agent lab the same way (isolated herdr session, 119 by 40, default themes, update checks
+off): Letta Code 0.34.23, maki 0.7.1, Kimi Code 2.5.3 (herdr names it `kimi`), Kilo 7.8.27 on the lab's QA backend
+(`run --qa`), and Gemini CLI 0.68.0 on the team proxy (it speaks only the Gemini API). Same three states;
+`kilo/draft-session-*` are Kilo's box under its first answer, the others its home screen. Letta's agent id reads
+all zeros.
+
 ## `codex-0.167.0/`: Codex's own screens, as the bridge reads them
 
 Recorded 2026-11-11 in an isolated herdr session (herdr 0.9.5) for the bridge's rule that no chat

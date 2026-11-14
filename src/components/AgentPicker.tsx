@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, typ
 import { ChevronDown, Plus, Terminal } from "lucide-react";
 
 import type { AgentKind } from "../../shared/protocol.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { nativeModalOver } from "../lib/useFocusTrap.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import "./AgentPicker.css";
@@ -56,6 +57,8 @@ export const AgentPicker = forwardRef<HTMLButtonElement, AgentPickerProps>(funct
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // Back closes the list, as Escape does, not the dialog it is in
+  usePhoneSheetBack(() => setOpen(false), open);
   const [place, setPlace] = useState<CSSProperties>({});
   const options: AgentKind[] = shell ? [{ kind: "", label: SHELL_LABEL }, ...agents] : agents;
   const selectedIndex = Math.max(0, options.findIndex((option) => option.kind === value));

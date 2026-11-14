@@ -1,6 +1,6 @@
 # User guide
 
-[← README](../README.md) · [Quick start](#quick-start) · [Supported agents](#supported-agents) · [Features](#features) · [Phone](#on-your-phone) · [Remote PCs](#remote-pcs-over-ssh) · [Access and safety](#access-and-safety) · [Configuration](#configuration) · [Updates](#updates) · [Keyboard shortcuts](#keyboard-shortcuts) · [How it works](#how-it-works) · [FAQ](#faq)
+[← README](../README.md) · [Quick start](#quick-start) · [Ovis and herdr](#how-ovis-fits-with-herdr) · [Supported agents](#supported-agents) · [Features](#features) · [Phone](#on-your-phone) · [Remote PCs](#remote-pcs-over-ssh) · [Access and safety](#access-and-safety) · [Configuration](#configuration) · [Updates](#updates) · [Keyboard shortcuts](#keyboard-shortcuts) · [How it works](#how-it-works) · [FAQ](#faq)
 
 Install, connect and use Ovis on your desktop and phone.
 
@@ -44,6 +44,8 @@ https://github.com/user-attachments/assets/2f030569-1004-425e-835d-9e775ec6e4c8
 > **Want a look first?** [Try it in your browser](https://ovis.sh/demo/): the app on a fictional session, nothing to install. Nothing in it is live.
 
 > **Setting it up with a coding agent?** Point it at [INSTALL.md](../INSTALL.md), a step-by-step guide written for agents.
+
+> **Rather have an app with nothing else to install?** Get [the desktop app](#the-desktop-app) for Mac, Windows or Linux. The steps below set Ovis up with herdr instead.
 
 **1. Install it** with one line, on Linux (x64, arm64) or macOS:
 
@@ -136,6 +138,16 @@ the pinned card.
 
 **3. Take it with you.** Scan the installer's QR code with a phone signed in to the same Tailscale account, then install the app from the browser. No Tailscale? Turn on the [Ovis relay](#through-the-ovis-relay) and scan its QR code instead. See [On your phone](#on-your-phone).
 
+### The desktop app
+
+The desktop app carries everything Ovis needs: the Ovis server, herdr-core (`hc`) for its terminals, and Bun to run the server. Nothing else has to be installed, neither herdr nor the plugin.
+
+- **Mac:** [Apple silicon](https://ovis.sh/Ovis-mac-arm64.dmg) or [Intel](https://ovis.sh/Ovis-mac-x64.dmg); drag it to **Applications**.
+- **Windows (x64):** [Ovis-win-x64.exe](https://ovis.sh/Ovis-win-x64.exe); run it. If Windows shows **Windows protected your PC**, choose **More info** → **Run anyway**.
+- **Linux:** on Debian or Ubuntu, the `.deb` for [x64](https://ovis.sh/Ovis-linux-x64.deb) or [arm64](https://ovis.sh/Ovis-linux-arm64.deb) (`sudo apt install ./Ovis-linux-*.deb`); elsewhere the AppImage, [x64](https://ovis.sh/Ovis-linux-x64.AppImage) or [arm64](https://ovis.sh/Ovis-linux-arm64.AppImage) (`chmod +x Ovis-linux-*.AppImage`).
+
+Its terminals are its own. The app starts a herdr-core of its own (the session `ovis`), apart from herdr's sessions and from the Herdr app's terminals, so it shows neither of those: to see them in Ovis, install with the one line above instead ([Herdr app terminals](#herdr-app-terminals)). Closing the window leaves Ovis running in the tray, so a phone or a browser keeps reaching it; **Quit Ovis** there stops the server, and the terminals keep running for the next start. A phone connects as with any other install ([On your phone](#on-your-phone)). [app/electron/README.md](../app/electron/README.md) has the rest: where the app keeps its files, its tray menu and its updates.
+
 ### In a terminal
 
 **The phone address, again:** run the one-line installer again. On a PC where the app is installed it installs nothing and prints the address and its QR code, serving the app to your tailnet first if nothing does yet. It finds the version that actually runs: herdr's plugin directory keeps the version first installed, and **Settings → Updates** runs newer ones from `~/.config/ovis/updates`, each checkout and port in a folder of its own. From a checkout, `bun scripts/plugin.ts phone` does the same.
@@ -197,9 +209,22 @@ tailscale serve --https=<port> off    # the port the installer printed, if it se
 
 The installer's herdr, Bun and Node stay, since other tools may use them: `~/.local/bin/herdr`, `~/.bun`, and `~/.local/share/ovis/node` (`~/.local/share/herdr-web-ui/node` for an install from before the rename); an older installer also linked it as `~/.local/bin/node`. Running the installer again removes that link once the installed release finds its Node itself; a release from before that still needs the link, so it stays until the installer runs again after Ovis is updated. Push keys, paired devices and the identity file that owns the app's Portal address are in `~/.config/ovis`.
 
+## How Ovis fits with herdr
+
+- **[herdr](https://github.com/herdrdev/herdr)** is a terminal multiplexer for coding agents. It keeps their terminals running and knows which agent is working, blocked or idle.
+- **The [Herdr app](https://herdr.dev/download/)** is herdr's own desktop app. Its terminals run on **[herdr-core](https://herdr.dev/core)** (`hc`).
+- **Ovis** is an independent project on top of them: a chat, a phone app and a browser client for the same terminals.
+
+Ovis replaces none of them. The terminals it shows from herdr or the Herdr app are the same live ones, so you use both at once, with nothing to move over. Which terminals you see depends on how Ovis was installed:
+
+- **The one-line install** shows your herdr sessions (herdr 0.9.0 or newer). On Linux or macOS with the Herdr app and no herdr, it shows the Herdr app's terminals instead. On Windows, or with both installed, it starts on herdr, and **Settings → About → Terminals** switches to the Herdr app's ([Herdr app terminals](#herdr-app-terminals)).
+- **The desktop app** keeps terminals of its own ([The desktop app](#the-desktop-app)).
+
 ## Supported agents
 
-Every agent herdr runs shows up with its live status, terminal and alerts. The chat view reads the agent's own session files wherever it knows where they are:
+Every agent herdr runs shows up with its live status, terminal and alerts. How much of the chat works depends on the agent: all of it for Claude Code; most of it for Codex, omp and omo; part of it for pi, OpenCode, Hermes, Devin CLI, Antigravity, Grok, gjc and the rest of the table, with fewer prompt cards and extras. Any other agent shows the terminal's text where the chat would be, and the real terminal always works.
+
+The chat view reads the agent's own session files wherever it knows where they are:
 
 | Agent | Chat | Answer prompts from chat |
 | --- | --- | --- |
@@ -232,10 +257,11 @@ bun scripts/install-gjc-integration.ts
 Restart existing GJC sessions to load it. The installer writes only the web UI's extension;
 it does not replace GJC settings or other extensions. To remove it, run the same command
 with `--remove` and restart GJC again. No running session is modified by the installer.
-A remote PC with only the runtime bundle has no checkout: run the installer with the bundle's
-own Bun from its folder, `cd ~/.local/share/herdr-web-ui/remote-vN && bin/bun
-scripts/install-gjc-integration.ts` (on Windows, `bin\bun.exe` in
-`%LOCALAPPDATA%\herdr-web-ui\remote-vN`), where `N` is the bundle version.
+A remote PC with only the runtime bundle has no checkout: run the built installer the bundle
+carries with its own server, which runs it as Bun, `cd ~/.local/share/herdr-web-ui/remote-vN &&
+BUN_BE_BUN=1 ./ovis-server scripts/install-gjc-integration.js` (on Windows, in
+`%LOCALAPPDATA%\herdr-web-ui\remote-vN`, `set BUN_BE_BUN=1` then `ovis-server.exe
+scripts\install-gjc-integration.js`), where `N` is the bundle version.
 
 The extension reports its current session ID and exact file path on session changes and
 refreshes a short-lived process binding. The bridge checks the process identity and native
@@ -426,9 +452,10 @@ The strip beside the **Settings** gear shows the plan limits of the AI tools sig
 | Antigravity | The macOS keychain item Antigravity signs in with (Gemini and other-model quota) |
 | OpenCode | OpenCode Go: the active `opencode-go` key, else the active `opencode` key, in the `credential` table of `opencode.db` (`~/.local/share/opencode/opencode.db`, or where `XDG_DATA_HOME` and `OPENCODE_DB` put it); with no OpenCode 2 store there, the `opencode-go` key, else the `opencode` key, in `~/.local/share/opencode/auth.json` (`opencode/auth.json` under `XDG_DATA_HOME` when it is set), else `OPENCODE_API_KEY`. Its rolling, weekly and monthly limits; a key without a Go subscription is left out |
 
-Only providers with a sign-in are shown; a GitHub account without Copilot is left out. One PC signed in to two accounts of a provider shows both, each named by its email (a login for Copilot) and told apart by its account id, so the same account found in two places counts once. A credential file, a command's output or a provider's answer over 1 MiB is treated as unreadable. Where each sign-in lives and which endpoint states its limits follows [OpenUsage](https://github.com/robinebers/openusage).
+Only providers with a sign-in, or with another tool's record of one (below), are shown; a GitHub account without Copilot is left out. One PC signed in to two accounts of a provider shows both, each named by its email (a login for Copilot) and told apart by its account id, so the same account found in two places counts once. A credential file, a command's output or a provider's answer over 1 MiB is treated as unreadable. Where each sign-in lives and which endpoint states its limits follows [OpenUsage](https://github.com/robinebers/openusage).
 
 - **Read only.** The server never refreshes a token: Claude, Codex, Cursor and Grok rotate refresh tokens, and a refresh the tool did not make would sign it out. An expired or refused sign-in says so; using the tool once may renew it, and otherwise sign in again. An expired Claude or Codex account (not a hub's) also has **Sign in again**, in Settings and in the usage popover: it opens the official sign-in in a terminal tab for that same account, replacing its expired sign-in instead of adding a new account.
+- **Accounts used through another tool.** A subscription you use only through another coding agent has no sign-in here that Ovis reads, and Ovis never reads another tool's sign-in or asks a provider in its name. Where that tool keeps its own record of the limits, Ovis shows the record instead. Today that is **Oh My Pi** and **Gajae Code**, for Claude: the five-hour session, the week and each model's week. Oh My Pi's come from the latest report in `usage_history` of its `agent.db` (in `PI_CODING_AGENT_DIR`, else `$XDG_DATA_HOME/omp` once that folder exists, else `~/.omp/agent`, or the folder `PI_CONFIG_DIR` names in place of `.omp`). Gajae Code keeps no such history, only the last report of each sign-in, for a day, in the `cache` table of its `agent.db` (in `GJC_CODING_AGENT_DIR` or its older name `PI_CODING_AGENT_DIR`, else `$XDG_DATA_HOME/gjc` once that folder exists, else `~/.gjc/agent`, or the folder `GJC_CONFIG_DIR` or its older name `PI_CONFIG_DIR` names in place of `.gjc`); that report is what Ovis shows, and an account both tools recorded is shown from whichever read it last. These variables are read as the Ovis server has them: one set only in your shell does not reach a server started as a service or an app. Both tools read the two `PI_` names, so where one of those points at Oh My Pi's folder, what an older Oh My Pi kept in its own `cache` table is read as Gajae Code's. The account says **Recorded by Oh My Pi** or **Recorded by Gajae Code** and how long ago, in the popover, in the strip's tooltip and in Settings, and its bar in the strip is dotted. Either tool reads about every five minutes while it runs: after 15 minutes without a new record the account is dimmed and says it may have changed since, and a limit whose window has reset is left out, the account with its last one. An account also signed in with Claude Code is listed once: with Claude Code's own reading while that is current, otherwise with whichever was read later. Where the record stands in, only the numbers are the recording tool's: the account keeps its plan, and a Claude Code sign-in that expired still says so and offers **Sign in again**. An account known from the record alone is not a Claude Code sign-in, so Claude Code's row and the setup guide still offer **Sign in**. The store is only read and left as it was; one that is missing, busy or not the shape Ovis knows lists no account. A tool that keeps no record of its limits cannot be shown.
 - **Asked only while someone looks.** Nothing runs in the background. The server asks a provider at most every five minutes, a refresh from the popover at most every 30 seconds, and a provider that answered 429 not before it said to.
 - **Yours to arrange.** **Settings → Agents** lists each coding agent on the PC as one row: its version, whether it is signed in (as far as these accounts show; an agent whose sign-in Ovis cannot read says only that it is installed), and, opened, its accounts with their limit and herdr's session resume for it. **New agents** below sets how New workspace starts Claude Code and Codex. Accounts no agent on the PC signs in to (Cursor, or an agent not installed there) are under **Other accounts**, with the hub; a remote PC shown there keeps every account under Other accounts, since they are read on the server's PC. Within each provider you order the accounts and hide any (from the strip and its popover alike); **Plan limits** at the bottom picks the limit the strip shows (**Weekly** or **Session**) and switches the meters between what is used and what is left. Each account shows whether it comes from **This PC** or **Hub**.
 - **Add an account.** **Other accounts → Add account** lists Claude, Codex, Cursor, GitHub Copilot, Grok, Antigravity and OpenCode, then Hub. Installed CLIs sign in in a new terminal tab; missing ones show an installation hint. Claude Code and Codex are followed in the browser: a dialog shows the sign-in page to open (only on the provider's own address), Codex's one-time code to enter there, and a box for the code Claude's page shows, which Ovis types into the login and keeps nowhere; it then says whether a new account signed in. **Open terminal** in the dialog shows the login's tab instead. **Sign in** on an agent's row with no account, and **Sign in to …** in the setup guide, sign in to the agent's own home (`~/.claude`, `~/.codex`), the one its plain command uses; Add account makes a separate home. Only Claude and Codex offer hub sign-in and a separate `~/.claude-<name>` or `~/.codex-<name>` credential home. Other providers keep their existing home and require **Continue** before replacing a discovered sign-in. Account names use lowercase letters, numbers and hyphens. Codex and Grok use a device code only if their installed help lists it; Cursor prints its URL without opening a server browser. Claude may need a localhost callback. Antigravity gives interactive sign-in guidance rather than guessing a login command. OpenCode plan limits require OpenCode Go/Zen, not an arbitrary provider selected in its CLI. Hub sign-in provides a waiting state and a redirect-paste field. An agent's own **Add account**, or **Sign in** on an agent row with no account, starts at its provider's choices.
@@ -467,6 +494,13 @@ Only providers with a sign-in are shown; a GitHub account without Copilot is lef
 
 ## Voice input
 
+For ElevenLabs, open **Settings → Chat → Speech recognition API**, select **ElevenLabs** as
+the STT provider, enter your ElevenLabs API key, and save. The defaults are
+`https://api.elevenlabs.io/v1` and `scribe_v2`. Recordings use the selected dictation language
+and available keyword hints. Text is inserted for review and is never sent automatically.
+Text tidying is unavailable with ElevenLabs. Switching providers or API addresses requires
+re-entering the key; `OVIS_OPENAI_API_KEY` locks the provider to OpenAI.
+
 Turn it on in **Settings → Voice input**, then tap the mic beside Attach (chat) or Send (the terminal input line), speak, and tap it again to finish; with a mouse, or with an OpenAI API key, you can also hold it while you speak. A pill above the box shows that it is recording, with a timer (and, when the server transcribes, the level of your voice); Esc or ✕ cancels. On a desktop, hold Ctrl+Shift+Space (Cmd+Shift+Space on a Mac). The text goes in at the caret and is never sent by itself, so you can read it first.
 
 - **With an OpenAI API key** (recommended for Korean, Japanese and Chinese mixed with code terms): paste it under **OpenAI API key** in the same section, or set `OVIS_OPENAI_API_KEY` for the server. The server sends each recording to `gpt-transcribe` with the dictation language and English, and the pane's slash commands as hints. In chat, a second call tidies the text (fillers, spacing) and leaves code, paths and flags as you said them; the terminal keeps the words as transcribed unless you turn tidying on there.
@@ -486,11 +520,11 @@ On an iPhone or iPad the app needs iOS 16 or later (Safari 16 or later on a Mac)
 
 ### Through the Ovis relay
 
-The Ovis relay lets your phone reach this PC from anywhere, with no Tailscale, no account and nothing to set up on the phone. It's off until you turn it on. While it's on, the PC and the phone each connect out to a relay that Ovis runs at `relay.ovis.sh`, which passes their traffic between them. Everything they send is end-to-end encrypted between the phone and the PC, so the relay can't read it. To turn it on, open **Settings → Phone & devices** on the PC, switch on **Ovis relay**, then point the phone's camera at the QR code that shows up. On a fresh install, the setup guide's **Connect your phone** offers it first: choose **Turn on the Ovis relay** and its QR code shows right there. **Use Tailscale or Wi-Fi instead**, under it, shows this page's own address and pairing QR code, or sends you to **Settings → Phone & devices** when the page is open on the PC itself.
+The Ovis relay lets your phone reach this PC from anywhere, with no Tailscale, no account and nothing to set up on the phone. It's off until you turn it on. While it's on, the PC and the phone each connect out to a relay that Ovis runs at `relay.ovis.sh`, which passes their traffic between them. Everything they send is end-to-end encrypted between the phone and the PC, so the relay can't read it. To turn it on, open **Settings → Devices and PCs → Add a connection → Ovis relay** on the PC, switch it on, choose **Show the QR code**, then point the phone's camera at it. On a fresh install, the setup guide's **Connect your phone** offers it first: choose **Turn on the Ovis relay** and its QR code shows right there. **Use Tailscale or Wi-Fi instead**, under it, shows this page's own address and pairing QR code, or sends you to **Settings → Devices and PCs** when the page is open on the PC itself.
 
 Step by step:
 
-1. On the PC, open **Settings → Devices and PCs**, choose **Connect** next to **Connect a device**, and turn on the **Ovis relay** switch. Once it is online, a QR code shows with a code to type beside it. Both work for ten minutes, and **Refresh** makes new ones. Signed in to your Ovis account, the dialog asks the new device to sign in instead, and you approve it once on a device already in the account; **Connect with a code (no sign-in)** still shows the QR code. The relay's switch and **Reset relay identity** are also under **More settings** on that page.
+1. On the PC, open **Settings → Devices and PCs**, choose **Add a connection**, and turn on the switch on its **Ovis relay** tab. Once it is online, choose **Show the QR code**. It works for ten minutes, **New code** makes another, and it comes down when the dialog closes. A PC that is already in an Ovis account shows no QR code there: a new device signs in to that account and opens the PC ([Through an account](#through-an-account)). Where this PC uses no account service (`OVIS_ACCOUNT_SERVICE_URL=off`, or it cannot be reached), the QR code shows at once with a code to type beside it, and **Refresh** makes new ones. The relay's switch and **Reset relay identity** are also under **More settings** on that page.
 2. Scan the QR code with the phone's camera. Ovis opens in the phone's browser at `app.ovis.sh` and asks whether to pair with this PC: tap **Pair**.
 3. Install it: in Safari, choose **Share → Add to Home Screen**; in Chrome, choose **Install app** or **Add to Home screen** from its menu. Then open the **⋯** menu at the top right and tap **Alerts** to get alerts on this phone. iPhone needs iOS 16.4+ and the home-screen app.
 
@@ -560,7 +594,7 @@ To stop trusting `app.ovis.sh` too, host the app yourself. `bun run build:shell`
 
 Signing in links your devices once instead of pairing each phone with each PC. It's optional: a QR code and a pairing code work as before, with or without an account.
 
-1. Sign in with **Continue with GitHub** or **Continue with Google** where the app offers it: in the desktop app, or on a PC's own page (**Settings → Devices and PCs → Account**). The public `app.ovis.sh` shows no sign-in at the moment; a phone pairs there with a QR code, and a hosted app built with `OVIS_ACCOUNT_SERVICE_URL` offers it. **Your PCs** lists the PCs of your account and the ones this phone is already paired with.
+1. Sign in with **Continue with GitHub** or **Continue with Google** where the app offers it: in the desktop app, on a PC's own page (**Settings → Devices and PCs → Account**), or on a phone at `app.ovis.sh`, which opens on **Sign in to Ovis** with **Pair with a QR or code** under it (a hosted app built with `OVIS_ACCOUNT_SERVICE_URL=off` offers no sign-in). **Your PCs** lists the PCs of your account and the ones this phone is already paired with.
 2. A phone already paired by QR code needs nothing more: the next time it opens each PC, it moves that pairing into the account by itself. Until then the PC's row says **Ready · not in the account yet**, since removing the phone through the account would not reach it.
 3. A PC marked **Needs approval** has not let this device in yet. Tap it: this device and the PC show the same six digits, as with a link without a code. The first device of an account is approved on the PC itself. After that, any device already in the account can approve: it asks whether to add the new device and shows three numbers, and you pick the one the new device shows. One approval adds the device to every PC of the account: the approving device signs a record that adds it to each PC, and a PC that was off picks that record up when it comes back.
 
@@ -620,6 +654,13 @@ and what happened, with a link to the pane, never what the agent asked or said; 
 terminal title, which an agent may take from your task. **Send a test**
 checks it; a destination that fails shows its last error and is retried a few times, with at most
 one alert waiting.
+
+For delayed escalation, the webhook API accepts `delay_ms` (0–3,600,000 milliseconds).
+This delays the external destination without changing ordinary device notifications. Opening
+an active Ovis window cancels pending alerts; a pane that resumes work also cancels its old alert.
+OpenMausBot can receive the JSON preset through a secret webhook URL with delivery set to
+`post`, which adds an alert to its chat without starting an agent task. A 5-minute delay is
+`delay_ms: 300000`.
 
 ### Using the app
 

@@ -24,6 +24,8 @@ import { mergeEnvLayers } from "../server/legacy-env.ts";
 import { acquireOwnerDirectory, guardPath, type OwnerLease } from "../server/owner-guard.ts";
 import { parseBirth, readProcessBirth } from "../server/process-owner.ts";
 import { defaultStateDir } from "../server/update-state.ts";
+import { COMPILED, entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
+import { version as builtVersion } from "../package.json";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, uptime } from "node:os";
@@ -48,7 +50,7 @@ import { descendantProcesses, windowsArgv, windowsProcessTable } from "../server
  * Declared before CONFIG_DIR, whose lookup uses it.
  */
 const ENV_FILES = ["env", ".env"];
-const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? join(import.meta.dir, ".."));
+const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? SERVER_ROOT);
 /** the dir under its Ovis name, or under the name before the rename while only that one exists */
 function ownDir(parent: string): string {
   const legacy = join(parent, "herdr-web-ui");
@@ -271,7 +273,7 @@ function provedServer(): number | null {
  * recorded or now, proves nothing either way, so the server counts as ours.
  */
 function recordedServer(pid: number): "ours" | "replaced" | "unrecorded" {
-  let owner: { pid?: unknown; birth?: unknown; birth_unknown?: unknown } | null = null;
+  let owner = null as { pid?: unknown; birth?: unknown; birth_unknown?: unknown } | null;
   let recordedAt = 0;
   try {
     owner = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as typeof owner;
@@ -511,7 +513,8 @@ async function startInTurn(): Promise<number> {
   // readable too: a failed start reads its server's last lines back through this handle
   const log = openSync(LOG_FILE, "a+");
   const logged = fstatSync(log).size;
-  const child = spawn(process.execPath, [join(ROOT, "server", "managed.ts")], {
+  const [runtime, managed] = entryCommand("managed", ROOT);
+  const child = spawn(runtime, [managed], {
     cwd: ROOT,
     detached: true,
     windowsHide: true,
@@ -692,7 +695,7 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     const owner = processes.find(row => row.pid === pid);
     const argv = windowsArgv(owner?.commandLine ?? "");
     if (owner?.path?.toLowerCase() !== process.execPath.toLowerCase()
-      || argv[1]?.toLowerCase() !== join(ROOT, "server", "managed.ts").toLowerCase()
+      || argv[1]?.toLowerCase() !== entryCommand("managed", ROOT)[1].toLowerCase()
       || owner.started === undefined || owner.started > recordedAt
       || !existsSync(PID_FILE) || statSync(PID_FILE).mtimeMs !== recordedAt
       || Number(readFileSync(PID_FILE, "utf8").trim()) !== pid) {
@@ -1051,9 +1054,11 @@ async function phoneSetup(): Promise<number> {
 /**
  * The version that runs, or runs at the next start: the release Settings → Updates installed, else
  * this checkout. herdr's plugin list names only the checkout's, which keeps the version first
- * installed, so Ovis for Windows reads this line to tell an old server from an updated one.
+ * installed, so Ovis for Windows reads this line to tell an old server from an updated one. The compiled server has
+ * no package.json beside it: it is the version compiled into it (updates stay unmanaged there for now).
  */
 function runningVersion(): string | null {
+  if (COMPILED) return builtVersion;
   try {
     const version = (JSON.parse(readFileSync(join(dirname(activePluginScript(ROOT, port, APP_STATE_DIR)), "..", "package.json"), "utf8")) as { version?: unknown }).version;
     return typeof version === "string" ? version : null;
@@ -1072,7 +1077,7 @@ async function status(): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) {
+export async function runPlugin(): Promise<void> {
   const named = process.argv[2] ?? "status";
   const command = Object.hasOwn(COMMAND_ALIASES, named) ? COMMAND_ALIASES[named] : named;
   if (command === "start") process.exit(await start());
@@ -1092,3 +1097,5 @@ if (import.meta.main) {
     process.exit(2);
   }
 }
+
+if (import.meta.main) await runPlugin();

@@ -10,6 +10,7 @@ import { changeTree, changeTreeFolders, type ChangeTreeEntry } from "../lib/chan
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { diffErrorMessage, nothingChangedWord, refName, shortHash, STATUS_MARK, statusWord, type RepoComparison } from "../lib/repoDiff.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { skeletonRows } from "../lib/skeleton.ts";
 import { useSettings } from "../lib/settings.ts";
 import { routeMissing } from "../lib/api.ts";
@@ -103,6 +104,8 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
   const [refs, setRefs] = useState<Refs>(NO_REFS);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // Back closes the list of branches, as Escape does, not the Files dialog it is in
+  usePhoneSheetBack(() => setPickerOpen(false), pickerOpen);
   const refsRequest = useRef(0);
   const pickerRef = useRef<HTMLDivElement>(null);
   const refsRef = useRef<HTMLDivElement>(null);

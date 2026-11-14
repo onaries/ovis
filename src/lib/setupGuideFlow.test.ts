@@ -113,6 +113,14 @@ describe("the setup screen after the PC check", () => {
     const account = (id: ProviderUsage["id"], key: string, problem: ProviderUsage["problem"]): ProviderUsage => ({ id, key, account: null, plan: null, windows: [], problem, checked_at: null });
     expect(signedInAgents([])).toEqual([]);
     expect(signedInAgents([account("claude", "a", null), account("claude", "b", "rate_limited"), account("codex", "c", "expired"), account("copilot", "d", null)])).toEqual(["claude", "copilot"]);
+    // an account another tool recorded is that tool's sign-in: Claude Code is still to be signed in
+    const recorded = (signedIn: boolean, problem: ProviderUsage["problem"] = null): ProviderUsage =>
+      ({ ...account("claude", "r", problem), checked_at: "2026-09-29T12:00:00Z", recorded: { by: "omp", stale: false, signed_in: signedIn } });
+    expect(signedInAgents([recorded(false), account("copilot", "d", null)])).toEqual(["copilot"]);
+    // this PC's own sign-in stays one while a record stands in for its numbers, unless it is to be signed in again
+    expect(signedInAgents([recorded(true), account("copilot", "d", null)])).toEqual(["claude", "copilot"]);
+    expect(signedInAgents([recorded(true, "rate_limited")])).toEqual(["claude"]);
+    expect(signedInAgents([recorded(true, "expired")])).toEqual([]);
   });
 
   it("keeps an instant answer on screen briefly, and adds nothing to a slow check", () => {

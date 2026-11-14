@@ -11,6 +11,9 @@
  * reported as `expired` instead; the CLI refreshes its own file the next time it runs.
  * Antigravity uses its official CLI only when HTTP omits Gemini quotas; the CLI owns its authentication.
  *
+ * A sign-in another tool on this PC holds is never read at all. Where that tool keeps its own record of the limits
+ * it read, the record is listed instead, named as that tool's (usage-recorded.ts).
+ *
  * Nothing runs in the background: a provider is asked only when a client asks this server, at
  * most every FRESH_MS unless the client forces it, which is still limited to one ask per
  * MIN_REFRESH_MS. A provider that answered 429 is not asked again before it said to.
@@ -27,6 +30,9 @@ import { installStatusline, removeStatusline, StatuslineInstallError, statusline
 import type { ProviderUsage, UsageCredits, UsageProblem, UsageProviderId, UsageReport, UsageResets, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
+import { recordedUsages, type RecordedReading, type RecordedSource, type RecordedUsage } from "./usage-recorded.ts";
+import { gjcRecorded } from "./usage-recorded-gjc.ts";
+import { ompRecorded } from "./usage-recorded-omp.ts";
 
 export const FRESH_MS = 5 * 60_000;
 export const MIN_REFRESH_MS = 30_000;
@@ -113,6 +119,11 @@ export interface UsageProvider {
   read(ctx: UsageContext, signIn: SignIn): Promise<Reading | null>;
   /** the command a sign-in may be kept behind that this PC lacks, so `signIns` could not look there; null when none */
   missingCommand?(ctx: UsageContext): string | null;
+  /**
+   * The tools on this PC that keep a record of this provider's limits for a sign-in of their own (usage-recorded.ts):
+   * read for what they recorded, never for that sign-in.
+   */
+  recorded?: readonly RecordedSource[];
 }
 
 /** an answer past MAX_READ_BYTES */
@@ -368,6 +379,7 @@ function claudeCredits(value: unknown): UsageCredits | null {
 
 const claude: UsageProvider = {
   id: "claude",
+  recorded: [ompRecorded, gjcRecorded],
   async signIns(ctx) {
     return (await Promise.all(claudeHomes(ctx).map((home) => claudeFound(ctx, home)))).flat();
   },
@@ -1151,6 +1163,8 @@ export class UsageService {
   private readonly backoffs = new Map<string, number>();
   private pending: Promise<UsageReport> | null = null;
   private pendingRefresh = false;
+  /** what each tool's store held when it was last read, and when: every report pass asks, also one answered from the cache */
+  private readonly records = new Map<RecordedSource, { readAt: number; readings: RecordedReading[] }>();
   /** the keys of the accounts hidden or removed from Ovis (skipAccounts) */
   private skipped: () => ReadonlySet<string> = () => new Set();
   /** what `skipped` gave the last pass: an account no longer in it was shown again */
@@ -1215,6 +1229,14 @@ export class UsageService {
       const held = byKey.get(usage.key);
       if (!held || (held.problem !== null && usage.problem === null)) byKey.set(usage.key, usage);
     }
+    // an account another tool on this PC recorded is listed once too: after this PC's accounts when it is known from
+    // the record alone, else in the numbers of this PC's own sign-in of it while those are not current. No sign-in is
+    // read for a record, so a hidden account's is read as well
+    for (const record of this.providers.flatMap((provider) => recordedUsages(provider.id, provider.recorded ?? [], this.ctx, (source) => this.recordOf(source, now)))) {
+      const own = byKey.get(record.key);
+      if (!own) byKey.set(record.key, record);
+      else if (!ownStands(own, record, now)) byKey.set(record.key, standingIn(own, record));
+    }
     // two sign-ins of one provider that name no account are told apart by a number, in key order
     const unnamed = new Map<UsageProviderId, ProviderUsage[]>();
     for (const usage of byKey.values()) if (usage.account === null) unnamed.set(usage.id, [...unnamed.get(usage.id) ?? [], usage]);
@@ -1224,7 +1246,18 @@ export class UsageService {
     }
     // a provider with an account found here needs nothing more; one with none names what it could not look with (a hub's accounts are not this PC's)
     const missingCommands = [...missing].filter(([id]) => !usages.flat().some((usage) => usage.id === id)).map(([provider, command]) => ({ provider, command }));
-    return { providers: [...byKey.values(), ...await this.additional(refresh, skipped)], ...(missingCommands.length > 0 ? { missing_commands: missingCommands } : {}) };
+    const additional = await this.additional(refresh, skipped);
+    // the clock as the report leaves, every provider waited for: a page counts a record's age from this time on
+    return { server_time: new Date(this.ctx.now()).toISOString(), providers: [...byKey.values(), ...additional], ...(missingCommands.length > 0 ? { missing_commands: missingCommands } : {}) };
+  }
+
+  /** What `source` recorded: its store is read when the last read is MIN_REFRESH_MS old, not once for every report. */
+  private recordOf(source: RecordedSource, now: number): RecordedReading[] {
+    const kept = this.records.get(source);
+    if (kept && now - kept.readAt < MIN_REFRESH_MS) return kept.readings;
+    const readings = source.read(this.ctx);
+    this.records.set(source, { readAt: now, readings });
+    return readings;
   }
 
   /** `incomplete`: a command it looks with is missing, so the search is not kept: the next report looks again, finding a sign-in once it is installed */
@@ -1381,6 +1414,29 @@ export class UsageService {
       return keep("failed", signIn.plan ?? null, RETRY_MS);
     }
   }
+}
+
+/**
+ * Whether this server's own reading of an account stands over another tool's record of it. One it made within its
+ * refresh interval, without a problem, always does. Any other (numbers kept through a failed read, a status-line
+ * capture hours old) only while it is no older than the record.
+ */
+function ownStands(own: ProviderUsage, recorded: RecordedUsage, now: number): boolean {
+  if (own.checked_at === null) return false;
+  const readAt = Date.parse(own.checked_at);
+  return (own.problem === null && now - readAt < FRESH_MS) || readAt >= Date.parse(recorded.checked_at);
+}
+
+/**
+ * This server's own sign-in of an account with another tool's newer record in place of its numbers. The sign-in stays:
+ * its plan and its problem are still to be told (an expired one is still to be signed in again). Credits and resets
+ * are no part of a record, and those kept from an older reading would pass for it, so they go.
+ */
+function standingIn(own: ProviderUsage, record: RecordedUsage): ProviderUsage {
+  return {
+    id: own.id, key: own.key, account: own.account ?? record.account, plan: own.plan, windows: record.windows, problem: own.problem,
+    checked_at: record.checked_at, recorded: { ...record.recorded, signed_in: true }, ...(own.statusline_offer ? { statusline_offer: true as const } : {}),
+  };
 }
 
 /** Whose sign-in a place holds: the account it names, else its token, hashed (kept in memory only, never reported). */

@@ -89,6 +89,8 @@ export const COMPOSER_JA: Record<string, string> = {
   "Not sent: this view only watches the pane.": "未送信: この画面はペインを閲覧するだけです。",
   "Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.": "未送信: ターミナルの Claude Code の入力欄が空ではありません。そこで送信するか消してから、このメッセージを送ってください。",
   "Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.": "未送信: ターミナルの Hermes の入力欄が空ではありません。そちらで送信するか消してから、このメッセージを送ってください。",
+  "Not sent: the agent's input box in the terminal holds text typed there. Send or clear it there, then send this message.": "未送信: ターミナルのエージェントの入力欄に入力済みの文字があります。そちらで送信するか消してから、このメッセージを送ってください。",
+  "Not sent: Claude Code's input box in the terminal holds a paste or image it folded, whose lines are not shown here, so it cannot be sent over. Send or clear it there, then send this message.": "未送信: ターミナルの Claude Code の入力欄に折りたたまれた貼り付けや画像があり、その行がここに表示されないため、その上から送れません。そちらで送信するか消してから、このメッセージを送ってください。",
   "Not sent: Claude Code's input box in the terminal already holds “{draft}”.": "未送信: ターミナルの Claude Code の入力欄にすでに「{draft}」が入力されています。",
   "Clear it and send": "消して送信",
   "Send it": "そのまま送信",

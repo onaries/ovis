@@ -14,7 +14,7 @@ import type { AppActions, PaneView } from "../lib/actions.ts";
 import { FILTER_KEYS, filterKeyOf, offeredPluginActions, parseQuery, STATUS_FILTERS, statusCounts, type OfferedPluginAction, type PaletteStatusFilter } from "../lib/paletteSearch.ts";
 import { actionAliases, rankByTitle, requestSettingsPage, settingsPageEntries } from "../lib/paletteSettings.ts";
 import { Ownership, runPluginActionToEnd } from "../lib/pluginRun.ts";
-import { shortcutDisplayKeys, formatKeys, type ShortcutId } from "../lib/shortcuts.ts";
+import { modalOpenBesides, shortcutDisplayKeys, formatKeys, type ShortcutId } from "../lib/shortcuts.ts";
 import { useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
@@ -187,6 +187,9 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
   const navigated = useRef(false);
   useLayoutEffect(() => { if (open) navigated.current = false; }, [open]);
   const surface = useFocusTrap<HTMLElement>(open, { initialFocus: inputRef, shouldRestore: () => !navigated.current });
+  // opened over Files, Settings or another dialog: no pane is closed under it, as the shortcut closes none there
+  const [overDialog, setOverDialog] = useState(false);
+  useLayoutEffect(() => { if (open) setOverDialog(modalOpenBesides(surface.current)); }, [open]);
   // a plugin action under way keeps the palette open for its answer: no drag closes it meanwhile
   useSheetSwipe(surface, running !== null ? null : onClose);
   usePhoneSheetBack(() => { if (running !== null) return false; onClose(); }, open);
@@ -345,6 +348,8 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
       { id: "split-down-open", label: t("Split pane down and open it"), icon: Rows2, run: () => splitPane("down", true) },
     ] satisfies PaletteAction[] : []),
     ...(zoomPane && zoom && tabPanes > 1 ? [{ id: "zoom", label: t(zoom === "off" ? "Unzoom pane" : "Zoom pane"), icon: zoom === "off" ? Minimize2 : Maximize2, shortcut: "zoom-pane" as const, run: () => zoomPane(zoom) }] : []),
+    // the pane menu's Close, its confirmation included (App, PaneCanvas)
+    ...(actions.closePane && !overDialog ? [{ id: "close-pane", label: t("Close pane"), icon: X, shortcut: "close-pane" as const, run: () => { if (!modalOpenBesides(surface.current)) actions.closePane?.(); } }] : []),
     { id: "view", label: t(view === "chat" ? "Switch to terminal" : "Switch to chat"), icon: SwitchCamera, shortcut: "toggle-view", run: actions.toggleView },
     // the selected pane's chat, older pages included (ChatView's ConversationSearch)
     ...(actions.searchConversation ? [{ id: "search-conversation", label: t("Search conversation"), icon: TextSearch, run: actions.searchConversation }] : []),
@@ -360,7 +365,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     // starts the address a page this PC serves is typed as (below), the port left to type
     ...(actions.openLocalPage ? [{ id: "local-page", label: t("Open a page on this PC…"), icon: Globe, keepOpen: true, run: () => { setQuery("localhost:"); setFilter("all"); setSelection(NO_SELECTION); inputRef.current?.focus(); } }] : []),
     { id: "refresh", label: t("Refresh"), icon: RefreshCw, run: actions.refresh },
-  ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, tabShown, renameOffered, worktreeHere, historyHere, online, browseTo, browseStart, home]);
+  ], [actions, overDialog, surface, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, tabShown, renameOffered, worktreeHere, historyHere, online, browseTo, browseStart, home]);
 
   // Settings pages and groups are found by a query only, and open on the page itself, a group's
   // scrolled to and focused: the dialog reads the request as it mounts

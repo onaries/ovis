@@ -12,7 +12,7 @@ import { t as inCurrentLanguage, type Translate } from "./i18n.ts";
  */
 export function optionName(prompt: InteractivePrompt, label: string): { text: string; recommended: boolean; words: string } {
   if (prompt.text_format === "markdown") return { text: label, recommended: false, words: shownText(parseInline(label, false)) ?? label };
-  const text = label.replace(/\s*\(recommended\)$/i, "");
+  const text = label.replace(/^\(recommended\)\s+|\s*\(recommended\)$/i, "");
   return { text, recommended: text !== label, words: text };
 }
 
@@ -109,7 +109,7 @@ export function polledPrompt(current: InteractivePrompt | null, next: Interactiv
 }
 
 /** At most `limit` UTF-16 units of `text`, never ending on half of a character (a lone high surrogate). */
-function capped(text: string, limit: number): string {
+export function capped(text: string, limit: number): string {
   const cut = text.slice(0, limit);
   const last = cut.charCodeAt(cut.length - 1);
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;

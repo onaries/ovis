@@ -32,6 +32,7 @@ const TELEGRAM_TOKEN = /^\d{3,20}:[A-Za-z0-9_-]{20,100}$/;
 const TELEGRAM_CHAT = /^(?:-?\d{1,20}|@[A-Za-z0-9_]{4,64})$/;
 
 interface StoredWebhook {
+  delay_ms?: number;
   preset: AlertWebhookPreset;
   /** the URL, or for Telegram the bot token */
   secret: string;
@@ -63,6 +64,7 @@ export interface WebhookAlert {
 export type WebhookResult = { ok: true } | { ok: false; error: string; retry: boolean };
 
 export interface AlertWebhook {
+  delay?(): number;
   /** what the destination wants told, or null: none is set */
   prefs(): AlertPrefs | null;
   wants(kind: AlertKind): boolean;
@@ -100,6 +102,7 @@ function parseStored(value: unknown): StoredWebhook | null {
   return {
     preset: preset as AlertWebhookPreset,
     secret,
+    ...(typeof record["delay_ms"] === "number" && Number.isInteger(record["delay_ms"]) && record["delay_ms"] >= 0 && record["delay_ms"] <= 3_600_000 ? { delay_ms: record["delay_ms"] } : {}),
     ...(typeof record["chat_id"] === "string" ? { chat_id: record["chat_id"] } : {}),
     alerts: parseAlerts(record["alerts"]),
     ...(typeof record["link_base"] === "string" ? { link_base: record["link_base"] } : {}),
@@ -171,7 +174,7 @@ export function buildPost(stored: StoredWebhook, alert: WebhookAlert | null, tel
       return { url: `${telegramApi}/bot${stored.secret}/sendMessage`, init: json({ chat_id: stored.chat_id, text: link ? `${text}\n${link}` : text, disable_web_page_preview: true }) };
     case "json":
       return { url: stored.secret, init: json(alert
-        ? { type: "alert", kind: alert.kind, text, title: alert.title, body: alert.body, ...(alert.pc ? { pc: alert.pc } : {}), pane_id: alert.pane_id,
+        ? { type: "alert", kind: alert.kind, text: link ? `${text}\n${link}` : text, title: alert.title, body: alert.body, ...(alert.pc ? { pc: alert.pc } : {}), pane_id: alert.pane_id,
           ...(alert.machine_id ? { machine_id: alert.machine_id } : {}), ...(alert.workspace_id ? { workspace_id: alert.workspace_id } : {}), ...(link ? { url: link } : {}) }
         : { type: "test", text }) };
   }
@@ -262,6 +265,7 @@ export function createAlertWebhook(options: AlertWebhookOptions): AlertWebhook {
       target: target ? maskSecret(target.preset, target.secret) : null,
       chat_id: target?.chat_id ?? null,
       alerts: target?.alerts ?? DEFAULT_ALERTS,
+      delay_ms: target?.delay_ms ?? 0,
       reachable_link: reachable(target?.link_base),
       last_success_at: iso(lastSuccess),
       last_failure_at: iso(lastFailure),
@@ -279,6 +283,7 @@ export function createAlertWebhook(options: AlertWebhookOptions): AlertWebhook {
   }
 
   return {
+    delay: () => current()?.delay_ms ?? 0,
     prefs: () => current()?.alerts ?? null,
     wants(kind) {
       const prefs = current()?.alerts;
@@ -306,6 +311,7 @@ export function createAlertWebhook(options: AlertWebhookOptions): AlertWebhook {
     view,
     save(input, linkBase, owner) {
       if (!(ALERT_WEBHOOK_PRESETS as readonly string[]).includes(input.preset)) throw new WebhookInputError("unknown destination");
+      if (input.delay_ms !== undefined && (!Number.isInteger(input.delay_ms) || input.delay_ms < 0 || input.delay_ms > 3_600_000)) throw new WebhookInputError("delay_ms must be an integer from 0 to 3600000");
       const before = current();
       const same = before?.preset === input.preset ? before : null;
       let secret: string;
@@ -332,6 +338,7 @@ export function createAlertWebhook(options: AlertWebhookOptions): AlertWebhook {
       }
       const saved: StoredWebhook = {
         preset: input.preset, secret, ...(chatId ? { chat_id: chatId } : {}),
+        delay_ms: input.delay_ms ?? same?.delay_ms ?? 0,
         alerts: input.alerts === undefined ? same?.alerts ?? DEFAULT_ALERTS : parseAlerts(input.alerts),
         ...(base ? { link_base: base } : {}),
         ...(owner === undefined ? {} : { owner }),
@@ -379,6 +386,7 @@ export async function handleAlertWebhookRequest(request: Request, pathname: stri
       ...(text("token") === undefined ? {} : { token: text("token")! }),
       ...(text("chat_id") === undefined ? {} : { chat_id: text("chat_id")! }),
       ...(body["alerts"] === undefined ? {} : { alerts: parseAlerts(body["alerts"]) }),
+      ...(body["delay_ms"] === undefined ? {} : { delay_ms: typeof body["delay_ms"] === "number" ? body["delay_ms"] : NaN }),
     }, request.headers.get("origin") ?? new URL(request.url).origin, owner);
     return jsonResponse(saved, 200, noStore);
   } catch (error) {

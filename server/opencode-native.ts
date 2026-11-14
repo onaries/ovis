@@ -49,7 +49,7 @@ export const PANE_VERIFIED_MS = 5_000;
  * service with its session there. A pane's end, its agent changing, or a verification that now fails
  * releases it; the stream closes when no verified pane uses its service.
  */
-const verifiedPanes = new Map<string, { sessionID: string; key: string; until: number; generation: number; pid: number | null }>();
+const verifiedPanes = new Map<string, { sessionID: string; key: string; until: number; generation: number; pid: number | null; started: number }>();
 let verificationGeneration = 0;
 /** A collector snapshot can release only ownership verified before its read began. */
 export function openCodeVerificationCheckpoint(): number { return verificationGeneration; }
@@ -280,7 +280,8 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
   let pid: number | null = null;
   try {
     const found = paneId ? await paneProcessRoots(paneId, label) : null;
-    pid = found?.pid ?? null;
+    // a pid herdr did not report comes back as -1: unknown, not a process
+    pid = found?.pid != null && found.pid > 0 ? found.pid : null;
     const roots = found ? typingRoots(found) : null;
     if (verification.cancelled || resolveAgent(pane, roots).agent !== "opencode") return null;
     const id = opencodeSessionId(pane);
@@ -304,8 +305,14 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
   if (paneId === undefined) return { service: service!, sessionID };
   // a verified OpenCode v2 pane keeps its service's event stream open, so a later send's events are not missed
   const live = ensureStream(service!);
+  const earlier = verifiedPanes.get(paneId);
+  // An older verification ending after a newer one leaves the newer one's pid, even none: a read that names no process
+  // clears it, so a new OpenCode stopped before any read saw it is still looked for (stoppedAgentJob walks without one)
+  const known = earlier !== undefined && earlier.started > verification.started ? earlier.pid : pid;
+  // the latest start a committed pid came from: an older verification ending later never lowers it
+  const started = Math.max(verification.started, earlier?.started ?? 0);
   verifiedPanes.delete(paneId);
-  verifiedPanes.set(paneId, { sessionID, key: live.key, until: Date.now() + PANE_VERIFIED_MS, generation: ++verificationGeneration, pid });
+  verifiedPanes.set(paneId, { sessionID, key: live.key, until: Date.now() + PANE_VERIFIED_MS, generation: ++verificationGeneration, pid: known, started });
   // a pane closed without an exit frame ends only if its collector tracks it
   for (const [track, { handed }] of paneTrackers) handOver(track, handed, paneId);
   scheduleRecheck();

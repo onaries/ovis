@@ -9,7 +9,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { meetsMinVersion, parseVersion, type AgentCatalogEntry, type AgentInstallState, type CatalogPlatform } from "../shared/agent-catalog.ts";
-import { loginPathProbe, loginShell, shellCommandLine, type LoginPathProbe } from "./shell-agent.ts";
+import { defaultAgentPathProbe, loginShell, shellCommandLine, type LoginPathProbe } from "./shell-agent.ts";
 
 /** How long one `--version` may run before it is killed and reported as timed out. */
 export const VERSION_TIMEOUT_MS = 5_000;
@@ -27,7 +27,7 @@ export const TIMEOUT_KEPT_MS = 60_000;
  * has one: the PATH it looks on, the login shell's included once read, which its version flag is
  * run with too (a script's interpreter, nvm's node, may be on that PATH only).
  */
-export type Locate = ((binary: string) => Promise<string | null>) & { searchPath?: () => string; refresh?: () => Promise<void> };
+export type Locate = ((binary: string) => Promise<string | null>) & { searchPath?: () => string; refresh?: (interactive?: boolean) => Promise<void>; problem?: () => string | null };
 
 /** How long the login shell's PATH is kept before a lookup that misses reads it again. */
 export const LOGIN_PATH_KEPT_MS = 60_000;
@@ -80,8 +80,10 @@ export function catalogLocator(options: { probe: LoginPathProbe | null; serviceP
   // reads the login PATH again after any read already out (it may predate an install); refreshes asked
   // for while that one waits to start join it: one login shell for them all
   let queued: Promise<string | null> | null = null;
-  const refresh = (): Promise<void> => {
+  // `interactive`: the interactive shell's PATH is read again too, not only the login shell's
+  const refresh = (interactive = true): Promise<void> => {
     if (options.probe === null) return Promise.resolve();
+    if (interactive) options.probe.reread?.();
     if (queued !== null) return queued.then(() => undefined);
     const probe = options.probe;
     const run: Promise<string | null> = (reading ?? Promise.resolve(null))
@@ -92,14 +94,17 @@ export function catalogLocator(options: { probe: LoginPathProbe | null; serviceP
     reading = run;
     return run.then(() => undefined);
   };
-  return Object.assign(locate, { searchPath: () => [servicePath(), kept?.path ?? ""].filter((part) => part !== "").join(delimiter), refresh });
+  return Object.assign(locate, { searchPath: () => [servicePath(), kept?.path ?? ""].filter((part) => part !== "").join(delimiter), refresh, problem: () => options.probe?.problem?.() ?? null });
 }
 
-/** The login-shell PATH probe of the real entrypoints: none on Windows, nor where the user has no login shell. */
+/**
+ * The login-shell PATH probe of the real entrypoints, as a pane's interactive shell sees it
+ * (agentPathProbe): none on Windows, nor where the user has no login shell.
+ */
 export function defaultLoginProbe(platform: string = process.platform): LoginPathProbe | null {
   if (platform === "win32") return null;
   const shell = loginShell();
-  return shell === null ? null : loginPathProbe({ shell });
+  return shell === null ? null : defaultAgentPathProbe(shell);
 }
 
 export interface VersionRun {
@@ -298,9 +303,14 @@ export class AgentDetector {
     return this.#inInstallDirs(binary, dirs, platform);
   }
 
-  /** Reads the login shell's PATH again (an install may have changed it). */
-  refreshPath(): Promise<void> {
-    return this.#locate.refresh?.() ?? Promise.resolve();
+  /** Reads the login shell's PATH again (an install may have changed it); `interactive`: the interactive shell's too. */
+  refreshPath(interactive = true): Promise<void> {
+    return this.#locate.refresh?.(interactive) ?? Promise.resolve();
+  }
+
+  /** Why the interactive shell's PATH could not be read, or null: agents only it puts on PATH read as missing. */
+  pathProblem(): string | null {
+    return this.#locate.problem?.() ?? null;
   }
 
   async executable(binary: string, dirs: readonly string[], platform: CatalogPlatform | null): Promise<string | null> {

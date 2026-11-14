@@ -70,12 +70,13 @@ import { useMachineId } from "../lib/machineContext.tsx";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { createSkillMatcher, type SkillMatcher } from "../lib/skillMentions.ts";
 import { lineDiff } from "../lib/diff.ts";
-import { endsWithTurn, formatTokens, stoppedTurn, type TurnIdentity } from "../lib/compose.ts";
+import { agentDisplayLabel, endsWithTurn, formatTokens, stoppedTurn, type TurnIdentity } from "../lib/compose.ts";
 import { formatElapsed, taskCallItems, taskResultMarkdown } from "../lib/omoTasks.ts";
 import { sendUserFileCall } from "../lib/sendUserFile.ts";
 import { LINE_IMAGES_SHOWN, LINE_IMAGES_SHOWN_TOUCH, lineImages, linePictures, previewPlace, workImages, type WorkImage } from "../lib/workImages.ts";
 import { shouldFoldUserMessage } from "../lib/userMessageFold.ts";
 import { invalidatePaneCommands } from "../lib/paneCommandCache.ts";
+import { agentName } from "../lib/runtimeMove.ts";
 import { afterMove, isSessionChange, moveCommand, noteCatalogChanges, type HistoryMove, outcomeChip, outcomeCommand, outcomeLabel, outcomeNote, outcomeResultText, outcomeRows, type OutcomeState } from "../lib/outcomeChip.ts";
 import { typedTerminalCommand } from "../lib/compose.ts";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
@@ -325,6 +326,7 @@ interface ChatState {
   scrollback?: string;
   truncated: boolean;
   hint?: ConversationResponse["hint"];
+  unavailable?: ConversationResponse["unavailable"];
 }
 
 const EMPTY_STATE: ChatState = { source: "conversation", turns: [], messages: [], truncated: false };
@@ -1230,14 +1232,16 @@ function compactCounts(t: ReturnType<typeof useT>, part: Extract<ConversationPar
  * A run of requests the agent recorded as failed: one row, each error on request, named by its first
  * part's index (`at`). `followed`: the turn went on with another request.
  */
-function FailedRequests({ parts, followed, at }: { parts: readonly Extract<ConversationPart, { kind: "text" }>[]; followed: boolean; at: number }) {
+function FailedRequests({ parts, followed, at, live = false }: { parts: readonly Extract<ConversationPart, { kind: "text" }>[]; followed: boolean; at: number; live?: boolean }) {
   const t = useT();
   const n = parts.length;
   const label = followed
     ? t(n === 1 ? "Request failed, then tried again" : "{n} requests failed, then tried again", { n })
     : t(n === 1 ? "Request failed" : "{n} requests failed", { n });
-  // a run the turn went on from is history, in the quiet register; only one nothing followed keeps the alert colour
-  return <ChatDetails memoryKey={`failed:${at}`} data-failed-requests={at} className={`chat-skill${followed ? "" : " is-error"} chat-failed-requests`}>
+  // a run the turn went on from is history, in the quiet register; only one nothing followed keeps the alert colour,
+  // and says what went wrong without a click once the turn ended on it (folded while the turn goes on, so a retry
+  // arriving under it does not fold it away under the reader)
+  return <ChatDetails memoryKey={`failed:${at}`} defaultOpen={!followed && !live} data-failed-requests={at} className={`chat-skill${followed ? "" : " is-error"} chat-failed-requests`}>
     <summary><CircleAlert aria-hidden="true" /><span className="chat-skill-name">{label}</span><ChevronDown className="chat-skill-caret" aria-hidden="true" /></summary>
     <ol className="chat-skill-detail chat-failed-requests-list">{parts.map((part, index) => <li key={index}>{part.text.replace(/^Error: /, "")}</li>)}</ol>
   </ChatDetails>;
@@ -1413,7 +1417,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
       : answerItems(segment.parts, requestDetails).map((item) => item.kind === "text"
         ? <Markdown key={`answer:${work.at.get(item.part)}`} skills={skills} visualizations>{item.part.text}</Markdown>
         // a later part of the turn is a later request: what the record shows, not whether it was a retry
-        : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} />))}
+        : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} live={live} />))}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -1435,9 +1439,12 @@ function fallbackTurn(message: TranscriptMessage): ConversationTurn {
  * commands sent from here keep their outcomes: the raw snapshot shows chips without duplicating
  * its text, while the agent fallback uses the native timeline's provisional sent rows.
  */
-export function ChatFallback({ paneId, agent, visible, messages, scrollback, outcomes, restored, actions, skills }: {
+export function ChatFallback({ paneId, agent, visible, messages, scrollback, outcomes, restored, actions, skills, unavailable, onOpenTerminal }: {
   paneId: string; agent: string | null; visible: boolean; messages: readonly TranscriptMessage[]; outcomes: readonly CommandOutcome[];
   scrollback?: string;
+  /** why the agent's conversation could not be read, where the PC said (ConversationResponse.unavailable) */
+  unavailable?: ConversationResponse["unavailable"];
+  onOpenTerminal?: () => void;
   restored: string | null; actions: OutcomeActions | null; skills: SkillMatcher | null;
 }) {
   const turns = useMemo(() => messages.filter((message) => message.role !== "status").map(fallbackTurn), [messages]);
@@ -1447,11 +1454,33 @@ export function ChatFallback({ paneId, agent, visible, messages, scrollback, out
     {rows.map((row) => row.outcome !== null && <OutcomeChip key={`outcome:${row.outcome.id}`} outcome={row.outcome} actions={actions} snapshot={scrollback} />)}
   </>;
   return <>
-    {agent !== null && <TerminalFallback key={paneId} paneId={paneId} visible={visible} />}
+    {agent !== null && unavailable !== undefined && <UnavailableReason agent={agent} reason={unavailable} onOpenTerminal={onOpenTerminal} />}
+    {agent !== null && <TerminalFallback key={paneId} paneId={paneId} visible={visible} explained={unavailable !== undefined} />}
     {rows.map((row) => row.kind === "sent"
       ? <OutcomeRow key={`outcome:${row.outcome.id}`} outcome={row.outcome} actions={actions} skills={skills} />
       : <Turn key={row.index} paneId={paneId} turn={turns[row.index]!} rowKey={`fallback:${row.index}`} live={false} waiting={false} showThinking={false} outcome={row.outcome} outcomeActions={actions} />)}
   </>;
+}
+
+/** Why an agent's conversation could not be read, in plain words, and what the user can do: work in its terminal. */
+function UnavailableReason({ agent, reason, onOpenTerminal }: { agent: string; reason: NonNullable<ConversationResponse["unavailable"]>; onOpenTerminal?: () => void }) {
+  const t = useT();
+  // the catalog's product name, or the label the composer gives one it does not list
+  const listed = agentName(agent);
+  const name = listed === agent ? agentDisplayLabel(agent) : listed;
+  const words = (() => {
+    switch (reason) {
+      case "not_found": return t("{agent} has not recorded a conversation Ovis can find for this pane yet. Before the first message this is normal; if it stays, use the terminal.", { agent: name });
+      case "no_reader": return t("Ovis can't read {agent} conversations yet. Use the terminal to work with it.", { agent: name });
+      case "unreadable": return t("Ovis couldn't find or read the file {agent} keeps this conversation in. Use the terminal.", { agent: name });
+      case "no_integration": return t("{agent} chat needs herdr's {agent} integration, which is not installed on this PC. Settings → Agents shows the command that installs it; then start {agent} again in this pane.", { agent: name });
+      case "no_folder": return t("herdr has not said which folder this pane is in, so Ovis can't find its conversation. Use the terminal.");
+    }
+  })();
+  return <p className="chat-inline-state chat-unavailable-reason" role="status">
+    {words}
+    {onOpenTerminal && <> <button type="button" className="chat-outcome-action" onClick={onOpenTerminal}>{t("Open Terminal")}</button></>}
+  </p>;
 }
 
 /** A terminal read is a snapshot, not a collection of attributed chat messages. */
@@ -1496,7 +1525,8 @@ function TerminalSnapshot({ text }: { text: string }) {
 }
 
 /** Optional terminal output must never hold initial display or transcript polling. */
-function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolean }) {
+/** `explained`: a line above says why the conversation is unavailable, so the preview's own line need not */
+function TerminalFallback({ paneId, visible, explained = false }: { paneId: string; visible: boolean; explained?: boolean }) {
   const { fetchPaneTranscript } = useMachineApi();
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -1524,7 +1554,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
   }, [paneId, open, visible, fetchPaneTranscript, retryKey]);
   return <details className="chat-terminal-fallback" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
     {/* a snapshot of the terminal's last lines, read again every few seconds: not the live terminal the header's Terminal opens */}
-    <summary>{t("Conversation unavailable — show a terminal output preview")}</summary>
+    <summary>{explained ? t("Show a terminal output preview") : t("Conversation unavailable — show a terminal output preview")}</summary>
     {text !== null && <TerminalSnapshot text={text} />}
     {text === null && error === null && <p className="chat-inline-state" role="status">{t("Loading…")}</p>}
     {error !== null && <FailureLine action={t("Couldn't load the terminal output")} failure={error} onRetry={() => setRetryKey((key) => key + 1)} />}
@@ -2017,7 +2047,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         showAnswerDetails(conversation);
         let next: ChatState;
         if (conversation.source !== "scrollback") next = conversationState(conversation);
-        else if (agent !== null) next = { source: "scrollback", turns: [], messages: [], truncated: false, hint: conversation.hint };
+        else if (agent !== null) next = { source: "scrollback", turns: [], messages: [], truncated: false, hint: conversation.hint, unavailable: conversation.unavailable };
         else {
           // The reader has rejected this history. Hide it before the separate terminal
           // request, which may wait or fail; a transport error must not revive those turns.
@@ -2028,7 +2058,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           }
           const result = await fetchPaneTranscript(paneId, TRANSCRIPT_LINES, signal);
           if (cancelled || generation !== olderGeneration.current) return;
-          next = { source: "scrollback", turns: [], messages: toTranscriptMessages(result.text).filter((message) => message.role !== "status"), scrollback: result.text, truncated: result.truncated === true, hint: conversation.hint };
+          next = { source: "scrollback", turns: [], messages: toTranscriptMessages(result.text).filter((message) => message.role !== "status"), scrollback: result.text, truncated: result.truncated === true, hint: conversation.hint, unavailable: conversation.unavailable };
         }
         showAnswer(conversation, next, moved);
         setReadPresentation(proved ? readKey : undefined);
@@ -2901,6 +2931,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     }
     if (commandScreenClosed(peek, agent, at, turns)) onCommandScreenClosed(peek);
   }, [peek, outcomes, turns, agent, onCommandScreenClosed]);
+  const openTerminal = useMemo(() => onOpenTerminal ? () => onOpenTerminal("") : undefined, [onOpenTerminal]);
   const outcomeActions = useMemo((): OutcomeActions => ({ answer: promptUp ? focusPrompt : null, terminal: onOpenTerminal ?? null, commands }), [promptUp, focusPrompt, onOpenTerminal, commands]);
   const renderTurn = useCallback((row: ChatRow) => {
     if (row.turn === null) return <OutcomeRow outcome={row.outcome} actions={outcomeActions} skills={skillMatcher} />;
@@ -2986,8 +3017,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
       {stale && error === null && <p className="chat-inline-state" role="status">{t("Updates paused — waiting for the agent's next activity")}</p>}
-      {loaded && error === null && agent === "grok" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Grok chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
-      {loaded && error === null && agent === "agy" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
+      {loaded && error === null && agent === "grok" && state.source !== "conversation" && state.unavailable === undefined && <p className="chat-inline-state" role="status">{t("Grok chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
+      {loaded && error === null && agent === "agy" && state.source !== "conversation" && state.unavailable === undefined && <p className="chat-inline-state" role="status">{t("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
       {loaded && error === null && agent === "copilot" && state.source === "scrollback" && state.hint === "copilot_ui_server" && <p className="chat-inline-state" role="status">{t("Copilot chat is unavailable. On Linux, starting Copilot with copilot --ui-server --port=0 may help. Its local API has no authentication: any program on this PC can control that session.")}</p>}
       {/* The agent's activity, where no open work block says it: before the turn has an assistant or
           tool row (Claude Code's spinner writes nothing to the transcript), and while a native turn
@@ -3041,7 +3072,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       renderRow={renderTurn}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={logLabel}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
-        <ChatFallback paneId={paneId} agent={agent} visible={visible} messages={state.messages} scrollback={state.scrollback} outcomes={outcomes} restored={restored} actions={outcomeActions} skills={skillMatcher} />
+        <ChatFallback paneId={paneId} agent={agent} visible={visible} messages={state.messages} scrollback={state.scrollback} outcomes={outcomes} restored={restored} actions={outcomeActions} skills={skillMatcher}
+          // a Copilot with a hint has its own line below; Grok and Antigravity keep theirs only where no reason is known
+          unavailable={state.hint !== undefined ? undefined : state.unavailable} onOpenTerminal={openTerminal} />
         {footer}
       </div>
     </div>}

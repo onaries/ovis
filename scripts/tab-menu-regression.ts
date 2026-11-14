@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, Locator, Page } from "playwright-core";
 import type { PaneLayoutSnapshot, PaneSplit } from "../shared/protocol.ts";
-import { paneFocus, paneRead, paneRename, paneSplit, paneZoom, sessionSnapshot, tabClose, tabCreate, tabMove, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { paneClose, paneFocus, paneRead, paneRename, paneSplit, paneZoom, sessionSnapshot, tabClose, tabCreate, tabMove, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { sheetsSettled } from "./sheets-settled.ts";
 import { routeDrained } from "./drained-route.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -736,7 +736,7 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
   } finally { await context.close(); }
 }
 
-async function checkTouchTablet(browser: Browser, origin: string, first: string): Promise<void> {
+async function checkTouchTablet(browser: Browser, origin: string, first: string, second: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch: true, locale: "en-US" });
   await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
   try {
@@ -757,6 +757,31 @@ async function checkTouchTablet(browser: Browser, origin: string, first: string)
     await screenshot(page, "tablet-menu");
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "detached" });
+    // a split's dividers reach into the panes beside them, but never over a pane's own buttons there (#3564)
+    const lower = (await paneSplit(second, "down", false)).pane_id;
+    try {
+      await screen(page, lower).waitFor();
+      for (const pane of [first, second, lower]) {
+        for (const button of await frame(page, pane).locator(".pane-frame-head button").all()) {
+          const covered = await button.evaluate((node) => {
+            const box = node.getBoundingClientRect();
+            // each edge's middle, just inside it (a rounded corner is no part of the button)
+            const midX = (box.left + box.right) / 2, midY = (box.top + box.bottom) / 2;
+            return [[midX, box.top + 2], [box.right - 2, midY], [midX, box.bottom - 2], [box.left + 2, midY]]
+              .map(([x, y]) => document.elementFromPoint(x!, y!)).filter((hit) => hit === null || !node.contains(hit)).map((hit) => hit?.className ?? null);
+          });
+          assert.deepEqual(covered, [], `${await button.getAttribute("aria-label")} takes a tap on every edge`);
+        }
+      }
+      // a tap on the top edge of the lower pane's ellipsis opens its menu, not the divider above it
+      const ellipsis = frame(page, lower).locator(".pane-frame-menu");
+      const box = await rect(ellipsis, "the lower pane's ellipsis");
+      await page.touchscreen.tap(box.left + box.width / 2, box.top + 2);
+      const opened = await until(async () => await ellipsis.getAttribute("aria-expanded") === "true", "the lower pane's menu opens").then(() => true, () => false);
+      await screenshot(page, "tablet-split-ellipsis-tap");
+      assert.ok(opened, "a tap on the top of the lower pane's ellipsis opens the pane menu");
+      await page.keyboard.press("Escape");
+    } finally { await paneClose(lower); }
   } finally { await context.close(); }
 }
 
@@ -774,7 +799,7 @@ export async function checkTabMenu(browser: Browser, origin: string): Promise<vo
     // A phone's title lists the tabs at both sizes; compact-height lone tabs wider than a phone are
     // exercised in phone-glass-header-demo-regression.ts.
     for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 720 }]) await checkPhone(browser, origin, first, second, viewport);
-    await checkTouchTablet(browser, origin, first);
+    await checkTouchTablet(browser, origin, first, second);
     console.log("PASS native tab drag/keyboard/touch reorder, cancellation and failure handling, desktop context and keyboard tab menus, touch menu buttons, inactive-tab close, simultaneous split terminals, focus and input isolation, swap, split, divider drag, zoom and phone sheets");
   } finally {
     if (workspaceId) await workspaceClose(workspaceId).catch(() => undefined);
