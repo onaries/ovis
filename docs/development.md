@@ -1378,7 +1378,7 @@ together: `ci.yml` runs each of them through `bun run check` with `CHECK_MAX_RUN
 itself takes ports of the host's loopback and does not count against them. Its image ships Bun,
 Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, the
 checksum-pinned GitHub CLI (`gh`) for deployment and release publishing, curl, jq, unzip,
-xz-utils and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
+xz-utils, OpenSSH (client and server), iproute2 (`ss`) and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
 fails on a stale image instead of downloading replacements. Rebuild the image after changing
 its pins; its Bun pin must match `.github/actions/setup-ci/action.yml`, and its Playwright pin
 must match `bun.lock`.

@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createServer as tcpServer } from "node:net";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "../server/index.ts";
 import { herdrRpc } from "../server/herdr/client.ts";
@@ -20,7 +20,7 @@ mkdirSync(join(remoteHome, ".ssh"), { recursive: true });
 writeFileSync(join(remoteHome, ".zshrc"), "# isolated SSH test session\n");
 const passwordMode = process.env["SSH_TEST_PASSWORD"] === "1";
 const password = "herdr-fixture-secret-only";
-const username = passwordMode ? `hbr${process.pid}` : userInfo().username;
+const username = passwordMode ? `hbr${process.pid}` : Bun.spawnSync(["id", "-un"]).stdout.toString().trim();
 let sshd: ReturnType<typeof Bun.spawn> | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 const initialSocket = process.env["HERDR_SOCKET"];
