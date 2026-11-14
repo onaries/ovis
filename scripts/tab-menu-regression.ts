@@ -617,8 +617,8 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     const at = all.findIndex((item) => item === "canvas-first" || item === "canvas-second");
     const phoneItems = all.slice(at);
     assert.deepEqual(phoneItems.slice(0, 2).sort(), ["canvas-first", "canvas-second"], "the split tab's panes lead its actions in More on a phone");
-    // the pane's and the tab's actions fold into More's last item, opening a sheet of their own (G-143)
-    assert.deepEqual(phoneItems.slice(2), ["Pane and tab…"], "More ends in Pane and tab… on a phone");
+    // the pane's and the tab's actions fold into one item, opening a sheet of their own (G-143); the way into the agent inbox is More's last
+    assert.deepEqual(phoneItems.slice(2), ["Pane and tab…", "Open agent inbox"], "More ends in Pane and tab… and Open agent inbox on a phone");
     const paneSheet = page.getByRole("dialog", { name: "Pane and tab…", exact: true });
     const openPaneSheet = async (): Promise<void> => {
       await tabSheet.getByRole("button", { name: "Pane and tab…", exact: true }).tap();

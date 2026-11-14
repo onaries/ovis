@@ -1,7 +1,7 @@
 /**
  * Japanese for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx, components/AgentInbox.tsx.
+ * components/SidebarSplit.tsx, components/InboxList.tsx, lib/inboxRow.ts.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_JA: Record<string, string> = {
@@ -33,12 +33,16 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Loading agents…": "エージェントを読み込み中…",
   "Herdr workspaces": "herdr ワークスペース",
   "No agents running": "実行中のエージェントはありません",
-  "Search agents": "エージェントを検索",
   "Clear search": "検索を消去",
-  "Filter agents by state": "状態でエージェントを絞り込む",
-  "No agents match": "一致するエージェントはありません",
+  "Nothing is running yet": "まだ何も実行されていません",
+  "Couldn't load the list.": "リストを読み込めませんでした。",
+  "Retrying…": "再試行しています…",
+  "Use + to start a workspace": "+ ボタンでワークスペースを開始できます",
+  "No results": "結果なし",
   "You: {text}": "自分: {text}",
   "Turn failed": "エラー",
+  "Filter by state": "状態で絞り込む",
+  "Filter by state: {state}": "状態で絞り込む: {state}",
   "Expand worktrees of {name}": "{name} のワークツリーを展開",
   "Collapse worktrees of {name}": "{name} のワークツリーを折りたたむ",
   "Agents: {names}": "エージェント: {names}",
@@ -71,6 +75,7 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Collapse": "折りたたむ",
   "Expand": "展開",
   "Working": "実行中",
+  "Working, waiting on background work": "実行中、バックグラウンドの作業待ち",
   "Idle": "準備完了",
   "{count} need you": "応答待ち {count} 件",
   "Agent state unknown": "エージェントの状態は不明",

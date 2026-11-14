@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane } from "../../shared/protocol.ts";
 import machinesFixture from "../../site/demo/fixtures/machines.json";
-import { heldOrder, inboxChip, inboxEmpty, inboxFiltered, inboxOrder, inboxSearched, inboxSinceAt, inboxStartsOpen, inboxStatus, inboxWords, questionWords, waitStartsAfter } from "./agentInbox.ts";
+import { heldOrder, inboxEmpty, inboxFiltered, inboxOrder, inboxSearched, inboxSinceAt, inboxStartsOpen, inboxStatus, inboxWords, questionWords } from "./agentInbox.ts";
 import type { AgentRow } from "./agentRoster.ts";
 import type { SidebarActivity } from "./sidebarActivity.tsx";
 
@@ -153,56 +153,23 @@ describe("agent inbox", () => {
 describe("inboxSinceAt", () => {
   const summary = { role: "assistant" as const, text: "Done.", at: 5_000, askedAt: 2_000, failed: false };
   it("times a working agent from the user's last ask, else from its last words", () => {
-    expect(inboxSinceAt("working", summary, undefined)).toBe(2_000);
-    expect(inboxSinceAt("working", { ...summary, askedAt: null }, undefined)).toBe(5_000);
+    expect(inboxSinceAt("working", summary, null)).toBe(2_000);
+    expect(inboxSinceAt("working", { ...summary, askedAt: null }, null)).toBe(5_000);
   });
-  it("times a waiting agent only from when this page saw it begin to wait, never from its last words", () => {
+  it("times a waiting agent from when this page saw it begin to wait, else from its last message, and not at all with neither", () => {
     expect(inboxSinceAt("blocked", summary, 7_000)).toBe(7_000);
     expect(inboxSinceAt("blocked", undefined, 7_000)).toBe(7_000);
-    expect(inboxSinceAt("blocked", summary, undefined)).toBeNull();
+    expect(inboxSinceAt("blocked", summary, null)).toBe(5_000);
+    expect(inboxSinceAt("blocked", { ...summary, at: null }, null)).toBeNull();
+    expect(inboxSinceAt("blocked", undefined, null)).toBeNull();
   });
   it("times a done or resting agent from its last words", () => {
     for (const group of ["done", "idle"] as const) expect(inboxSinceAt(group, summary, 7_000)).toBe(5_000);
-    expect(inboxSinceAt("done", { ...summary, at: null }, undefined)).toBeNull();
+    expect(inboxSinceAt("done", { ...summary, at: null }, null)).toBeNull();
   });
   it("has no time without a summary, but for a wait seen to begin", () => {
-    expect(inboxSinceAt("working", undefined, undefined)).toBeNull();
-    expect(inboxSinceAt("done", null, undefined)).toBeNull();
+    expect(inboxSinceAt("working", undefined, null)).toBeNull();
+    expect(inboxSinceAt("done", null, null)).toBeNull();
   });
 });
 
-describe("waitStartsAfter", () => {
-  const none: ReadonlyMap<string, number> = new Map();
-  it("starts no wait for a row already waiting when the page first sees it", () => {
-    expect(waitStartsAfter(none, null, [["pc:a", "blocked"]], 5)).toBe(none);
-    expect(waitStartsAfter(none, new Map([["pc:b", "working"]]), [["pc:a", "blocked"], ["pc:b", "working"]], 5)).toBe(none);
-  });
-  it("starts a wait seen to begin, keeps it while it lasts and drops it when it ends or the row leaves", () => {
-    const started = waitStartsAfter(none, new Map([["pc:a", "working"]]), [["pc:a", "blocked"]], 5);
-    expect([...started]).toEqual([["pc:a", 5]]);
-    expect(waitStartsAfter(started, new Map([["pc:a", "blocked"]]), [["pc:a", "blocked"]], 9)).toBe(started);
-    expect(waitStartsAfter(started, new Map([["pc:a", "blocked"]]), [["pc:a", "done"]], 9).size).toBe(0);
-    expect(waitStartsAfter(started, new Map([["pc:a", "blocked"]]), [], 9).size).toBe(0);
-  });
-  it("keeps a start while its PC is away and starts none from its return", () => {
-    const started = new Map([["pc:a", 5]]);
-    const away = waitStartsAfter(started, new Map([["pc:a", "blocked"], ["pc:b", "blocked"]]), [["pc:a", undefined], ["pc:b", undefined]], 9);
-    expect([...away]).toEqual([["pc:a", 5]]);
-    expect([...waitStartsAfter(away, new Map([["pc:a", undefined], ["pc:b", undefined]]), [["pc:a", "blocked"], ["pc:b", "blocked"]], 12)]).toEqual([["pc:a", 5]]);
-  });
-});
-
-describe("inboxChip", () => {
-  const failed = { role: "assistant" as const, text: "Error: rate limited", at: 5_000, askedAt: null, failed: true };
-  it("draws a done row whose last words are a failed request as a failed turn", () => {
-    expect(inboxChip("done", "done", failed)).toBe("failed");
-  });
-  it("changes nothing else about chips", () => {
-    expect(inboxChip("done", "done", { ...failed, failed: false })).toBe("done");
-    expect(inboxChip("done", "done", undefined)).toBe("done");
-    expect(inboxChip("working", "working", failed)).toBe("working");
-    expect(inboxChip("working", "waiting", failed)).toBe("waiting");
-    expect(inboxChip("blocked", "blocked", failed)).toBe("blocked");
-    expect(inboxChip("idle", "idle", failed)).toBeNull();
-  });
-});

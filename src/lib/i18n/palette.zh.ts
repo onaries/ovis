@@ -11,7 +11,6 @@ export const PALETTE_ZH: Record<string, string> = {
   "Close command palette": "关闭窗格和命令搜索",
   "Filter panes by status": "按状态筛选窗格",
   "Status filter": "状态筛选",
-  "Search": "搜索",
   "Workspace": "工作区",
   "Unknown workspace": "未知工作区",
   "Actions": "操作",

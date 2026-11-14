@@ -1,5 +1,5 @@
 /**
- * Each inbox row's last words and their time (components/AgentInbox.tsx), read through GET
+ * Each inbox row's last words and their time (components/InboxList.tsx), read through GET
  * /api/pane/summary a batch per PC at a time. Nothing is stored past the page; a row that leaves the
  * list leaves its summary behind.
  */

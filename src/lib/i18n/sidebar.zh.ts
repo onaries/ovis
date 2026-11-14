@@ -1,7 +1,7 @@
 /**
  * Simplified Chinese for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx, components/AgentInbox.tsx.
+ * components/SidebarSplit.tsx, components/InboxList.tsx, lib/inboxRow.ts.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_ZH: Record<string, string> = {
@@ -33,12 +33,16 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Loading agents…": "正在加载代理…",
   "Herdr workspaces": "herdr 工作区",
   "No agents running": "没有运行中的代理",
-  "Search agents": "搜索 Agent",
   "Clear search": "清除搜索",
-  "Filter agents by state": "按状态筛选 Agent",
-  "No agents match": "没有匹配的 Agent",
+  "Nothing is running yet": "还没有任何内容在运行",
+  "Couldn't load the list.": "无法加载列表。",
+  "Retrying…": "正在重试…",
+  "Use + to start a workspace": "使用 + 新建工作区",
+  "No results": "无结果",
   "You: {text}": "我：{text}",
   "Turn failed": "出错",
+  "Filter by state": "按状态筛选",
+  "Filter by state: {state}": "按状态筛选：{state}",
   "Expand worktrees of {name}": "展开 {name} 的工作树",
   "Collapse worktrees of {name}": "折叠 {name} 的工作树",
   "Agents: {names}": "代理：{names}",
@@ -71,6 +75,7 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Collapse": "折叠",
   "Expand": "展开",
   "Working": "运行",
+  "Working, waiting on background work": "运行，等待后台工作",
   "Idle": "就绪",
   "{count} need you": "{count} 个需回应",
   "Agent state unknown": "代理状态未知",

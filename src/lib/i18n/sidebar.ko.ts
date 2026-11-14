@@ -1,7 +1,7 @@
 /**
  * Korean for the keys only the sidebar files use:
  * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx,
- * components/SidebarSplit.tsx, components/AgentInbox.tsx.
+ * components/SidebarSplit.tsx, components/InboxList.tsx, lib/inboxRow.ts.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_KO: Record<string, string> = {
@@ -33,12 +33,16 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Loading agents…": "에이전트 불러오는 중…",
   "Herdr workspaces": "herdr 워크스페이스",
   "No agents running": "실행 중인 에이전트가 없습니다",
-  "Search agents": "에이전트 검색",
   "Clear search": "검색어 지우기",
-  "Filter agents by state": "상태로 에이전트 거르기",
-  "No agents match": "맞는 에이전트가 없습니다",
+  "Nothing is running yet": "아직 실행 중인 것이 없습니다",
+  "Couldn't load the list.": "목록을 불러오지 못했습니다.",
+  "Retrying…": "다시 시도하는 중…",
+  "Use + to start a workspace": "+ 버튼으로 워크스페이스를 시작하세요",
+  "No results": "결과 없음",
   "You: {text}": "나: {text}",
   "Turn failed": "오류",
+  "Filter by state": "상태로 거르기",
+  "Filter by state: {state}": "상태로 거르기: {state}",
   "Expand worktrees of {name}": "{name}의 워크트리 펼치기",
   "Collapse worktrees of {name}": "{name}의 워크트리 접기",
   "Agents: {names}": "에이전트: {names}",
@@ -71,6 +75,7 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Collapse": "접기",
   "Expand": "펼치기",
   "Working": "실행",
+  "Working, waiting on background work": "실행, 백그라운드 작업 대기 중",
   "Idle": "대기",
   "{count} need you": "응답 필요 {count}개",
   "Agent state unknown": "에이전트 상태 알 수 없음",

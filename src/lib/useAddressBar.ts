@@ -29,10 +29,18 @@ export function popUnread(dispatching: Event | undefined, read: Event | null): b
  * panes is an entry, Back and Forward select the entry's pane, and a file open over a pane is left
  * behind, or kept for Back and shown again on return (#3179), when another pane is selected. A
  * phone's agent list (lib/useInbox.ts) is the place that names no pane: leaving it for a pane is an
- * entry marked as such, and Back or Forward onto a place with no pane shows it again.
+ * entry marked as such, and Back or Forward onto a place with no pane shows it again. In the inbox
+ * mode (lib/inboxMode.ts) the list is the floor and a thread one entry above it: a move from one
+ * thread to another takes the thread's entry, so rows opened one after another never pile up.
  */
-export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, newSessionPending, setHeaderNote, selectionRef }: {
+export function useAddressBar({ inbox, mode, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, newSessionPending, setHeaderNote, selectionRef }: {
   inbox: Pick<ReturnType<typeof useInbox>, "shown" | "enabled" | "show" | "leave">;
+  /**
+   * The inbox mode. `on`: the app is in it, as drawn. `lands`: whether a place with no pane is the list's on the
+   * entry the history is on, read from the address: a Back or Forward lands before React draws the mode its entry
+   * is in, so the handler asks this and not what was last drawn. Absent, the list is `inbox.enabled` says.
+   */
+  mode?: { on: boolean; lands(): boolean };
   newSessionOpen: boolean;
   /** the PC the New workspace dialog is for: the list's sheet of PCs opens it for one not selected */
   newSessionMachineId: string;
@@ -83,6 +91,8 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
   const poppedTo = useRef(false);
   const newSessionOpenRef = useRef(newSessionOpen); newSessionOpenRef.current = newSessionOpen;
   const inboxRef = useRef(inbox); inboxRef.current = inbox;
+  const modeRef = useRef(mode); modeRef.current = mode;
+  const modeOn = mode?.on === true;
   const { shown: inboxShown, enabled: inboxEnabled } = inbox;
   // the list's address is the app's own start: no pane, workspace, view or file (the PC only while
   // the New workspace dialog is open over it, as that dialog is for one PC). It names no PC: the list
@@ -186,14 +196,16 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
     const moved = leftInbox ? inboxEnabled && link.pane !== null : previous !== null && !autoSelected && isNavigation(previous, link);
     if (!popped && !settingsOpen && !newSessionOpen && moved) {
       const state = leftInbox ? { [NAV_KEY]: true, [INBOX_FROM_KEY]: true } : { [NAV_KEY]: true };
+      // in the inbox mode another thread takes the thread's entry, with the marks that say what lies under it
+      if (modeOn && !leftInbox) window.history.replaceState(fileLeft ? withoutFile(window.history.state) : window.history.state, "", url);
       // a move that leaves the open file behind takes the file's entry: no entry is left between
       // leaving the list is never that: the list's own entry stays under the pane
-      if (fileLeft && !kept && !leftInbox) window.history.replaceState(state, "", url);
+      else if (fileLeft && !kept && !leftInbox) window.history.replaceState(state, "", url);
       else window.history.pushState(state, "", url);
       // a file left on the pane moved to opens over the move's entry, as its own (#3179)
       if (selectedPaneId !== null) restoreFileRef.current(selectedMachineId, selectedPaneId);
     } else window.history.replaceState(kept && !popped ? withoutFile(window.history.state) : window.history.state, "", url);
-  }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newSessionMachineId, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected, released, inboxShown, inboxEnabled]);
+  }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newSessionMachineId, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected, released, inboxShown, inboxEnabled, modeOn]);
   useEffect(() => {
     shownSelection.current = { machineId: selectedMachineId, paneId: selectedPaneId };
   }, [selectedMachineId, selectedPaneId]);
@@ -213,6 +225,8 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
   // Back and Forward between panes: the entry's address says which one. Settings' own entries
   // are its module's (lib/settingsHistory.ts)
   useEffect(() => {
+    /** whether a place with no pane is the list's on the entry landed on */
+    const listHere = (): boolean => modeRef.current?.lands() ?? inboxRef.current.enabled;
     const onPop = (event: PopStateEvent): void => {
       if (settingsEntry(event.state) !== null) return;
       // a phone's sheet closing itself steps off its entry: not a Back, and what its item opened (a
@@ -234,7 +248,7 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
           pendingCreate.current = null;
           // the list it leaves is written over the entry, not pushed
           if (fileFromLink(link) !== null) { if (inboxRef.current.shown) { inboxRef.current.leave(); poppedTo.current = true; } }
-          else if (inboxRef.current.enabled) inboxRef.current.show();
+          else if (listHere()) inboxRef.current.show();
           return;
         }
         if (link.pane || link.workspace) inboxRef.current.leave();
@@ -266,7 +280,7 @@ export function useAddressBar({ inbox, newSessionOpen, newSessionMachineId, sele
           if (link.create && selectionRef.current.machineId !== link.machine) { poppedTo.current = true; popMoving.current = true; selectTargetRef.current(link.machine, null); }
           // a place with no pane is the list's, on a phone that has it; an absolute file with no pane is not (above)
           if (fileFromLink(link) !== null) { if (inboxRef.current.shown) { inboxRef.current.leave(); poppedTo.current = true; } }
-          else if (inboxRef.current.enabled) inboxRef.current.show();
+          else if (listHere()) inboxRef.current.show();
           return;
         }
         // the list covered the pane: the entry's pane is shown and written over the entry, not pushed

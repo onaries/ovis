@@ -282,8 +282,8 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
     const more = page.getByRole("dialog", { name: "More", exact: true });
     await more.waitFor();
     const ids = await more.locator(".row-sheet-item").evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset["item"] ?? ""));
-    // the pane's and tab's actions fold into More's last item, Pane and tab…, which opens them in a sheet of their own (G-143)
-    assert.deepEqual(ids.slice(-3).map((id) => id.startsWith("pane:") ? "pane" : id), ["pane", "pane", "pane-group"], `a split tab's two panes come before its pane's actions (${ids.join(", ")})`);
+    // the pane's and tab's actions fold into one item, Pane and tab…, which opens them in a sheet of their own (G-143); the way into the agent inbox is More's last
+    assert.deepEqual(ids.slice(-4).map((id) => id.startsWith("pane:") ? "pane" : id), ["pane", "pane", "pane-group", "enter-inbox"], `a split tab's two panes come before its pane's actions (${ids.join(", ")})`);
     await more.locator('.row-sheet-item[data-item="pane-group"]').tap();
     const actions = page.getByRole("dialog", { name: "Pane and tab…", exact: true });
     await actions.waitFor();

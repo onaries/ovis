@@ -11,7 +11,6 @@ export const PALETTE_KO: Record<string, string> = {
   "Close command palette": "패널과 명령 검색 닫기",
   "Filter panes by status": "상태별 패널 필터",
   "Status filter": "상태 필터",
-  "Search": "검색",
   "Workspace": "워크스페이스",
   "Unknown workspace": "알 수 없는 워크스페이스",
   "Actions": "동작",

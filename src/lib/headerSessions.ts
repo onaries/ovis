@@ -56,6 +56,21 @@ export function sessionCountsAcross<T extends PaneInfo>(rosters: readonly Machin
   return total;
 }
 
+/**
+ * How many sessions wait for the person other than the selected pane: what More counts over an inbox mode thread,
+ * whose own agent's question is on the screen already. The pane left out is the one nextWaitingTarget never opens.
+ */
+export function waitingElsewhere<T extends PaneInfo>(rosters: readonly MachineRoster<T>[], selected: { machineId: string; paneId: string | null }): number {
+  let waiting = 0;
+  for (const roster of rosters) {
+    for (const pane of rosterPanes(roster.panes)) {
+      if (roster.machineId === selected.machineId && pane.pane_id === selected.paneId) continue;
+      if (knownStatus(roster.status(pane)) === "blocked") waiting += 1;
+    }
+  }
+  return waiting;
+}
+
 function hiddenByTabZoom<T extends PaneInfo>(panes: readonly T[], layouts: Layouts, pane: T): boolean {
   const layout = layouts?.find((candidate) => candidate.tab_id === pane.tab_id);
   return !!layout?.zoomed && layout.focused_pane_id !== pane.pane_id && panes.some((other) => other.pane_id === layout.focused_pane_id);
@@ -110,9 +125,8 @@ export function useWaitingRosters(shown: readonly Machine[], selected: Machine |
 /** The header's control drawn over the open drawer, its top row: the toggle that closes it. */
 const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle")];
 
-/** The header's first button a closed drawer gives the focus back to: the drawer toggle, else Back to agents drawn in its place (App.tsx). */
-const drawerReturnButton = (): HTMLElement | null =>
-  document.querySelector<HTMLElement>(".app-header .drawer-toggle") ?? document.querySelector<HTMLElement>(".app-header .inbox-back");
+/** The header's button a closed drawer gives the focus back to: its toggle. */
+const drawerReturnButton = (): HTMLElement | null => document.querySelector<HTMLElement>(".app-header .drawer-toggle");
 
 /**
  * A phone's open drawer is a dialog over the pane (App.tsx gives it the role): Tab goes round its own controls

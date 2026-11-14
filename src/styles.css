@@ -295,6 +295,9 @@
   --fs-reading: var(--fs-chat);
   --fs-dense-row: var(--fs-md);
   --fs-section-title: calc(17px * var(--ui-scale));
+  /* a list row's second line under a --fs-lg name, one step smaller at every pointer (--fs-chat reaches the
+     name's own size under a finger): the inbox mode's row words on a phone (InboxList.css) */
+  --fs-row-sub: calc(15px * var(--ui-scale));
   --fs-h3: calc(19px * var(--ui-scale));
   --fs-h2: calc(24px * var(--ui-scale));
   --fs-h1: calc(30px * var(--ui-scale));
@@ -1641,6 +1644,7 @@
   --fs-chat: calc(14px * var(--ui-scale));
   --fs-lg: calc(15px * var(--ui-scale));
   --fs-section-title: calc(16px * var(--ui-scale));
+  --fs-row-sub: calc(14px * var(--ui-scale));
   --fs-xl: calc(17px * var(--ui-scale));
   --fs-h3: calc(18px * var(--ui-scale));
   --fs-display: calc(21px * var(--ui-scale));
@@ -3702,6 +3706,13 @@ button {
   height: var(--icon-size-md);
   flex: 0 0 auto;
   color: var(--text-dim);
+}
+
+/* the app's own mark in an item's icon place (OvisMark.tsx: Back to Ovis), in the icon's box */
+.menu-item .ovis-mark {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  flex: 0 0 auto;
 }
 
 .menu-item[aria-selected="true"] {

@@ -1,0 +1,313 @@
+/* The inbox mode's shell (App.tsx, InboxMode.tsx; the list is InboxList.css). Every value is one of the app's tokens. */
+
+/* The mode's own sizes, defined here once for the list (InboxList.css) and the pane's zone alike: a round control,
+   a finger's size on a phone and the density's control beside the thread, and the band the column's top controls
+   and the pane's floating ones are centred in. */
+.app.is-inbox {
+  --inbox-control: var(--touch-target);
+  --inbox-zone-h: calc(var(--inbox-control) + var(--space-3) * 2);
+}
+
+/* The list is the screen on a phone: the shell draws no header over it, so the pane column takes the top safe
+   area the header would have, on the list's own surface. */
+.app.is-inbox .pane-column {
+  background: var(--bg);
+}
+
+.app.is-inbox-list .pane-column {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* A phone thread's title: the mark, then the name over the state, both lines inside the header's height (the
+   classic header's two lines on a phone, styles.css .context.has-connection). */
+.thread-title {
+  --inbox-avatar: var(--avatar-size);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  /* the name never touches the monitor button */
+  margin-inline-end: var(--space-1);
+}
+
+.thread-title-words {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--lh-tight);
+}
+
+.thread-name,
+.thread-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-name {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+.thread-state {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* the connection's word takes the state's place in its own colour, as it does under a classic title */
+.thread-state.is-reconnecting {
+  color: var(--status-reconnecting);
+}
+
+.thread-state.is-connected {
+  color: var(--status-done);
+}
+
+/* ---------- from 769px: the list beside the thread ---------- */
+
+/* The list is the sidebar's column at the sidebar's own width, so the pane is as wide here as in the classic
+   shell and entering or leaving the mode refits no terminal. No bar crosses the window: the column's top
+   controls and the pane's zone share one band (--inbox-zone-h), and the seam runs from the window's top. */
+.app.is-inbox-wide {
+  --inbox-control: var(--control-h);
+}
+
+.inbox-column,
+.app.is-inbox-wide .pane-column {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* the zone, then the thread's one pane under it */
+.app.is-inbox-wide .pane-split {
+  flex-direction: column;
+}
+
+/* The zone over the pane. Under the terminal it is a band of the terminal's own surface above it; over the chat
+   it floats (below), and the two columns beside the chip are at least as wide as the controls, so the chip
+   stays on the pane's middle and never runs under them. Only what it holds takes a press. */
+.thread-top {
+  --thread-side: calc(var(--inbox-control) * 2 + var(--space-2));
+  position: relative;
+  z-index: var(--z-header);
+  display: grid;
+  grid-template-columns: minmax(var(--thread-side), 1fr) minmax(0, auto) minmax(var(--thread-side), 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  flex: 0 0 auto;
+  height: var(--inbox-zone-h);
+  padding-inline: var(--space-3);
+  background: var(--term-bg);
+  pointer-events: none;
+}
+
+.thread-top-middle {
+  grid-column: 2;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.thread-top-controls {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: var(--space-2);
+}
+
+.thread-top-middle > *,
+.thread-top-controls > * {
+  pointer-events: auto;
+}
+
+/* Over the chat the zone floats, as a phone's glass header does: the stack starts under it (--header-over,
+   ChatView.css) while the transcript reaches up and fades into the pane's surface behind the chip. The zone
+   draws that fade itself, in place of the transcript's own short one. */
+.app.is-inbox-wide .pane-column.is-chat {
+  --header-over: var(--inbox-zone-h);
+}
+
+.app.is-inbox-wide .pane-column.is-chat .thread-top,
+.thread-top.is-empty {
+  position: absolute;
+  top: 0;
+  inset-inline: 0;
+}
+
+.app.is-inbox-wide .pane-column.is-chat .thread-top {
+  background: linear-gradient(var(--bg), transparent);
+}
+
+.thread-top.is-empty {
+  background: transparent;
+}
+
+.app.is-inbox-wide .terminal-host:first-child .chat-view::before {
+  display: none;
+}
+
+.app.is-inbox-wide .terminal-stack.is-chat > .terminal-surface {
+  overflow: visible;
+  clip-path: inset(calc(-1 * var(--header-over, 0px)) 0 0 0);
+}
+
+/* The thread's round controls and its chip rest on the pane: no shadow, a pointer's glyph size. */
+.thread-top .icon-button.inbox-round {
+  box-shadow: none;
+}
+
+.thread-top .icon-button.inbox-round svg {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+
+/* the chip: as wide as what it says, opaque, the mark concentric with its end */
+.thread-chip {
+  --inbox-avatar: var(--mark-size);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--inbox-control);
+  padding-inline: calc((var(--inbox-control) - var(--mark-size)) / 2 - var(--hairline)) calc(var(--space-3) + var(--space-half));
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.thread-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-chip-state {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.thread-chip-state.is-reconnecting {
+  color: var(--status-reconnecting);
+}
+
+.thread-chip-state.is-connected {
+  color: var(--status-done);
+}
+
+/* no agent chosen: one quiet line where the thread would be, over the pane the list would cover on a phone */
+.inbox-unchosen {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  text-align: center;
+}
+
+/* A phone's thread under the terminal. Where the classic shell draws the workspace's tabs as a row of the pane's own
+   (under a phone's header: Settings → Tabs on a phone, TabStrip.css), a thread has no row and keeps that row's room
+   free above the terminal, on the terminal's surface: a finger's target and the row's hairline. The terminal's box
+   is then the one classic gives it, and showing it sizes its pty as classic does. */
+.app.is-inbox-tab-room .pane-split {
+  padding-top: calc(var(--touch-target) + var(--hairline));
+  background: var(--term-bg);
+}
+
+/* Under the terminal the pane's box is the one it has in the classic shell, so showing a thread's terminal sizes its
+   pty as classic does. Where classic closes the pane column with a status bar (a mouse), the zone is taller than the
+   classic header and the rest of the two bars' height is kept under the terminal. Where classic has no status bar (a
+   finger, a pointer that cannot hover), the zone is the classic header's own height, its controls on its middle as
+   the classic header's are. */
+.app.is-inbox-wide.is-inbox-terminal .pane-column {
+  background: var(--term-bg);
+}
+
+.app.is-inbox-wide.is-inbox-terminal .thread-top {
+  height: var(--header-h);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app.is-inbox-wide.is-inbox-terminal .thread-top {
+    height: var(--inbox-zone-h);
+  }
+
+  .app.is-inbox-wide.is-inbox-terminal .pane-column {
+    padding-bottom: calc(var(--header-h) + var(--status-bar-h) - var(--inbox-zone-h));
+  }
+}
+
+/* a finger gets its target at any width, and the band grows with it */
+@media (pointer: coarse) {
+  .app.is-inbox-wide {
+    --inbox-control: var(--touch-target);
+  }
+
+  /* Over a shown terminal the band is the classic header's own height (above), not the zone's: its controls take
+     the header's own touch size, as classic's header controls do in that band, and sit on its middle. The band is
+     one row of its own height, and a control taller than it is centred all the same, not laid from its top. */
+  .app.is-inbox-wide.is-inbox-terminal .thread-top {
+    --inbox-control: var(--touch-target-header);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: unsafe center;
+  }
+}
+
+/* An installed desktop app with the title bar folded away has no header to drag the window by or to keep clear
+   of the window's controls (styles.css does both for the classic header): the two top bands do it here. */
+@media (display-mode: window-controls-overlay) {
+  .mode-inbox.is-wide .inbox-top,
+  .thread-top {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+
+  .mode-inbox.is-wide .inbox-top :is(button, input),
+  .thread-top :is(button, .thread-chip) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  .mode-inbox.is-wide .inbox-top {
+    padding-inline-start: calc(var(--space-4) + env(titlebar-area-x, 0px));
+  }
+
+  .thread-top {
+    padding-inline-end: calc(var(--space-3) + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  }
+}
+
+/* an iPad home-screen app in a window has the window's controls over its top-left corner (lib/viewport.ts) */
+:root[data-window-controls] .mode-inbox .inbox-top {
+  padding-inline-start: calc(var(--window-controls-w, 72px) + env(safe-area-inset-left, 0px));
+}
+
+/* More's header over a thread (App.tsx gives the crumb .is-inbox in the mode only): its fixed lines never make a
+   scroller of the header; only a path longer than six lines scrolls, in its own lines. The classic app's header
+   scrolls as a whole (styles.css .header-more-crumb). */
+.header-more-crumb.is-inbox {
+  max-height: none;
+  overflow-y: visible;
+}
+
+.header-more-crumb.is-inbox .header-more-path {
+  flex: none;
+  max-height: calc(6em * var(--lh-base));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

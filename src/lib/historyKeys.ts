@@ -13,6 +13,13 @@ export const SHEET_UNDER_KEY = "ovis:sheet-under";
  */
 export const PLACE_KEY = "ovis:place";
 
+/**
+ * an entry the app has stood on that carries nothing else (lib/inboxMode.ts writes it): the one a page loaded on,
+ * and one left without a state by the time the page is hidden. An entry with no state at all is then one no page
+ * of the app has stood on, which is how a fresh navigation is told from a restored tab (freshNavigation)
+ */
+export const SEEN_KEY = "ovis:seen";
+
 /** a file's own entry (lib/useFileViewer.ts) and a repository diff's (lib/repoDiff.ts) */
 export const FILE_PREVIEW_KEY = "ovis:file-preview";
 export const REPO_DIFF_KEY = "ovis:repo-diff";

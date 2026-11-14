@@ -302,6 +302,13 @@
   color: var(--text-dim);
 }
 
+/* the app's own mark in an item's icon place (OvisMark.tsx: Back to Ovis), in the icon's box */
+.row-sheet-item .ovis-mark {
+  flex: 0 0 auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
 /* an item with a button of its own at its end (a tab list's Close): the item takes the row */
 .row-sheet-line {
   display: flex;

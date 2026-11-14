@@ -2,7 +2,7 @@
  * The header's More menu (App): its button's menu, and on a phone the two groups it folds its items into,
  * Find… and Pane and tab… (G-143), each opened as a sheet of its own from More's button once More has closed.
  */
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 export type MoreGroup = "find" | "pane";
 
@@ -18,6 +18,10 @@ export interface MoreMenu {
 export function useMoreMenu(): MoreMenu {
   const [more, setMore] = useState<{ anchor: HTMLElement } | null>(null);
   const closeMore = useCallback(() => setMore(null), []);
+  // A More whose button left the document goes with it, before a frame is drawn: the thread it stood over closed
+  // under it (a system Back in the inbox mode's wide layout takes the pane's More away), and what it listed was that
+  // thread's. Checked after every render: nothing tells of a button's leaving.
+  useLayoutEffect(() => { if (more !== null && !more.anchor.isConnected) setMore(null); });
   const [group, setGroup] = useState<{ kind: MoreGroup; anchor: HTMLElement } | null>(null);
   const openGroup = useCallback((kind: MoreGroup, anchor: HTMLElement) => setGroup({ kind, anchor }), []);
   const closeGroup = useCallback(() => setGroup(null), []);

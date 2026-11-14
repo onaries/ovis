@@ -973,7 +973,7 @@ export const SIDEBAR_CONTEXT_STORAGE_KEY = "ovis:sidebar-context";
 export const FOLD_HELPERS_STORAGE_KEY = "ovis:fold-helpers";
 /** Settings > Appearance > Agents under workspaces, kept in a key of its own for the same reason: off until chosen. */
 export const SIDEBAR_AGENT_TREE_STORAGE_KEY = "ovis:sidebar-agent-tree";
-/** Settings > Appearance > Agent inbox on a phone, kept in a key of its own for the same reason; null until chosen. */
+/** Settings > Appearance > Start in the agent inbox on a phone, kept in a key of its own for the same reason; null until chosen. */
 export const PHONE_INBOX_STORAGE_KEY = "ovis:phone-inbox";
 
 /** a device's own on or off in its own key; null where it chose neither */

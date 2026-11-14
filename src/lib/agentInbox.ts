@@ -1,5 +1,5 @@
 /**
- * The phone's agent inbox (components/AgentInbox.tsx): every shown PC's agents in one list, the ones
+ * The agent inbox's list (components/InboxList.tsx): every shown PC's agents in one list, the ones
  * that need the reader first, narrowed by state. Built on the Agents list's own rows and shown state
  * (lib/agentRoster.ts, lib/sidebarActivity.tsx), so the two never disagree.
  */
@@ -13,7 +13,6 @@ import type { AgentGroupSort } from "./settings.ts";
 import type { SidebarActivity } from "./sidebarActivity.tsx";
 import type { RowSummary } from "./useInboxSummaries.ts";
 import { capped } from "./promptText.ts";
-import { knownStatus, type KnownStatus } from "./status.ts";
 import { machineFilter, sidebarFilter } from "./sidebarFilter.ts";
 import { sidebarPinKey } from "./sidebarPins.ts";
 
@@ -96,43 +95,18 @@ export function inboxWords(input: { group: AgentGroup; blocked: string | null; q
 }
 
 /**
- * Since when a row is in its state (ms): a waiting agent since this page saw it begin to wait (`waitStart`, none when
- * the page did not: the summary knows when the agent last spoke, not when it began to wait), a working agent since
- * the user last asked it, any other since its last words.
+ * Since when a row is in its state (ms): a waiting agent since this device saw it begin to wait (`waitStart`, the
+ * stamp the Agents list reads too, lib/agentStateSince.ts), else since its last message (herdr tells no time of a
+ * state change: the summary's time of its last words, which a done or ready row draws too, where the Agents list says
+ * none); a working agent since the user last asked it, any other since its last words.
  */
-export function inboxSinceAt(group: AgentGroup, summary: RowSummary | null | undefined, waitStart: number | undefined): number | null {
-  if (group === "blocked") return waitStart ?? null;
+export function inboxSinceAt(group: AgentGroup, summary: RowSummary | null | undefined, waitStart: number | null): number | null {
+  if (group === "blocked") return waitStart ?? summary?.at ?? null;
   if (!summary) return null;
   return group === "working" ? summary.askedAt ?? summary.at : summary.at;
 }
 
-/**
- * When this page saw each agent begin to wait, by its row's key, as the Agents list keeps it (AgentSidebar.tsx
- * waitStarts): a row seen in another state before (`before`, the last states seen; null before the first look) and
- * waiting now starts at `at`; one already waiting when first seen gets none, as no time of change is known; a PC that
- * is away (no state) keeps a start already seen and starts none on its return; a row that stops waiting or leaves
- * loses its start. The same map when nothing changed.
- */
-export function waitStartsAfter(starts: ReadonlyMap<string, number>, before: ReadonlyMap<string, AgentStatus | undefined> | null,
-  statuses: readonly (readonly [string, AgentStatus | undefined])[], at: number): ReadonlyMap<string, number> {
-  const next = new Map<string, number>();
-  for (const [key, status] of statuses) {
-    if (status === undefined) { const kept = starts.get(key); if (kept !== undefined) next.set(key, kept); continue; }
-    if (status !== "blocked") continue;
-    const seen = before?.get(key);
-    const start = starts.get(key) ?? (seen !== undefined && seen !== "blocked" ? at : undefined);
-    if (start !== undefined) next.set(key, start);
-  }
-  return next.size === starts.size && [...next].every(([key, start]) => starts.get(key) === start) ? starts : next;
-}
-
-/** A row's chip: its state's badge, `failed` for a done row whose last words are a failed request; a resting row has none. */
-export function inboxChip(group: AgentGroup, status: AgentStatus | undefined, summary: RowSummary | undefined): KnownStatus | "failed" | null {
-  if (group === "idle") return null;
-  return group === "done" && summary?.failed === true ? "failed" : knownStatus(status);
-}
-
-/** Whether a phone opens on the list: the address names no pane, workspace or file. */
+/** Whether the inbox mode opens on its list: the address names no pane, workspace or file. */
 export function inboxStartsOpen(enabled: boolean, link: AppLink | null): boolean {
   return enabled && !(link !== null && Boolean(link.pane || link.workspace || fileFromLink(link)));
 }

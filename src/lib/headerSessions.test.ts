@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { create } from "react-test-renderer";
 import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot, TabInfo } from "../../shared/protocol.ts";
-import { nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, type MachineRoster } from "./headerSessions.ts";
+import { nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, waitingElsewhere, type MachineRoster } from "./headerSessions.ts";
 
 const pane = (pane_id: string, agent_status: AgentStatus, tab_id = "t1", workspace_id = "w1", extra: Partial<HerdrPane> = {}): HerdrPane =>
   ({ pane_id, agent_status, tab_id, workspace_id, focused: false, agent: "claude", ...extra }) as HerdrPane;
@@ -60,6 +60,20 @@ it("counts and walks the waiting panes of every connected PC, the selected PC fi
   expect(nextWaitingTarget(twoPlusOne, { machineId: "workstation", paneId: "w1" })).toEqual({ machineId: "workstation", paneId: "w2" });
   expect(nextWaitingTarget(twoPlusOne, { machineId: "workstation", paneId: "w2" })).toEqual({ machineId: "laptop", paneId: "l1" });
   expect(nextWaitingTarget(twoPlusOne, { machineId: "laptop", paneId: "l1" })).toEqual({ machineId: "workstation", paneId: "w1" });
+});
+
+it("counts the waiting sessions other than the selected pane, on every connected PC", () => {
+  const rosters = [
+    { machineId: "local", panes: [pane("a", "idle"), pane("b", "blocked")], status: raw },
+    { machineId: "work", panes: [pane("b", "blocked"), pane("d", "working")], status: raw },
+  ];
+  // the selected pane waits: it is the one left out, and only on its own PC (two PCs may reuse a pane id)
+  expect(waitingElsewhere(rosters, { machineId: "local", paneId: "b" })).toBe(1);
+  expect(waitingElsewhere(rosters, { machineId: "work", paneId: "b" })).toBe(1);
+  // the selected pane does not wait, or none is selected: every waiting one counts, as the header's count
+  expect(waitingElsewhere(rosters, { machineId: "local", paneId: "a" })).toBe(2);
+  expect(waitingElsewhere(rosters, { machineId: "local", paneId: null })).toBe(sessionCountsAcross(rosters).waiting);
+  expect(waitingElsewhere([rosters[0]!], { machineId: "local", paneId: "b" })).toBe(0);
 });
 
 it("skips a waiting pane its tab's zoom hides, which a pick would never reach", () => {

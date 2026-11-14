@@ -21,12 +21,23 @@ import { deviceInUse, followsHerdrFocus, movingHerdrFocusOn } from "./followFocu
 import { pruneWaitingSends } from "./sentWaiting.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { displayPaneTitle } from "../components/Sidebar.tsx";
+import { useHeaderConnection, type HeaderConnection } from "./headerConnection.ts";
 import type { usePreferencesSync } from "./preferencesSync.ts";
 import type { useAlertSignals } from "./useAlertSignals.ts";
 
 const POLL_MS = 5000;
 const STREAM_BACKSTOP_MS = 30_000;
 type RosterStreamUpdate = "opened" | "lost" | "closed" | Machine[];
+
+/** The stream that feeds the roster: open now, and opened before since the page loaded (a first opening is no reconnect). */
+export interface RosterLink { open: boolean; before: boolean }
+
+/** The roster stream after an update; the same object when only a roster came, so nothing draws again for it. */
+export function rosterLinkAfter(link: RosterLink, update: RosterStreamUpdate): RosterLink {
+  if (Array.isArray(update)) return link;
+  if (update === "opened") return link.open ? link : { open: true, before: true };
+  return link.open ? { open: false, before: link.before } : link;
+}
 
 /**
  * Polls and the event stream hand over fresh objects every few seconds even when nothing
@@ -103,7 +114,12 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
   const snapshotRequests = useRef(new SnapshotRequests());
   const stream = useRef({ open: false, localConnected: false });
   const polling = useRef<((readNow: boolean) => void) | null>(null);
+  // What the stream that feeds the roster has to say, which the inbox mode's list says (components/InboxList.tsx):
+  // its rows come from it, whether or not a pane is mounted under the list
+  const [link, setLink] = useState<RosterLink>({ open: false, before: false });
+  const rosterConnection: HeaderConnection = useHeaderConnection({ scope: "roster", reportedBy: "roster", connected: link.open, connectedBefore: link.before, outputStopped: false });
   const onRosterStream = useCallback((update: RosterStreamUpdate) => {
+    setLink((previous) => rosterLinkAfter(previous, update));
     // the agents' state times go by what the page was told, and when (lib/agentStateWatch.ts)
     if (Array.isArray(update)) stateWatch.pushed();
     else stateWatch.subscription(update);
@@ -219,7 +235,7 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
   useEffect(() => () => {
     if (refetchTimer.current !== null) window.clearTimeout(refetchTimer.current);
   }, []);
-  return { snapshotRequests, reorderCoordinator, load, scheduleRefetch, onRosterStream };
+  return { snapshotRequests, reorderCoordinator, load, scheduleRefetch, onRosterStream, rosterConnection };
 }
 
 export function useRosterEvents({ onPaneMoved, machineSessions, locked, onRosterStream, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, setRelayPairings, setRemotePairings, setRemovedNotices, getTakeNotificationTargetRef }: {

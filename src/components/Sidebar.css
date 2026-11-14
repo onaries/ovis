@@ -1,3 +1,12 @@
+/* The navigation column's row fills, on its own surface: the sidebar's rows (on .sidebar-shell, where they have
+   always been set) and the inbox mode's column (InboxList.css), which stands in the sidebar's place. Aliases of
+   existing tokens only. */
+.sidebar-shell,
+.sidebar.inbox-column {
+  --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-nav));
+  --side-selected: var(--bg-hover);
+}
+
 .sidebar-shell {
   /* One grid for every row: a leading cell that says who or what the row is, the title, and a
      trailing cell that says how it is. The two cells are the columns of the header zone's own
@@ -7,8 +16,6 @@
   --side-row: var(--control-h);
   --side-row-2: calc(var(--control-h) + var(--space-3));
   --side-action: var(--space-6);
-  --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-nav));
-  --side-selected: var(--bg-hover);
   /* Until resized, Agents keeps today's half-shell allocation when both lists are long. The PCs
      take the rest, but never reserve height beyond their rows: Agents can use what they leave free.
      The PCs grow first (below), so a long roster does not change today's default split. */

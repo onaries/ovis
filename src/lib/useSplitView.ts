@@ -114,7 +114,7 @@ export interface SlotView {
   attach: boolean;
 }
 
-export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, arrangeRefused, followPaneMove }: {
+export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, arrangeRefused, followPaneMove, threadDrawn }: {
   machines: Machine[];
   split: SplitState | null;
   wideScreen: boolean;
@@ -158,11 +158,14 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
   arrangeRefused: (machineId: string) => boolean;
   /** herdr moved a pane under a new ID: what is kept under the old one, and every view of it, goes to the new one (App's followPaneMove) */
   followPaneMove: (machineId: string, from: string, to: string) => void;
+  /** the inbox mode draws the selected pane's thread alone (`PaneCanvas` `solo`): no other slot's pane is on the screen */
+  threadDrawn: boolean;
 }) {
   // The split view (lib/split.ts): drawn only where the sidebar stands beside the pane, and only
   // while a pane is selected; a narrower window shows the active slot alone and keeps the split
   const splitOn = split !== null && wideScreen && selectedPaneId !== null;
-  splitShownRef.current = splitOn;
+  // what the alerts read as on the screen (lib/useAlertSignals.ts): a thread drawn alone shows none of the other slots
+  splitShownRef.current = splitOn && !threadDrawn;
   const current: SplitTarget | null = selectedPaneId === null ? null : { machineId: selectedMachineId, paneId: selectedPaneId };
   // every slot draws on a connection of its own but slot a (App's SlotSessions), so slots may attach
   // one tab each and attach and detach it as the others are not there
@@ -276,6 +279,19 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     if (!splitOn || current === null) return;
     const change = activatedSlot(split, current, slot);
     if (change) applySplit(change, keepFocus);
+  };
+  /**
+   * A pick of a pane another slot shows, where the pick is not the active slot's to take (the inbox mode's row: a
+   * thread is one pane, and the mode left from it shows the split as it was): that slot becomes the active one and
+   * the active slot keeps its pane. The layout only; the pick is the caller's. A narrower window that keeps the split
+   * shows its active slot alone, so the slot is made active there too: the pane it held is not drawn twice once the
+   * window widens.
+   */
+  const activateSlotOf = (target: SplitTarget): void => {
+    if (split === null || current === null) return;
+    const slot = Object.entries(split.panes).find(([, pane]) => sameTarget(pane, target))?.[0];
+    const change = slot === undefined ? null : activatedSlot(split, current, slot);
+    if (change?.split) setSplit(change.split);
   };
   const closeSlot = (slot: SplitSlot): void => {
     if (!splitOn || current === null) return;
@@ -445,5 +461,5 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
       window.removeEventListener("keydown", cancel);
     };
   }, [splitDragOn, clearDropPreview, hideDropTarget]);
-  return { splitOn, others, shownSlots, rects, follows, activateSlot, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview };
+  return { splitOn, others, shownSlots, rects, follows, activateSlot, activateSlotOf, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview };
 }

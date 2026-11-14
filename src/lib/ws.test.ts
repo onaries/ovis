@@ -855,6 +855,31 @@ it("releases the shared grid once when the chat lens covers a terminal this tab 
   client.close();
 });
 
+it("says a pane holds the pty's size only while it sized it last and has not let it go since", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  FakeSocket.last.open();
+  try {
+    // a pane this tab never attached holds nothing, and one attached keeping another device's size holds none
+    expect(client.holdsSize("w1:p1")).toBe(false);
+    client.attach("w1:p1", 40, 20, true);
+    expect(client.holdsSize("w1:p1")).toBe(false);
+    // sized by this tab, it holds the size until it lets it go, by either way of letting it go
+    client.resize("w1:p1", 53, 33, true);
+    expect(client.holdsSize("w1:p1")).toBe(true);
+    client.releaseSize("w1:p1");
+    expect(client.holdsSize("w1:p1")).toBe(false);
+    client.resize("w1:p1", 53, 33, true);
+    client.keepSize("w1:p1", false);
+    expect(client.holdsSize("w1:p1")).toBe(false);
+    // attached sizing the pty: it holds the size from the attach
+    client.attach("w1:p2", 120, 40);
+    expect(client.holdsSize("w1:p2")).toBe(true);
+  } finally {
+    client.close();
+  }
+});
+
 it("keeps a visible unfocused grid while changing only its reconnect policy", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();

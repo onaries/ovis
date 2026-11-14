@@ -1,5 +1,5 @@
 /**
- * What each waiting agent of the inbox asks (components/AgentInbox.tsx): its prompt card read once per
+ * What each waiting agent of the inbox asks (components/InboxList.tsx): its prompt card read once per
  * wait and each time the list is shown, through the read-only GET /api/pane/prompt, a few at a time.
  * Nothing is answered from here.
  */
