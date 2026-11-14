@@ -200,6 +200,44 @@
   height: var(--icon-size-sm);
 }
 
+/* A bare row's sentence over the page (#3275), while a mouse rests on the row or the keyboard is on its
+   control: the one tooltip surface the app has (.relay-map-tooltip), placed by placeSentence in
+   SettingsControls.tsx. It never moves: it is there or it is not. */
+.settings-help,
+.settings-help-copy {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  max-width: min(22rem, calc(100vw - var(--space-4)));
+  /* in a window shorter than the sentence (a high zoom) it stays inside the screen and scrolls under the pointer */
+  max-height: calc(100dvh - var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-menu);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-base);
+  overflow-wrap: break-word;
+}
+
+/* a sentence that lies on another row's control (no room beside it) is cut out over that control (a clip-path
+   in SettingsControls.tsx RowSentence), so the pointer there is the control's. This copy lies under it at the
+   same place and size, takes no pointer, and draws what was cut. It scrolls as the sentence does, with a scroll
+   bar where the sentence has one, so its lines break where the sentence's do. Every theme's elevated background
+   and strong border are opaque, so the two layers read as one */
+.settings-help-copy {
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
 .theme-cards {
   display: flex;
@@ -481,6 +519,22 @@
   max-width: 54ch;
 }
 
+/* a bare row's sentence opened in the row by a tap (a finger has no hover, #3275): under the name and the
+   control, as wide as the row, starting where the name does */
+.settings-row.is-explained {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.settings-row > .settings-row-sentence {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.settings-row:has(> .settings-row-text .settings-row-icon) > .settings-row-sentence {
+  padding-inline-start: var(--settings-icon-column);
+}
+
 /* a condition that applies right now, on its own line under the sentence */
 .settings-condition {
   display: block;
@@ -541,14 +595,12 @@
   gap: var(--space-2);
 }
 
-/* the controls sit in wells of the input color, so a card reads as one surface with holes */
+/* the controls sit in wells of the input color, so a card reads as one surface with holes; the chosen option is a
+   thumb lifted off its well, under a mouse and under a finger (styles.css draws --segmented-chosen-shadow on the box
+   that is the pill for each) */
 .settings-segmented {
+  --segmented-chosen-shadow: var(--shadow-thumb);
   background: var(--bg-input);
-}
-
-.settings-segmented > button[aria-pressed="true"] {
-  font-weight: var(--fw-selected);
-  box-shadow: var(--shadow-thumb);
 }
 
 .settings-stepper {
@@ -695,6 +747,12 @@
     min-width: var(--touch-target);
     min-height: var(--touch-target);
   }
+
+  /* options that take more than one row (a stacked row, below) stand a whole hit box apart: the pill is shorter than
+     the hit box by this much, so with less between the rows a tap under one row's pill would be the next row's */
+  .settings-segmented {
+    --segmented-row-gap: calc(var(--touch-target) - (var(--control-h) - var(--segmented-inset)));
+  }
 }
 
 .settings-dialog :is(.input, .select) {
@@ -715,7 +773,10 @@
     border-color: var(--border-contrast);
   }
 
-  .settings-segmented > button[aria-pressed="true"],
+  .settings-segmented {
+    --segmented-chosen-shadow: inset 0 0 0 var(--hairline) var(--text);
+  }
+
   .settings-chip[aria-pressed="true"],
   .settings-tab[aria-selected="true"] {
     box-shadow: inset 0 0 0 var(--hairline) var(--text);
@@ -781,18 +842,57 @@
     gap: var(--space-2);
   }
 
+  /* its options share that line equally while the widest label (--segmented-widest, which Segmented measures) fits a
+     share with --space-1 on each side. Where it does not they go two to a row, as the relay's PC filter wraps
+     (RelayDashboard.css), and one to a row where it does not fit half the line either: a label is never cut, shrunk
+     under the size it is set in, scrolled sideways or laid over its neighbour. The rows are --space-2 apart under a
+     mouse and a finger's hit box apart under a finger (--segmented-row-gap, above). --segmented-need is the room that
+     label asks for, --segmented-share and --segmented-half what an option has with all on the line and with two */
   .settings-row.is-wide > .settings-segmented {
+    --segmented-need: calc(var(--segmented-widest, 0px) + 2 * var(--space-1));
+    --segmented-share: calc((100% - (var(--segmented-count, 1) - 1) * var(--space-half)) / var(--segmented-count, 1));
+    --segmented-half: calc((100% - var(--space-half)) / 2);
     display: flex;
+    flex-wrap: wrap;
+    row-gap: var(--segmented-row-gap, var(--space-2));
   }
 
+  /* the basis is a step, not a slope: 9999 times the room the label lacks is past the far end of its clamp as soon as
+     any is lacking, and under the near end while none is. A pixel under the share keeps the rounding of a full line
+     from wrapping its last option; the options grow back to the share. Whatever was measured, an option is never
+     narrower than its own label */
   .settings-row.is-wide > .settings-segmented > button {
-    flex: 1 1 0;
+    flex: 1 1 max(clamp(var(--segmented-share) - 1px, (var(--segmented-need) - var(--segmented-share)) * 9999, var(--segmented-half) - 1px), clamp(0px, (var(--segmented-need) - var(--segmented-half)) * 9999, 100%));
     justify-content: center;
-    min-width: 0;
+    min-width: min-content;
+    padding-inline: var(--space-1);
   }
 
-  .settings-row.is-wide > .settings-font-input {
+  /* a label takes the room its chosen weight needs, chosen or not (the chosen one is heavier, and in Latin text
+     wider): what Segmented measures is then the same whichever option is chosen, and a tap never changes how many
+     rows the options take. The copy is as wide as the label at that weight, takes no height and is not drawn */
+  .settings-row.is-wide > .settings-segmented > button > span {
+    text-align: center;
+  }
+
+  .settings-row.is-wide > .settings-segmented > button > span::after {
+    display: block;
+    height: 0;
+    overflow: hidden;
+    content: attr(data-label);
+    font-weight: var(--fw-selected);
+    visibility: hidden;
+  }
+
+  .settings-row.is-wide > .settings-font-input,
+  .settings-row.is-wide > .settings-row-sentence {
     flex: 0 0 auto;
+  }
+
+  /* a stacked row is a column already, and the opened sentence its last line: wrapping would size that column to
+     its widest child's own width (a font field, four segments), past the card */
+  .settings-row.is-wide.is-explained {
+    flex-wrap: nowrap;
   }
 
   /* a stepper under its name ends on the card's edge, as the font rows' steppers do */
@@ -828,6 +928,8 @@
 
   .settings-description,
   .settings-hint,
+  .settings-help,
+  .settings-help-copy,
   .settings-row-text > .settings-condition {
     font-size: var(--fs-sm);
   }

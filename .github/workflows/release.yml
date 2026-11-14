@@ -64,11 +64,13 @@ jobs:
       attestations: write
     with:
       ref: ${{ github.sha }}
-  # The server as one compiled binary per platform (scripts/build-server.ts), attached beside the PTY host: ovis-server.json
-  # (version, the git trees of server/ and shared/, SHA-256 per platform), ovis-server.SHA256SUMS and the manifest's
-  # Ed25519 signature, ovis-server.json.sig. Bun compiles every platform's binary here; nothing in it runs a secret.
+  # The server as one compiled binary per platform (scripts/build-server.ts), attached beside the PTY host with the built
+  # client the installers unpack beside it (ovis-dist.tar.gz): ovis-server.json (version, the git trees of server/ and
+  # shared/, SHA-256 and size of each file), ovis-server.SHA256SUMS and the manifest's Ed25519 signature,
+  # ovis-server.json.sig. Bun compiles every platform's binary here; nothing in it runs a secret.
   server-binary:
-    needs: preflight
+    # the Rust PTY hosts go under the signed manifest too: an installer runs no host the manifest does not name
+    needs: [preflight, pty-sidecar]
     runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     permissions:
@@ -82,9 +84,17 @@ jobs:
         with:
           cache: restore
       - run: bun install --frozen-lockfile
-      - name: Build the five binaries and their manifest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ovis-pty-sidecar
+          path: ${{ runner.temp }}/pty-sidecar
+      - name: Build the five binaries, the client and their manifest, which names the PTY hosts too
         run: |
+          bun run build
           bun scripts/build-server.ts release "$RUNNER_TEMP/server-binary"
+          for host in ovis-pty-sidecar-linux-x64 ovis-pty-sidecar-linux-arm64 ovis-pty-sidecar-darwin-universal; do
+            cp "$RUNNER_TEMP/pty-sidecar/$host" "$RUNNER_TEMP/server-binary/$host"
+          done
           bun scripts/build-server.ts manifest "$RUNNER_TEMP/server-binary"
       # the binary for this runner answers before anything is signed
       - name: The Linux x64 binary runs
@@ -104,7 +114,9 @@ jobs:
   # installed. The key is the secret OVIS_SERVER_SIGNING_KEY of the environment release-signing, which only main may
   # use (docs/development.md, "The server binary's signing key"); no other job names that environment, and a job that
   # deploys (production) never sees the key. Without the environment or its secret this job fails, and publish, which
-  # needs it, never runs: nothing is published unsigned. In a fork the job is skipped, and so is publish.
+  # needs it, never runs: nothing is published unsigned. sign refuses a key whose public half is not
+  # RELEASE_PUBLIC_KEY (scripts/server-manifest.ts), the one key every installer trusts, so a key put into the secret by
+  # mistake fails the release too. In a fork the job is skipped, and so is publish.
   server-binary-sign:
     needs: server-binary
     if: github.repository == 'devswha/ovis' && github.ref == 'refs/heads/main'
@@ -113,8 +125,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-    outputs:
-      public_key: ${{ steps.sign.outputs.public_key }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -128,7 +138,6 @@ jobs:
           name: ovis-server-unsigned
           path: ${{ runner.temp }}/server-binary
       - name: Sign the manifest
-        id: sign
         env:
           OVIS_SERVER_SIGNING_KEY: ${{ secrets.OVIS_SERVER_SIGNING_KEY }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -137,9 +146,8 @@ jobs:
             echo "::error title=Server binary not signed::The environment release-signing has no secret OVIS_SERVER_SIGNING_KEY, so ovis-server.json cannot be signed and this release is not published. Add it (docs/development.md, \"The server binary's signing key\") and run the release again." >&2
             exit 1
           fi
-          public_key=$(bun scripts/build-server.ts sign "$RUNNER_TEMP/server-binary")
-          bun scripts/build-server.ts verify "$RUNNER_TEMP/server-binary" --public-key "$public_key" --expect-version "$RELEASE_VERSION"
-          echo "public_key=$public_key" >> "$GITHUB_OUTPUT"
+          bun scripts/build-server.ts sign "$RUNNER_TEMP/server-binary"
+          bun scripts/build-server.ts verify "$RUNNER_TEMP/server-binary" --expect-version "$RELEASE_VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ovis-server
@@ -163,6 +171,7 @@ jobs:
         with:
           subject-path: |
             server-binary/ovis-server-*
+            server-binary/ovis-dist.tar.gz
             server-binary/ovis-server.json
             server-binary/ovis-server.SHA256SUMS
   publish:
@@ -200,7 +209,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ inputs.version }}
-          SERVER_PUBLIC_KEY: ${{ needs.server-binary-sign.outputs.public_key }}
         run: |
           git fetch origin main --tags
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
@@ -211,10 +219,14 @@ jobs:
           fi
           # shellcheck disable=SC2016 # JavaScript, not shell
           test "$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).version)' "$RUNNER_TEMP/pty-sidecar/ovis-pty-sidecar.json")" = "$RELEASE_VERSION"
-          # the server's files by name, and only once they verify for this version: a file anything else left in the
-          # folder is refused, never attached
-          server_files=(ovis-server-linux-x64 ovis-server-linux-arm64 ovis-server-darwin-arm64 ovis-server-darwin-x64 ovis-server-windows-x64.exe ovis-server.json ovis-server.json.sig ovis-server.SHA256SUMS)
-          bun scripts/build-server.ts verify "$RUNNER_TEMP/server-binary" --public-key "$SERVER_PUBLIC_KEY" --expect-version "$RELEASE_VERSION"
+          # the server's files by name, and only once they verify for this version against the committed key (not one the
+          # sign job reports about itself): a file anything else left in the folder is refused, never attached
+          server_files=(ovis-server-linux-x64 ovis-server-linux-arm64 ovis-server-darwin-arm64 ovis-server-darwin-x64 ovis-server-windows-x64.exe ovis-dist.tar.gz ovis-server.json ovis-server.json.sig ovis-server.SHA256SUMS)
+          bun scripts/build-server.ts verify "$RUNNER_TEMP/server-binary" --expect-version "$RELEASE_VERSION"
+          # the PTY hosts attached are the very ones ovis-server.json signed
+          for host in ovis-pty-sidecar-linux-x64 ovis-pty-sidecar-linux-arm64 ovis-pty-sidecar-darwin-universal; do
+            cmp "$RUNNER_TEMP/pty-sidecar/$host" "$RUNNER_TEMP/server-binary/$host"
+          done
           gh release create "v$RELEASE_VERSION" "$RUNNER_TEMP"/pty-sidecar/* "${server_files[@]/#/$RUNNER_TEMP/server-binary/}" --target "$GITHUB_SHA" --title "Ovis v$RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --latest=false
   # The hosted shell (https://app.ovis.sh/) is built from the release tag and nothing else. shell-build
   # builds and packs it without any secret; shell-deploy waits for the `production` environment's

@@ -20,6 +20,8 @@ export interface TerminalRefitsDeps {
   chatView: boolean;
   chatViewRef: RefObject<boolean>;
   coarseRef: RefObject<boolean>;
+  /** the inbox mode's list stands over the pane (lib/paneSubmitContext.ts PaneCoveredContext) */
+  covered: boolean;
   findOpenRef: RefObject<boolean>;
   fitRef: RefObject<FitAddon | null>;
   fittedRef: RefObject<() => void>;
@@ -43,7 +45,7 @@ export interface TerminalRefitsDeps {
 }
 
 export function useTerminalRefits(deps: TerminalRefitsDeps): void {
-  const { activeRef, autoSelected, baseFontRef, pinchingRef, fontSettledRef, chatView, chatViewRef, coarseRef, findOpenRef, fitRef, fittedRef, fixedGridRef, follow, followCursorRef, keyboardHoldsRef, narrowFont, narrowFontFitted, observeRef, colors, paneRef, peekRef, sharedGridRef, shown, sizesPty, socketRef, termRef, terminalFontFamily, terminalFontSize } = deps;
+  const { activeRef, autoSelected, baseFontRef, pinchingRef, fontSettledRef, chatView, chatViewRef, coarseRef, findOpenRef, fitRef, fittedRef, fixedGridRef, follow, followCursorRef, keyboardHoldsRef, narrowFont, narrowFontFitted, observeRef, colors, covered, paneRef, peekRef, sharedGridRef, shown, sizesPty, socketRef, termRef, terminalFontFamily, terminalFontSize } = deps;
   // the theme follows the settings without a remount
   useEffect(() => {
     const term = termRef.current;
@@ -151,10 +153,14 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
 
   // hidden behind another pane of its split, the pane keeps the size the pty has; shown again, it
   // fits this screen and takes the pty, as a lens switch back to the terminal does
+  // a pane the list uncovered only to hide it (a thread drawn alone over its tab's split): whether it held the pty's
+  // size as the list covered it, kept for the list's return; shown again with no list over it, that is spent
+  const heldWhileHidden = useRef(false);
   const wasShown = useRef(shown);
   useEffect(() => {
     if (wasShown.current === shown) return;
     wasShown.current = shown;
+    if (shown && !covered) heldWhileHidden.current = false;
     const pane = paneRef.current;
     if (!pane || observeRef.current || fixedGridRef.current || chatViewRef.current) return;
     if (!shown) { socketRef.current?.keepSize(pane); return; }
@@ -168,6 +174,49 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
     }
     if (term && sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
   }, [shown]);
+
+  // Under the inbox mode's list the pane sizes nothing and keeps its hold on the pty's size, or the lack of one. Shown
+  // again, it fits the box it is shown in, and a pane that held the size as the list covered it asks for that grid
+  // only where it differs from the one it last asked for: one that comes back to the box it had sends nothing. A pane
+  // that held no size then (the chat lens, a split half that let the size go or follows the other half's grid)
+  // takes none on its way out: it is as the list found it.
+  const wasCovered = useRef(covered);
+  const heldAtCover = useRef(false);
+  useEffect(() => {
+    if (wasCovered.current === covered) return;
+    wasCovered.current = covered;
+    const pane = paneRef.current;
+    if (covered) {
+      heldAtCover.current = heldWhileHidden.current || (pane !== null && socketRef.current?.holdsSize(pane) === true);
+      heldWhileHidden.current = false;
+      return;
+    }
+    const held = heldAtCover.current;
+    heldAtCover.current = false;
+    if (!shown) { heldWhileHidden.current = held; return; }
+    if (!held || !pane || observeRef.current || fixedGridRef.current || chatViewRef.current) return;
+    if (keyboardHoldsRef.current(true)) return;
+    const term = termRef.current;
+    try {
+      fitRef.current?.fit();
+      fittedRef.current();
+    } catch {
+      // a terminal not laid out yet, or one being disposed: its ResizeObserver fits it once it has a box, as here
+      return;
+    }
+    if (term && sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows);
+  }, [covered]);
+  // A connection made again while the list covers the pane attaches it keeping the size the pty has: the pane sizes
+  // nothing there, and another device may have sized the pty meanwhile. The hold it had as the list covered it
+  // (heldAtCover) stays, and the pane shown again asks for its grid, which it no longer holds
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!covered || socket === null) return;
+    return socket.onBeforeReplay(() => {
+      const pane = paneRef.current;
+      if (pane !== null && socket.holdsSize(pane)) socket.keepSize(pane, false);
+    });
+  }, [covered]);
 
   // the split's other half took this tab's grid: this half lets the pty go and draws it at that grid;
   // made the active half, it fits its own screen and takes the pty, as a pane shown again does

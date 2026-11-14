@@ -121,7 +121,7 @@ export function useSelectionMark({ selectedMachineId, selectedPaneId }: { select
   return { selectionRef, movingPanes };
 }
 
-export function useSelectTarget({ selectedMachineId, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setDrawerOpen, setOutputStopped, setNotificationViewTarget, setTerminalPeek, pendingLink, pendingFile, setLinkLanded, selectionHint, selectionSince, rosterSeq, snapshot, selectedMachine, selectedPaneId, setHeaderNote, linkTick, movingPanes, onPick }: {
+export function useSelectTarget({ selectedMachineId, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setDrawerOpen, setOutputStopped, setNotificationViewTarget, setTerminalPeek, pendingLink, pendingFile, setLinkLanded, selectionHint, selectionSince, rosterSeq, snapshot, selectedMachine, selectedPaneId, setHeaderNote, linkTick, movingPanes, onPick, onLinkMiss }: {
   selectedMachineId: string;
   setConnected: Dispatch<SetStateAction<boolean>>;
   setConnectedBefore: Dispatch<SetStateAction<boolean>>;
@@ -147,8 +147,11 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
   movingPanes: RefObject<Set<string>>;
   /** told of every pick (a row, the palette, a link, an alert, a new pane), never of the app's own fallback; `paneId` is the pane it named, null for a PC alone */
   onPick?: (paneId: string | null) => void;
+  /** told when a link or a tapped alert named a pane that is not there: the pane selected in its place was not asked for */
+  onLinkMiss?: () => void;
 }) {
   const onPickRef = useRef(onPick); onPickRef.current = onPick;
+  const onLinkMissRef = useRef(onLinkMiss); onLinkMissRef.current = onLinkMiss;
   const selectedMachineRef = useRef(selectedMachineId);
   selectedMachineRef.current = selectedMachineId;
   /** how many picks were made since the tab opened: a link, an alert, the user (lib/hiddenMachines.ts reads it) */
@@ -196,7 +199,7 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
       const land = (landed: ReturnType<typeof resolveLink>): boolean => {
         pendingLink.current = null;
         setLinkLanded(true);
-        if (landed.note) setHeaderNote(landed.note);
+        if (landed.note) { setHeaderNote(landed.note); onLinkMissRef.current?.(); }
         if (landed.pane) {
           if (landed.pane !== selectedPaneId) {
             setSelectedPaneId(landed.pane);
@@ -244,7 +247,7 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
       selectionHint.current = null;
       if (hint && hint.machine === selectedMachineId && hint.pane === selectedPaneId) {
         const landed = resolveLink(current, { workspace: hint.workspace, workspaceSlug: null, pane: hint.pane });
-        if (landed.note) setHeaderNote(landed.note);
+        if (landed.note) { setHeaderNote(landed.note); onLinkMissRef.current?.(); }
         setNotificationViewTarget(null); setTerminalPeek(null);
         setSelectedPaneId(landed.pane ?? fallback(current));
         setAutoSelected(true);

@@ -9,6 +9,8 @@ import { useRosterEvents, useRosterLoader } from "./useMachineRoster.ts";
 
 const local = (state: Machine["state"] = "connected"): Machine => ({ id: "local", name: "This PC", kind: "local", enabled: true, state, error: null, snapshot: null });
 const noop = () => {};
+/** what the loader says of the stream, as the inbox mode's list says it */
+let said: string | null = null;
 // The real loader and event hooks, with a tab's visibility and interval clock driven without sleeps.
 describe("roster and health polling beside the event stream", () => {
   const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -45,6 +47,7 @@ describe("roster and health polling beside the event stream", () => {
       setHealthFailing(!(await getTransport().fetch("/api/health")).ok);
     }, []);
     const loader = useRosterLoader({ locked, healthFailing, lockedRef, refetchTimer, loadHealth, rosterIn: noop, setMachines: noop, setMachineRosterLoaded: noop, setError: noop, setLocked: noop });
+    said = loader.rosterConnection;
     useRosterEvents({
       ...loader, locked, machineSessions, onPaneMoved: noop, receivePreferencesRef: { current: noop }, onRoster: noop,
       setMachines: noop, rosterIn: noop, setMachineRosterLoaded: noop, machinesRef: { current: [] }, setRemotePairings: noop, setRemovedNotices: noop,
@@ -220,6 +223,33 @@ describe("roster and health polling beside the event stream", () => {
     readState = "connected";
     await advance(30_000); // a read alone never slows it again: that waits for a pushed roster
     expect(counts()).toEqual([8, 8, 8]);
+  });
+
+  it("says Reconnecting while the stream that feeds the roster is lost after it was had, and Connected when it is back", async () => {
+    // a stream not yet had is no reconnect, nor its first opening
+    expect(said).toBeNull();
+    await healthyStream();
+    expect(said).toBeNull();
+    await stream("lost");
+    expect(said).toBe("reconnecting");
+    // the rosters a reconnecting stream still hands over say nothing of it
+    await stream([local()]);
+    expect(said).toBe("reconnecting");
+    await stream("opened");
+    expect(said).toBe("connected");
+  });
+
+  it("says the same of the local terminal socket when it carries the roster's events", async () => {
+    socketEvents = true;
+    await onSocket({ type: "features", features: ["machine-events"] } as ServerMessage);
+    expect(said).toBeNull();
+    // a lost socket says nothing of its events until it reconnects
+    socketEvents = undefined;
+    await onSocket("disconnect");
+    expect(said).toBe("reconnecting");
+    socketEvents = true;
+    await onSocket({ type: "features", features: ["machine-events"] } as ServerMessage);
+    expect(said).toBe("connected");
   });
 
   it("watches health immediately and every five seconds while locked, without reading the roster", async () => {

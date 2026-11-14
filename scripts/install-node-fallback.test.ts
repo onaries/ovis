@@ -16,7 +16,7 @@ function fn(name: string): string {
   if (!match) throw new Error(`install.sh defines no ${name}()`);
   return match[0];
 }
-const FUNCTIONS = ["say", "sha256", "kill_tree", "bounded", "rust_host_runs", "install_node", "server_arch", "node_fits", "node_link"].map(fn).join("\n");
+const FUNCTIONS = ["say", "sha256", "kill_tree", "bounded", "rust_host_runs", "node_sha_for", "install_node", "server_arch", "node_fits", "node_link"].map(fn).join("\n");
 /** main()'s choice of whether to install Node, as written there: from `needs_node=""` to its node_link call */
 const NODE_DECISION = /^ {2}needs_node=""[\s\S]*?^ {2}node_link "\$code" "\$needs_node"$/m.exec(INSTALLER)?.[0] ?? "";
 

@@ -194,7 +194,8 @@ class Pc {
     return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
   }
   environment(extra: Record<string, string> = {}): Record<string, string> {
-    return { PATH: this.bin, HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", ...extra };
+    // the source path: these stand-ins model herdr's checkout, not the release's binary (scripts/install-binary.test.ts)
+    return { PATH: this.bin, HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_FROM_SOURCE: "1", ...extra };
   }
 
   /** runs `call` after install.sh's constants and functions under sh with `set -eu`, as the script runs */

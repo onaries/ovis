@@ -1,6 +1,6 @@
 # Self-hosted CI runner
 
-An ephemeral Docker GitHub Actions runner for this repository's Linux CI/CD jobs. Each container registers, runs exactly one job and exits; the launcher then starts a fresh one. The image includes Bun, Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, `gh`, curl, jq, unzip and xz-utils, with no sudo. Jobs detect it with `RUNNER_ENVIRONMENT=self-hosted`.
+An ephemeral Docker GitHub Actions runner for this repository's Linux CI/CD jobs. Each container registers, runs exactly one job and exits; the launcher then starts a fresh one. The image includes Bun, Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, `gh`, curl, jq, unzip, xz-utils, OpenSSH (client and server) and iproute2 (`ss`), with no sudo. Jobs detect it with `RUNNER_ENVIRONMENT=self-hosted`.
 
 ## Prerequisites
 
@@ -375,6 +375,40 @@ four slot jobs and twelve runners busy, the host stayed under 17.2 GiB; a fifth 
 workers (about 5-7 GiB above that job's usual 2-4 GiB) but not two at once.
 
 A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted.
+
+## Cloud VM runners
+
+`vm-runner.sh` turns a 4-vCPU cloud VM without systemd (a Cursor cloud agent's VM, say) into a runner of this
+repository with the same image, guard and per-job fresh container as above, for when this PC's cores are needed
+elsewhere:
+
+```sh
+vm-runner.sh setup                                  # docker.io, dockerd, the image built from main, the firewall
+gh api -X POST repos/devswha/ovis/actions/runners/registration-token --jq .token \
+  | ssh vm 'vm-runner.sh register vm-NAME ovis-vm'  # once; the token goes in on stdin and is used once
+vm-runner.sh supervise                              # forever: one container per job (run.sh --once)
+```
+
+- Registration is not ephemeral: the VM keeps the runner's credential (a root-owned docker volume) and each job's
+  container gets a copy. The runner reads it as the same user the job's steps run as, so **a job can read its runner's
+  credential** and could register a look-alike runner that takes later jobs of this repository. Only this repository's
+  own branches run here (the guard below), so that takes code already in this repository; this PC's runners differ in
+  holding a fresh registration per job. Remove the runner (`gh api -X DELETE repos/devswha/ovis/actions/runners/ID`)
+  when the VM goes, and re-register to rotate the credential.
+- The firewall is not optional: such VMs listen on every address with services of their own (an unauthenticated
+  Docker API on 2375 among them). `vm-runner.sh` drops all traffic from the job containers to the VM itself and to
+  private and link-local ranges; a job reaches the internet and the resolver only.
+- Fork PRs never run here, as on every runner of this image (`job-started.sh`).
+- **Fast checks**: on these VMs (Linux 6.12, 4 vCPUs) Fast checks fails until the coarse-file-clock and SIGTERM fixes
+  of #3808 are on main. Until then keep it on this PC's runners while the rest moves:
+  `gh variable set CI_FAST_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis"]'`. It applies only while
+  the Linux jobs go to `ovis-vm` (never to a fork's run); delete it once #3808 is in to move Fast checks too.
+- Routing: `gh variable set CI_LINUX_SELF_HOSTED_LABELS --body '["self-hosted","ovis-vm"]'` moves ci.yml's Linux jobs
+  of pull requests and branch pushes to them (main keeps `CI_MAIN_SELF_HOSTED_LABELS`; tag pushes, manual runs and
+  the workflows that call ci.yml, such as release-validate, pages and relay-deploy, keep `CI_SELF_HOSTED_LABELS`). With `ovis-vm` the browser scripts run as five jobs. A manual run takes
+  `self_hosted_labels`. `gh variable delete CI_LINUX_SELF_HOSTED_LABELS` moves them back.
+- The VM's per-host caps (`CHECK_HOST_*`, 3 browser workers, 3 test shards) keep a job inside 4 vCPUs. A VM that
+  sleeps or drops mid-job loses that job (GitHub fails it once the runner stops answering); keep the VMs awake.
 
 ## Security model
 

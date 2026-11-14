@@ -100,6 +100,8 @@ try {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
       await context.addInitScript(() => {
         if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal" }));
+      // the split tab's panes are listed in the header's More where the tabs are in the header (Settings -> Tabs on a phone)
+      if (!localStorage.getItem("ovis:phone-tabs")) localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
       });
       const page = await context.newPage();
       const errors: string[] = [];

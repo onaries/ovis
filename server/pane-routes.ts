@@ -12,6 +12,7 @@ import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jso
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
 import { copilotRecoverable, unavailableReason } from "./conversation-shared.ts";
 import { MAX_SEARCH_QUERY, searchPattern, type ConversationSearchResponse } from "../shared/conversation-search.ts";
+import { PANE_SUMMARY_DEADLINE_MS, PANE_SUMMARY_KEEP_MS, PANE_SUMMARY_MAX_IDS, PANE_SUMMARY_PANE_MS, summaryOf, type PaneSummaries, type PaneSummary } from "../shared/pane-summary.ts";
 import { searchConversationPages } from "./conversation-search.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
@@ -26,6 +27,23 @@ import { expandedDirectory } from "./directories.ts";
 import { ConversationDiagnostics } from "./conversation-diagnostics.ts";
 
 const conversationDiagnostics = new ConversationDiagnostics();
+
+/**
+ * A pane's summary read still running, by pane, and when it began: a later request for the pane waits on it while it
+ * is younger than PANE_SUMMARY_DEADLINE_MS; an older one, begun perhaps under another state of the pane, is left to
+ * finish by itself and a new read takes its place. A read a request stopped waiting for that settles with no request
+ * waiting on it keeps its result (`settledAt`) for PANE_SUMMARY_KEEP_MS, handed to the next request for the pane and
+ * then dropped; any other read is dropped when it settles.
+ */
+interface SummaryReadEntry {
+  read: Promise<PaneSummary | null | undefined>;
+  startedAt: number;
+  /** the requests waiting on it now, and whether one stopped waiting */
+  waiting: number;
+  leftBehind: boolean;
+  settledAt?: number;
+}
+const summaryReads = new Map<string, SummaryReadEntry>();
 
 /** The agents whose chat herdr's integration alone binds, by the session it reports (opencode.ts, grok-store.ts). */
 const INTEGRATION_BOUND = new Set(["opencode", "grok"]);
@@ -338,6 +356,69 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     } catch (error) {
       return errorResponse(error);
     }
+  }
+
+  if (pathname === "/api/pane/summary") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const paneIds = [...new Set(url.searchParams.getAll("pane_id").filter((id) => id.trim() !== ""))];
+    if (paneIds.length === 0) return badRequest("missing_pane_id", "pane_id query parameter is required");
+    if (paneIds.length > PANE_SUMMARY_MAX_IDS) return badRequest("too_many_panes", `at most ${PANE_SUMMARY_MAX_IDS} pane_id values`);
+    // no prototype: a pane id such as `__proto__` is a key like any other
+    const summaries: PaneSummaries["summaries"] = Object.create(null);
+    const deadline = Date.now() + PANE_SUMMARY_DEADLINE_MS;
+    // the asker going away ends the wait at once
+    let leave = (): void => {};
+    const gone = new Promise<"gone">((resolve) => { leave = () => resolve("gone"); });
+    if (request.signal.aborted) leave(); else request.signal.addEventListener("abort", leave, { once: true });
+    // one pane after another, each given at most PANE_SUMMARY_PANE_MS of what is left: a pane read no faster is left out
+    // (its read goes on, for a request soon after to take up) and the next pane read, until the request's time is used up;
+    // a pane with no conversation to read is null; one whose read failed for now (undefined) is left out, for the client
+    // to ask again; neither is the list's failure
+    for (const [paneId, entry] of summaryReads) if (entry.settledAt !== undefined && Date.now() - entry.settledAt >= PANE_SUMMARY_KEEP_MS) summaryReads.delete(paneId);
+    try {
+      for (const paneId of paneIds) {
+        const left = deadline - Date.now();
+        if (left <= 0 || request.signal.aborted) break;
+        const running = summaryReads.get(paneId);
+        let entry: SummaryReadEntry;
+        if (running?.settledAt !== undefined) {
+          // a kept result is handed over once
+          summaryReads.delete(paneId);
+          entry = running;
+        } else if (running !== undefined && Date.now() - running.startedAt < PANE_SUMMARY_DEADLINE_MS) entry = running;
+        else {
+          const started: SummaryReadEntry = {
+            read: paneConversation(paneId, options.codexHome, { prompts: 1 }, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData)
+              // a summary that throws while it is made is left out, as a read that failed for now is
+              .then((conversation) => summaryOf(conversation.turns))
+              .catch((error: unknown) => error instanceof ConversationUnavailable ? null : undefined)
+              // a read replaced by a newer one leaves its successor in place; one left behind with nobody waiting is kept
+              .finally(() => {
+                if (summaryReads.get(paneId) !== started) return;
+                if (started.leftBehind && started.waiting === 0) started.settledAt = Date.now();
+                else summaryReads.delete(paneId);
+              }),
+            startedAt: Date.now(), waiting: 0, leftBehind: false,
+          };
+          summaryReads.set(paneId, started);
+          entry = started;
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), Math.min(PANE_SUMMARY_PANE_MS, left)); });
+        entry.waiting++;
+        const summary = await Promise.race([entry.read, late, gone]);
+        entry.waiting--;
+        clearTimeout(timer);
+        if (summary === "late" || summary === "gone") entry.leftBehind = true;
+        if (summary === "gone") break;
+        if (summary === "late" || summary === undefined) continue;
+        summaries[paneId] = summary;
+      }
+    } finally {
+      request.signal.removeEventListener("abort", leave);
+    }
+    return jsonResponse({ server_time: new Date().toISOString(), summaries } satisfies PaneSummaries, 200, { "cache-control": "no-store" });
   }
 
   if (pathname === "/api/pane/conversation") {

@@ -29,7 +29,7 @@ import { version as builtVersion } from "../package.json";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, uptime } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 
 import qrcode from "qrcode-generator";
 
@@ -659,6 +659,22 @@ const stopDependencies: StopDependencies = {
  * checkout's lock until the bridge under it exits, and a `start` before then finds that lock,
  * gives up, and leaves nothing running.
  */
+/**
+ * Whether a process (its executable and argv) is this plugin's server in either of the forms it runs in: the form this
+ * process would start, Bun running the plugin checkout's server/managed.ts (from source, as before the compiled server),
+ * or the checkout's installed ovis-server(.exe) running its managed entry (scripts/plugin-launch.ts). So a stop run by
+ * one form finds the server the other started, as after herdr plugin update moved the plugin to the binary.
+ */
+export function startedByThisPlugin(path: string, argv: string[], env: Record<string, string | undefined> = process.env): boolean {
+  const same = (left: string | undefined, right: string) => left?.toLowerCase() === right.toLowerCase();
+  if (same(path, process.execPath) && same(argv[1], entryCommand("managed", ROOT)[1])) return true;
+  const checkout = env["OVIS_PLUGIN_CHECKOUT"] ?? env["HERDR_PLUGIN_ROOT"];
+  if (!checkout) return false;
+  if (same(argv[1], join(checkout, "server", "managed.ts")) && /^bun(\.exe)?$/i.test(basename(path))) return true;
+  const installed = `${join(checkout, ".ovis", "server").toLowerCase()}${sep}`;
+  return argv[1] === "managed" && path.toLowerCase().startsWith(installed) && /^ovis-server(\.exe)?$/i.test(basename(path));
+}
+
 export async function stop(dependencies: StopDependencies = stopDependencies): Promise<number> {
   // no start made the dir, and no server runs under the old id's: nothing to stop
   if (!existsSync(REQUESTED_STATE_DIR) && recordedPid() === null) {
@@ -679,6 +695,15 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
   }
 }
 
+/** The creation time (ms) `start` recorded on Windows for the server under `pid`, or null when it kept none for it. */
+function recordedWindowsBirth(pid: number): number | null {
+  try {
+    const owner = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { pid?: unknown; birth?: unknown };
+    const birth = parseBirth(owner.birth);
+    return owner.pid === pid && birth?.platform === "win32" ? Number(birth.value) : null;
+  } catch { return null; }
+}
+
 async function stopInTurn(dependencies: StopDependencies): Promise<number> {
   const pid = recordedPid();
   if (pid === null) {
@@ -693,10 +718,16 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     const recordedAt = statSync(PID_FILE).mtimeMs;
     const processes = await dependencies.processTable();
     const owner = processes.find(row => row.pid === pid);
-    const argv = windowsArgv(owner?.commandLine ?? "");
-    if (owner?.path?.toLowerCase() !== process.execPath.toLowerCase()
-      || argv[1]?.toLowerCase() !== entryCommand("managed", ROOT)[1].toLowerCase()
-      || owner.started === undefined || owner.started > recordedAt
+    // The identity start recorded (the pid and the creation time Windows gives it) decides, whichever installation
+    // folder runs this stop: herdr plugin update builds the new version in a new one while the old server runs on. A
+    // record without a birth (none could be read) falls back to the server's form and folder.
+    const birth = recordedWindowsBirth(pid);
+    // An exact creation-time match decides alone, as on Linux. Without one, the process must also have started
+    // before its pid record was written (a record older than it is not its own).
+    const identified = owner?.started !== undefined && (birth !== null
+      ? owner.started === birth
+      : owner.started <= recordedAt && startedByThisPlugin(owner.path ?? "", windowsArgv(owner.commandLine ?? "")));
+    if (!owner || !identified
       || !existsSync(PID_FILE) || statSync(PID_FILE).mtimeMs !== recordedAt
       || Number(readFileSync(PID_FILE, "utf8").trim()) !== pid) {
       process.stderr.write("could not verify the recorded Ovis process; it was left running and its pid file was kept\n");

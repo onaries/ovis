@@ -2,6 +2,7 @@ import { SETTINGS_JA } from "./i18n/settings.ja.ts";
 import { SETTINGS_ACCESS_JA } from "./i18n/settings-access.ja.ts";
 import { SETTINGS_AGENTS_JA } from "./i18n/settings-agents.ja.ts";
 import { SETTINGS_COMPOSER_JA } from "./i18n/settings-composer.ja.ts";
+import { SETTINGS_HELP_JA } from "./i18n/settings-help.ja.ts";
 import { SETTINGS_LAYOUT_JA } from "./i18n/settings-layout.ja.ts";
 import { TERMINAL_JA } from "./i18n/terminal.ja.ts";
 import { COMPOSER_JA } from "./i18n/composer.ja.ts";
@@ -163,7 +164,6 @@ const BASE: Record<string, string> = {
   "Connecting to Ovis…": "Ovis に接続しています…",
   "Close workspace list": "ワークスペース一覧を閉じる",
   "Open workspace list": "ワークスペース一覧を開く",
-  "Back to agents": "エージェント一覧へ戻る",
   "Show workspace list": "ワークスペース一覧を表示",
   "Workspace list": "ワークスペース一覧",
   "Hide workspace list": "ワークスペース一覧を非表示",
@@ -218,6 +218,7 @@ const BASE: Record<string, string> = {
   "That agent has closed: its workspace is open": "そのエージェントは閉じられました。代わりにワークスペースを開きました",
   "That link's workspace is closed": "そのリンクのワークスペースは閉じられています",
   "That link's PC is not set up here": "そのリンクの PC はここに設定されていません",
+  "That link's chat is closed": "そのリンクのチャットは閉じられています",
   "Could not sign out. Try again.": "サインアウトできませんでした。もう一度お試しください。",
   "Retry": "再試行",
   "On, pushed to this device": "オン、この端末にプッシュ",
@@ -570,6 +571,11 @@ const BASE: Record<string, string> = {
   "Add": "追加",
   "Update": "更新",
   "All": "すべて",
+  "Search": "検索",
+  "Choose one from the list to open its chat here.": "リストから選ぶと、チャットがここに開きます。",
+  "Agent inbox": "エージェント受信トレイ",
+  "Open agent inbox": "エージェント受信トレイを開く",
+  "Back to Ovis": "Ovis に戻る",
   "Remove PC": "PC を削除",
   "Remove PC {name}?": "PC {name} を削除しますか？",
   "Removes this registration. Remote sessions keep running.": "この登録のみを削除します。リモートのセッションは実行されたままです。",
@@ -607,7 +613,7 @@ const BASE: Record<string, string> = {
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const JA_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_JA, ...SETTINGS_ACCESS_JA, ...SETTINGS_COMPOSER_JA, ...SETTINGS_LAYOUT_JA, ...SETTINGS_AGENTS_JA },
+  settings: { ...SETTINGS_JA, ...SETTINGS_ACCESS_JA, ...SETTINGS_COMPOSER_JA, ...SETTINGS_LAYOUT_JA, ...SETTINGS_AGENTS_JA, ...SETTINGS_HELP_JA },
   terminal: TERMINAL_JA,
   composer: COMPOSER_JA,
   chat: CHAT_JA,

@@ -301,6 +301,27 @@ describe("a phone's sheet in the history", () => {
     leave(); await settled();
   });
 
+  it("closes a staying sheet by its own Back after the busy sheet over it refused one Back and then opened Settings: the sheet has an entry of its own by then", async () => {
+    const start = fake.at();
+    let closed = 0;
+    const leave = hooks.enter(() => { closed += 1; }, true);
+    // a busy sheet over a terminal peek takes the peek's entry and refuses Back: both stay, each on an entry of its own from here
+    const leaveBusy = hooks.enter(() => false);
+    expect(fake.at()).toBe(start + 1);
+    h.back(); await settled();
+    expect(closed).toBe(0); expect(fake.at()).toBe(start + 2);
+    // the busy sheet's item opens Settings, which takes that sheet's entry and not the peek's
+    h.pushState({ settings: 1 }, "", "/?pane=b&settings=list");
+    leaveBusy(); await settled();
+    expect(fake.at()).toBe(start + 2);
+    // Back from Settings lands on the peek's own entry, and the next Back is the peek's
+    h.back(); await settled();
+    expect(closed).toBe(0); expect(fake.at()).toBe(start + 1); expect(fake.marks()[start + 1]).toBe(true);
+    h.back(); await settled();
+    expect(closed).toBe(1); expect(fake.at()).toBe(start);
+    leave(); await settled();
+  });
+
   it("leaves a sheet still up under one opened over it: Back closes the one on top, and its own close comes back to the one under", async () => {
     // the Files dialog under a confirmation (merging a pull request): neither the confirmation's Cancel nor a Back closes Files
     const start = fake.at();

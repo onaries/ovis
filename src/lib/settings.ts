@@ -21,6 +21,8 @@ import { applyThemeEntry, CUSTOM_ROWS_STORAGE_KEY, CUSTOM_THEMES_STORAGE_KEY, DA
 export { resolveTheme };
 export type { ResolvedTheme, ThemeSetting };
 export type Density = "compact" | "comfortable";
+/** where a phone draws the open workspace's tabs (#3375): a row of their own under the header, or in the header in the title's place */
+export type PhoneTabs = "row" | "header";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
@@ -87,6 +89,8 @@ export interface Settings {
   herdrPrefixKeys: boolean;
   theme: ThemeSetting;
   density: Density;
+  /** Settings -> Appearance -> Tabs on a phone: a row under the header (more tabs in view, a little less pane), or in the header (the pane keeps its height) */
+  phoneTabs: PhoneTabs;
   /** How much a workspace row says: its name, or its pane's title over its place. */
   sidebarRows: SidebarRows;
   /** the Filter field above the sidebar's lists (components/MachineSidebar.tsx), off until chosen; off, the command palette's
@@ -302,7 +306,7 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
  * Settings field in the projection makes a new field require an explicit collection decision.
- * keyBarExpanded, herdrPrefixKeys, agentLocks, lockedAgents, opencodeParentEnds, ompHeldFiles, restoreReplacedServer, the named agent groups, fileOpen, reopenFileOnReturn, webLinks, reuseExternalLinkTab, the launch modes, followHerdrFocus, sidebarPeek, phoneInbox, sidebarBackgroundWorkspaces, codexDrag, autoTabNames, composerArtifacts, composerPasteSend, composerBtw, terminalMirrorWrap, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, sidebarFilter, sidebarContext, sidebarAgentTree, foldHelpers, pcLoad, voiceEngine, the agent groups, the
+ * keyBarExpanded, herdrPrefixKeys, agentLocks, lockedAgents, opencodeParentEnds, ompHeldFiles, restoreReplacedServer, the named agent groups, fileOpen, reopenFileOnReturn, webLinks, reuseExternalLinkTab, the launch modes, followHerdrFocus, sidebarPeek, phoneInbox, sidebarBackgroundWorkspaces, codexDrag, autoTabNames, composerArtifacts, composerPasteSend, composerBtw, terminalMirrorWrap, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, sidebarFilter, sidebarContext, sidebarAgentTree, foldHelpers, pcLoad, phoneTabs, voiceEngine, the agent groups, the
  * interface font, the file text size and the folds its blocks start in are not collected: the telemetry schema
  * (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
@@ -311,7 +315,7 @@ type TelemetrySourceSettings = Omit<Settings,
   | "claudeLaunchModel" | "claudeLaunchEffort" | "codexLaunchModel" | "codexLaunchEffort"
   | "followHerdrFocus" | "sidebarPeek" | "phoneInbox" | "sidebarBackgroundWorkspaces" | "changesChildRepos" | "changesRepoDepth" | "splitGrid" | "codexDrag" | "composerArtifacts" | "composerPasteSend" | "composerBtw" | "terminalMirrorWrap" | "sidebarFilter" | "sidebarContext" | "sidebarAgentTree" | "foldHelpers" | "pcLoad"
   | "expandThinking" | "foldWork" | "customThemes" | "autoTabNames" | "voiceEngine" | "agentGroups" | "agentGroupSort" | "terminalImages" | "terminalAttachButton"
-  | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "fileFontSize" | "fileFontBase" | "editTextFiles" | "reopenFileOnReturn">;
+  | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "fileFontSize" | "fileFontBase" | "editTextFiles" | "reopenFileOnReturn" | "phoneTabs">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -389,7 +393,7 @@ export const SETTING_SCOPE = {
   agentMarks: "shared", agentLocks: "shared", lockedAgents: "shared", opencodeParentEnds: "shared", ompHeldFiles: "shared", restoreReplacedServer: "shared", agentNamedGroups: "shared", agentGroupNames: "shared", agentGroupOf: "shared", autoSendQueued: "shared", autoTabNames: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
   usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
-  terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", keyBarExpanded: "device", shortcutOverrides: "device", herdrPrefixKeys: "device", density: "device",
+  terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", keyBarExpanded: "device", shortcutOverrides: "device", herdrPrefixKeys: "device", density: "device", phoneTabs: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
   // a phone has less memory for decoded pictures than a desk
@@ -460,6 +464,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // the startup default (themeBoot.ts defaultThemeSetting): Reset puts back what a fresh device is drawn in
   theme: "system",
   density: "comfortable",
+  phoneTabs: "row",
   sidebarRows: "one",
   sidebarFilter: false,
   sidebarContext: false,
@@ -710,6 +715,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     agentNamedGroups: typeof record["agentNamedGroups"] === "boolean" ? record["agentNamedGroups"] : DEFAULT_SETTINGS.agentNamedGroups,
     agentGroupNames: sanitizeGroupNames(record["agentGroupNames"]),
     agentGroupOf: sanitizeGroupOf(record["agentGroupOf"]),
+    phoneTabs: record["phoneTabs"] === "row" || record["phoneTabs"] === "header" ? record["phoneTabs"] : DEFAULT_SETTINGS.phoneTabs,
     statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
     darkTheme,
     lightTheme,
@@ -871,6 +877,18 @@ function readAgentGroups(): Pick<Settings, "agentGroups" | "agentGroupSort"> {
   return { agentGroups, agentGroupSort };
 }
 
+/** Settings → Appearance → Tabs on a phone, in a key of its own for the same reason. */
+export const PHONE_TABS_STORAGE_KEY = "ovis:phone-tabs";
+
+function readPhoneTabs(): PhoneTabs {
+  try {
+    const raw = window.localStorage.getItem(PHONE_TABS_STORAGE_KEY);
+    return sanitizeSettings({ phoneTabs: raw === null ? null : JSON.parse(raw) }).phoneTabs;
+  } catch {
+    return DEFAULT_SETTINGS.phoneTabs;
+  }
+}
+
 /** Settings → Voice input → Speech recognition, in a key of its own: an older tab's whole-record save would put it back on Auto. */
 export const VOICE_ENGINE_STORAGE_KEY = "ovis:voice-engine";
 
@@ -963,7 +981,7 @@ export const SIDEBAR_CONTEXT_STORAGE_KEY = "ovis:sidebar-context";
 export const FOLD_HELPERS_STORAGE_KEY = "ovis:fold-helpers";
 /** Settings > Appearance > Agents under workspaces, kept in a key of its own for the same reason: off until chosen. */
 export const SIDEBAR_AGENT_TREE_STORAGE_KEY = "ovis:sidebar-agent-tree";
-/** Settings > Appearance > Agent inbox on a phone, kept in a key of its own for the same reason; null until chosen. */
+/** Settings > Appearance > Start in the agent inbox on a phone, kept in a key of its own for the same reason; null until chosen. */
 export const PHONE_INBOX_STORAGE_KEY = "ovis:phone-inbox";
 
 /** a device's own on or off in its own key; null where it chose neither */
@@ -1044,7 +1062,7 @@ export function loadSettings(): Settings {
   // no main record: the same theme the boot script draws (the hosted shell follows the system)
   const settings = stored.main === null ? { ...DEFAULT_SETTINGS, theme: defaultThemeSetting() } : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
-  return { ...merged, enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), pcLoad: readPcLoad(), voiceEngine: readVoiceEngine(), ...readAgentGroups(), ...readFileFont(), composerArtifacts: readComposerArtifacts(),
+  return { ...merged, enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), pcLoad: readPcLoad(), phoneTabs: readPhoneTabs(), voiceEngine: readVoiceEngine(), ...readAgentGroups(), ...readFileFont(), composerArtifacts: readComposerArtifacts(),
     expandThinking: readChatFold(EXPAND_THINKING_STORAGE_KEY, DEFAULT_SETTINGS.expandThinking), foldWork: readChatFold(FOLD_WORK_STORAGE_KEY, DEFAULT_SETTINGS.foldWork),
     reuseExternalLinkTab: readChatFold(REUSE_EXTERNAL_LINK_TAB_STORAGE_KEY, DEFAULT_SETTINGS.reuseExternalLinkTab),
     filesPanel: readChatFold(FILES_PANEL_STORAGE_KEY, DEFAULT_SETTINGS.filesPanel),
@@ -1069,9 +1087,10 @@ export function saveSettings(settings: Settings): boolean {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    const { uiFontFamily, terminalMirrorWrap, sidebarFilter, sidebarContext, sidebarAgentTree, phoneInbox, foldHelpers, pcLoad, voiceEngine, agentGroups, agentGroupSort, fileFontSize, fileFontBase, composerArtifacts, composerPasteSend, composerBtw, expandThinking, foldWork, reuseExternalLinkTab, filesPanel, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, customThemes, ...main } = mirrored;
+    const { uiFontFamily, terminalMirrorWrap, sidebarFilter, sidebarContext, sidebarAgentTree, phoneInbox, foldHelpers, pcLoad, voiceEngine, agentGroups, agentGroupSort, fileFontSize, fileFontBase, composerArtifacts, composerPasteSend, composerBtw, expandThinking, foldWork, reuseExternalLinkTab, filesPanel, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, customThemes, phoneTabs, ...main } = mirrored;
     window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(customThemes));
     window.localStorage.setItem(VOICE_ENGINE_STORAGE_KEY, JSON.stringify(voiceEngine));
+    window.localStorage.setItem(PHONE_TABS_STORAGE_KEY, JSON.stringify(phoneTabs));
     window.localStorage.setItem(UI_FONT_STORAGE_KEY, JSON.stringify(uiFontFamily));
     window.localStorage.setItem(MIRROR_WRAP_STORAGE_KEY, JSON.stringify(terminalMirrorWrap));
     window.localStorage.setItem(SIDEBAR_FILTER_STORAGE_KEY, JSON.stringify(sidebarFilter));
@@ -1198,11 +1217,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
-      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== ENTER_SENDS_STORAGE_KEY && event.key !== VOICE_ENGINE_STORAGE_KEY && event.key !== null)) return;
-      // the recognition another tab chose: audio must not keep going where this tab last sent it
-      const { shortcutOverrides, enterSends, voiceEngine } = loadSettings();
-      stored.current = { ...stored.current, shortcutOverrides, enterSends, voiceEngine };
-      setSettings((current) => ({ ...current, shortcutOverrides, enterSends, voiceEngine }));
+      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== ENTER_SENDS_STORAGE_KEY && event.key !== VOICE_ENGINE_STORAGE_KEY && event.key !== PHONE_TABS_STORAGE_KEY && event.key !== null)) return;
+      // the recognition another tab chose: audio must not keep going where this tab last sent it; the phone's tab
+      // placement is the device's, so a tab still open moves its row with the one that changed it
+      const { shortcutOverrides, enterSends, voiceEngine, phoneTabs } = loadSettings();
+      stored.current = { ...stored.current, shortcutOverrides, enterSends, voiceEngine, phoneTabs };
+      setSettings((current) => ({ ...current, shortcutOverrides, enterSends, voiceEngine, phoneTabs }));
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

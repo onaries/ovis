@@ -34,7 +34,7 @@ it.skipIf(process.platform !== "win32")("runs the Windows launcher with executab
   const launcher = join(prefix, "plugin.ps1");
   copyFileSync(join(import.meta.dir, "plugin.ps1"), launcher);
   const result = join(scratch, "arguments.json");
-  writeFileSync(join(prefix, "plugin.ts"), `
+  writeFileSync(join(prefix, "plugin-launch.ts"), `
     await Bun.write(${JSON.stringify(result)}, JSON.stringify(process.argv.slice(2)));
     process.exit(process.argv[2] === "status" ? 7 : 0);
   `);
@@ -197,7 +197,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     Path: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
     HERDR_SOCKET: socket, HERDR_SOCKET_PATH: socket, HERDR_PLUGIN_ROOT: undefined,
     HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: config, OVIS_STATE_DIR: join(scratch, "app-state"),
-    OVIS_AUTO_UPDATE: "0", OVIS_TOKEN: "", HOST: "127.0.0.1", PORT: String(port) };
+    OVIS_AUTO_UPDATE: "0", OVIS_TOKEN: "", HOST: "127.0.0.1", PORT: String(port),
+    // this checkout's own server: the developer path of scripts/plugin-launch.ts, not a release binary
+    OVIS_FROM_SOURCE: "1" };
   delete env["PATH"];
   const run = async (command: string, expectedCode = 0) => {
     const entry = command === "start" ? manifest.startup.find(entry => entry.platforms.includes("windows"))
@@ -230,11 +232,15 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     for (let attempt = 0; attempt < 3; attempt++) await run("start"); // fast successful exits keep their exit code
     expect(Number(readFileSync(join(state, "server.pid"), "utf8"))).toBe(pid);
     const record = statSync(join(state, "server.pid"));
+    const owner = readFileSync(join(state, "server.owner"), "utf8");
     try {
+      // with no creation time recorded, a matching app started after an old PID record is not its owner
+      // (a recorded creation time that matches decides alone: plugin-stop-identity.test.ts)
+      writeFileSync(join(state, "server.owner"), `${JSON.stringify({ pid, birth_unknown: true })}\n`);
       utimesSync(join(state, "server.pid"), record.atime, new Date(0));
-      await run("stop", 1); // a matching app started after an old PID record is not its owner
+      await run("stop", 1);
       expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
-    } finally { utimesSync(join(state, "server.pid"), record.atime, record.mtime); }
+    } finally { writeFileSync(join(state, "server.owner"), owner); utimesSync(join(state, "server.pid"), record.atime, record.mtime); }
     await run("stop");
     const deadline = Date.now() + 10_000;
     const stillOwned = () => [...owned].filter(member => {

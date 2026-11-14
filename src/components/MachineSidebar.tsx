@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronRight, Download, EyeOff, Monitor, Pencil, Plug, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, Unplug, X } from "lucide-react";
 import { OWN_UPDATE_OFFER, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -32,6 +32,9 @@ import { changePc, inNativeApp } from "../lib/nativeApp.ts";
 import { serverIdOfPath, shellMode } from "../lib/shellMode.ts";
 import { canHideMachine, HIDDEN_MACHINES_MAX, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 
+/** the width under which the sidebar is a drawer (src/styles.css), as AgentSidebar.tsx reads it */
+const DRAWER_QUERY = "(max-width: 768px)";
+
 /** the release a PC's own Ovis offers as its card shows it: an update installs only that one (docs/remote-pcs.md) */
 const shownRevision = (machine: Machine) => machine.ovis_update?.revision ? { revision: machine.ovis_update.revision } : undefined;
 
@@ -64,7 +67,7 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 
 /** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it.
  *  `machines` are the PCs this device shows (Settings → Devices and PCs chooses them) */
-interface Props { machines: Machine[]; /** every PC of the roster, the hidden ones too: Manage PC's Hide on this device keeps those hidden (lib/hiddenMachines.ts) */ allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => LayoutOffer; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
+interface Props { machines: Machine[]; /** a row of the footer's own above its gear, drawn by the shell: the way into the agent inbox (lib/inboxMode.ts) */ footerStart?: ReactNode; /** every PC of the roster, the hidden ones too: Manage PC's Hide on this device keeps those hidden (lib/hiddenMachines.ts) */ allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => LayoutOffer; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const activity = props.activity;
@@ -283,6 +286,7 @@ export function MachineSidebar(props: Props) {
     {!settings.agentGroups && <SidebarSplit shell={shell} order={order} split={splits[order]} controls={listId} onSplit={changeSplit} onFold={foldSections} />}
     {!settings.agentGroups && agentList}
     <footer className="sidebar-footer">
+      {props.footerStart}
       {/* one PC of the phone's several: which one, and back to the list in one tap, as a team switcher at a
           sidebar's foot does (Slack, Discord); Settings → Phone & devices keeps its Change PC row too */}
       {exitToPcs !== null && (
@@ -337,13 +341,17 @@ export function manageActions(machine: Pick<Machine, "kind" | "herdr_profile_id"
 }
 
 /** `headerless`: the sidebar's lone Host, drawn without its header. What the header held is elsewhere: the state
- *  and its notice are lines of their own, the + is the New workspace row under the workspaces, and nothing is
- *  folded with no caret to open it. A Host has no Manage PC menu; Add PC is in Settings and the palette.
+ *  and its notice are lines of their own, the + is the New workspace row under the workspaces (the + beside the
+ *  logo instead in a desktop's one-line rows, App.tsx), and nothing is folded with no caret to open it. A Host has
+ *  no Manage PC menu; Add PC is in Settings and the palette.
  *  `canHide`/`onHide`: the menu's Hide on this device, under MachineSidebar's rules. */
 function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }: Props & { machine: Machine; headerless?: boolean; canHide: boolean; onHide(): void }) {
   const t = useT();
-  // the compact rows (Settings → Sidebar rows → One line, the default) draw New workspace as its + alone
+  // the compact rows (Settings → Sidebar rows → One line, the default): a desktop draws New workspace as the +
+  // beside its logo (App.tsx), so a lone Host needs no row for it there
   const compact = useSettings().settings.sidebarRows === "one";
+  // a phone's drawer has no + in its top row: each PC's header carries its own, and a lone Host's is its row
+  const drawer = useMediaQuery(DRAWER_QUERY);
   // Manage PC opens a sheet at a phone's width and a popover above it (RowMenu): the button says which (G-037)
   const sheet = useMediaQuery(SHEET_QUERY);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`ovis:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
@@ -526,8 +534,9 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
       <MachineContext.Provider value={machine.id}><AppLayoutContext.Provider value={props.appLayout?.(machine.id) ?? FULL_LAYOUT}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></AppLayoutContext.Provider></MachineContext.Provider>
     </div>}
     {/* the header's +, as the list's last row, also while the roster loads: an empty roster has its own New
-        workspace, and a filtered list shows only what was looked for; a watching device sees it disabled (G-040) */}
-    {headerless && !compact && online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className={`machine-new-row${compact ? " is-compact" : ""}`} disabled={!canCreate} aria-label={compact ? t("New workspace") : undefined} title={compact || props.watching ? createTitle : undefined} onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span>{!compact && <span className="machine-new-row-label">{t("New workspace")}</span>}</button>}
+        workspace, and a filtered list shows only what was looked for; a watching device sees it disabled (G-040).
+        A desktop's one-line rows leave it out: the + beside the logo starts one there (App.tsx) */}
+    {headerless && (!compact || drawer) && online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className="machine-new-row" disabled={!canCreate} title={props.watching ? createTitle : undefined} onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span><span className="machine-new-row-label">{t("New workspace")}</span></button>}
   </section>;
 }
 

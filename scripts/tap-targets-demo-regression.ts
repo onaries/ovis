@@ -224,6 +224,8 @@ async function floors(browser: Browser, server: { port: number }): Promise<strin
       localStorage.setItem("ovis:settings", settings);
       // Files beside the pane is kept in a key of its own (lib/settings.ts)
       if (panel) localStorage.setItem("ovis:files-panel", "true");
+      // a phone's More carries the pane's actions (Rename pane, below) where its tabs are in the header (Settings -> Tabs on a phone)
+      localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
     }, [JSON.stringify({ language: "en", theme: "dark", darkTheme: "codex", defaultView: "chat", alertsOn: false, ...settings }), filesPanel] as const);
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);

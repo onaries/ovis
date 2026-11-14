@@ -11,7 +11,9 @@ import { chromePath } from "./chrome-path.ts";
 // a summary on checkout-api's Claude, a task's progress on web-dashboard's Codex, a plugin's line for
 // the OMP agent (display_agent), and markup that must stay text. Only this disposable demo fixture is
 // rewritten; no live session is read. The machine events then say herdr's `[ui.sidebar.agents]`
-// rows, as server/herdr-sidebar.ts reads them, and a later roster brings a new value.
+// rows, as server/herdr-sidebar.ts reads them, and a later roster brings a new value. A roster the
+// page reads carries the same as one pushed to it: the page reads it again every 30 seconds, and a
+// read without them would take them off the rows until the next push.
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-tokens-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 const LONG = "reviewing the authentication middleware and the session refresh path before the release branch is cut";
@@ -29,9 +31,22 @@ const patch = `(() => {
   });
   const sources = new Set();
   let last = [];
+  const fetchDemo = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const answer = await fetchDemo(input, init);
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (url.pathname !== "/api/machines" || method.toUpperCase() !== "GET" || !answer.ok) return answer;
+    const body = await answer.clone().json();
+    if (!Array.isArray(body.machines)) return answer;
+    last = body.machines;
+    return new Response(JSON.stringify({ ...body, machines: roster(body.machines) }), { status: answer.status, headers: answer.headers });
+  };
   window.__tokens = {
     // a roster with a pane's tokens changed, as the server sends after herdr's pane.updated
     report(paneId, tokens) { reports[paneId] = { ...reports[paneId], tokens }; for (const source of sources) source.tell({ type: "machines", machines: roster(last) }); },
+    // a roster with what a waiting agent says it waits for (OSC 7501's message)
+    says(paneId, agent_message) { reports[paneId] = { ...reports[paneId], agent_message }; for (const source of sources) source.tell({ type: "machines", machines: roster(last) }); },
     // herdr's agent rows, as the server tells them
     rows(agents) { for (const source of sources) source.tell({ type: "herdr-sidebar", agents }); },
   };
@@ -54,6 +69,21 @@ const patch = `(() => {
 const row = (page: Page, pane: string) => page.locator(`.agent-list .agent-item[data-pane="${pane}"]`);
 const tokensOf = (page: Page, pane: string) => row(page, pane).locator(".agent-tokens");
 const box = async (page: Page, pane: string, selector: string) => (await row(page, pane).locator(selector).boundingBox())!;
+/** the open sheet once it has come to rest: whether its title, its first action and Cancel can be tapped, and whether the long text scrolls in its own box */
+async function sheetReach(page: Page, scroller: string): Promise<{ title: boolean; pin: boolean; cancel: boolean; scrolls: boolean }> {
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity).map((animation) => animation.finished)));
+  return page.evaluate((selector) => {
+    const hittable = (target: string): boolean => {
+      const element = document.querySelector(target);
+      if (!element) return false;
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return box.top >= 0 && box.bottom <= innerHeight && !!hit && element.contains(hit);
+    };
+    const long = document.querySelector(selector)!;
+    return { title: hittable(".row-sheet .row-menu-target-name"), pin: hittable(".row-sheet .row-sheet-item"), cancel: hittable(".row-sheet .row-sheet-cancel"), scrolls: long.scrollHeight > long.clientHeight };
+  }, scroller);
+}
 
 try {
   await buildDemoApp(app);
@@ -101,9 +131,13 @@ try {
 
           // the line sits under the title and the place, small and cut, its whole text in the tooltip
           const title = await box(page, panes.api, ".agent-title"), place = await box(page, panes.api, ".agent-context"), tokens = await box(page, panes.api, ".agent-tokens");
-          if (rows === "one") assert.ok(Math.abs(title.y + title.height - (place.y + place.height)) < 3, "One line keeps the place beside the title");
+          // a touch screen's One line row draws no place (#3505): it stays in the row for a screen reader, clipped to a dot
+          const placeDrawn = !(phone && rows === "one");
+          if (!placeDrawn) assert.ok(place.width <= 1 && place.height <= 1, `a phone's One line row draws no place (${place.width}x${place.height})`);
+          else if (rows === "one") assert.ok(Math.abs(title.y + title.height - (place.y + place.height)) < 3, "One line keeps the place beside the title");
           else assert.ok(place.y >= title.y + title.height - 1, "Two lines keeps the place under the title");
-          assert.ok(tokens.y >= place.y + place.height - 1, "the tokens have their own line, under the place");
+          const above = placeDrawn ? place : title;
+          assert.ok(tokens.y >= above.y + above.height - 1, `the tokens have their own line, under the ${placeDrawn ? "place" : "title"}`);
           assert.ok(await tokensOf(page, panes.api).evaluate((element) => element.scrollWidth > element.clientWidth), "a long value is cut");
           assert.match(await row(page, panes.api).locator(".agent-select").getAttribute("title") ?? "", new RegExp(LONG), "the tooltip says it whole");
           const sizes = await row(page, panes.api).evaluate((item) => ({
@@ -138,22 +172,26 @@ try {
             await page.waitForFunction((pane) => document.querySelector(`.agent-list .agent-item[data-pane="${pane}"] .agent-tokens`)?.textContent?.startsWith("value 0 "), panes.api);
             await row(page, panes.api).locator(".row-menu-toggle").click();
             await detail.waitFor();
-            await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity).map((animation) => animation.finished)));
-            const reach = await page.evaluate(() => {
-              const hittable = (selector: string): boolean => {
-                const element = document.querySelector(selector);
-                if (!element) return false;
-                const box = element.getBoundingClientRect();
-                const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-                return box.top >= 0 && box.bottom <= innerHeight && !!hit && element.contains(hit);
-              };
-              const scroller = document.querySelector(".row-sheet .row-sheet-detail")!;
-              return { title: hittable(".row-sheet .row-menu-target-name"), pin: hittable(".row-sheet .row-sheet-item"), cancel: hittable(".row-sheet .row-sheet-cancel"), scrolls: scroller.scrollHeight > scroller.clientHeight };
-            });
-            assert.deepEqual(reach, { title: true, pin: true, cancel: true, scrolls: true }, "long tokens scroll in the sheet and leave its title and actions in reach");
+            assert.deepEqual(await sheetReach(page, ".row-sheet .row-sheet-detail"), { title: true, pin: true, cancel: true, scrolls: true }, "long tokens scroll in the sheet and leave its title and actions in reach");
             if (evidence && rows === "one") await page.screenshot({ path: join(evidence, "tokens-phone-sheet-many.png") });
             await page.locator(".row-sheet-cancel").click();
+            await page.locator(".row-sheet").waitFor({ state: "detached" });
             await page.evaluate(([pane, summary]) => (window as unknown as { __tokens: { report(paneId: string, tokens: object): void } }).__tokens.report(pane, { quota: "5h 95% \u00b7 Wk 67%", summary }), [panes.api, LONG] as const);
+
+            // what a waiting agent says it waits for is its own words, of any length: the sheet says them whole, and a
+            // long one scrolls in the head as the tokens do, with the title, the actions and Cancel still in reach (#3505)
+            const reason = "the migration renames a column the billing export still reads, so say whether to keep the old name too. ".repeat(30).trim();
+            await page.evaluate(([pane, message]) => (window as unknown as { __tokens: { says(paneId: string, message: string): void } }).__tokens.says(pane, message), [panes.web, reason] as const);
+            await row(page, panes.web).locator(".row-menu-toggle").click();
+            const waitsFor = page.locator(".row-sheet .row-sheet-alert");
+            await waitsFor.waitFor();
+            assert.equal(await waitsFor.textContent(), reason, "the sheet says what the agent waits for, whole");
+            const reasonReach = await sheetReach(page, ".row-sheet .row-sheet-alert");
+            if (evidence && rows === "one") await page.screenshot({ path: join(evidence, "tokens-phone-sheet-long-reason.png") });
+            assert.deepEqual(reasonReach, { title: true, pin: true, cancel: true, scrolls: true }, "a long waiting reason scrolls in the sheet and leaves its title and actions in reach");
+            await page.locator(".row-sheet-cancel").click();
+            await page.locator(".row-sheet").waitFor({ state: "detached" });
+            await page.evaluate((pane) => (window as unknown as { __tokens: { says(paneId: string, message: string): void } }).__tokens.says(pane, ""), panes.web);
           }
 
           // herdr's rows told: only the tokens they name, in their order, a hide rule kept

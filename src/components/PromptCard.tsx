@@ -50,9 +50,11 @@ export interface PromptCardProps {
   screenWords?: string | null;
   /** the existing pane context, kept visually hidden and associated with the card for assistive technology */
   context?: string | null;
+  /** this device may only watch: the PC refuses its answers, so the card offers none and sends none, and says why */
+  watching?: boolean;
 }
 
-export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, initialText, onAnswered, answered = false, typedAnswer = null, onTypedAnswerDone, stale = false, screenWords = null, context = null }: PromptCardProps) {
+export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, initialText, onAnswered, answered = false, typedAnswer = null, onTypedAnswerDone, stale = false, screenWords = null, context = null, watching = false }: PromptCardProps) {
   const t = useT();
   const { answerPanePrompt } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(() => {
@@ -68,6 +70,12 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
   const [custom, setCustom] = useState(() => initialText ?? prompt.default_custom_text ?? "");
   const [sending, setPending] = useState(false);
   const pending = sending || answered;
+  // what keeps the card's answers from being pressed: one on its way, or a device that may only watch
+  const held = pending || watching;
+  const watchReason = watching ? t("This device can only watch.") : undefined;
+  const watchReasonId = useId();
+  const watchDescribed = watching ? watchReasonId : undefined;
+  const describedBy = (...ids: (string | undefined)[]): string | undefined => ids.filter((id) => id !== undefined).join(" ") || undefined;
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const [error, setError] = useState<(UserError & { retry?: Omit<PromptAnswer, "pane_id" | "prompt_id"> }) | null>(null);
@@ -108,7 +116,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
    * prompt took its place, or after its pane was left, changes nothing there.
    */
   const answer = async (choice: Omit<PromptAnswer, "pane_id" | "prompt_id">, press?: { nativeEvent: Event; currentTarget: EventTarget }): Promise<boolean> => {
-    if (pendingRef.current) return false;
+    if (pendingRef.current || watching) return false;
     pendingRef.current = true;
     // Native OpenCode multiselect fields and pi-ask's take checks and a custom entry in one answer.
     // Both buttons and Enter submit the whole field, including edits restored by Back.
@@ -200,9 +208,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
           <button
             type="button"
             className="btn btn-ghost prompt-card-back"
-            disabled={pending || stepsHeld}
+            disabled={held || stepsHeld}
             aria-label={t("Back")}
-            title={t("Back")}
+            aria-describedby={watchDescribed}
+            title={watchReason ?? t("Back")}
             onClick={(event) => void answer({ step_back: true, draft: { option_indices: [...selected], custom_text: custom } }, event)}
           >
             <ArrowLeft aria-hidden="true" />
@@ -217,9 +226,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
           <button
             type="button"
             className="btn btn-ghost prompt-card-next"
-            disabled={pending || navigationBlocked || typedAnswer?.option_index !== undefined}
+            disabled={held || navigationBlocked || typedAnswer?.option_index !== undefined}
             aria-label={t("Next question")}
-            title={t("Next question")}
+            aria-describedby={watchDescribed}
+            title={watchReason ?? t("Next question")}
             onClick={(event) => void answer({ step_next: true, draft: { option_indices: [...selected], custom_text: custom } }, event)}
           >
             <span>{t("Next")}</span>
@@ -257,9 +267,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
                   <button
                     type="button"
                     className="prompt-card-step-button"
-                    disabled={pending || stepsHeld}
+                    disabled={held || stepsHeld}
                     aria-label={words.step(index)}
-                    title={step.can_navigate ? words.step(index) : t("Back")}
+                    aria-describedby={watchDescribed}
+                    title={watchReason ?? (step.can_navigate ? words.step(index) : t("Back"))}
                     onClick={(event) => void answer({ step_index: index, draft: { option_indices: [...selected], custom_text: custom } }, event)}
                   >
                     <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
@@ -278,6 +289,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
           })}
         </ol>
       )}
+      {/* why nothing on the card can be pressed here, for a touch screen too, where no title shows */}
+      {watching && <p id={watchReasonId} className="prompt-card-hint">{watchReason}</p>}
       {navigationBlocked && <p className="prompt-card-hint">{t("Submit or clear edits before switching questions.")}</p>}
       {/* what the agent said before asking, as the terminal shows it over the question (#2088): the
           chat gets the agent's own record of it only with the answer */}
@@ -322,7 +335,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
       {hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
            read (Chromium), and the status line below has to be */
-        <div className="prompt-card-options" role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? words.question : undefined} aria-busy={pending}>
+        <div className={`prompt-card-options${watching ? " is-unavailable" : ""}`} role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? words.question : undefined} aria-busy={pending}>
           {prompt.options.map((option, index) => {
             if (index === prompt.custom_option_index) return null;
             const { text, recommended } = labelOf(words.label(index));
@@ -355,8 +368,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
               const checked = selected.has(index);
               return (
                 <Fragment key={index}>
-                  <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`}>
-                    <input type="checkbox" checked={checked} disabled={pending} aria-describedby={scopeId} onChange={() => toggle(index)} />
+                  <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`} title={watchReason}>
+                    <input type="checkbox" checked={checked} disabled={held} aria-describedby={describedBy(scopeId, watchDescribed)} onChange={() => toggle(index)} />
                     {number} {content}
                   </label>
                   {scopeText}
@@ -367,7 +380,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
             const isSelected = prompt.default_option_index === index;
             return (
               <Fragment key={index}>
-                <button type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}${isSelected ? " is-selected" : ""}`} disabled={pending} aria-describedby={scopeId} onClick={(event) => void answer({ option_index: index }, event)}>
+                <button type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}${isSelected ? " is-selected" : ""}`} disabled={held} aria-describedby={describedBy(scopeId, watchDescribed)} title={watchReason} onClick={(event) => void answer({ option_index: index }, event)}>
                   {number} {content}
                 </button>
                 {scopeText}
@@ -378,7 +391,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
         </div>
       )}
       {prompt.multi_select && (
-        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (selected.size === 0 && !prompt.optional && !(sendsChecksWithText(prompt) && custom.trim()))} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
+        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={held || (selected.size === 0 && !prompt.optional && !(sendsChecksWithText(prompt) && custom.trim()))} aria-describedby={watchDescribed} title={watchReason} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
           {selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
         </button>
       )}
@@ -386,7 +399,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
         <div className="prompt-card-custom">
           {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{sendsChecksWithText(prompt) ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
-            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => {
+            <input className="input" value={custom} disabled={held} title={watchReason} aria-describedby={watchDescribed} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => {
               const next = event.currentTarget.value;
               setCustom(next);
               onTextChange?.(next);
@@ -395,14 +408,14 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
               // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
               if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
             }} />
-            <button type="button" className={`btn${custom.trim().length > 0 ? " btn-primary" : ""}`} disabled={pending || custom.trim().length === 0} onClick={(event) => void answer({ custom_text: custom.trim() }, event)}>
+            <button type="button" className={`btn${custom.trim().length > 0 ? " btn-primary" : ""}`} disabled={held || custom.trim().length === 0} aria-describedby={watchDescribed} title={watchReason} onClick={(event) => void answer({ custom_text: custom.trim() }, event)}>
               <Send aria-hidden="true" /> {t("Send")}
             </button>
           </div>
         </div>
       )}
       {prompt.optional && !prompt.multi_select && (
-        <button type="button" className="btn prompt-card-skip" disabled={pending} onClick={(event) => void answer({ custom_text: "" }, event)}>
+        <button type="button" className="btn prompt-card-skip" disabled={held} aria-describedby={watchDescribed} title={watchReason} onClick={(event) => void answer({ custom_text: "" }, event)}>
           {t("Skip question")}
         </button>
       )}
@@ -412,7 +425,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
               of it and scrolls in itself, and the two buttons stay whole, on one line */}
           <span className="prompt-card-confirm-text">{t("Send {answer}?", { answer: `${typedAnswer.option_index + 1}. ${words.label(typedAnswer.option_index)}` })}</span>
           <span className="prompt-card-confirm-actions">
-            <button type="button" className="btn btn-primary" disabled={pending} onClick={(event) => void answer(typedAnswer, event).then((current) => { if (current) onTypedAnswerDone?.(); })}>{t("Confirm")}</button>
+            <button type="button" className="btn btn-primary" disabled={held} aria-describedby={watchDescribed} title={watchReason} onClick={(event) => void answer(typedAnswer, event).then((current) => { if (current) onTypedAnswerDone?.(); })}>{t("Confirm")}</button>
             <button type="button" className="btn" disabled={pending} onClick={() => onTypedAnswerDone?.()}>{t("Cancel")}</button>
           </span>
         </div>
@@ -421,7 +434,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
         <div className="prompt-card-error" role="alert">
           <span className="prompt-card-error-text">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</span>
           {error.retry !== undefined && (
-            <button type="button" className="btn prompt-card-retry" disabled={pending} onClick={(event) => void answer(error.retry!, event)}>{t("Retry")}</button>
+            <button type="button" className="btn prompt-card-retry" disabled={held} aria-describedby={watchDescribed} title={watchReason} onClick={(event) => void answer(error.retry!, event)}>{t("Retry")}</button>
           )}
         </div>
       )}

@@ -121,7 +121,7 @@ export const DEVICES_KO: Record<string, string> = {
   "Visitors can watch your terminals, but cannot type or change anything. Your app token or paired device keeps its existing access.": "방문자는 터미널을 볼 수 있지만 입력하거나 변경할 수는 없습니다. 앱 토큰이나 페어링된 기기의 기존 접근 권한은 유지됩니다.",
   "With no names, every unexpired link you issue opens it. Add names to accept only links issued to them.": "이름이 없으면 발급한 링크 중 만료되지 않은 것은 모두 열 수 있습니다. 이름을 추가하면 그 이름 앞으로 발급한 링크만 받습니다.",
   "Test notification": "테스트 알림",
-  "Check whether this device can receive push alerts": "이 기기가 푸시 알림을 받을 수 있는지 확인합니다",
+  "Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.": "지금 이 기기로 알림을 하나 보내 푸시 알림이 여기에 도착하는지 확인합니다. 보낼 수 없으면 이름 아래 줄에서 알려 줍니다.",
   "Send test": "테스트 보내기",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "푸시 알림은 HTTPS 또는 localhost가 필요하고, iPhone에서는 홈 화면 앱이어야 합니다.",
   "Allow notifications in your browser settings, then try again.": "브라우저 설정에서 알림을 허용한 뒤 다시 시도하세요.",

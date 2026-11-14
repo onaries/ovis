@@ -92,4 +92,8 @@ export const DASHBOARD_JA: Record<string, string> = {
   "1 relay": "リレー 1 か所",
   "{count} relays": "リレー {count} か所",
   "Account setup is incomplete. Open it to try again.": "アカウントの設定が完了していません。開くともう一度試します。",
+  "Dark and Light keep one look; System follows this device's dark or light mode.": "「ダーク」「ライト」はその表示に固定します。「システム」はこのデバイスのダーク／ライトモードに合わせます。",
+  "Compact makes text one step smaller and rows shorter, so more fits on the screen.": "「コンパクト」は文字を一段階小さくし、行の高さを詰めて、画面により多く表示します。",
+  "The text size of this app's menus, lists and dialogs.": "このアプリのメニュー、リスト、ダイアログの文字サイズです。",
+  "The language of this app. System follows the browser's language.": "このアプリの表示言語です。「システム」はブラウザーの言語に合わせます。",
 };

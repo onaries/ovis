@@ -96,7 +96,7 @@ export function RuntimeMove({ bootId, hidden, onServerRestarted, onOpenPane }: P
   return (
     <>
       {!hidden && answer.available && (
-        <SettingsRow label={t("Move everything to herdr-core")} description={t("Every workspace, tab and agent reopens on herdr-core, all at once.")}>
+        <SettingsRow label={t("Move everything to herdr-core")} description={t("Every workspace, tab and agent reopens on herdr-core, all at once, after a list shows what moves. Scrollback and programs running in shells do not come along.")}>
           <button type="button" className="btn" onClick={openDialog}>{state === "waiting" ? t("Waiting…") : state === "moving" ? t("Moving…") : t("Move…")}</button>
         </SettingsRow>
       )}

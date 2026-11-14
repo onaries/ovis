@@ -39,8 +39,9 @@ export function useFileViewer() {
 
   useEffect(() => {
     const onPop = (event: PopStateEvent): void => {
-      // the entry Back closed the file off, gone onto again by the file list that takes it: no file to show again
-      if (sheetStep.taking(event)) return;
+      // the entry Back closed the file off, gone onto again by the file list that takes it: no file to show again.
+      // Nor does a Back that a sheet with no entry refused, or its way back, move the file under the sheet
+      if (sheetStep.taking(event) || sheetStep.holds(event)) return;
       closing.current = false;
       // Forward restores the preview with its original PC/pane, including after reload.
       const preview = previewFromState(event.state);

@@ -1,4 +1,5 @@
-# Herdr may have started before Bun was installed: read the current user PATH at invocation time.
+# herdr's way into Ovis on Windows: runs scripts/plugin-launch.ts, which installs the release's checked server and runs
+# its plugin command. Herdr may have started before Bun was installed: read the current user PATH at invocation time.
 param(
     [string]$Command = 'status',
     # the command's own flags (link --code, add --google), handed on as they are
@@ -18,7 +19,7 @@ $batchShim = [IO.Path]::GetExtension($bun.Source) -in '.cmd', '.bat'
 if ($batchShim) {
     # Expand each path once from the environment so literal %NAME% pairs are not reinterpreted.
     $env:OVIS_BUN = $bun.Source
-    $env:OVIS_PLUGIN_SCRIPT = Join-Path $PSScriptRoot 'plugin.ts'
+    $env:OVIS_PLUGIN_SCRIPT = Join-Path $PSScriptRoot 'plugin-launch.ts'
     $env:OVIS_PLUGIN_COMMAND = $Command
     # The flags are expanded once too, unquoted: the check above left nothing in them to quote.
     # Without flags the variable is left out of the command line, since cmd.exe keeps the name of one that is not set.
@@ -28,7 +29,7 @@ if ($batchShim) {
 if ($Command -eq 'start') {
     # A fresh hidden console keeps PowerShell's output pipes out of the detached server.
     $executable = $bun.Source
-    $arguments = '"{0}" start' -f (Join-Path $PSScriptRoot 'plugin.ts')
+    $arguments = '"{0}" start' -f (Join-Path $PSScriptRoot 'plugin-launch.ts')
     if ($batchShim) {
         # Batch shims need a command interpreter, not ShellExecute's document association.
         $arguments = '/d /v:off /s /c ""%OVIS_BUN%" "%OVIS_PLUGIN_SCRIPT%" start"'
@@ -49,6 +50,6 @@ if ($Command -eq 'start') {
 if ($batchShim) {
     & $env:ComSpec /d /v:off /s /c ('""%OVIS_BUN%" "%OVIS_PLUGIN_SCRIPT%" "%OVIS_PLUGIN_COMMAND%"' + $flags + '"')
 } else {
-    & $bun.Source (Join-Path $PSScriptRoot 'plugin.ts') $Command @Rest
+    & $bun.Source (Join-Path $PSScriptRoot 'plugin-launch.ts') $Command @Rest
 }
 exit $LASTEXITCODE

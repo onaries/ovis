@@ -38,7 +38,9 @@ const roster = (): Snapshot => ({
 }) as unknown as Snapshot;
 
 /** what the app shows: the hook's inputs that the tests move */
-let place: { machineId: string; paneId: string | null; newSessionOpen: boolean; newFields: Omit<CreateDraft, "kind"> | null; sidebarCollapsed: boolean; snapshot: Snapshot; viewing: Preview | null; linkLanded: boolean; inbox: { open: boolean; enabled: boolean }; dialogMachineId?: string; rosterOut?: boolean };
+let place: { machineId: string; paneId: string | null; newSessionOpen: boolean; newFields: Omit<CreateDraft, "kind"> | null; sidebarCollapsed: boolean; snapshot: Snapshot; viewing: Preview | null; linkLanded: boolean; inbox: { open: boolean; enabled: boolean }; dialogMachineId?: string; rosterOut?: boolean;
+  /** the inbox mode as last drawn (lib/inboxMode.ts); absent, the hook is given no mode, as before it existed */
+  mode?: boolean };
 /** what the handler asked of a phone's agent list */
 let inboxCalls: string[];
 /** Reopen files on return: whether a file left behind is kept on its entry */
@@ -61,12 +63,13 @@ const refs = {
   pendingFile: { current: null as string | null },
   pendingLink: { current: null as AppLink | null },
   pendingCreate: { current: null as CreateDraft | null },
+  newSessionPending: { current: false },
   linkSince: { current: 0 },
   rosterSeq: { current: 0 },
 };
 
 function Probe() {
-  const { machineId, paneId, newSessionOpen, newFields, sidebarCollapsed, snapshot, viewing, linkLanded, inbox, dialogMachineId, rosterOut } = place;
+  const { machineId, paneId, newSessionOpen, newFields, sidebarCollapsed, snapshot, viewing, linkLanded, inbox, dialogMachineId, rosterOut, mode } = place;
   const machine = { id: machineId, name: "workstation", kind: "local", enabled: true, state: "connected", error: null, snapshot } as Machine;
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId) as HerdrPane;
   // the PCs are not in yet: the page has no roster to settle an entry against
@@ -80,6 +83,8 @@ function Probe() {
       show: () => { inboxCalls.push("show"); place.inbox = { ...place.inbox, open: true }; draw(); },
       leave: () => { inboxCalls.push("leave"); place.inbox = { ...place.inbox, open: false }; draw(); },
     },
+    // the mode an entry is in is what its address says, whatever was last drawn
+    mode: mode === undefined ? undefined : { on: mode, lands: () => new URLSearchParams(window.location.search).get("app") === "inbox" },
     // the New workspace dialog's PC: the selected one, unless it was opened for another (the list's sheet of PCs)
     newSessionOpen, newSessionMachineId: dialogMachineId ?? machineId, newFields, sidebarCollapsed, snapshot, selectedPaneId: paneId, selectedPane: pane,
     // a pane its roster does not list yet (one New workspace just made) has no workspace
@@ -90,7 +95,7 @@ function Probe() {
     restoreFile: () => {}, fileFromPop: () => 0, forgetLeftFiles: () => {}, openFile: () => {},
     locked: false, linkLanded, view: "chat", wideScreen: true, autoSelected: false, newTab: null,
     settingsOpen: false, settingsPage: null, settingsLinkPage: null, settingsLinkSection: null,
-    pendingFile: refs.pendingFile, pendingLink: refs.pendingLink, pendingCreate: refs.pendingCreate, linkSince: refs.linkSince, rosterSeq: refs.rosterSeq,
+    pendingFile: refs.pendingFile, pendingLink: refs.pendingLink, pendingCreate: refs.pendingCreate, newSessionPending: refs.newSessionPending, linkSince: refs.linkSince, rosterSeq: refs.rosterSeq,
     selectTargetRef: refs.selectTarget, selectionRef: refs.selection,
     setLinkLanded: () => {}, setHeaderNote: () => {},
     setNewSessionOpen: (open: boolean) => { place.newSessionOpen = open; draw(); },
@@ -115,6 +120,7 @@ beforeEach(() => {
   waiting = null;
   refs.selectTarget.current = (_machineId, paneId) => { asked.push(paneId); if (paneId !== null) { place.paneId = paneId; draw(); } };
   refs.pendingCreate.current = null;
+  refs.newSessionPending.current = false;
   const write = (method: "pushState" | "replaceState") => (state: unknown, _unused: string, url?: string): void => {
     const entry = { state, url: url === undefined ? entries[index]!.url : new URL(url, entries[index]!.url) };
     if (method === "pushState") { entries.splice(index + 1); entries.push(entry); index += 1; } else entries[index] = entry;
@@ -193,6 +199,25 @@ it("Back with nothing waiting selects the entry's pane and writes nothing", asyn
   expect(addresses()).toEqual([P1, P2]);
 });
 
+it("keeps a parameter it does not own through a move between panes, a lens change and Back", async () => {
+  // Given p1 shown at an address that also says the inbox mode (lib/inboxMode.ts), a parameter of that module's own.
+  place = { ...place, paneId: "p1" };
+  await mount([`?app=inbox&${P1.slice(1)}`]);
+
+  // When p2 is selected.
+  await act(async () => { place.paneId = "p2"; draw(); });
+
+  // Then the move is pushed with the parameter still in its address.
+  expect(writes).toEqual([`pushState 1 ?app=inbox&${P2.slice(1)}`]);
+
+  // When Back lands on p1's entry.
+  await back();
+
+  // Then p1 is selected and neither entry is rewritten.
+  expect(asked).toEqual(["p1"]);
+  expect(addresses()).toEqual([`?app=inbox&${P1.slice(1)}`, `?app=inbox&${P2.slice(1)}`]);
+});
+
 it("Back selects the entry's pane while a roster is waiting to be drawn", async () => {
   // Given p2 shown on its entry, and a roster that has arrived and is not drawn yet.
   await mount([P1, P2]);
@@ -221,6 +246,47 @@ it("Back off the New workspace dialog's entry closes it while its fields are on 
   // Then the dialog closes, and neither entry was written over.
   expect(place.newSessionOpen).toBe(false);
   expect(addresses()).toEqual([P1, held]);
+});
+
+/**
+ * New workspace open over the list, as App has it: its sheet's entry over the list's. lib/sheetHistory.ts listens
+ * before the address bar; while the create is in flight the sheet refuses Back, and that module pushes the sheet's
+ * entry again over where Back landed, with no URL. Simulated here exactly so, by a listener ahead of the hook's.
+ */
+async function dialogOverList(): Promise<string> {
+  place = { ...place, newSessionOpen: true, newFields: { cwd: null, name: "New", agent: null }, inbox: { open: true, enabled: true } };
+  window.addEventListener("popstate", () => { if (refs.newSessionPending.current) window.history.pushState({ "ovis:sheet": "sheet-1" }, ""); });
+  await mount(["", ""]);
+  await act(async () => { draw(); });
+  expect(addresses()[0]).toBe("");
+  expect(addresses()[1]).toContain("new=workspace");
+  return addresses()[1]!;
+}
+
+it("Back while New workspace's create is in flight over the list leaves it open, its entry made again saying its address (the sheet's push simulated)", async () => {
+  const dialog = await dialogOverList();
+  refs.newSessionPending.current = true;
+
+  await back();
+
+  expect(place.newSessionOpen).toBe(true);
+  expect(index).toBe(1);
+  expect(addresses()).toEqual(["", dialog]);
+});
+
+it("Back once New workspace's create has settled closes it onto the list's entry, after a Back it refused while in flight (the sheet's push simulated)", async () => {
+  const dialog = await dialogOverList();
+  refs.newSessionPending.current = true;
+  await back();
+  expect(place.newSessionOpen).toBe(true);
+
+  refs.newSessionPending.current = false;
+  await back();
+
+  expect(place.newSessionOpen).toBe(false);
+  expect(index).toBe(0);
+  expect(addresses()).toEqual(["", dialog]);
+  expect(window.location.search).toBe("");
 });
 
 it("writes the place held back over the entry landed on, once, when that entry leads nowhere else", async () => {
@@ -383,6 +449,68 @@ it("Forward from the list onto another pane selects it and pushes nothing", asyn
   expect(inboxCalls).toEqual(["show", "leave"]);
   expect(addresses()).toEqual(["", P1]);
   expect(entries).toHaveLength(2);
+});
+
+it("in the inbox mode another thread takes the thread's entry and keeps its mark, so Back still shows the list", async () => {
+  // Given the mode's list with p1 opened from it.
+  const LIST = "?app=inbox";
+  const thread = (pane: string): string => `${LIST}&${pane.slice(1)}`;
+  place = { ...place, paneId: "p1", mode: true, inbox: { open: false, enabled: true } };
+  await mount([LIST, thread(P1)]);
+  entries[1]!.state = FROM_INBOX;
+
+  // When p2 is opened from the thread (another row beside it, the next waiting agent).
+  await act(async () => { place.paneId = "p2"; draw(); });
+
+  // Then p2 takes the thread's entry: nothing is pushed, and the entry still says the list lies under it.
+  expect(writes).toEqual([`replaceState 1 ${thread(P2)}`]);
+  expect(entries[1]!.state).toEqual(FROM_INBOX);
+  expect(addresses()).toEqual([LIST, thread(P2)]);
+
+  // When Back lands on the list's entry.
+  await back();
+
+  // Then the list shows.
+  expect(inboxCalls).toEqual(["show"]);
+});
+
+it("outside the inbox mode a move between two panes opened from the list is still an entry", async () => {
+  // Given a list that is enabled while the mode's shell is not drawn (the setup guide stands over it), with p1 opened from it.
+  place = { ...place, paneId: "p1", mode: false, inbox: { open: false, enabled: true } };
+  await mount(["", P1]);
+  entries[1]!.state = FROM_INBOX;
+
+  // When p2 is selected.
+  await act(async () => { place.paneId = "p2"; draw(); });
+
+  // Then the move is pushed, as it always was.
+  expect(writes).toEqual([`pushState 2 ${P2}`]);
+});
+
+it("Back from the app onto the inbox mode's list shows the list, though no list was enabled as last drawn", async () => {
+  // Given the app on p2, entered from the mode's list (Back to Ovis): the list is not enabled as drawn.
+  place = { ...place, paneId: "p2", mode: false, inbox: { open: false, enabled: false } };
+  await mount(["?app=inbox", P2]);
+
+  // When Back lands on the list's entry.
+  await back();
+
+  // Then the list is asked to show, for the mode the entry's address says.
+  expect(inboxCalls).toEqual(["show"]);
+  expect(asked).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+it("Back from an inbox mode thread onto the app's own start shows no list, though one was enabled as last drawn", async () => {
+  // Given a thread of the mode over the app's start, which names no pane and is not the mode's.
+  place = { ...place, paneId: "p1", mode: true, inbox: { open: false, enabled: true } };
+  await mount(["", `?app=inbox&${P1.slice(1)}`]);
+
+  // When Back lands on the start.
+  await back();
+
+  // Then the list is not shown: that entry is the app's, where no list stands.
+  expect(inboxCalls).toEqual([]);
 });
 
 it("opens the list in place by a replace, and a window widened past a phone's leaves it by a replace", async () => {

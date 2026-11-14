@@ -24,6 +24,8 @@ import { useLocale, useT, type Translate } from "../lib/i18n.ts";
 const BLOCKED_REASONS: ReadonlyArray<{ is: (reason: string) => boolean; words: (t: Translate) => string }> = [
   { is: (reason) => reason === "Start with bun run start or the herdr plugin to enable updates.", words: (t) => t("Start with bun run start or the herdr plugin to enable updates.") },
   { is: (reason) => reason === "Switch the source checkout to main to update.", words: (t) => t("Switch the source checkout to main to update.") },
+  { is: (reason) => reason.startsWith("Ovis runs here as an installed release"), words: (t) => t("Ovis runs here as an installed release: update it by running the installer again (curl -fsSL https://ovis.sh/install.sh | sh, or irm https://ovis.sh/install.ps1 | iex on Windows), then restart Ovis.") },
+  { is: (reason) => reason.startsWith("Ovis runs here as the herdr plugin's compiled server"), words: (t) => t("Ovis runs here as the herdr plugin's compiled server: update it with herdr (herdr plugin update devswha.ovis), then restart Ovis.") },
   { is: (reason) => reason === CHECKOUT_CHANGED_REASON, words: (t) => t("The source checkout changed. Restart the app before updating.") },
   { is: (reason) => reason === "The source checkout has local changes. Commit or move them before updating.", words: (t) => t("The source checkout has local changes. Commit or move them before updating.") },
   { is: (reason) => reason === "Updates require a Git checkout on the main branch.", words: (t) => t("Updates require a Git checkout on the main branch.") },
@@ -123,7 +125,7 @@ export function UpdateControls({ updates, bridgesFollow = false }: { updates: Up
       {/* the section keeps its name for a link and a screen reader, out of sight like a bare page's captions */}
       <h3 id="settings-updates-title" className="visually-hidden">{t("Updates")}</h3>
       <div className="settings-card">
-        <SettingsRow label="Ovis" icon={Info}>
+        <SettingsRow label="Ovis" description={t("The version of Ovis running on this PC. Update and restart installs the release shown and then restarts Ovis.")} icon={Info}>
           <span className="settings-fact">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</span>
           {state && <span className="settings-hint" role="status">{state}</span>}
           {status?.managed && (status.available
@@ -181,7 +183,7 @@ export function HerdrUpdateControls({ enabled, herdrVersion, showVersion = false
   if (bare && !(status?.supported && ((status.stale && !!status.binary_version && !!status.server_version) || error || busy || status.output || status.phase === "error"))) {
     return status?.supported || (showVersion && version) ? <section className="settings-section settings-herdr-update">
       <div className="settings-card">
-        <SettingsRow label="herdr" icon={Download}>
+        <SettingsRow label="herdr" description={t("Installs the newest herdr on the PC this app runs on and moves its running panes onto it. Panes and agents keep running, and open terminals reconnect.")} icon={Download}>
           {showVersion && version && <span className="settings-fact">{version}</span>}
           {status?.supported && <button type="button" className="btn" onClick={() => void request()}>{t("Update herdr")}</button>}
         </SettingsRow>

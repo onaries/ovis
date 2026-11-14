@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { AppLink } from "./deepLink.ts";
 import { watchDrawerSwipe } from "./edgeSwipe.ts";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./filePanelWidth.ts";
@@ -7,12 +7,18 @@ import { useMediaQuery } from "./useMediaQuery.ts";
 
 export interface SidebarLayoutParams {
   initialLink: AppLink | null;
+  /** while true the shell has no drawer (the inbox mode, lib/inboxMode.ts): nothing opens one, a swipe included */
+  drawerBlocked?: RefObject<boolean>;
 }
 
 /** Keeps the drawer, sidebar and file-panel layout state. */
-export function useSidebarLayout({ initialLink }: SidebarLayoutParams) {
+export function useSidebarLayout({ initialLink, drawerBlocked }: SidebarLayoutParams) {
   // a phone opened by a link that says so starts with its drawer out (lib/deepLink.ts)
-  const [drawerOpen, setDrawerOpen] = useState(() => initialLink?.sidebar === "shown" && window.matchMedia?.("(min-width: 769px)").matches !== true);
+  const [drawerOpen, setDrawerOpenState] = useState(() => initialLink?.sidebar === "shown" && window.matchMedia?.("(min-width: 769px)").matches !== true && drawerBlocked?.current !== true);
+  const setDrawerOpen = useCallback<Dispatch<SetStateAction<boolean>>>((next) => setDrawerOpenState((open) => {
+    const asked = typeof next === "function" ? next(open) : next;
+    return asked && drawerBlocked?.current !== true;
+  }), [drawerBlocked]);
   const drawerOpenRef = useRef(drawerOpen); drawerOpenRef.current = drawerOpen;
   // from 769px the drawer is a plain sidebar column and its toggle is hidden, so a drawer a
   // narrow window opened must not come back (with its scrim) the next time the window narrows

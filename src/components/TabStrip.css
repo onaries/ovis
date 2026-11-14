@@ -383,3 +383,128 @@
   font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
 }
+
+/* A phone's header with Settings -> Tabs on a phone at In the header (#3375): the workspace's tabs in the
+   title's place, one row that scrolls sideways. Each is a 44px target; the open one is a pill and capped
+   narrower than the row, so the next tab's mark and the start of its name show beside it and the row
+   reads as tabs, not a title. It fades out under its end. pan-x and contained overscroll leave the edge
+   swipe to the sidebar; the chevron after it, with the tab count, opens the tab sheet. */
+.header-tabs.is-phone {
+  align-items: center;
+  gap: 0;
+  padding-right: 0;
+}
+
+.header-tabs.is-phone .tab-strip {
+  gap: 0;
+  height: var(--touch-target);
+  min-height: 0;
+  background: transparent;
+  overflow-x: auto;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: var(--space-3);
+  mask-image: linear-gradient(to right, var(--bg) calc(100% - var(--space-5)), transparent);
+}
+
+.header-tabs.is-phone .tab-strip-item {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 6rem;
+  height: var(--touch-target);
+  background: transparent;
+  border: 0;
+}
+
+.header-tabs.is-phone .tab-strip-item.is-active {
+  max-width: min(7rem, 100%);
+  background: transparent;
+  border: 0;
+}
+
+.header-tabs.is-phone .tab-strip-item.is-active::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-1-5) 0;
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+}
+
+.header-tabs.is-phone .tab-strip-tab {
+  position: relative;
+  padding: 0 var(--space-2);
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.header-tabs.is-phone .tab-strip-item.is-active .tab-strip-tab {
+  padding-right: var(--space-2);
+}
+
+.header-tabs.is-phone .tab-strip-position {
+  order: 3;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.header-tabs-sheet {
+  flex: 0 0 auto;
+  gap: var(--space-half);
+  width: auto;
+  min-width: var(--touch-target);
+  height: var(--touch-target);
+  padding: 0 var(--space-1-5);
+}
+
+.header-tabs-sheet svg {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+
+.header-tabs-count {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.header-tabs-watch {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.header-tabs-watch svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+/* the connection, lost and back, in words before the chevron (App.tsx): the tabs give it the room it needs */
+.header-tabs-connection {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline: var(--space-1);
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-tabs-connection.is-reconnecting { color: var(--status-reconnecting); }
+.header-tabs-connection.is-connected { color: var(--status-done); }
+
+/* a failed action from the header's row: the notice hangs under the header, over the pane's top */
+.header-tabs .tab-strip-notice {
+  position: fixed;
+  top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  right: 0;
+  left: 0;
+  z-index: var(--z-header);
+  background: var(--bg-panel);
+}

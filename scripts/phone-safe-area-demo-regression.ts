@@ -34,7 +34,7 @@ if (evidence) mkdirSync(evidence, { recursive: true });
 async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page) => Promise<void>, keyboard = false, pane = panes.api): Promise<void> {
   const context = await browser.newContext({ viewport: { width: screen.width, height: screen.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, locale: "en-US" });
   try {
-    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
     // an iPhone's keyboard: the visual viewport shrinks under a layout viewport that stays (lib/viewport.ts)
     if (keyboard) await context.addInitScript(() => {
       const viewport = window.visualViewport!;
@@ -169,7 +169,7 @@ try {
       await reachable(page.locator(".row-sheet .row-sheet-item").last(), UPRIGHT.insets, `${label}: the More sheet's last action`);
       await close(page, ".row-sheet");
 
-      await page.locator(".app-header .context-tabs").click();
+      await page.locator(".app-header .header-tabs-sheet").click();
       clear(await outside(page, ".row-sheet", UPRIGHT.insets), `${label}: the title's tab sheet clears the insets`);
       await reachable(page.locator(".row-sheet-cancel"), UPRIGHT.insets, `${label}: the tab sheet's Cancel`);
       await close(page, ".row-sheet");

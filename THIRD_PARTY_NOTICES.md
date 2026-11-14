@@ -43,6 +43,18 @@ computer and its branch. Its sizes and layout were adapted; no code was copied. 
 Apache License, Version 2.0 (<http://www.apache.org/licenses/LICENSE-2.0>), copyright the Herdr
 app's authors.
 
+## Herdr app agents list
+
+The Agents list's state headings that fold, and the time each row says its agent has been in its
+state (`src/components/AgentSidebar.tsx`, `src/lib/agentStateSince.ts`), follow the Herdr app's
+agents mod, <https://github.com/herdrdev/herdr-app> (`defaults/mods/agents/main.js`, commit
+`93b097f`): a section header in its state's colour that folds its rows and says their count, a
+time in the form `<1m`, `5m`, `2h`, `3d` counted from the state change the app saw and kept across
+restarts, done and idle counted as one state, and the time of an agent gone for thirty days
+forgotten. The behaviour was written anew for this app; no code was copied. Licensed under the
+Apache License, Version 2.0 (<http://www.apache.org/licenses/LICENSE-2.0>), copyright the Herdr
+app's authors.
+
 ## Agent of Empires request correlation
 
 `server/request-log.ts` adapts the request-completion boundary and client correlation-ID

@@ -1,0 +1,697 @@
+/* The inbox mode's list (InboxList.tsx). On a phone it is the screen: one flat surface, two round controls floating
+   at its top and a round button and a search pill at its foot, the rows scrolling under both. From 769px it is the
+   column beside the thread it opens (.is-wide), its controls in a top row and a foot of its own. */
+.mode-inbox {
+  /* a round control's size (--inbox-control) and the band the column's top controls are centred in
+     (--inbox-zone-h) are the shell's, which the pane's own controls share: InboxMode.css, .app.is-inbox */
+  /* the gutter the round controls stand on; a row's mark and its time stand one step further in */
+  --inbox-gutter: calc(var(--space-4) + var(--space-1) / 2);
+  --inbox-inset: calc(var(--inbox-gutter) + var(--space-1));
+  --inbox-avatar: var(--touch-target);
+  /* how far under the top safe area a phone's two floating controls start: they touch no edge, under a status bar
+     or with none over them (a browser tab, a narrow desktop window) */
+  --inbox-top-gap: var(--space-2);
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+/* the pane keeps its size under the list (never display: none: a terminal refit to nothing would resize its pty) */
+.pane-split.is-under-inbox > .pane-slot {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* and the box it was shown in (lib/coveredPane.ts, written on the slot's own style, where a split's slot carries
+   its rectangle): the list takes the shell's bars away, and from 769px it draws its column whether or not the
+   classic sidebar was open, so laid out again the pane would have another box than the one its pty was sized to */
+.pane-split.is-under-inbox {
+  /* a kept box may lie outside the area as it is now (the column beside it, a window resized under the list) */
+  overflow: hidden;
+}
+
+.pane-split.is-under-inbox > .pane-slot[data-kept-box] {
+  flex: none;
+}
+
+/* the rows scroll under the two floating rows of controls and end clear of both; a row the keyboard brings into
+   view stops clear of them too, so its focus ring is never under a control */
+.mode-inbox .inbox-scroll {
+  position: absolute;
+  inset: 0;
+  /* the rows are sized from the list, not from what a scrollbar leaves of it (.inbox-rows): where a scrollbar takes
+     room they end in its place's own room, and nothing here scrolls sideways */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* thin as a document's, in the theme's colours (html, styles.css), as the transcript's is */
+  scrollbar-width: thin;
+  padding-block: calc(var(--inbox-top-gap) + var(--inbox-control) + var(--space-4)) calc(var(--inbox-control) + var(--space-3) * 2 + env(safe-area-inset-bottom, 0px));
+  scroll-padding-block: calc(var(--inbox-top-gap) + var(--inbox-control) + var(--space-2)) calc(var(--inbox-control) + var(--space-3) * 2 + env(safe-area-inset-bottom, 0px));
+}
+
+/* only the controls take a press: between and beside them the rows under the band do */
+.mode-inbox .inbox-top,
+.mode-inbox .inbox-foot {
+  position: absolute;
+  inset-inline: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  padding-inline: var(--inbox-gutter);
+  pointer-events: none;
+}
+
+.mode-inbox .inbox-top > *,
+.mode-inbox .inbox-foot > * {
+  pointer-events: auto;
+}
+
+.mode-inbox .inbox-top {
+  top: var(--inbox-top-gap);
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* What the connection has to say (Reconnecting…, then Connected for a moment), centred between a phone's two top
+   controls, on their centre line. It floats over the rows as they do, so it is drawn as they are: a small round
+   pill on the raised surface, with the hairline edge and the soft shadow, and a row that scrolls under it passes
+   under a thing of the page, not under a patch of the page's colour. It takes no press. */
+.mode-inbox .inbox-top > .inbox-connection {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(var(--inbox-gutter) + var(--inbox-control) + var(--space-2));
+  width: fit-content;
+  height: fit-content;
+  margin: auto;
+  padding: var(--space-1) var(--space-2-5);
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* with no More before it (nothing to offer), New workspace keeps the end corner */
+.mode-inbox .inbox-top > .inbox-add:first-child {
+  margin-inline-start: auto;
+}
+
+.mode-inbox .inbox-foot {
+  bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  gap: var(--space-3);
+}
+
+/* the mode's round control: the icon button as a raised disc. It keeps one look under a press and while its menu
+   is open (the icon button's accent edge is a square control's), and its disc under a finger */
+.icon-button.inbox-round {
+  width: var(--inbox-control);
+  height: var(--inbox-control);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+  color: var(--text-strong);
+}
+
+.icon-button.inbox-round:active,
+.icon-button.inbox-round[aria-expanded="true"] {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* Under a pointer that hovers, hover already fills the disc: a press goes one step past it, the disc filled with
+   its own strong edge's colour, so a click is answered by more than the pointer's resting look. */
+@media (hover: hover) {
+  .icon-button.inbox-round:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  .icon-button.inbox-round:active:not(:disabled) {
+    background: var(--border-strong);
+  }
+}
+
+/* a phone's top controls stand --space-2 under the top safe area (--inbox-top-gap), close to the screen's own edge
+   where there is none: a ring drawn round them would all but touch it, so the screen's round controls draw it
+   inside, as its rows do */
+.mode-inbox:not(.is-wide) .icon-button.inbox-round:focus-visible {
+  outline-offset: var(--ring-inset-offset);
+}
+
+/* a filter other than All is on: the button is filled, as a chosen choice is */
+.icon-button.inbox-filter-toggle.is-on,
+.icon-button.inbox-filter-toggle.is-on:active,
+.icon-button.inbox-filter-toggle.is-on[aria-expanded="true"] {
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+  color: var(--bg);
+}
+
+@media (hover: hover) {
+  .icon-button.inbox-filter-toggle.is-on:hover:not(:disabled) {
+    background: var(--text);
+    border-color: var(--text);
+  }
+
+  /* pressed, the filled button is its resting fill again: a step from its hover, as every round control's press is */
+  .icon-button.inbox-filter-toggle.is-on:active:not(:disabled) {
+    background: var(--text-strong);
+    border-color: var(--text-strong);
+  }
+}
+
+/* a state's mark as a filter choice's glyph, in the box a menu's icon has */
+.inbox-filter-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+
+.inbox-filter-mark > .sidebar-status {
+  flex: none;
+  width: auto;
+  height: auto;
+}
+
+.mode-inbox .inbox-search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mode-inbox .inbox-search-glass {
+  position: absolute;
+  top: 50%;
+  inset-inline-start: var(--space-4);
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--text-dim);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.mode-inbox .inbox-search-input {
+  --field-fs: var(--fs-input);
+  width: 100%;
+  height: var(--inbox-control);
+  min-height: var(--inbox-control);
+  padding-inline: calc(var(--space-4) + var(--icon-size) + var(--space-2-5)) var(--inbox-control);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+}
+
+/* the clear is the field's own, drawn once below; the browser's cancel glyph would make two */
+.mode-inbox .inbox-search-input::-webkit-search-cancel-button,
+.mode-inbox .inbox-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mode-inbox .inbox-search-clear {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  display: grid;
+  place-items: center;
+  width: var(--inbox-control);
+  height: var(--inbox-control);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.mode-inbox .inbox-search-clear svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* A row is as wide as the list, whatever the scroller's own scrollbar takes: under a scrollbar that takes room
+   (Chrome's own on Windows and Linux) the rows keep their width and their place, and the scrollbar stands in the
+   end inset beside them. The list is the size container its rows read (cqi). */
+.mode-inbox {
+  container-type: inline-size;
+}
+
+.mode-inbox .inbox-rows {
+  width: 100cqi;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* the mark with the gutter above and below it is the row: no rule and no gap between two rows */
+.mode-inbox .inbox-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-height: calc(var(--inbox-avatar) + var(--inbox-gutter) * 2);
+  padding: 0 var(--inbox-inset);
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.mode-inbox .inbox-row:active {
+  background: var(--bg-hover);
+}
+
+@media (hover: hover) {
+  .mode-inbox .inbox-row:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+.mode-inbox .inbox-row:focus-visible {
+  outline-offset: calc(var(--ring-offset) * -1);
+}
+
+.mode-inbox .inbox-row:disabled {
+  cursor: default;
+}
+
+.mode-inbox .inbox-item.is-offline {
+  opacity: 0.55;
+}
+
+/* the round mark, in a row and in a thread's title and chip (InboxMode.css), which stand outside the list */
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar {
+  flex: 0 0 auto;
+  width: var(--inbox-avatar);
+  height: var(--inbox-avatar);
+}
+
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar-face {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+}
+
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar .agent-mark {
+  display: grid;
+}
+
+/* a mark that sits on the face keeps three fifths of it; one drawn as a tile fills it */
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar-face svg {
+  width: calc(var(--inbox-avatar) * 0.6);
+  height: calc(var(--inbox-avatar) * 0.6);
+}
+
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar.is-tile .inbox-avatar-face {
+  border: 0;
+}
+
+:is(.mode-inbox, .thread-title, .thread-chip) .inbox-avatar.is-tile .inbox-avatar-face svg {
+  width: var(--inbox-avatar);
+  height: var(--inbox-avatar);
+}
+
+.mode-inbox .inbox-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+/* the time stands on the name's middle, not on its baseline */
+.mode-inbox .inbox-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mode-inbox .inbox-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-heading);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* how long the agent has been in its state, at the end of the name's line */
+.mode-inbox .inbox-time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  font-variant-numeric: var(--font-numeric);
+  white-space: nowrap;
+}
+
+.mode-inbox .inbox-sub {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* one line, whatever the agent wrote: a line break in its words reads as a space */
+.mode-inbox .inbox-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-row-sub);
+  line-height: var(--lh-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* a row that asks for a look (needs you, done and not looked at) draws its line one step stronger */
+.mode-inbox .inbox-item.is-asking .inbox-words {
+  color: var(--text);
+}
+
+/* the state's mark at the end of the words: only as wide as what it draws, so a row with none gives the words the line */
+.mode-inbox .inbox-state {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.mode-inbox .inbox-state.is-drawn {
+  margin-inline-start: var(--space-2);
+}
+
+/* a state that draws nothing keeps its element and its label, out of the row's flow */
+.mode-inbox .inbox-state:not(.is-drawn) {
+  position: absolute;
+}
+
+.mode-inbox .inbox-state > .sidebar-status {
+  flex: none;
+  width: auto;
+  height: auto;
+}
+
+/* an unread finish's check is a box turned 45 degrees (Sidebar.css), which draws it about 2.5px wider on each side
+   than its layout box: it gets that room here, so its drawn edge stands on the row's inset as a dot's does */
+.mode-inbox .inbox-state > .sidebar-status[data-status="done"] .sidebar-status-dot {
+  margin-inline: calc(var(--space-half) + var(--hairline) / 2);
+}
+
+/* loading, none, no match: one quiet line where the rows would be */
+.mode-inbox .inbox-empty {
+  margin: var(--space-8) var(--space-4);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  text-align: center;
+}
+
+/* a load that failed, where the rows would be: what happened in the app's words and the danger's colour, the read's
+   own message smaller and dim under it (often the browser's English: it is the detail, not the sentence), and Retry
+   under them */
+.mode-inbox .inbox-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-8) var(--space-4);
+  text-align: center;
+}
+
+.mode-inbox .inbox-failed-words {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mode-inbox .inbox-failed-line {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.mode-inbox .inbox-failed-cause {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+/* a Retry's read on its way: the loading words, as the list's own loading line says them, and the read's message
+   kept in its room, unseen, so Retry stays where it was pressed */
+.mode-inbox .inbox-failed-words.is-loading .inbox-failed-line {
+  color: var(--text-dim);
+}
+
+.mode-inbox .inbox-failed-words.is-loading .inbox-failed-cause {
+  visibility: hidden;
+}
+
+/* Retry and Retrying… in one cell, the one not said hidden: the button keeps one box whichever it says */
+.mode-inbox .inbox-retry-words {
+  display: inline-grid;
+}
+
+.mode-inbox .inbox-retry-words > span {
+  grid-area: 1 / 1;
+}
+
+.mode-inbox .inbox-retry-words > [aria-hidden="true"] {
+  visibility: hidden;
+}
+
+/* on its way (aria-disabled, so a press keeps the focus): dimmed by its colour, not faded, so its word stays
+   legible, as Settings' Retry on its way (SettingsDialog.css); no hover, and a finger's press does not dim it */
+.mode-inbox .btn.inbox-retry[aria-disabled="true"] {
+  opacity: 1;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .mode-inbox .btn.inbox-retry[aria-disabled="true"]:hover {
+    background: var(--bg-elevated);
+    border-color: var(--border);
+  }
+}
+
+/* what happened, and under it the next step where there is one: each a line of its own at every width, so neither
+   sentence runs into the other or ends on a word left alone. One too long for a narrow window breaks into even
+   lines, between words (Korean keeps each word whole, styles.css) */
+.mode-inbox .inbox-empty > span {
+  display: block;
+  text-wrap: balance;
+}
+
+/* ---------- from 769px: the column beside the thread ---------- */
+
+/* its rows fill as the sidebar's do (--side-hover, --side-selected: Sidebar.css, .sidebar) */
+.mode-inbox.is-wide {
+  --inbox-avatar: var(--avatar-size);
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-nav);
+}
+
+/* the column ends in its seam (the sidebar's own edge, a hairline): the end insets are counted from the column's
+   edge, so each takes the seam off */
+.mode-inbox.is-wide .inbox-top,
+.mode-inbox.is-wide .inbox-foot {
+  position: static;
+  flex: 0 0 auto;
+  padding-inline: var(--space-4) calc(var(--space-4) - var(--hairline));
+  pointer-events: auto;
+}
+
+.mode-inbox.is-wide .inbox-top {
+  justify-content: flex-end;
+  gap: var(--space-2-5);
+  height: var(--inbox-zone-h);
+}
+
+/* in the column the top row floats over nothing: the connection's words lead it as a plain line, on the column's
+   own surface */
+.mode-inbox.is-wide .inbox-top > .inbox-connection {
+  position: static;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  margin-inline-end: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.mode-inbox.is-wide .inbox-foot {
+  gap: var(--space-2);
+  padding-block: var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+}
+
+.mode-inbox .inbox-foot-start {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Back to Ovis: the sidebar foot's own action (Sidebar.css), as wide as its words, where the classic sidebar's
+   foot has the way in. The app's mark stands in its icon's place, on the column's inset: the fill under a pointer
+   reaches --space-2 past it. */
+.mode-inbox .inbox-exit {
+  flex: 0 1 auto;
+  gap: var(--space-2-5);
+  width: auto;
+  min-width: 0;
+  height: var(--inbox-control);
+  margin-inline-start: calc(-1 * var(--space-2));
+  padding: 0 var(--space-3) 0 var(--space-2);
+}
+
+.mode-inbox .inbox-exit-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: var(--mark-size);
+  height: var(--mark-size);
+}
+
+.mode-inbox .inbox-exit-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the column's controls rest on its surface: no shadow, and the smaller glyph of a pointer's control */
+.mode-inbox.is-wide .icon-button.inbox-round {
+  box-shadow: none;
+}
+
+.mode-inbox.is-wide .icon-button.inbox-round svg {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+
+.mode-inbox.is-wide .inbox-search-input {
+  --field-fs: var(--fs-sm);
+  padding-inline: var(--space-3) var(--inbox-control);
+  box-shadow: none;
+}
+
+.mode-inbox.is-wide .inbox-search-clear svg {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+
+/* the first row starts --space-4 under the top controls: the band's own --space-3 and this */
+.mode-inbox.is-wide .inbox-scroll {
+  position: static;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* no end padding: the rows' own width leaves the end inset (below), and a scrollbar stands in it */
+  padding: var(--space-1) 0 var(--space-3) var(--space-3);
+  scroll-padding-block: var(--space-1);
+}
+
+/* --space-3 in from each of the column's edges (the end one counted from the column's edge, seam included): the
+   column's width less its two insets, with or without a scrollbar in the end one */
+.mode-inbox.is-wide .inbox-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: calc(100cqi - var(--space-3) * 2 + var(--hairline));
+}
+
+.mode-inbox.is-wide .inbox-row {
+  gap: var(--space-2-5);
+  min-height: var(--row-h);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+}
+
+@media (hover: hover) {
+  .mode-inbox.is-wide .inbox-row:hover:not(:disabled) {
+    background: var(--side-hover);
+  }
+}
+
+/* A press is a step past hover that reads as one in both themes: the open row's own press, half way from the
+   selection's fill to the strong edge's colour. After the hover rule, which it must outweigh under a pointer that is
+   over the row it presses. Back to Ovis at the foot answers a press the same way. */
+.mode-inbox.is-wide .inbox-row:active:not(:disabled),
+.mode-inbox.is-wide .inbox-exit:active:not(:disabled) {
+  background: color-mix(in srgb, var(--side-selected), var(--border-strong));
+}
+
+.mode-inbox.is-wide .inbox-name {
+  font-size: var(--fs-md);
+}
+
+.mode-inbox.is-wide .inbox-words {
+  font-size: var(--fs-sm);
+}
+
+/* the mark at the row's end, on its middle: the row's gap and this keep the text --space-3 before it */
+.mode-inbox.is-wide .inbox-state.is-drawn {
+  margin-inline-start: var(--space-half);
+}
+
+/* the open thread's row: the sidebar's own selection, a tonal fill and a heavier name. Hover adds nothing to it; a
+   press, which shows its chat again where its terminal was shown, takes it half way to the strong edge's colour */
+.mode-inbox.is-wide .inbox-item.is-current .inbox-row,
+.mode-inbox.is-wide .inbox-item.is-current .inbox-row:hover {
+  background: var(--side-selected);
+}
+
+.mode-inbox.is-wide .inbox-item.is-current .inbox-row:active:not(:disabled) {
+  background: color-mix(in srgb, var(--side-selected), var(--border-strong));
+}
+
+.mode-inbox.is-wide .inbox-item.is-current .inbox-name {
+  font-weight: var(--fw-selected);
+}
+
+/* a finger gets its target at any width (the controls' own size is the shell's: InboxMode.css) */
+@media (pointer: coarse) {
+  .mode-inbox.is-wide .inbox-row {
+    min-height: max(var(--row-h), var(--touch-target));
+  }
+}
+
+/* a press fills a row, as an iPhone's list row; it does not dim (styles.css) */
+@media (hover: none) and (pointer: coarse) {
+  .mode-inbox .inbox-row:active:not(:disabled),
+  .icon-button.inbox-round:active:not(:disabled) {
+    opacity: 1;
+  }
+}

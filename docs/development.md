@@ -255,7 +255,8 @@ bun scripts/key-bar-customization-demo-regression.ts # mobile key layout, handle
 bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds (arrows and editing keys), swipes and sticky Ctrl on demo fixtures
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/settings-palette-search-demo-regression.ts # Settings found through the command palette: 46 searches in English, Korean, Japanese and Chinese open their page and group at 1440 and 390, and no earlier search steers a later opening
-bun scripts/settings-rows-demo-regression.ts # what Settings' pages hold: the dialog's own search, folded groups, merged rows and ↺, the account's PCs and sign-in, the welcome's sign-in, About and the Alerts chips; the OpenAI key's group on React's development build too
+bun scripts/settings-rows-demo-regression.ts # what Settings' pages hold: the dialog's own search, folded groups, merged rows and ↺, a row's sentence (a resting mouse, keyboard focus, Escape, a phone's tap, a watching device), the account's PCs and sign-in, the welcome's sign-in, About and the Alerts chips; the OpenAI key's group on React's development build too
+bun scripts/settings-segmented-demo-regression.ts # Settings' segmented controls by their boxes, on a phone at 390, 360 and 320px in English, Korean, Japanese and Chinese, at the largest and the compact text, with more contrast, and at 1440: what a chosen option draws stays inside its track, it holds its own label, and no label leaves its option or lies on its neighbour; a tap never changes how many rows a control takes, and no fact beside its label (Devices, Access) is squeezed narrower than its text
 bun scripts/agent-entry-points-demo-regression.ts # Add another agent… in New workspace and New worktree, Settings' agent list (installed, the tiles to install) and Open setup guide, and none of it on a watching device, at 1280 and 390
 bun scripts/terminal-served-font-regression.ts # a Terminal or Chat font only the PC has, served from the state folder's fonts/, at 1280 and 390, light and dark: the terminal is measured from it and attached once; no font named asks nothing
 bun scripts/interface-font-demo-regression.ts # Interface font at 390 and 1440: System and a typed list lead --font-ui, a reload keeps it, Default restores it; the message box takes the Chat font
@@ -331,18 +332,20 @@ bun scripts/composer-draft-demo-regression.ts # the draft in the message box: up
 bun scripts/plan-chip-demo-regression.ts      # the plan chip's step in progress: one row at 390 and 1440, cut when long, with tasks, the list's read states, offline and in a split, Korean too
 bun scripts/held-rows-demo-regression.ts      # held messages: the fold under an approval card, its button, a row's error
 bun scripts/chat-working-line-demo-regression.ts # the Working head: none before a working pane's first read, none under an answer drawn 300 ms or 1.5 s before the pane rests or read in with the last answer's start time or drawn while blocked, a finished turn not reopened when the agent begins another by itself, a turn kept at work until its answer is read after herdr rests, and an empty chat's greeting kept through a /clear's short working status
+bun scripts/sidebar-scrollbar-grip-demo-regression.ts # the sidebar's resize grip over a list's drawn scrollbar at 1440, light and dark: a drag on the scrollbar scrolls the list and resizes nothing, the strip beside it resizes, nothing moves
 bun scripts/sidebar-split-demo-regression.ts # PCs/Agents height split at 390 and 1280, both orders, light and dark: default, drag, per-order persistence, reset, keyboard and snap-folds (Agents only; the PCs stop at a row), list scrolling and containment, touch target and a short-window clamp; synthetic screenshots in UI_EVIDENCE_DIR
 bun scripts/sidebar-split-access-demo-regression.ts # divider review regressions: filter context and focus return, forced-colors focus, short folded phone windows, a drag or Home to the PCs' top never folding them, click-to-focus, live drag percentage, pointer ownership and cancellation, held-snap regrouping and two-line Agents minimums in both densities/orders; synthetic demo only
 bun scripts/sidebar-peek-demo-regression.ts # Settings → Show the sidebar on hover (#2588): off by default; on, the collapsed sidebar's toggle hover shows it over the pane at 1280 without moving the pane or the focus, the trip in keeps it, a row opens its pane, a field focused by keyboard and a row dragged in it hold it, an empty filter's Escape and leaving or Escape hide it, a click keeps it open; a phone's drawer unchanged at 390; light and dark screenshots in UI_EVIDENCE_DIR
-bun scripts/sidebar-heads-demo-regression.ts # no PCs head (also for a lone Host), and the Agents head counts and always shows its caret, open and folded, in both orders; a PC header's agent count traded for its actions on hover and keyboard focus, actions always under a finger, a press on the name folding it; folded PCs one row each; each list fading only at an edge with rows past it, none in forced colors; synthetic screenshots at 390 and 1280 in UI_EVIDENCE_DIR
+bun scripts/sidebar-heads-demo-regression.ts # no PCs head (also for a lone Host), and the Agents head counts and always shows its caret, open and folded, in both orders; a PC header's agent count traded for its actions on hover and keyboard focus, actions always under a finger, a press on the name folding it; a phone's drawer (360 and 390) starting a workspace from each PC's own +, the header's last control, on its rows' state column with the fold on their ⋯, none in its top row, and a + that is off at 3:1 or more in every theme entry, under a finger and on a hybrid device; folded PCs one row each; each list fading only at an edge with rows past it, none in forced colors; synthetic screenshots at 390 and 1280 in UI_EVIDENCE_DIR
 bun scripts/sidebar-activity-demo-regression.ts # Agents order Activity and pins: blocked pinned, recency, Pin agent / Unpin agent and Pin workspace / Unpin workspace from a right-click and the context-menu key, the ⋯ on a phone, and a finish opened here drawn as ready until the next one
-bun scripts/phone-inbox-demo-regression.ts # Settings → Agent inbox on a phone at 390 in light and dark: the list as the first screen, INPUT/RUN/DONE rows and filters, search, a thread and Back to agents keeping the filter and scroll, the system Back and Forward, the drawer, New workspace, reloads, a cold link, a watching device, the setting off, 1280 unchanged, the Settings row, the drawer's focus return; screenshots in UI_EVIDENCE_DIR
+bun scripts/inbox-mode-demo-regression.ts # the agent inbox as a mode of the app, in light and dark. At 390: More's Open agent inbox and the drawer's foot row, the list (no title, the round controls, 80px rows, each state's mark, the filter's sheet, search), a thread with its prompt card and the terminal behind the monitor button, Back keeping the filter and scroll, Back to Ovis, the system Back and Forward, reloads, cold addresses, New workspace, a watching device, Settings → Start in the agent inbox on a phone, the keys the shell withholds, Keep screen on, finishes under the list, two PCs. At 1440 and 1920: the list beside the thread at the sidebar's width with the pane and the terminal as wide as in the classic app, the chip and the round controls on one line, each side's More, a narrowed window. Then once each: no size sent to a pane's pty by entering the mode or leaving it from the list (a phone, a wide window, one with the classic sidebar collapsed), the two sizes a thread's terminal asks for with the classic sidebar collapsed, a phone that left the mode stays out of it over a reload, the focus after Back to Ovis, the palette from More, the first paint of a cold load, the pressed fills, the rows under a scrollbar that takes room, which waits a row times, the list's word while the connection is lost, entering with a file open, the system Back with More open, an address whose pane is gone; screenshots in UI_EVIDENCE_DIR
 bun scripts/hide-pc-demo-regression.ts       # Remote PCs → Show in sidebar at 390 and 1440 on two demo PCs: a hidden PC leaves the sidebar, Agents and palette, the selection moves, the last PC stays, a reload keeps it, its link still opens, Settings shows it again; on three PCs at 390 and 1280, light and dark, no PCs head or hidden count, the list starting the section, and Settings listing the hidden ones off, showing one again and keeping the last PC shown on
 bun scripts/pc-load-demo-regression.ts       # Devices and PCs → PC load in the status bar on three demo PCs at 390 and 1280: on by default, the selected PC's load in a desktop's status bar, none in the sidebar or a phone's drawer, none for a herdr-core machine, no ask while off, the choice in its own key; screenshots in UI_EVIDENCE_DIR
 bun scripts/sidebar-filter-demo-regression.ts # the roster's label filter on two demo PCs: fuzzy matches with their ancestors, the selection kept as context, pins and folds untouched, a live and an offline roster, the drawer and a reload clearing it; screenshots at 390 and 1440 in UI_EVIDENCE_DIR
 bun scripts/sidebar-branch-line-demo-regression.ts # herdr's branch line: a repository and an unmarked git folder say their branch under the name, worktrees and folders outside git stay one line, desktop and phone, dark and light
 bun scripts/agent-lock-demo-regression.ts # Lock agent on a pinned Agents row (#2432): only a pinned row locks, a locked one keeps its pin, draws a lock and its tab offers no Close tab; Unlock brings Unpin back; 390 and 1280, light and dark
 bun scripts/agent-groups-demo-regression.ts # Named agent groups (#2431): a row's menu moves it into a group, drawn under its own heading with its count, which folds it; New workspace offers the groups; 390 and 1280, light and dark
+bun scripts/agent-state-groups-demo-regression.ts # Group agents by state (#3505): a heading folds its group by click, Enter and Space, keeps its count and stays folded across a reload, the filter opens every group, a watching device folds its own; a row says how long its agent has been in its state, from a kept stamp that carries herdr's counter (one without says none) and from a change in sight, and a read finish keeps it; on Two lines a row with a time is drawn as a row without one; 390 and 1280, light and dark
 bun scripts/sidebar-tokens-demo-regression.ts # herdr plugin tokens on agent rows: a dim line of their own on One line and Two lines, cut with the whole text in the tooltip and a phone's sheet, as text, following herdr's `$name` rows, and changing live
 bun scripts/sidebar-context-ring-demo-regression.ts # Settings → Context left on agent rows (#1305): off by default; on, the composer's context ring, words and 20% threshold on the rows whose window is known, the row's height kept, following the roster; 390 and 1280, light and dark
 bun scripts/sidebar-background-workspaces-demo-regression.ts # Settings → Background workspaces apart (#770): off keeps herdr's order; on, workspaces tagged role=background stand after the others under a folded heading with their count, a tagged worktree stays with its repository, the open one and a question stay in sight, the fold kept per PC; 390 and 1280, light and dark
@@ -889,26 +892,42 @@ A release without them gets them from **Actions → Attach the Rust PTY host** w
 
 It also builds the server as one compiled binary per platform (`server-binary`, on the same runners as the
 rest of the release, `bun scripts/build-server.ts release`): `ovis-server-linux-x64`, `-linux-arm64`,
-`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, with `ovis-server.json` (the version, the git trees of
-`server/` and `shared/`, each file's SHA-256), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
+`-darwin-arm64`, `-darwin-x64` and `-windows-x64.exe`, and the built client the installers unpack beside the binary,
+`ovis-dist.tar.gz` (from `bun run build`), with `ovis-server.json` (the version, the git trees of `server/` and
+`shared/`, each file's SHA-256 and size, and those of the three Rust PTY host binaries, which `server-binary` waits
+for and copies in: the binary installers run no host but the one named there), `ovis-server.SHA256SUMS` and `ovis-server.json.sig`, an Ed25519
 signature over the manifest's exact bytes. `server-binary-sign` signs on GitHub's runner: beside the key run only Bun,
 installed by the SHA-pinned `oven-sh/setup-bun`, and `scripts/server-manifest.ts`, which uses Node's built-ins; none
-of the repository's dependencies is installed there. It then verifies the folder for the version being released.
-`server-binary-attest` attests the files, and `publish` verifies them again for that version and attaches each by
-name, refusing a folder that holds anything else. The signature vouches for whatever `server-binary` built.
+of the repository's dependencies is installed there. `sign` refuses a key whose public half is not `RELEASE_PUBLIC_KEY`,
+committed in `scripts/server-manifest.ts`; the job then verifies the folder for the version being released against
+that committed key. `server-binary-attest` attests the files, and `publish` verifies them again for that version
+against the committed key, never one a job reports, and attaches each by name, refusing a folder that holds anything
+else; the PTY hosts it attaches must be byte for byte the ones the manifest signed. A different key put into the secret fails the release at `sign`. The signature vouches for whatever `server-binary` built.
 
-`bun scripts/build-server.ts verify <dir> --public-key <base64> --expect-version <X.Y.Z>` checks a downloaded set, and
-stops at the first part that fails, with one line naming it (exit 1):
-- the folder holds exactly the five binaries, the manifest, its signature and the sums file;
+`bun scripts/build-server.ts verify <dir> --expect-version <X.Y.Z>` checks a downloaded set against the committed key
+(`--public-key <base64>` names another, for a test's own release), and stops at the first part that fails, with one
+line naming it (exit 1):
+- the folder holds exactly the five binaries, the client archive, the manifest, its signature and the sums file;
 - the signature over the manifest's bytes (both the signature and the key in standard base64, nothing around them);
-- the manifest in its canonical form: exactly its fields and the five platforms, no duplicate key;
+- the manifest in its canonical form: exactly its fields, the five platforms and the client archive, no duplicate key;
 - the version, when `--expect-version` is given;
-- each binary's SHA-256 (a mismatch names its platform), and the sums file, which is required and must list exactly the
-  manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
+- each file's SHA-256 and size (a mismatch names its platform, or the client), and the sums file, which is required and
+  must list exactly the manifest's sums. The sums file adds no trust of its own: it is checked against the signed manifest.
 
 A signature alone does not stop a downgrade: an older release signed by the same key verifies too. Every consumer (the
 installers, the updater, a fleet machine: todos 6, 7, 28 and 59 of the relay-fleet plan) passes the version it asked
-for, as the release job does. Remote PC bundles and the desktop app carry the same binary with what runs beside it
+for, as the release job does. The installers do it now: `install.sh` and `install.ps1` pin the committed key on one
+line each (`RELEASE_PUBLIC_KEY=` and `$releasePublicKey =`, held equal to `scripts/server-manifest.ts` by its test),
+and `scripts/plugin-launch.ts` takes it from that file. Each checks the manifest's signature first, then its schema
+(`"schema": 1`, the first field, so a reader can tell a later shape from this one) and version, then each file's
+size and SHA-256, and only then moves the release into place, in one rename (two on Windows, where a run cut off
+between them is put back by the next), holding an install lock (`.install.lock`, made by an atomic mkdir with the
+holder's pid; a waiter breaks it once the holder's pid no longer runs, one breaker at a time, so two installs at once
+take turns; with three or more started at the same instant a narrow race remains, a follow-up). When to build
+from source instead is [one rule](../INSTALL.md#binary-or-source). Their tests run a copy whose key line names a key made for
+the test, or pass that key as `installServer`'s option, which the launcher never does: the shipped scripts read no
+key from anywhere else. `OVIS_RELEASES_URL` (https://, or a `file://` folder laid out as GitHub's
+`<url>/v<version>/<file>`) points them at another place, checked against the same key. Remote PC bundles and the desktop app carry the same binary with what runs beside it
 (`scripts/server-artifact.ts`), and no server sources. The builds are reproducible with the same Bun: CI pins Bun 1.4.2,
 so CI's hashes differ from ones built with another Bun.
 
@@ -921,15 +940,20 @@ environment) never holds it. Without the environment or its secret, `server-bina
 the secret, and `publish`, which needs it, does not run: no tag and no release are made, and nothing is published
 unsigned. In a fork the job is skipped, and so is `publish`.
 
-The owner sets it up once, before the first release that signs, on a Linux or macOS PC they trust (`keygen` refuses
-to run on Windows, where a file mode does not keep the key to its owner):
+The committed key (`RELEASE_PUBLIC_KEY`, `C8+dOD0g…`) is the public half of the key the owner already made: the
+secret holds its private half, and nothing below runs again for it. Only a new key pair (a lost or replaced key) runs
+these steps, on a Linux or macOS PC the owner trusts (`keygen` refuses to run on Windows, where a file mode does not
+keep the key to its owner), and then also commits the printed public key in `scripts/server-manifest.ts`
+(`RELEASE_PUBLIC_KEY`), `install.sh` (`RELEASE_PUBLIC_KEY=`) and `install.ps1` (`$releasePublicKey =`), before a
+release: `sign` refuses any other key, and installs that took the old key need a release under it to move on:
 1. `bun scripts/build-server.ts keygen <folder>` writes `<folder>/ovis-server-signing-key.pem` (readable by them
    alone) and prints only the public key.
 2. Create the environment `release-signing` with deployment branches limited to `main` (Settings → Environments →
    New environment; Deployment branches and tags: Selected branches and tags, add `main`).
 3. `gh secret set OVIS_SERVER_SIGNING_KEY --env release-signing --repo devswha/ovis < <folder>/ovis-server-signing-key.pem`
    (the key is read from the file, never typed on a command line).
-4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. Once a
+4. Keep an offline copy, delete the file, and keep the public key: installs and updates check against it. It is
+   `RELEASE_PUBLIC_KEY` in `scripts/server-manifest.ts` and the key line of `install.sh` and `install.ps1`. Once a
    release pins it in the binary, replacing the key strands the installs that took it, so losing the private key means
    no further verified update reaches them.
 
@@ -1354,7 +1378,7 @@ together: `ci.yml` runs each of them through `bun run check` with `CHECK_MAX_RUN
 itself takes ports of the host's loopback and does not count against them. Its image ships Bun,
 Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, the
 checksum-pinned GitHub CLI (`gh`) for deployment and release publishing, curl, jq, unzip,
-xz-utils and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
+xz-utils, OpenSSH (client and server), iproute2 (`ss`) and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
 fails on a stale image instead of downloading replacements. Rebuild the image after changing
 its pins; its Bun pin must match `.github/actions/setup-ci/action.yml`, and its Playwright pin
 must match `bun.lock`.

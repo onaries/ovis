@@ -51,7 +51,9 @@ Windows では PowerShell で：
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**スマートフォンで：** コンピューターで **設定 → デバイスと PC → 接続を追加 → Ovis リレー** を開いてスイッチをオンにし、**QR コードを表示する** を押して、表示された QR コードをスマートフォンで読み取ります。コンピューターが Ovis アカウントに入っている場合は、QR コードの代わりにスマートフォンでのサインインを求められます。[iPhone・Android アプリ](https://ovis.sh/ja/beta/)はベータ版です。[スマートフォンの設定 →](docs/guide.md#on-your-phone)
+**スマートフォンで：** コンピューターで **設定 → デバイスと PC → 接続を追加 → Ovis リレー** を開いてスイッチをオンにし、**QR コードを表示する** を押して、表示された QR コードをスマートフォンで読み取ります。コンピューターが Ovis アカウントに入っている場合は、QR コードの代わりにスマートフォンでのサインインを求められます。Android 版は [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app) で配信中です。[iPhone 版](https://ovis.sh/ja/beta/#iphone)は TestFlight のベータ版です。[スマートフォンの設定 →](docs/guide.md#on-your-phone)
+
+<a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-ja.svg" alt="Google Play で手に入れよう" height="48"></a>
 
 ## 機能
 

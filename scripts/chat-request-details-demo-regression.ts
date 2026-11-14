@@ -76,6 +76,8 @@ async function check(browser: Browser, origin: string, width: number, theme: "li
     // the demo's other agents finish turns now and then: their in-app alerts stay off over the transcript
     await context.addInitScript(([settings, pane, stored]) => {
       localStorage.setItem("ovis:settings", settings!);
+      // a phone's More folds the pane's Find items where its tabs are in the header (Settings -> Tabs on a phone)
+      localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
       localStorage.setItem(`ovis:view:${pane}`, "chat");
       if (stored === "true") localStorage.setItem("ovis:chat-request-details", "false");
     }, [JSON.stringify({ language: "en", alertsOn: false, theme }), PANE, String(storedOff)]);

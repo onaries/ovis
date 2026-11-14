@@ -86,7 +86,7 @@ const screenOf = (page: Page, paneId: string) => page.locator(`[data-layout-pane
 async function choose(page: Page, first: string, item: Case, sent: Sent[]): Promise<void> {
   if (item.way === "sheet") {
     // the title's list stands in for the row on a narrow window
-    if (item.touch) await page.locator(".app-header .context-tabs").tap(); else await page.locator(".app-header .context-tabs").click();
+    if (item.touch) await page.locator(".app-header .header-tabs-sheet").tap(); else await page.locator(".app-header .header-tabs-sheet").click();
     sent.length = 0;
     const entry = page.locator(".row-sheet-item", { hasText: "New terminal" });
     if (item.touch) await entry.tap(); else await entry.click();
@@ -113,7 +113,7 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
   const first = created.root_pane.pane_id;
   const context = await browser.newContext({ viewport: item.viewport, hasTouch: item.touch === true, isMobile: item.touch === true, locale: "en-US" });
   // the away case clicks the sidebar's Filter field, which is off until chosen (Settings → Sidebar filter)
-  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); });
+  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);

@@ -221,12 +221,29 @@ button.machine-title:focus-visible { outline-offset: calc(var(--ring-offset) * -
   }
 }
 
-/* in one-line rows the phone drawer's header has the + for a new workspace: a PC's own + there would only widen
-   its line. The fold then keeps the column a workspace row's ... stands in, the status cell's width short of the
-   edge. Two-line rows draw no header +, so each PC keeps its own */
+/* A phone's drawer draws no + in its top row: each PC's header keeps its own, which says which PC the workspace
+   is made on, a folded PC's too. In one-line rows the header ends on its rows' own trailing columns (Sidebar.css):
+   the +, a finger's size, is centred on their state's cell (--space-6 wide, so it reaches into the gutter), and
+   the fold's caret on their ⋯, its extra width at its start. The two boxes meet and never share a tap, and the
+   name keeps the room it had while the + was out */
+@media (max-width: 768px) and (pointer: coarse) {
+  .machine-group:not(.is-two-line) .machine-new { margin-right: calc((var(--space-6) - var(--touch-target)) / 2); }
+  .machine-group:not(.is-two-line) .machine-toggle { padding-inline-start: calc(var(--touch-target) - var(--space-6)); }
+}
+
+/* a + that is off (its PC away, a device that only watches) rests in view there wherever a finger may come, beside a
+   mouse too (SidebarSections.css hides a PC's actions at rest only where none can): it keeps more ink than the 0.55
+   of a row action (Sidebar.css), the least round step that holds its glyph at 3:1 on the drawer's surface in every
+   shipped theme */
+@media (max-width: 768px) and (any-pointer: coarse) {
+  .machine-header > .machine-new:disabled { opacity: 0.75; }
+}
+
+/* the lone Host's row there is off the same way for a device that only watches: its + as dim, no pointer's hand,
+   and its words in their own ink, as a menu's item that is off keeps them */
 @media (max-width: 768px) {
-  .machine-group:not(.is-two-line) .machine-new { display: none; }
-  .machine-group:not(.is-two-line) .machine-toggle { margin-right: var(--side-box); }
+  .machine-new-row:disabled { cursor: default; }
+  .machine-new-row:disabled > .sidebar-mark { opacity: 0.75; }
 }
 
 .machine-state {
@@ -599,14 +616,6 @@ p.machine-own-address {
   overflow-wrap: anywhere;
   color: var(--text-strong);
   font-family: var(--font-mono);
-}
-
-/* the compact sidebar's New workspace, its + alone: held at the foot of the list while it scrolls, so it is always in reach */
-.machine-new-row.is-compact {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  background: var(--bg-nav);
 }
 
 /* one line (the default): a PC's header is a quiet label over its workspaces, as herdr-app draws it, so the names

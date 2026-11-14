@@ -191,6 +191,15 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       const shown = () => results.evaluate((region) => [...region.querySelectorAll<HTMLElement>(".settings-search-page")].filter((section) => section.checkVisibility())
         .map((section) => [section.getAttribute("aria-label"), [...section.querySelectorAll<HTMLElement>("[data-setting]")].filter((row) => row.checkVisibility()).map((row) => row.querySelector(".settings-label")?.textContent ?? "")] as const));
 
+      // a setting that is kept in every search with its group (Test notification) is found by its own name and by
+      // the words of its sentence, like any other
+      for (const words of ["test notification", "push alerts arrive"]) {
+        await search.fill(words);
+        const alerts = await shown();
+        assert.deepEqual(alerts.map(([name]) => name), ["Alerts"], `${width}px: "${words}" finds a setting on Alerts`);
+        assert.ok(alerts[0]?.[1].includes("Test notification"), `${width}px: "${words}" finds Test notification`);
+      }
+
       await search.fill("Font SIZE");
       const found = await shown();
       // every font row is on Appearance: the terminal's and the chat's are found by their sizes' words
@@ -252,12 +261,30 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       await search.fill("speech recognition api");
       await results.locator('input[aria-label="API key"]').waitFor();
 
-      // Escape empties a search from a result too, not only from the field
+      // Escape empties a search from a result too, not only from the field. After a click the pointer came last, so
+      // the focus put on the result is not the keyboard's: no sentence shows there (#3275) and the Escape is the search's
+      await search.click();
       await search.fill("sound");
-      await results.getByRole("switch", { name: "Play sounds", exact: true }).focus();
+      const playSounds = results.getByRole("switch", { name: "Play sounds", exact: true });
+      await playSounds.focus();
+      assert.equal(await page.locator(".settings-help").count(), 0, `${width}px: a focus the keyboard did not move shows no sentence`);
       await page.keyboard.press("Escape");
       assert.equal(await search.inputValue(), "", `${width}px: Escape on a result empties the search`);
       assert.equal(await search.evaluate((field) => field === document.activeElement), true, `${width}px: the field takes the focus back`);
+      // reached by Tab, the result shows its row's sentence, which closes first and leaves the search and the focus
+      await search.fill("sound");
+      await playSounds.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      assert.equal(await playSounds.evaluate((control) => control === document.activeElement), true, `${width}px: Tab is back on the result`);
+      await page.locator(".settings-help").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator(".settings-help").waitFor({ state: "detached" });
+      assert.equal(await search.inputValue(), "sound", `${width}px: Escape on a result closes its sentence first and keeps the search`);
+      assert.equal(await playSounds.evaluate((control) => control === document.activeElement), true, `${width}px: and leaves the focus on the result`);
+      await page.keyboard.press("Escape");
+      assert.equal(await search.inputValue(), "", `${width}px: the next Escape empties the search`);
+      assert.equal(await search.evaluate((field) => field === document.activeElement), true, `${width}px: and gives the field the focus`);
 
       // a row a found row opens is found with it: Custom from a description match shows its field
       await search.fill("menus dialogs");
@@ -871,6 +898,347 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
   console.log("PASS Appearance: ↺ shows only off the default and puts back its row's keys; theme cards pick by arrow and follow the Theme mode");
 }
 
+/**
+ * A row's sentence on a page without sentences (#3275). A mouse resting on the row shows it over the page, above
+ * the row and off the row's own control and the row below, and the pointer on it keeps it. The keyboard on the
+ * row's control shows the same sentence, which is also what describes that control. Escape closes the sentence
+ * and leaves Settings open; in a text field the first text typed closes it, and Escape still takes a typed size
+ * back. A finger opens it in the row, under the name and the control, and closes it again; the control keeps its
+ * own tap. A watching device reads the same sentence.
+ */
+async function rowSentences(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  type Page = import("playwright-core").Page;
+  interface Box { left: number; top: number; right: number; bottom: number }
+  const over = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  /** two frames on: what a pointer move changed is drawn by then */
+  const drawn = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  const rowOf = (page: Page, name: string) => page.locator(".settings-body:not([hidden]) .settings-row").filter({ has: page.getByText(name, { exact: true }) }).first();
+  /** the sentence that describes a control, wherever it is drawn */
+  const describes = (control: import("playwright-core").Locator) => control.evaluate((node) => document.getElementById(node.getAttribute("aria-describedby") ?? "")?.textContent ?? null);
+  const appearance = async (page: Page, query = ""): Promise<void> => {
+    await page.goto(`${url}?settings=appearance${query}`);
+    await page.locator(".conn-live").waitFor({ state: "attached" });
+    await page.locator(".theme-cards").waitFor();
+  };
+
+  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
+  try {
+    await desktop.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify(SETTINGS));
+    const page = await desktop.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await appearance(page);
+    const sentence = page.locator(".settings-help");
+    const density = rowOf(page, "Density");
+    const control = page.getByRole("group", { name: "Density", exact: true });
+    const text = await describes(control);
+    assert.ok(text !== null && text.trim() !== "", "Density's control is described by its row's sentence");
+    assert.equal(await sentence.count(), 0, "no sentence over the page until something asks for one");
+
+    // a mouse resting on the row
+    await density.locator(".settings-label").hover();
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "the sentence over the page is the one that describes the control");
+    const boxes = await density.evaluate((row) => {
+      const box = (node: Element) => { const rect = node.getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }; };
+      const below = row.closest(".settings-section")?.nextElementSibling?.querySelector(".settings-row") ?? row.nextElementSibling;
+      return { sentence: box(document.querySelector(".settings-help")!), row: box(row), control: box(row.querySelector(".settings-segmented")!), below: below ? box(below) : null };
+    });
+    assert.ok(boxes.sentence.top < boxes.row.top, "the sentence is above its row");
+    assert.equal(over(boxes.sentence, boxes.control), false, "off the row's own control");
+    assert.ok(boxes.below !== null && !over(boxes.sentence, boxes.below), "and off the row below");
+    // the pointer on the sentence keeps it, on the part that lies on no other row's control (its start, over the names)
+    await page.mouse.move(boxes.sentence.left + 10, (boxes.sentence.top + boxes.sentence.bottom) / 2, { steps: 4 });
+    await drawn(page);
+    assert.equal(await sentence.count(), 1, "the pointer on the sentence keeps it");
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence, not Settings");
+    await page.mouse.move(2, 2);
+
+    // where no room is left beside the control of the row above, the sentence lies on that control's near end.
+    // There the pointer is the control's: the sentence is cut out over that control, so a press reaches the
+    // control, and the mouse that moves onto it has left the row, which closes a hover's sentence. Beside the
+    // control the sentence is whole and keeps the pointer. The first row of the page whose sentence lies on
+    // another row's control, with some of itself above or below that control, shows it.
+    // Density is asked first, and again: Escape closed its sentence with the pointer on the sentence, which sends
+    // the row no leave, and a row hovered again still shows its sentence
+    const withSentence = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
+      .filter((row) => row.checkVisibility() && row.querySelector(":scope > .settings-row-text > .visually-hidden[id]") !== null)
+      .map((row) => row.querySelector(".settings-label")?.textContent ?? ""));
+    let covered: { row: string; x: number; y: number; beside: number } | null = null;
+    for (const name of ["Density", ...withSentence.filter((other) => other !== "Density")]) {
+      await rowOf(page, name).locator(".settings-label").first().hover();
+      await sentence.waitFor();
+      covered = await page.evaluate((name) => {
+        const tip = document.querySelector(".settings-help")!.getBoundingClientRect();
+        const rows = [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")];
+        for (const row of rows.filter((other) => other.querySelector(".settings-label")?.textContent !== name)) {
+          for (const control of [...row.children].filter((child) => !child.classList.contains("settings-row-text"))) {
+            const box = control.getBoundingClientRect();
+            const [left, right, top, bottom] = [Math.max(box.left, tip.left), Math.min(box.right, tip.right), Math.max(box.top, tip.top), Math.min(box.bottom, tip.bottom)];
+            // `beside`: a height where the sentence is over that control's columns but above or below the control
+            const beside = box.top - tip.top > 6 ? (tip.top + box.top) / 2 : tip.bottom - box.bottom > 6 ? (box.bottom + tip.bottom) / 2 : null;
+            if (box.height > 0 && right - left > 4 && bottom - top > 4 && beside !== null) return { row: row.querySelector(".settings-label")?.textContent ?? "", x: (left + right) / 2, y: (top + bottom) / 2, beside };
+          }
+        }
+        return null;
+      }, name);
+      if (covered !== null) break;
+      await page.mouse.move(2, 2);
+      await sentence.waitFor({ state: "detached" });
+    }
+    assert.ok(covered !== null, "some row's sentence lies on the control of another row at this width");
+    const lying = await sentence.textContent();
+    await page.mouse.move(covered.x, covered.beside, { steps: 4 });
+    await drawn(page);
+    assert.equal(await sentence.textContent(), lying, "above or below the control it lies on, the sentence keeps the pointer");
+    assert.equal(await page.evaluate(({ x, beside }) => document.elementFromPoint(x, beside)?.closest(".settings-help") != null, covered), true, "and is what a press there lands on, so its words can be selected");
+    await page.mouse.move(covered.x, covered.y, { steps: 4 });
+    // that sentence goes; the row the pointer is on now may show its own, which lies on none of its own control
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent !== was, lying);
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const under = document.elementFromPoint(x, y);
+      return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    }, covered), covered.row, "a press on the part that lay on another row's control reaches that control");
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+    // the keyboard's sentence stays while it lies there, and a press that comes with no move before it (a finger
+    // on a touch screen with a keyboard) still lands on the control, not on the sentence
+    const lyingRow = (await page.evaluate((was) => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
+      .find((row) => row.querySelector(":scope > .settings-row-text > .visually-hidden[id]")?.textContent === was)?.querySelector(".settings-label")?.textContent ?? null, lying))!;
+    await rowOf(page, lyingRow).locator("button, input, select").first().focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const under = document.elementFromPoint(x, y);
+      return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    }, covered), covered.row, "under the keyboard's sentence too, a press on the covered part lands on the control");
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    // a sentence taller than its room (a short window, a high zoom) scrolls under the wheel and stays, and the copy
+    // drawn under it where it lies on a control follows. No window is short enough to cut the room of a row that
+    // is still in view, so a style cuts it here, by less than the sentence lies on the control
+    const lyingName = rowOf(page, lyingRow).locator(".settings-label").first();
+    await lyingName.hover();
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    const natural = await sentence.evaluate((tip: HTMLElement) => tip.offsetHeight);
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+    const cut = await page.addStyleTag({ content: `.settings-help { max-height: ${natural - 14}px !important; }` });
+    await lyingName.hover();
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    await page.locator(".settings-help-copy").waitFor();
+    const tall = await sentence.evaluate((tip: HTMLElement, { x, beside }) => {
+      const box = tip.getBoundingClientRect();
+      const on = ([[box.left + 10, (box.top + box.bottom) / 2], [x, beside]] as const).find(([px, py]) => document.elementFromPoint(px, py)?.closest(".settings-help") === tip);
+      return { on: on ?? null, scrolls: tip.scrollHeight > tip.clientHeight };
+    }, covered);
+    assert.ok(tall.scrolls, "a sentence with less room than its words need scrolls");
+    assert.ok(tall.on !== null, "and has a part that lies on no control, where the pointer is its own");
+    await page.mouse.move(tall.on[0], tall.on[1], { steps: 4 });
+    await page.mouse.wheel(0, 40);
+    await page.waitForFunction(() => {
+      const tip = document.querySelector(".settings-help");
+      const copy = document.querySelector(".settings-help-copy");
+      return tip !== null && copy !== null && tip.scrollTop > 0 && copy.scrollTop === tip.scrollTop;
+    });
+    assert.equal(await sentence.textContent(), lying, "the wheel over it scrolls it and keeps it, and the copy under it follows");
+    await cut.evaluate((node) => node.remove());
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+
+    // a search hides a row while its sentence shows: the row is removed under a still pointer, which sends no
+    // leave, and the sentence does not come back with the row once the pointer is elsewhere
+    const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
+    await search.fill("densit");
+    await control.waitFor();
+    await page.locator(".settings-row").filter({ has: page.getByText("Density", { exact: true }) }).first().locator(".settings-label").hover();
+    await sentence.waitFor();
+    await search.focus();
+    await page.keyboard.press("End");
+    await page.keyboard.type("zzzz");
+    await page.getByRole("status").filter({ hasText: "No settings match." }).waitFor();
+    await page.mouse.move(2, 2);
+    for (let erased = 0; erased < 4; erased += 1) await page.keyboard.press("Backspace");
+    await control.waitFor();
+    // one more change of the search draws the rows again, which is when a sentence left marked as showing came back
+    await page.keyboard.press("Backspace");
+    await control.waitFor();
+    await drawn(page);
+    assert.equal(await sentence.count(), 0, "a row the search hid comes back without its sentence");
+    await appearance(page);
+
+    // the keyboard on the row's control, then on the next row's
+    await control.getByRole("button", { name: "Comfortable", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "the keyboard on the control shows the same sentence");
+    // past the row's second choice, onto the first thing of the row after it, whichever row that is: its own
+    // sentence takes the first one's place
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const focusedRow = () => page.evaluate(() => document.activeElement?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    const next = await page.evaluate(() => {
+      const row = document.activeElement?.closest(".settings-row");
+      return { name: row?.querySelector(".settings-label")?.textContent ?? null, text: row?.querySelector(":scope > .settings-row-text > .visually-hidden[id]")?.textContent ?? null };
+    });
+    assert.ok(next.name !== null && next.name !== "Density", "Tab left Density for the row after it");
+    assert.ok(next.text !== null && next.text !== text, "the row after Density has a sentence of its own");
+    await page.waitForFunction((want) => document.querySelector(".settings-help")?.textContent === want, next.text);
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence, not Settings");
+    assert.equal(await focusedRow(), next.name, "and left the focus where it was");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    // a press on the control is a choice, not a question: the keyboard's press closes the sentence, and the next
+    // Escape is Settings' again
+    await appearance(page);
+    await control.getByRole("button", { name: "Comfortable", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    await page.keyboard.press("Space");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await focusedRow(), "Density", "the focus stays on the choice that was pressed");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    // a text field: what is typed closes the sentence, and Escape is still the field's
+    await appearance(page);
+    const size = page.getByRole("textbox", { name: "Terminal font size", exact: true });
+    await size.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    await size.fill(String(DEFAULT_SETTINGS.terminalFontSize + 2));
+    await sentence.waitFor({ state: "detached" });
+    await page.keyboard.press("Escape");
+    assert.equal(await size.inputValue(), String(DEFAULT_SETTINGS.terminalFontSize), "Escape still takes a typed size back");
+    assert.equal(await page.locator(".settings-dialog").count(), 1);
+    // a click that puts the focus in a field is a pointer's, not the keyboard's: no sentence shows for it
+    await appearance(page);
+    await size.click();
+    assert.equal(await size.evaluate((field) => field === document.activeElement), true);
+    assert.equal(await sentence.count(), 0, "a click into a field shows no sentence");
+
+    // a pen that cannot hover has only its tap: on the name it opens the sentence in the row, as a finger's does.
+    // The events such a pen sends, dispatched: the browser's own pen input gives a page no click here
+    await appearance(page);
+    await density.locator(".settings-label").evaluate((name) => {
+      const pen = { bubbles: true, cancelable: true, pointerType: "pen", pointerId: 7, isPrimary: true };
+      for (const type of ["pointerover", "pointerdown", "pointerup", "click", "pointerout"]) name.dispatchEvent(new PointerEvent(type, pen));
+    });
+    await density.locator(":scope > .settings-row-sentence").waitFor();
+    assert.equal(await sentence.count(), 0, "a pen's tap draws nothing over the page");
+
+    // a dialog moves the keyboard's focus without scrolling (lib/useFocusTrap.ts), so the focus can be on a setting the
+    // page is not scrolled to: its sentence waits, drawn nowhere, and shows once the row is in the page's view
+    await appearance(page);
+    await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLDetailsElement>(".settings-body:not([hidden]) details")) fold.open = true; });
+    const far = page.getByRole("group", { name: "Status indicators", exact: true }).getByRole("button", { name: "Classic", exact: true });
+    const farText = await describes(page.getByRole("group", { name: "Status indicators", exact: true }));
+    assert.ok(farText !== null && farText.trim() !== "");
+    const outOfView = () => far.evaluate((control) => { const page = control.closest(".modal-body")!.getBoundingClientRect(); const row = control.closest(".settings-row")!.getBoundingClientRect(); return row.bottom <= page.top || row.top >= page.bottom; });
+    const drawnSentence = () => page.evaluate(() => { const tip = document.querySelector<HTMLElement>(".settings-help"); return tip === null ? null : tip.style.visibility === "hidden" ? "waiting" : tip.textContent; });
+    // Tab from the stop before it, as the dialog moves the focus: without scrolling
+    await page.getByRole("group", { name: "Agent logos", exact: true }).getByRole("button", { name: "Mono", exact: true }).evaluate((control: HTMLElement) => control.focus({ preventScroll: true }));
+    await page.keyboard.press("Tab");
+    assert.equal(await far.evaluate((control) => control === document.activeElement), true, "Tab reached Status indicators");
+    assert.equal(await outOfView(), true, "the focused setting is below what the page shows");
+    assert.equal(await drawnSentence(), "waiting", "no sentence is drawn for a setting the page is not scrolled to");
+    await far.evaluate((control) => control.scrollIntoView({ block: "nearest" }));
+    await page.waitForFunction((want) => { const tip = document.querySelector<HTMLElement>(".settings-help"); return tip !== null && tip.style.visibility !== "hidden" && tip.textContent === want; }, farText);
+    // scrolled away again it is drawn nowhere, and Escape is then Settings' own
+    await far.evaluate((control) => { control.closest(".modal-body")!.scrollTop = 0; });
+    await page.waitForFunction(() => (document.querySelector<HTMLElement>(".settings-help")?.style.visibility ?? "") === "hidden");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    // a button and a field a page draws in its row are described by the row's sentence too
+    await page.goto(`${url}?settings=terminal`);
+    await page.locator(".settings-dialog").waitFor();
+    /** a row's own sentence, not a hidden line one of its controls keeps (a size field's range) */
+    const sentenceOf = (name: string) => rowOf(page, name).locator(":scope > .settings-row-text > .visually-hidden[id]").textContent();
+    const keyBarText = await sentenceOf("Key bar");
+    assert.ok(keyBarText !== null && keyBarText.trim() !== "");
+    assert.equal(await describes(page.getByRole("button", { name: "Edit key bar", exact: true })), keyBarText, "Edit key bar is described by its row's sentence");
+    await appearance(page);
+    assert.equal(await describes(page.getByRole("textbox", { name: "Terminal font", exact: true })), await sentenceOf("Terminal font"), "the font field is described by its row's sentence");
+
+    // a device that only watches reads the same sentence
+    await appearance(page, "&demo_devices=watch");
+    await rowOf(page, "Density").locator(".settings-label").hover();
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "a watching device reads the same sentence");
+    assert.deepEqual(errors, []);
+  } finally {
+    await desktop.close();
+  }
+
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, locale: "en" });
+  try {
+    await phone.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify(SETTINGS));
+    const page = await phone.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await appearance(page);
+    const density = rowOf(page, "Density");
+    const text = await describes(page.getByRole("group", { name: "Density", exact: true }));
+    const opened = density.locator(".settings-row-sentence");
+    await density.locator(".settings-label").tap();
+    await opened.waitFor();
+    assert.equal(await opened.textContent(), text, "a tap on the row's name opens its sentence in the row");
+    assert.equal(await page.locator(".settings-help").count(), 0, "nothing is drawn over a phone's page");
+    const placed = await density.evaluate((row) => {
+      const line = row.querySelector(".settings-row-sentence")!.getBoundingClientRect();
+      const control = row.querySelector(".settings-segmented")!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      return { underControl: line.top >= control.bottom, inRow: line.left >= box.left && line.right <= box.right + 0.5 };
+    });
+    assert.deepEqual(placed, { underControl: true, inRow: true }, "under the name and the control, inside the row");
+    await density.getByRole("button", { name: "Compact", exact: true }).tap();
+    await page.waitForFunction(() => document.documentElement.dataset["density"] === "compact");
+    assert.equal(await opened.count(), 1, "a tap on the control is the control's: the sentence stays as it was");
+    await density.locator(".settings-label").tap();
+    await opened.waitFor({ state: "detached" });
+    // a stacked row with a wide control (the font field): its opened sentence stays in the card, and the page does
+    // not scroll sideways
+    const font = rowOf(page, "Terminal font");
+    await font.locator(".settings-label").tap();
+    await font.locator(":scope > .settings-row-sentence").waitFor();
+    assert.deepEqual(await font.evaluate((row) => {
+      const line = row.querySelector(":scope > .settings-row-sentence")!.getBoundingClientRect();
+      const card = row.closest(".settings-card")!.getBoundingClientRect();
+      const body = row.closest(".settings-body")!;
+      return { inCard: line.left >= card.left && line.right <= card.right + 0.5, sideways: body.scrollWidth > body.clientWidth + 1 };
+    }), { inCard: true, sideways: false }, "a stacked row's sentence stays in its card");
+    await font.locator(".settings-label").tap();
+    await font.locator(":scope > .settings-row-sentence").waitFor({ state: "detached" });
+    // a tap that puts the focus in a field draws nothing over the page either
+    await page.getByRole("textbox", { name: "Terminal font size", exact: true }).tap();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Terminal font size");
+    assert.equal(await page.locator(".settings-help").count(), 0, "a tap into a field draws no sentence over the page");
+    // a touch screen with a keyboard: Escape closes the sentence a tap opened, and only the next one closes Settings
+    await appearance(page);
+    await density.locator(".settings-label").tap();
+    await opened.waitFor();
+    await page.keyboard.press("Escape");
+    await opened.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence a tap opened, not Settings");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    assert.deepEqual(errors, []);
+  } finally {
+    await phone.close();
+  }
+  console.log("PASS a row's sentence: over the page on a resting mouse and on keyboard focus, off its control and the row below, closed alone by Escape and by a press on its control, gone when the pointer comes onto another row's control under it or a search hides its row, scrolled by the wheel where it has less room than its words need, none for a click or a tap into a field, waiting for a row out of view, describing a row's button and field, opened in the row by a finger's or a pen's tap, inside the card and closed by Escape, and the same on a watching device");
+}
+
 async function mergedRows(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
   try {
@@ -939,6 +1307,7 @@ try {
       await dialogSearch(browser, url);
       await foldedGroups(browser, url);
       await mergedRows(browser, url);
+      await rowSentences(browser, url);
       await rowResets(browser, url);
       await accountPcList(browser, url);
       await accountGoogle(browser, url);

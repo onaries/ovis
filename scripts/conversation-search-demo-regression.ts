@@ -97,7 +97,8 @@ try {
   try {
     for (const [width, height] of [[1280, 800], [390, 844]] as const) {
       const context = await browser.newContext({ viewport: { width, height }, locale: "en-US", hasTouch: width < 640, isMobile: width < 640 });
-      await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
+      // a phone's More folds the pane's Find items where its tabs are in the header (Settings -> Tabs on a phone)
+      await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })); localStorage.setItem("ovis:phone-tabs", JSON.stringify("header")); });
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));

@@ -16,6 +16,7 @@ const faviconAsked: { search: string; authorization: string | null; cookie: stri
 const textAsked: { method: string; body: string; authorization: string | null; contentType: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const catalogAsked: string[] = [];
+const summaryAsked: { search: string; authorization: string | null }[] = [];
 const remote = Bun.serve({
   port: 0,
   fetch(request) {
@@ -52,6 +53,10 @@ const remote = Bun.serve({
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
       return Response.json({ icon: null });
+    }
+    if (path === "/api/pane/summary") {
+      summaryAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization") });
+      return Response.json({ server_time: "2026-11-12T10:00:00.000Z", summaries: { "w1:p1": { role: "assistant", text: "Done.", at: "2026-11-12T09:59:00Z", asked_at: null } } }, { headers: { "cache-control": "no-store" } });
     }
     if (path === "/api/agent-catalog") {
       catalogAsked.push(new URL(request.url).search);
@@ -98,6 +103,19 @@ describe("PC proxy", () => {
     expect(await unchanged.text()).toBe("");
     expect(asked).toEqual([null, "\"v1\""]);
   });
+});
+
+it("passes a pane summary request to the PC with its query, for a watching device too, and its answer back", async () => {
+  const url = "http://127.0.0.1/api/machines/pc1/pane/summary?pane_id=w1%3Ap1&pane_id=w1%3Ap2";
+  for (const readOnly of [false, true]) {
+    const response = await handleMachineRequest(new Request(url), manager, undefined, undefined, readOnly);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ server_time: "2026-11-12T10:00:00.000Z", summaries: { "w1:p1": { role: "assistant", text: "Done.", at: "2026-11-12T09:59:00Z", asked_at: null } } });
+  }
+  expect(summaryAsked).toEqual([
+    { search: "?pane_id=w1%3Ap1&pane_id=w1%3Ap2", authorization: "Bearer remote-token" },
+    { search: "?pane_id=w1%3Ap1&pane_id=w1%3Ap2", authorization: "Bearer remote-token" },
+  ]);
 });
 
 it("never has a PC run its shell profile again for a watching device's Check again: the PC sees this server's full token", async () => {

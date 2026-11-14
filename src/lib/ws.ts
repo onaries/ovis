@@ -1005,6 +1005,15 @@ export class HerdrSocket {
     if (drove && this.mode === "interact") this.send({ type: "release-size", pane_id: paneId });
   }
 
+  /**
+   * Whether this tab holds the pane's pty at the size it last asked for: attached, and sized by it since it last let
+   * the size go (keepSize, releaseSize) or attached keeping the size another device gave the pty.
+   */
+  holdsSize(paneId: string): boolean {
+    const state = this.attached.get(paneId);
+    return state !== undefined && !state.keepSize;
+  }
+
   /** Whether the page is in use (visible and focused): the server holds web push while one is. Replays on reconnect. */
   setPresence(active: boolean): void {
     if (this.presence === active) return;

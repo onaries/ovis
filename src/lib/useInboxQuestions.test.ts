@@ -31,7 +31,7 @@ function harness(words: (asked: InteractivePrompt, language: string) => string =
   return { reads, calls, waits, notified: () => notified };
 }
 
-const target = (key: string, seq = 1): QuestionTarget => ({ key, machineId: "local", paneId: `pane-${key}`, seq });
+const target = (key: string, seq = 1, lifetime = ""): QuestionTarget => ({ key, machineId: "local", paneId: `pane-${key}`, seq, lifetime });
 const settled = () => new Promise<void>((resolve) => queueMicrotask(resolve)).then(() => undefined);
 
 describe("QuestionReads", () => {
@@ -91,7 +91,7 @@ describe("QuestionReads", () => {
     expect(calls[4]!.paneId).toBe("pane-e");
   });
 
-  it("stores nothing for a failed read, reads it once more at the next sync and not a third time", async () => {
+  it("stores nothing for a failed read, tries it once more after the retry's wait without a sync, and not a third time", async () => {
     const { reads, calls, waits, notified } = harness();
     reads.sync([target("a")]);
     const before = reads.texts();
@@ -99,19 +99,41 @@ describe("QuestionReads", () => {
     await settled();
     expect(reads.texts()).toBe(before);
     expect(notified()).toBe(0);
-    expect(waits).toHaveLength(0);
-    reads.sync([target("a")]);
+    expect(waits.map((wait) => wait.ms)).toEqual([QUESTION_RETRY_MS]);
+    waits[0]!.run();
     expect(calls).toHaveLength(2);
     calls[1]!.reject(new Error("offline"));
     await settled();
+    expect(waits).toHaveLength(1);
     reads.sync([target("a")]);
     expect(calls).toHaveLength(2);
-    expect(waits).toHaveLength(0);
   });
 
-  it("releases the slot of a read whose answer cannot be worded, and reads it once more at the next sync", async () => {
+  it("stores the words the retry after a failed read finds", async () => {
+    const { reads, calls, waits } = harness();
+    reads.sync([target("a")]);
+    calls[0]!.reject(new Error("offline"));
+    await settled();
+    waits[0]!.run();
+    calls[1]!.resolve({ prompt: prompt("Allow command?") });
+    await settled();
+    expect(reads.texts().get("a")).toBe("Allow command?");
+  });
+
+  it("cancels the retry of a failed read when its target leaves, and reads nothing when it fires", async () => {
+    const { reads, calls, waits } = harness();
+    reads.sync([target("a")]);
+    calls[0]!.reject(new Error("offline"));
+    await settled();
+    reads.sync([]);
+    expect(waits[0]!.cancelled).toBe(true);
+    waits[0]!.run();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("releases the slot of a read whose answer cannot be worded, and reads it once more after the retry's wait", async () => {
     // bun test fails a test during which a promise rejection goes unhandled
-    const { reads, calls } = harness((asked) => { if (asked.question === "Broken") throw new Error("no words"); return asked.question; });
+    const { reads, calls, waits } = harness((asked) => { if (asked.question === "Broken") throw new Error("no words"); return asked.question; });
     reads.sync(["a", "b", "c"].map((key) => target(key)));
     calls[0]!.resolve({ prompt: prompt("Broken") });
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -120,7 +142,7 @@ describe("QuestionReads", () => {
     calls[1]!.resolve({ prompt: prompt("B") });
     await settled();
     expect(reads.texts().get("b")).toBe("B");
-    reads.sync(["a", "b", "c"].map((key) => target(key)));
+    waits[0]!.run();
     expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-c", "pane-a"]);
   });
 
@@ -187,6 +209,117 @@ describe("QuestionReads", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("reads every target once more when the list is shown again with the same counters, keeping its words until the answer lands", async () => {
+    const { reads, calls } = harness();
+    reads.sync([target("a"), target("b")]);
+    calls[0]!.resolve({ prompt: prompt("A") });
+    calls[1]!.resolve({ prompt: prompt("B") });
+    await settled();
+    reads.sync([target("a"), target("b")]);
+    expect(calls).toHaveLength(2);
+    reads.shownAgain();
+    reads.sync([target("a"), target("b")]);
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-a", "pane-b"]);
+    expect(reads.texts().get("a")).toBe("A");
+    calls[2]!.resolve({ prompt: prompt("A, asked next") });
+    await settled();
+    expect(reads.texts().get("a")).toBe("A, asked next");
+    expect(reads.texts().get("b")).toBe("B");
+    reads.sync([target("a"), target("b")]);
+    expect(calls).toHaveLength(4);
+  });
+
+  it("removes the words a read on a new showing finds no question for, after its one retry", async () => {
+    const { reads, calls, waits } = harness();
+    reads.sync([target("a")]);
+    calls[0]!.resolve({ prompt: prompt("A") });
+    await settled();
+    reads.shownAgain();
+    reads.sync([target("a")]);
+    calls[1]!.resolve({ prompt: null });
+    await settled();
+    expect(reads.texts().get("a")).toBe("A");
+    waits[0]!.run();
+    calls[2]!.resolve({ prompt: null });
+    await settled();
+    expect(calls).toHaveLength(3);
+    expect(reads.texts().has("a")).toBe(false);
+  });
+
+  it("starts no second read on a new showing for a read in flight, queued or waiting its retry", async () => {
+    const { reads, calls, waits } = harness();
+    reads.sync(["a", "b", "c"].map((key) => target(key)));
+    reads.shownAgain();
+    reads.sync(["a", "b", "c"].map((key) => target(key)));
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b"]);
+    calls[0]!.resolve({ prompt: null });
+    await settled();
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-c"]);
+    reads.shownAgain();
+    reads.sync(["a", "b", "c"].map((key) => target(key)));
+    expect(calls).toHaveLength(3);
+    // a's retry waits for a slot: b and c hold both
+    waits[0]!.run();
+    calls[1]!.resolve({ prompt: prompt("B") });
+    await settled();
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-c", "pane-a"]);
+    // only b's read is done: it alone is made again, once c's slot is free
+    reads.shownAgain();
+    reads.sync(["a", "b", "c"].map((key) => target(key)));
+    calls[2]!.resolve({ prompt: prompt("C") });
+    await settled();
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-c", "pane-a", "pane-b"]);
+  });
+
+  it("reads a target once more when the list is shown again while its read is in flight, once that read lands", async () => {
+    const { reads, calls } = harness();
+    reads.sync([target("a")]);
+    calls[0]!.resolve({ prompt: prompt("A") });
+    await settled();
+    reads.shownAgain();
+    reads.sync([target("a")]);
+    expect(calls).toHaveLength(2);
+    // shown again while that read is on its way: it may carry the question as it was before
+    reads.shownAgain();
+    reads.shownAgain();
+    reads.sync([target("a")]);
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve({ prompt: prompt("A") });
+    await settled();
+    expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-a", "pane-a"]);
+    calls[2]!.resolve({ prompt: prompt("B") });
+    await settled();
+    expect(reads.texts().get("a")).toBe("B");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("keeps a question's words read under an absent herdr lifetime when it becomes known, while it is read again", async () => {
+    const { reads, calls } = harness();
+    reads.sync([target("a", 1)]);
+    calls[0]!.resolve({ prompt: prompt("Asked before the proof") });
+    await settled();
+    reads.sync([target("a", 1, "life-1")]);
+    expect(calls).toHaveLength(2);
+    expect(reads.wordsFor(target("a", 1, "life-1"))).toBe("Asked before the proof");
+    calls[1]!.resolve({ prompt: prompt("Asked after the proof") });
+    await settled();
+    expect(reads.wordsFor(target("a", 1, "life-1"))).toBe("Asked after the proof");
+  });
+
+  it("reads a target again under a new herdr lifetime with the same seq, showing none of the old pane's words", async () => {
+    const { reads, calls } = harness();
+    reads.sync([target("a", 1, "first")]);
+    calls[0]!.resolve({ prompt: prompt("Old pane's question") });
+    await settled();
+    expect(reads.wordsFor(target("a", 1, "first"))).toBe("Old pane's question");
+    reads.sync([target("a", 1, "second")]);
+    expect(calls).toHaveLength(2);
+    expect(reads.wordsFor(target("a", 1, "second"))).toBeUndefined();
+    calls[1]!.resolve({ prompt: prompt("New pane's question") });
+    await settled();
+    expect(reads.wordsFor(target("a", 1, "second"))).toBe("New pane's question");
+  });
+
   it("schedules no further wait after a second empty answer", async () => {
     const { reads, calls, waits } = harness();
     reads.sync([target("a")]);
@@ -217,6 +350,13 @@ describe("questionTargets", () => {
     const shown = machines();
     const targets = questionTargets(inboxOrder(shown, activity), activity);
     expect(targets.map((t) => [t.machineId, t.paneId, t.seq]).sort()).toEqual([["local", "w1C:p1", 0], ["local", blockedPane, 7]]);
+  });
+
+  it("names each target's herdr lifetime", () => {
+    const shown = machines((machine) => machine.snapshot === null ? machine : { ...machine, snapshot: { ...machine.snapshot, herdr_lifetime: "life-1" } });
+    const targets = questionTargets(inboxOrder(shown, activity), activity);
+    expect(targets.length).toBeGreaterThan(0);
+    expect(targets.map((t) => t.lifetime)).toEqual(targets.map(() => "life-1"));
   });
 
   it("leaves out a waiting pane whose agent reported a message or a kind", () => {

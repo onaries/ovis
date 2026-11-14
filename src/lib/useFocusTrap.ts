@@ -32,7 +32,7 @@ export interface FocusTrapOptions {
   shouldRestore?: () => boolean;
   /** suspend keyboard ownership while another surface covers this one */
   paused?: boolean;
-  /** controls outside the surface that belong to it, before its own stops in the Tab order (a phone drawer's header toggle and +) */
+  /** controls outside the surface that belong to it, before its own stops in the Tab order (a phone drawer's header toggle) */
   leadingStops?: () => readonly HTMLElement[];
   /** the surface itself (tabIndex -1) gets the focus on open, so no control shows a focus ring a finger did not ask
    *  for and no text field raises a phone's keyboard; Tab goes on to the first stop (a phone's drawer) */

@@ -107,8 +107,12 @@ function alignBreath(event: AnimationEvent<HTMLSpanElement>) {
   for (const animation of event.currentTarget.getAnimations()) animation.startTime = 0;
 }
 
-/** `detail`: what the agent itself said of the state (a blocked agent's reason), after the state's words */
-export function StatusBadge({ status, compact = false, detail = null }: { status?: AgentStatus; compact?: boolean; detail?: string | null }) {
+/**
+ * `detail`: what the agent itself said of the state (a blocked agent's reason), after the state's words. `label`: the
+ * state in the caller's own words, which are then the badge's everywhere: its name, its tooltip and its text (the
+ * inbox mode names a state as its chip and its filters do, lib/inboxRow.ts).
+ */
+export function StatusBadge({ status, compact = false, detail = null, label: said }: { status?: AgentStatus; compact?: boolean; detail?: string | null; label?: string }) {
   const t = useT();
   const { settings } = useSettings();
   const value = knownStatus(status);
@@ -116,7 +120,7 @@ export function StatusBadge({ status, compact = false, detail = null }: { status
   // the description names the state in words a reader knows (G-020): "waiting" is said whole, and a state nobody
   // reported (an agent that said nothing yet, a PC that is away) is said to be unknown, not read as a dash
   const stateWords = value === "waiting" ? t("Agent waiting on background work") : value === "unknown" ? t("Agent state unknown") : t("Agent {status}", { status: label });
-  const description = detail ? `${stateWords} — ${detail}` : stateWords;
+  const description = said ?? (detail ? `${stateWords} — ${detail}` : stateWords);
   // classic (the default): a compact cell draws only the states that ask for a look: a red question
   // mark while the agent waits for an answer, a green dot once it has finished and was not looked
   // at, a working-coloured dot that breathes while it runs, a working-coloured ring held still while
@@ -135,7 +139,7 @@ export function StatusBadge({ status, compact = false, detail = null }: { status
       {compact && indicators !== "classic" && <span className="sidebar-status-glyph" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined}>{indicatorGlyph(value, indicators)}</span>}
       {compact && indicators === "classic" && value === "blocked" && <span className="sidebar-status-mark" aria-hidden="true">?</span>}
       {compact && indicators === "classic" && dot && <span className="sidebar-status-dot" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined} />}
-      <span className={compact ? "visually-hidden" : undefined}>{label}</span>
+      <span className={compact ? "visually-hidden" : undefined}>{said ?? label}</span>
     </span>
   );
 }

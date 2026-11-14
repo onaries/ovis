@@ -10,6 +10,8 @@ const FORK_GUARD = "github.event.pull_request && github.event.pull_request.head.
 const LIGHT = `\${{ ${FORK_GUARD} || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '["self-hosted","self-hosted-ovis"]') }}`;
 // ci.yml's heavy Linux jobs: scripts/ci-runner-route.sh keeps forks hosted (scripts/ci-runner-route.test.ts)
 const ROUTED = "${{ fromJSON(needs.changes.outputs.linux) }}";
+// Fast checks: the Linux jobs' runner, or CI_FAST_SELF_HOSTED_LABELS only when those name ovis-vm (never a fork's)
+const ROUTED_FAST = "${{ fromJSON(needs.changes.outputs.fast) }}";
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 
 const dir = join(root, ".github/workflows");
@@ -43,6 +45,7 @@ function forkSafe(job: Job & { strategy?: { matrix?: { include?: { os?: unknown 
   if (HOSTED.test(runsOn)) return "hosted";
   if (runsOn === LIGHT) return "light";
   if (runsOn === ROUTED) return "routed";
+  if (runsOn === ROUTED_FAST) return "routed (fast)";
   if (runsOn === "${{ matrix.os }}") {
     const include = job.strategy?.matrix?.include ?? [];
     return include.length > 0 && include.every((entry) => typeof entry.os === "string" && HOSTED.test(entry.os)) ? "hosted matrix" : null;
@@ -62,6 +65,9 @@ describe("self-hosted runners and fork pull requests", () => {
     const ci = workflows.find(({ name }) => name === "ci.yml")!.workflow;
     const changes = ci.jobs.changes!;
     expect(changes.outputs?.linux).toBe("${{ steps.route.outputs.linux }}");
+    expect(changes.outputs?.fast).toBe("${{ steps.route.outputs.fast }}");
+    // CI_LINUX_SELF_HOSTED_LABELS reaches the route only in ci.yml's own runs, never in a caller's (relay-deploy on a push to main)
+    expect(changes.steps?.find((step) => step.id === "route")?.env?.["LINUX_LABELS"]).toBe("${{ github.workflow == 'CI' && vars.CI_LINUX_SELF_HOSTED_LABELS || '' }}");
     expect(changes.steps?.find((step) => step.id === "route")?.run).toBe('bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"');
   });
 

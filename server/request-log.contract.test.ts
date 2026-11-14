@@ -10,6 +10,7 @@ import { PortalService } from "./portal.ts";
 import { fileInfo, fileResponse } from "./file-view.ts";
 import { serveStatic } from "./static.ts";
 import { compressResponse } from "./compress.ts";
+import * as conversation from "./conversation.ts";
 
 function records(root: string): Record<string, unknown>[] {
   const text = readFileSync(join(root, "http-requests.jsonl"), "utf8").trim();
@@ -34,6 +35,7 @@ it("attributes reserved setup job lookups to the dispatch branch rather than a m
     // Adjacent dispatch branches keep their own templates and never copy private segments.
     for (const [path, route, status] of [
       ["/api/machines/private-pc/pane/conversation", "/api/machines/:machine_id/pane/conversation", 503],
+      ["/api/machines/private-pc/pane/summary", "/api/machines/:machine_id/pane/summary", 503],
       ["/api/devices/private-label", "/api/devices/:device_id", 400],
       ["/api/fs/page-media/private-token", "/api/fs/page-media/:media_id", 404],
       ["/api/pane/private-pane", "unmatched", 404],
@@ -53,6 +55,32 @@ it("attributes reserved setup job lookups to the dispatch branch rather than a m
     app.stop();
     rmSync(root, { recursive: true, force: true });
     console.log(`CLEANUP pid=${process.pid} ports=${app.port} removed=${root} sockets=closed readers=closed`);
+  }
+});
+
+it("answers a pane's summary through the dispatch: 401 without a session, 200 for a watching device", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-summary-dispatch-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "fictional-watch-label", "watch");
+  if (watch === null) throw new Error("Watch fixture did not pair");
+  store.match(watch.token);
+  const read = spyOn(conversation, "paneConversation").mockImplementation(async () => ({
+    source: "claude-transcript", cursor: null, history_id: "h", version: "v", metadata: { model: null, reasoning_effort: null },
+    turns: [{ role: "assistant", ts: "2026-11-12T10:00:00Z", parts: [{ kind: "text", text: "Done." }] }],
+  }));
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "fictional-owner", tailscaleOwner: null, sidecar: false });
+  const url = `http://127.0.0.1:${app.port}/api/pane/summary?pane_id=w1%3Ap1`;
+  try {
+    const refused = await fetch(url);
+    expect(refused.status).toBe(401);
+    await refused.arrayBuffer();
+    const watched = await fetch(url, { headers: { cookie: `ovis_device=${watch.token}` } });
+    expect(watched.status).toBe(200);
+    expect((await watched.json() as { summaries: unknown }).summaries).toEqual({ "w1:p1": { role: "assistant", text: "Done.", at: "2026-11-12T10:00:00Z", asked_at: null } });
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally {
+    app.stop(); read.mockRestore();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

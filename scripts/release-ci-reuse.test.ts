@@ -221,11 +221,12 @@ describe("job names", () => {
   it("takes the matrix job alone, or every shard of four", () => {
     expect(namesProblem(shards(""))).toBeNull();
     expect(namesProblem(shards(" 1/4", " 2/4", " 3/4", " 4/4"))).toBeNull();
+    expect(namesProblem(shards(" 1/5", " 2/5", " 3/5", " 4/5", " 5/5"))).toBeNull();
     expect(namesProblem(shards(" 4/4", " 2/4", " 1/4", " 3/4").reverse())).toBeNull();
   });
 
   it("refuses shards that are incomplete, mixed, doubled or of another size", () => {
-    const neither = `the jobs are not ci.yml's ("Browser regression (other scripts)" is neither one job nor all of 1/4 to 4/4)`;
+    const neither = `the jobs are not ci.yml's ("Browser regression (other scripts)" is neither one job nor all of 1/4 to 4/4 nor all of 1/5 to 5/5)`;
     expect(namesProblem(shards())).toBe(neither);
     expect(namesProblem(shards(" 1/4", " 2/4", " 3/4"))).toBe(neither);
     expect(namesProblem(shards(" 2/4", " 3/4", " 4/4"))).toBe(neither);
@@ -702,7 +703,7 @@ describe("ci.yml", () => {
     expect(names.filter((name) => name.includes("${{")), UPDATE).toEqual([CI_MATRIX_JOB]);
   });
 
-  it("has one matrix job, of one or four shards", () => {
+  it("has one matrix job, of one, four or five shards", () => {
     const matrix = Object.values(ci.jobs).filter((job) => job.strategy !== undefined);
     expect(matrix.map((job) => job.name), UPDATE).toEqual([CI_MATRIX_JOB]);
     expect(Object.keys(matrix[0]!.strategy!.matrix!), UPDATE).toEqual(["shard"]);
@@ -710,7 +711,7 @@ describe("ci.yml", () => {
     const lists = [...shard.matchAll(/'(\[[\d,\s]*\])'/g)].map((match) => JSON.parse(match[1]!) as number[]);
     for (const list of lists) expect(list).toEqual(Array.from({ length: list.length }, (_, index) => index + 1));
     expect(lists.map((list) => list.length).sort(), UPDATE).toEqual([...CI_SHARD_COUNTS].sort());
-    expect(shard.replace(/'\[[\d,\s]*\]'/g, "'[]'")).toBe("${{ fromJSON(contains(needs.changes.outputs.linux, 'self-hosted') && '[]' || '[]') }}");
+    expect(shard.replace(/'\[[\d,\s]*\]'/g, "'[]'")).toBe("${{ fromJSON(contains(needs.changes.outputs.linux, 'ovis-vm') && '[]' || contains(needs.changes.outputs.linux, 'self-hosted') && '[]' || '[]') }}");
   });
 
   it("calls no other workflow, whose jobs a run would list under another name", () => {

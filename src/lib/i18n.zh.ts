@@ -2,6 +2,7 @@ import { SETTINGS_ZH } from "./i18n/settings.zh.ts";
 import { SETTINGS_ACCESS_ZH } from "./i18n/settings-access.zh.ts";
 import { SETTINGS_AGENTS_ZH } from "./i18n/settings-agents.zh.ts";
 import { SETTINGS_COMPOSER_ZH } from "./i18n/settings-composer.zh.ts";
+import { SETTINGS_HELP_ZH } from "./i18n/settings-help.zh.ts";
 import { SETTINGS_LAYOUT_ZH } from "./i18n/settings-layout.zh.ts";
 import { TERMINAL_ZH } from "./i18n/terminal.zh.ts";
 import { COMPOSER_ZH } from "./i18n/composer.zh.ts";
@@ -165,7 +166,6 @@ const BASE: Record<string, string> = {
   "Connecting to Ovis…": "正在连接 Ovis…",
   "Close workspace list": "关闭工作区列表",
   "Open workspace list": "打开工作区列表",
-  "Back to agents": "返回 Agent 列表",
   "Show workspace list": "显示工作区列表",
   "Workspace list": "工作区列表",
   "Hide workspace list": "隐藏工作区列表",
@@ -220,6 +220,7 @@ const BASE: Record<string, string> = {
   "That agent has closed: its workspace is open": "该 Agent 已关闭，已改为打开其工作区",
   "That link's workspace is closed": "该链接的工作区已关闭",
   "That link's PC is not set up here": "该链接的电脑未在此处设置",
+  "That link's chat is closed": "该链接的聊天已关闭",
   "Could not sign out. Try again.": "无法退出登录，请重试。",
   "Retry": "重试",
   "On, pushed to this device": "已开启，推送到此设备",
@@ -572,6 +573,11 @@ const BASE: Record<string, string> = {
   "Add": "添加",
   "Update": "更新",
   "All": "全部",
+  "Search": "搜索",
+  "Choose one from the list to open its chat here.": "从列表中选择一项，它的聊天会在这里打开。",
+  "Agent inbox": "Agent 收件箱",
+  "Open agent inbox": "打开 Agent 收件箱",
+  "Back to Ovis": "返回 Ovis",
   "Remove PC": "移除 PC",
   "Remove PC {name}?": "移除 PC {name}？",
   "Removes this registration. Remote sessions keep running.": "仅移除此注册。远程会话会继续运行。",
@@ -609,7 +615,7 @@ const BASE: Record<string, string> = {
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const ZH_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_ZH, ...SETTINGS_ACCESS_ZH, ...SETTINGS_COMPOSER_ZH, ...SETTINGS_LAYOUT_ZH, ...SETTINGS_AGENTS_ZH },
+  settings: { ...SETTINGS_ZH, ...SETTINGS_ACCESS_ZH, ...SETTINGS_COMPOSER_ZH, ...SETTINGS_LAYOUT_ZH, ...SETTINGS_AGENTS_ZH, ...SETTINGS_HELP_ZH },
   terminal: TERMINAL_ZH,
   composer: COMPOSER_ZH,
   chat: CHAT_ZH,

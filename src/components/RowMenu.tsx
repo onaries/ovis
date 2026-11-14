@@ -8,7 +8,7 @@
  * unless what an item mounted (a rename field, a confirm) takes it first: the button is focused
  * in a layout cleanup, before a new field's autoFocus and a dialog's own focus.
  */
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, type LucideIcon } from "lucide-react";
 
@@ -53,6 +53,8 @@ interface Props {
   /** the menu's accessible name, and the sheet's title */
   title: string;
   subtitle?: string;
+  /** what the row waits for, in the waiting state's colour, wrapped and whole: first under the sheet's subtitle, and under the popover's header */
+  alert?: string;
   /** a phone's sheet only, under the subtitle and wrapped, not cut: text a row cuts (a hover tooltip says it on a desktop) */
   detail?: string;
   /** drawn above the items, and in the sheet's head in the title's place: what the menu is about, when that is more than a name */
@@ -63,15 +65,22 @@ interface Props {
   onClose: () => void;
   /** `paths`: each hint is a path; the menu is wider and a long path gives way before its label */
   variant?: "paths";
+  /**
+   * the items are one choice among them, `checked` on the chosen one: a menu's radio items, in the popover and in the
+   * sheet, where the arrows walk them, a press chooses and closes, and Tab takes them as one stop, at the chosen one
+   */
+  choice?: boolean;
 }
 
 const GAP = 4;
 const EDGE = 8;
 /** letters typed within this long of each other look for one item together (a menu's type-ahead) */
 const TYPE_AHEAD_MS = 500;
-const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"]';
+const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
 // the sheet is modal: its Cancel is one of the stops
 const SHEET_ITEMS = '.row-sheet-item, .row-sheet-aside, .row-sheet-cancel';
+/** a choice's chosen item, where the sheet's focus starts */
+const CHOSEN = '.row-sheet-item[aria-checked="true"]';
 
 // each open menu's button: the menu is drawn outside what holds it, and a surface that keeps its own focus
 // (MachineSidebar's asked-for filter) counts its rows' menus as its own, and no other's
@@ -82,10 +91,11 @@ export function rowMenuAnchor(node: Element): HTMLElement | null {
   return surface === null ? null : anchors.get(surface) ?? null;
 }
 
-export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail, header, items, align = "end", onClose, variant }: Props) {
+export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, alert, detail, header, items, align = "end", onClose, variant, choice = false }: Props) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const surface = useRef<HTMLDivElement>(null);
+  const alertId = useId();
   // the letters typed so far and when the last came: a long list (a tab strip's More) is searched by its
   // items' first letters, as a native menu is (G-160)
   const typed = useRef<{ text: string; at: number }>({ text: "", at: 0 });
@@ -145,7 +155,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }, [align, anchor, onClose, point, sheet]);
 
   useEffect(() => {
-    const first = surface.current?.querySelector<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS);
+    const first = (sheet && choice ? surface.current?.querySelector<HTMLElement>(CHOSEN) : null) ?? surface.current?.querySelector<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS);
     window.requestAnimationFrame(() => first?.focus());
   }, [sheet]);
   // the sheet is modal: an item that went from under the focus (a tab closed elsewhere) gives it to the first one left
@@ -192,8 +202,13 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }, [anchor, onClose, point, sheet]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    const buttons = [...(surface.current?.querySelectorAll<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS) ?? [])];
-    const index = buttons.indexOf(document.activeElement as HTMLElement);
+    const stops = [...(surface.current?.querySelectorAll<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS) ?? [])];
+    const focused = document.activeElement as HTMLElement;
+    // a choice in the sheet is a menu of its own above Cancel: the arrows walk its items, Tab takes them as one stop
+    const choices = sheet && choice ? stops.filter((button) => button.getAttribute("role") === "menuitemradio") : [];
+    const inChoice = choices.includes(focused);
+    const buttons = inChoice && event.key !== "Tab" ? choices : stops;
+    const index = buttons.indexOf(focused);
     const move = (next: number): void => {
       event.preventDefault();
       buttons[point ? Math.max(0, Math.min(buttons.length - 1, next)) : (next + buttons.length) % buttons.length]?.focus();
@@ -203,7 +218,13 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
     else if (event.key === "Home") move(0);
     else if (event.key === "End") move(buttons.length - 1);
     // Tab stays inside the sheet, which is modal; it leaves the popover, which then goes
-    else if (event.key === "Tab" && sheet) move(index + (event.shiftKey ? -1 : 1));
+    else if (event.key === "Tab" && sheet && choices.length > 0) {
+      // the choice's stop is the item the focus is on, or the chosen one when the focus comes from outside it
+      const stop = inChoice ? focused : choices.find((button) => button.getAttribute("aria-checked") === "true") ?? choices[0]!;
+      const ring = stops.filter((button) => !choices.includes(button) || button === stop);
+      event.preventDefault();
+      ring[(ring.indexOf(inChoice ? stop : focused) + (event.shiftKey ? -1 : 1) + ring.length) % ring.length]?.focus();
+    } else if (event.key === "Tab" && sheet) move(index + (event.shiftKey ? -1 : 1));
     else if (event.key === "Tab") { event.preventDefault(); onClose(); }
     // a letter: the next item whose words start with what was typed; the same letter again walks the items that
     // start with it. Space and the modifiers are left to the item (Space presses it)
@@ -250,18 +271,19 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
           {/* a header of the menu's own stands in for the title and subtitle; the detail still follows it */}
-          {header ? <div className="row-sheet-head">{header}{detail && <span className="row-sheet-detail">{detail}</span>}</div> : (
+          {header ? <div className="row-sheet-head">{header}{alert && <span className="row-sheet-alert">{alert}</span>}{detail && <span className="row-sheet-detail">{detail}</span>}</div> : (
             <div className="row-sheet-head">
               <span className="row-sheet-title">{title}</span>
               {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}
+              {alert && <span className="row-sheet-alert">{alert}</span>}
               {detail && <span className="row-sheet-detail">{detail}</span>}
             </div>
           )}
           {/* the items scroll between the head and Cancel: a tab's menu is taller than a short phone, and `.modal` hides its overflow */}
-          <div className="row-sheet-items">
+          <div className="row-sheet-items" role={choice ? "menu" : undefined} aria-label={choice ? title : undefined}>
             {items.map((item) => {
               const button = (
-                <button key={item.id} type="button" data-item={item.id} className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider && !item.aside ? " has-divider" : ""}${item.disabled ? " is-disabled" : ""}`} aria-current={item.current ? "true" : undefined} aria-pressed={item.checked} aria-disabled={item.disabled || undefined} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
+                <button key={item.id} type="button" data-item={item.id} className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider && !item.aside ? " has-divider" : ""}${item.disabled ? " is-disabled" : ""}`} aria-current={item.current ? "true" : undefined} role={choice ? "menuitemradio" : undefined} aria-checked={choice ? item.checked === true : undefined} aria-pressed={choice ? undefined : item.checked} aria-disabled={item.disabled || undefined} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
                   {item.glyph ?? <item.icon aria-hidden="true" />}
                   <span className="row-sheet-label">{item.label}</span>
                   {item.hint && <span className="row-sheet-hint">{item.hint}</span>}
@@ -288,12 +310,13 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }
 
   return createPortal(
-    <div ref={surface} className={`menu row-menu${overModal ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
-      {header && <div className="row-menu-header" role="presentation">{header}</div>}
+    <div ref={surface} className={`menu row-menu${overModal ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} aria-describedby={alert ? alertId : undefined} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
+      {/* the reason describes the menu: a screen reader inside a menu reads its items, and nothing that stands between them */}
+      {(header || alert) && <div className="row-menu-header" role="presentation">{header}{alert && <span id={alertId} className="row-menu-alert">{alert}</span>}</div>}
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.divider && <span className="row-menu-divider" role="separator" />}
-          <button type="button" data-item={item.id} role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={item.checked} className={`menu-item${item.danger ? " is-danger" : ""}${item.disabled ? " is-disabled" : ""}`} aria-current={item.current ? "true" : undefined} aria-disabled={item.disabled || undefined} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
+          <button type="button" data-item={item.id} role={choice ? "menuitemradio" : item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={choice ? item.checked === true : item.checked} className={`menu-item${item.danger ? " is-danger" : ""}${item.disabled ? " is-disabled" : ""}`} aria-current={item.current ? "true" : undefined} aria-disabled={item.disabled || undefined} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
             {item.glyph ?? <item.icon aria-hidden="true" />}
             <span className="menu-item-main">{item.label}</span>
             {item.hint && <span className="menu-item-hint">{item.hint}</span>}

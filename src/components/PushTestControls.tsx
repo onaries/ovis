@@ -9,12 +9,11 @@ import { repairFailed, runPushAction, usePushHealth, type PushActionOutcome, typ
 import { repairOutcome } from "../lib/useNotifications.ts";
 import { useSettings } from "../lib/settings.ts";
 import { repairFailureText } from "./PushHealthNotice.tsx";
-import { SettingsBare } from "./SettingsControls.tsx";
+import { matchesSettingsQuery, SettingsQuery, SettingsRow } from "./SettingsControls.tsx";
 
 export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushActionResult> }) {
   const { settings } = useSettings();
   const t = useT();
-  const bare = useContext(SettingsBare);
   // the same state as the notice over the pane (lib/pushHealth.ts): one fault, one repair, wherever it is read
   const { health, busy, result } = usePushHealth();
   const wanted = useRef(settings.alertsOn);
@@ -54,17 +53,21 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushAct
     : health.transient !== null ? t("The last alert did not reach this device; the next one is tried as usual. Send a test to check.")
     : !settings.alertsOn ? t("Alerts off") : null);
 
+  const words = useContext(SettingsQuery);
+  const label = t("Test notification");
+  const description = t("Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.");
+  // the row is kept in every search (held), so its being drawn does not say the search found it: this does,
+  // for the rules that show a group and a page by what was found in them (SettingsDialog.css)
+  const found = words.length > 0 && matchesSettingsQuery(words, label, description, hint, t("Send test"));
+
   return (
-    <div className="settings-item">
-      <div className="settings-row">
-        <div className="settings-row-text">
-          <span className="settings-label-line"><BellRing className="settings-row-icon" aria-hidden="true" /><span className="settings-label">{t("Test notification")}</span></span>
-          {!bare && <span className="settings-description">{t("Check whether this device can receive push alerts")}</span>}
-          {/* always in the document, empty until there is something to say: a live region */}
-          <span className="settings-hint" role="status" data-testid="push-health-hint">{hint}</span>
-        </div>
+    <div className="settings-item" data-found={found ? "" : undefined}>
+      {/* held: in a search the row stays with its group, as it did before it was a SettingsRow. The hint is always
+          in the document, empty until there is something to say: a live region */}
+      <SettingsRow held icon={BellRing} label={label} description={description}
+        condition={<span className="settings-hint" role="status" data-testid="push-health-hint">{hint}</span>}>
         <button type="button" className="btn" disabled={busy !== null || !settings.alertsOn || !supported || denied || result === "read-only"} onClick={() => void send(false)}>{busy === "test" ? t("Sending…") : t("Send test")}</button>
-      </div>
+      </SettingsRow>
       {enable && supported && !denied && <div className="settings-actions">
         <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void send(true)}>{busy === "repair" ? t("Turning alerts on…") : t("Turn alerts on again")}</button>
       </div>}

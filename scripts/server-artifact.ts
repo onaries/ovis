@@ -17,12 +17,12 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { buildIntegration } from "./install-gjc-integration.ts";
-import type { ServerPlatform } from "./server-manifest.ts";
+import { binaryName, type ServerPlatform } from "./server-manifest.ts";
 
 const root = resolve(import.meta.dir, "..");
 const packageJson = (): { version: string; dependencies: Record<string, string> } => JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
-export const binaryName = (platform: ServerPlatform): string => (platform === "windows-x64" ? "ovis-server.exe" : "ovis-server");
+export { binaryName };
 
 /** node-pty's prebuilt package for each platform, as the registry names it */
 const PTY_PACKAGE: Record<ServerPlatform, string> = {

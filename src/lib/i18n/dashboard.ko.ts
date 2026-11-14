@@ -92,4 +92,8 @@ export const DASHBOARD_KO: Record<string, string> = {
   "1 relay": "릴레이 1곳",
   "{count} relays": "릴레이 {count}곳",
   "Account setup is incomplete. Open it to try again.": "계정 설정이 완료되지 않았습니다. 열면 다시 시도합니다.",
+  "Dark and Light keep one look; System follows this device's dark or light mode.": "어둡게와 밝게는 그 화면으로 고정하고, 시스템은 이 기기의 다크·라이트 모드를 따릅니다.",
+  "Compact makes text one step smaller and rows shorter, so more fits on the screen.": "촘촘은 글자를 한 단계 줄이고 행 높이를 낮춰 한 화면에 더 많이 보여 줍니다.",
+  "The text size of this app's menus, lists and dialogs.": "이 앱의 메뉴, 목록, 대화 상자의 글자 크기입니다.",
+  "The language of this app. System follows the browser's language.": "이 앱에 표시되는 언어입니다. 시스템은 브라우저의 언어를 따릅니다.",
 };

@@ -44,7 +44,7 @@ const SHARD = "${{ strategy.job-total > 1 && format(' {0}/{1}', matrix.shard, st
 /** The `name:` of ci.yml's one matrix job, as written there. */
 export const CI_MATRIX_JOB = `Browser regression (other scripts${SHARD})`;
 /** The sizes of that matrix: one job on the self-hosted PC, four on GitHub's runners (ci.yml's `shard` lists). */
-export const CI_SHARD_COUNTS = [1, 4];
+export const CI_SHARD_COUNTS = [1, 4, 5];
 /** The names the matrix job runs under for one size: its bare name alone, or `k/N` for every k. */
 export const matrixJobs = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => CI_MATRIX_JOB.replace(SHARD, count > 1 ? ` ${index + 1}/${count}` : ""));

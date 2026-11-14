@@ -1,11 +1,11 @@
 import type { Locator, Page } from "playwright-core";
 
 /**
- * Opens a tab as a user does at the page's width: a phone's header title lists the workspace's tabs
- * (TabStrip's sheet), a wider screen clicks the tab in its strip.
+ * Opens a tab as a user does: a phone whose tabs are in the header (Settings -> Tabs on a phone) lists
+ * them from its chevron (TabStrip's sheet); the row under the header, as a wider screen's, is clicked.
  */
 export async function pickTab(page: Page, tabId: string): Promise<void> {
-  const title = page.locator(".app-header .context-tabs");
+  const title = page.locator(".app-header .header-tabs-sheet");
   if (!(await title.isVisible())) {
     await clickTab(page, tabId);
     return;

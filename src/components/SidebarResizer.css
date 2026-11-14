@@ -14,6 +14,11 @@
   touch-action: none;
 }
 
+/* a pointer on a list's scrollbar under the grip drags that scrollbar (SidebarResizer.tsx); nothing moves */
+.sidebar-resizer.is-yielding {
+  pointer-events: none;
+}
+
 /* the seam itself lights up: stronger under a pointer, amber while it is held or focused; drawn over the
    sidebar's border, --space-2 in from the grip's pane-side edge */
 .sidebar-resizer::after {

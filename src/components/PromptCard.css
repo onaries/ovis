@@ -460,18 +460,22 @@
 
 /* while an answer is on its way every option waits, the checkbox rows included (the busy state is
    the options group's own, so the card's status line stays outside it); disabled is communicated by
-   cursor/state while keeping decision rationale and descriptions legible at >= 4.5:1 */
-.prompt-card-options[aria-busy="true"] .prompt-card-option {
+   cursor/state while keeping decision rationale and descriptions legible at >= 4.5:1. A device that may
+   only watch sees them so too (is-unavailable): it cannot answer */
+.prompt-card-options[aria-busy="true"] .prompt-card-option,
+.prompt-card-options.is-unavailable .prompt-card-option {
   color: var(--text-dim);
   cursor: default;
 }
 
 @media (hover: hover) {
-  .prompt-card-options[aria-busy="true"] .prompt-card-option:hover {
+  .prompt-card-options[aria-busy="true"] .prompt-card-option:hover,
+  .prompt-card-options.is-unavailable .prompt-card-option:hover {
     background: transparent;
   }
 
-  .prompt-card-options[aria-busy="true"] .prompt-card-option:hover .prompt-card-number {
+  .prompt-card-options[aria-busy="true"] .prompt-card-option:hover .prompt-card-number,
+  .prompt-card-options.is-unavailable .prompt-card-option:hover .prompt-card-number {
     color: var(--text-dim);
   }
 }

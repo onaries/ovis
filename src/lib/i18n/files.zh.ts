@@ -193,11 +193,9 @@ export const FILES_ZH: Record<string, string> = {
   "The pull request changed since it was shown. Refresh it, then merge.": "拉取请求在显示后已更改。请刷新后再合并。",
   "This base branch merges through a merge queue; merge it on GitHub.": "此基础分支通过合并队列合并，请在 GitHub 上合并。",
   "File text size": "文件字号",
-  "An open file's text, in its preview and its source. Follows the chat font size until you choose one.": "打开的文件的文字(预览和源码)。在你选择之前跟随聊天字号。",
   "Decrease file text size": "减小文件字号",
   "Increase file text size": "增大文件字号",
   "Files beside the pane": "在窗格旁显示文件",
-  "On a wide window, Browse files opens as a panel on the right of the pane instead of a popup. With Open files set to Beside the pane, a file opened from it shows in its place, and closing the file brings the list back.": "在宽窗口中，浏览文件会在窗格右侧的面板中打开，而不是弹出窗口。当“打开文件”设为“在窗格旁”时，从列表打开的文件会显示在该位置，关闭文件后会回到列表。",
   "Outline": "大纲",
   "Edit file": "编辑文件",
   "Unsaved changes": "未保存的更改",
@@ -230,4 +228,6 @@ export const FILES_ZH: Record<string, string> = {
   "Diff layout": "差异布局",
   "Unified": "单栏",
   "Split": "并排",
+  "The text size of a file you open, in its preview and its source. It follows the chat font size until you set one here.": "所打开文件的字号，预览和源码都适用。在这里设置之前，跟随聊天的字号。",
+  "On a wide window, Browse files opens as a panel to the right of the pane and not as a popup. With Open files on Beside the pane, a file opened from the list takes its place, and closing the file brings the list back.": "在宽窗口中，“浏览文件”会作为窗格右侧的面板打开，而不是弹窗。当“打开文件”设为“在窗格旁”时，从列表打开的文件会显示在这个位置，关闭文件后列表恢复显示。",
 };

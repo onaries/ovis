@@ -1,6 +1,6 @@
 ### Added
-- Settings → Appearance → More settings → Sidebar → Agent inbox on a phone (off by default, this
-  device only): a phone-width window that opens with no pane in its address shows one list of
-  your agents from every shown PC, the ones that need you first, with filters by state and a
-  search field; from a pane, the header's Back opens it. A tap opens the agent's chat, Back
-  returns to the list, and New workspace starts one from there. Wider windows are unchanged.
+- Settings → Appearance → More settings → Sidebar → Start in the agent inbox on a phone (off by
+  default, this device only): a phone-width window that opens with no pane in its address starts
+  in the agent inbox, and one that opens on a pane's address opens that pane's thread there, with
+  the list behind its Back. Back to Ovis in More leaves the inbox and a reload stays out of it;
+  wider windows start as before.
