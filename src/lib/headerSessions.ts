@@ -109,6 +109,24 @@ export function nextWaitingTarget<T extends PaneInfo>(rosters: readonly MachineR
 }
 
 /**
+ * How many panes nextWaitingTarget can open from `selected`, pressed again and again: every waiting pane it walks,
+ * which leaves out the selected pane and any pane its tab's zoom hides. A control that draws a count on that jump
+ * counts these, never an agent its press cannot reach: the count is above zero exactly when nextWaitingTarget has a
+ * pane to give. (waitingElsewhere, which More counts, leaves out the selected pane alone.)
+ */
+export function waitingTargets<T extends PaneInfo>(rosters: readonly MachineRoster<T>[], selected: { machineId: string; paneId: string | null }): number {
+  let targets = 0;
+  for (const roster of rosters) {
+    const own = roster.machineId === selected.machineId;
+    for (const pane of rosterPanes(roster.panes)) {
+      if (own && pane.pane_id === selected.paneId) continue;
+      if (knownStatus(roster.status(pane)) === "blocked" && !hiddenByTabZoom(roster.panes, roster.layouts, pane)) targets += 1;
+    }
+  }
+  return targets;
+}
+
+/**
  * Every connected PC's roster as the header counts it, in the sidebar's stable PC order so repeated
  * next-waiting jumps walk every PC without cycling between two. A PC that is not connected has only a
  * cached roster, which its sidebar greys out: the header counts none of it. The selected PC counts whether

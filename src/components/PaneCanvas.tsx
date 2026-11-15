@@ -64,6 +64,8 @@ interface Props {
   onMoveToWorkspace?: (tabId: string, workspaceId: string) => Promise<void>;
   /** the Rename tab shortcut or palette action for the open pane: where the row is left out, its dialog stands in for the row's field (TabStrip clears it) */
   renameRequest?: RenameRequest | null;
+  /** the Close tab shortcut's press (App): taken here only where the open tab has no row and no header lists it; TabStrip takes it otherwise */
+  closeTabRequest?: RenameRequest | null;
   /** a phone's header title lists the tabs (App): no row is drawn, and its sheet holds New terminal and New tab with agent… */
   tabsInHeader?: boolean;
   /** a watching device sends no settings: it sees a locked pane's Unlock and cannot use it, as in the Agents list */
@@ -93,7 +95,7 @@ interface Drag {
 }
 
 /** The active tab, drawn from herdr's rectangles. No browser-owned layout or PTY state. */
-export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, onRecoverUnsent, onSearchConversation, onNewTab, onNewTerminal, onMoveToWorkspace, renameRequest = null, tabsInHeader = false, watching = false, solo = false }: Props) {
+export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, onRecoverUnsent, onSearchConversation, onNewTab, onNewTerminal, onMoveToWorkspace, renameRequest = null, closeTabRequest = null, tabsInHeader = false, watching = false, solo = false }: Props) {
   const t = useT();
   const { settings, update: updateSettings } = useSettings();
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
@@ -187,6 +189,12 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     const tab = snapshot?.tabs.find((entry) => entry.tab_id === presented.tab_id);
     if (tab) setRenamingTab(tab);
   }, [renameRequest]);
+  // the Close tab shortcut where the open tab has no row and the header lists no tabs (a lone tab on a cramped screen):
+  // the pane menu's own Close tab runs, its confirmation included, and nothing where that menu has none (a locked tab)
+  useLayoutEffect(() => {
+    if (closeTabRequest === null || !loneRowHidden || tabsInHeader || !presented || watching) return;
+    rowItems(presented)?.tab.find((item) => item.id === "close-tab" && !item.disabled)?.run();
+  }, [closeTabRequest]);
   useEffect(() => { if (menu && !snapshot?.panes.some((item) => item.pane_id === menu.paneId)) setMenu(null); }, [snapshot, menu]);
 
   const run = (operation: () => Promise<unknown>): void => {

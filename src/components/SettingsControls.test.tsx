@@ -55,6 +55,23 @@ describe("the typed font size (G-179)", () => {
     expect(changes).toEqual([17]);
   });
 
+  it("says an end's button goes no further without disabling it, and a press there changes nothing", () => {
+    const { changes, field, button } = mount();
+    expect(button("Larger").props["aria-disabled"]).toBeUndefined();
+    // the end the field's size reaches, as the buttons step from it
+    act(() => field().props.onChange({ target: { value: "22" } }));
+    expect(button("Larger").props["aria-disabled"]).toBe(true);
+    // a disabled button would drop the keyboard's focus to the page
+    expect(button("Larger").props.disabled).toBeUndefined();
+    act(() => button("Larger").props.onClick());
+    expect(changes).toEqual([]);
+    act(() => field().props.onChange({ target: { value: "10" } }));
+    expect(button("Smaller").props["aria-disabled"]).toBe(true);
+    expect(button("Larger").props["aria-disabled"]).toBeUndefined();
+    act(() => button("Smaller").props.onClick());
+    expect(changes).toEqual([]);
+  });
+
   it("names the range, and shows it under the field after a refused size until the next edit", () => {
     const { field, range } = mount();
     expect(range().props.children).toBe("Enter 10–22px");

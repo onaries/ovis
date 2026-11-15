@@ -42,7 +42,6 @@ export const MACHINES_JA: Record<string, string> = {
   "New workspace on {name}": "{name} で新しいワークスペース",
   "PCs and workspaces": "PC とワークスペース",
   "Loading PCs…": "PC を読み込んでいます…",
-  "PC {name}": "PC {name}",
   "Manage {name}": "{name} を管理",
   "Manage PC": "PC を管理",
   "PC name": "PC 名",

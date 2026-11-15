@@ -155,7 +155,7 @@ try {
   };
   // the workspace menu lists the item beside Rename workspace, and it opens the folder's sessions newest first
   const menu = await openMenu("w1");
-  assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace"]);
+  assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "New tab with agent…", "Rename workspace", "Earlier sessions…", "Close workspace"]);
   await page.keyboard.press("Escape");
   await menu.waitFor({ state: "detached" });
   await openHistory("w1");
@@ -564,7 +564,7 @@ try {
   // StrictMode mounts the sidebar's effect twice in this development bundle: each probe is query-less
   assert.ok(probes.length >= 1 && probes.every((query) => query === ""), `the probe carries no workspace and lists no session: ${JSON.stringify(probes)}`);
   const remoteMenu = await openMenu("w1");
-  assert.deepEqual(await remoteMenu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Close workspace"], "no Earlier sessions on a PC whose bridge cannot list them");
+  assert.deepEqual(await remoteMenu.getByRole("menuitem").allTextContents(), ["Pin workspace", "New tab with agent…", "Rename workspace", "Close workspace"], "no Earlier sessions on a PC whose bridge cannot list them");
   await settled(page);
   await page.screenshot({ path: join(evidence, "remote-404.png") });
   await page.keyboard.press("Escape");

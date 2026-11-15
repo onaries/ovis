@@ -82,6 +82,7 @@
     "scripts/terminal-cjk-punctuation-regression.ts",
     "scripts/pane-paging-demo-regression.ts",
     "scripts/inbox-mode-demo-regression.ts",
+    "scripts/sheet-outside-tap-demo-regression.ts",
     "scripts/omp-question-compat.ts",
     "app/scripts/build-web.ts"
   ],

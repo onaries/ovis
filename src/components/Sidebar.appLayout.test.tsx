@@ -74,12 +74,12 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function draw(snapshot: SessionSnapshot, offer: LayoutOffer, online = false): Promise<ReorderCoordinator> {
+  async function draw(snapshot: SessionSnapshot, offer: LayoutOffer, online = false, given: { actions?: AppActions; watching?: boolean } = {}): Promise<ReorderCoordinator> {
     const coordinator = new ReorderCoordinator();
     await act(async () => {
       renderer = create(createElement(SettingsProvider, null, createElement(SidebarFilterProvider, { value: { filter: inactiveSidebarFilter(), reportBranches: () => {} } },
         createElement(AppLayoutContext.Provider, { value: offer }, createElement(ReorderContext.Provider, { value: coordinator },
-          createElement(Sidebar, { snapshot, online, selectedPaneId: `${snapshot.workspaces[0]!.workspace_id}:p`, actions }))))), { createNodeMock: node });
+          createElement(Sidebar, { snapshot, online, selectedPaneId: `${snapshot.workspaces[0]!.workspace_id}:p`, actions: given.actions ?? actions, watching: given.watching }))))), { createNodeMock: node });
     });
     return coordinator;
   }
@@ -158,6 +158,24 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     await draw(roster([workspace("root"), { ...workspace(HC_OTHER_WORKSPACE_ID), label: "Other terminals" }]), OVIS_CORE);
     expect(await menuOf("root")).toEqual(["pin-workspace", "rename-workspace", "session-history", "close"]);
     expect(await menuOf("Other terminals")).toEqual(["pin-workspace", "session-history", "close"]);
+  });
+
+  it("opens a new tab in a row's workspace from its menu, on a connected PC to a device that drives (#3772)", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ error: "not_found" }, { status: 404 }), { preconnect: globalThis.fetch.preconnect }));
+    try {
+      const opened: unknown[] = [];
+      const spying = new Proxy({}, { get: (_, name) => name === "openNewTab" ? (target: unknown) => opened.push(target) : () => {} }) as AppActions;
+      await draw(roster([workspace("a"), workspace("b")]), TUI, true, { actions: spying });
+      expect(await menuOf("b")).toEqual(["pin-workspace", "new-tab", "rename-workspace", "session-history", "close"]);
+      await act(async () => (renderer!.root.findByType(RowMenu).props.items as { id: string; run: () => void }[]).find((item) => item.id === "new-tab")!.run());
+      expect(opened).toEqual([{ machineId: "local", workspaceId: "b" }]);
+      await act(async () => renderer!.unmount());
+      renderer = undefined;
+      await draw(roster([workspace("a"), workspace("b")]), TUI, true, { actions: spying, watching: true });
+      expect(await menuOf("b")).not.toContain("new-tab");
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it("lets a TUI PC's rows be dragged and moved with Alt+arrows", async () => {

@@ -122,7 +122,8 @@ describe("the mode's shell before the app has connected", () => {
   it("is the list's own surface as the screen on a phone: no header, no sidebar, no control, one status line", () => {
     const markup = draw(createElement(InboxConnecting, { wide: false }));
     expect(markup).toMatch(/^<div class="app sidebar-collapsed is-inbox is-inbox-list">/);
-    for (const classic of ["app-header", "terminal-placeholder", "brand", "<aside", "<button"]) expect(markup).not.toContain(classic);
+    // nor the wide layout's rail: a phone's list is the screen
+    for (const classic of ["app-header", "terminal-placeholder", "brand", "<aside", "<button", "inbox-rail"]) expect(markup).not.toContain(classic);
     expect(markup.match(/class="mode-inbox"/g)).toHaveLength(1);
     expect(markup).toContain('<div class="pane-column"><div class="pane-split"><section class="mode-inbox" aria-label="Agent inbox">');
     // the line is in the document before its words (lib/useAnnouncedText.ts), where the list's own loading line will be
@@ -130,11 +131,12 @@ describe("the mode's shell before the app has connected", () => {
     expect(markup).toContain('<div class="inbox-scroll"><p class="visually-hidden" role="status"></p></div>');
   });
 
-  it("is the column beside an empty pane on a wide window, at the width the column will have", () => {
+  it("is the column beside an empty pane on a wide window, at the width the column will have, its rail an empty surface before the list", () => {
     const markup = draw(createElement(InboxConnecting, { wide: true, sidebarWidth: 360 }));
     expect(markup).toMatch(/^<div class="app is-inbox is-inbox-wide" style="--sidebar-user-w:360px">/);
-    for (const classic of ["app-header", "terminal-placeholder", "brand", "<button"]) expect(markup).not.toContain(classic);
-    expect(markup).toContain('<aside class="sidebar inbox-column"><section class="mode-inbox is-wide" aria-label="Agent inbox">');
+    // the rail's surface holds its width so nothing shifts when the list arrives; with no control in it, it is no landmark
+    for (const classic of ["app-header", "terminal-placeholder", "brand", "<button", "<nav"]) expect(markup).not.toContain(classic);
+    expect(markup).toContain('<aside class="sidebar inbox-column"><div class="inbox-rail"></div><section class="mode-inbox is-wide" aria-label="Agent inbox">');
     expect(markup).toContain('<div class="pane-column"><div class="pane-split"></div></div>');
     expect(markup.match(/role="status"/g)).toHaveLength(1);
   });

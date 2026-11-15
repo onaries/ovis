@@ -622,6 +622,25 @@
   }
 }
 
+/* an end's button reads as a disabled .icon-button does (styles.css) and keeps its focus (SettingsControls.tsx) */
+.settings-stepper > .icon-button[aria-disabled="true"] {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* a press there does nothing, so it takes none of .icon-button:active's pressed look, as a disabled button takes none */
+.settings-stepper > .icon-button[aria-disabled="true"]:active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+@media (hover: hover) {
+  .settings-stepper > .icon-button[aria-disabled="true"]:hover {
+    background: transparent;
+  }
+}
+
 .settings-stepper output {
   min-width: 3.5em;
   color: var(--text-strong);

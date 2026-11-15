@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants, gunzipSync } from "node:zlib";
 import { build } from "vite";
 
 test("a production build produces exact compressed JS/CSS sidecars and leaves the shell alone", async () => {
@@ -22,6 +22,17 @@ test("a production build produces exact compressed JS/CSS sidecars and leaves th
       expect(brotliDecompressSync(readFileSync(`${path}.br`))).toEqual(readFileSync(path));
       expect(gunzipSync(readFileSync(`${path}.gz`))).toEqual(readFileSync(path));
     }
+    // what the page names (its module script, the modules it preloads, its styles, the theme's boot script) takes
+    // Brotli's best; the lazy chunks keep the quicker quality 5
+    const html = readFileSync(join(output, "index.html"), "utf8");
+    const startup = new Set([...html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="[^"]*?(assets\/[^"]+)"/g)].map((match) => match[1]!.slice("assets/".length)));
+    expect([...startup].some((name) => name.endsWith(".js")) && [...startup].some((name) => name.endsWith(".css"))).toBe(true);
+    const at = (quality: number, name: string) => brotliCompressSync(readFileSync(join(assets, name)), { params: { [constants.BROTLI_PARAM_QUALITY]: quality } });
+    for (const name of names) {
+      const best = startup.has(name);
+      expect(readFileSync(join(assets, `${name}.br`)).equals(at(best ? 11 : 5, name)), `${name} at quality ${best ? 11 : 5}`).toBe(true);
+    }
+    expect(names.some((name) => !startup.has(name) && name.endsWith(".js"))).toBe(true);
     expect(existsSync(join(output, "index.html.br"))).toBe(false);
     expect(existsSync(join(output, "index.html.gz"))).toBe(false);
     expect(existsSync(join(output, "sw.js.gz"))).toBe(false);

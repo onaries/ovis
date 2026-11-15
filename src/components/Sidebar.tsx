@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 
 import "./Sidebar.css";
 
@@ -590,6 +590,9 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       pinned
         ? { id: "unpin-workspace", label: t("Unpin workspace"), icon: PinOff, run: () => togglePin(state) }
         : { id: "pin-workspace", label: t("Pin workspace"), icon: Pin, run: () => togglePin(state) },
+      // the tab row's own New tab with agent…, aimed at this workspace without opening it first (#3772); a tab is a drive
+      // action, so a watching device is not offered it, and a PC that is not connected has no roster to make it in
+      ...(online && !watching ? [{ id: "new-tab", label: t("New tab with agent…"), icon: Bot, run: () => actions.openNewTab({ machineId, workspaceId: workspace.workspace_id }) }] : []),
       ...(!renameOffered || !renamesWorkspace(workspace.workspace_id) ? [] : [{ id: "rename-workspace", label: t("Rename workspace"), icon: Pencil, run: () => beginWorkspaceRename(workspace) }]),
       // the folder's earlier sessions, listed for the agent of the pane the row opens
       ...(historyOffered && !watching ? [{ id: "session-history", label: t("Earlier sessions…"), icon: History, run: () => actions.openSessionHistory({ machineId, workspaceId: workspace.workspace_id, agent: (panes.length > 0 ? currentPane(workspace, panes) : null)?.agent ?? null }) }] : []),

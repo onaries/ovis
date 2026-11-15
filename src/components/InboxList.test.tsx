@@ -31,6 +31,7 @@ function RowMenu(_props: Parameters<typeof rowMenu.RowMenu>[0]) { return null; }
 await mock.module("./RowMenu.tsx", () => ({ ...rowMenu, RowMenu }));
 const { InboxList } = await import("./InboxList.tsx");
 const { newQuestionReads } = await import("../lib/useInboxQuestions.ts");
+type InboxListHandle = import("../lib/useInbox.ts").InboxListHandle;
 const { SummaryReads } = await import("../lib/useInboxSummaries.ts");
 const { useAgentStateStamping } = await import("../lib/useAgentStateSince.ts");
 
@@ -135,7 +136,11 @@ describe("InboxList", () => {
     returnTo?: string | null;
     /** how far the scroller can scroll at first: a scrollTop past it is clamped, as a browser does */
     scrollMax?: number;
-    more?: Parameters<typeof InboxList>[0]["more"]; note?: ReactNode; onExit?: () => void;
+    /** the head's Search button is not drawn: a column with the room for its search field (InboxList.css) */
+    searchToggleHidden?: boolean;
+    more?: Parameters<typeof InboxList>[0]["more"]; note?: ReactNode;
+    /** what the shell asks of the list through (lib/useInbox.ts) */
+    handle?: { current: InboxListHandle | null };
     onFilter?: (filter: InboxFilter) => void; onQuery?: (query: string) => void;
     onOpen?: (machineId: string, paneId: string) => void; onNew?: (machineId: string) => void;
   }
@@ -148,9 +153,9 @@ describe("InboxList", () => {
   let drawn: { machines: Machine[]; options: DrawOptions } = { machines: [], options: {} };
   const view = (machines: Machine[], options: DrawOptions): ReactElement => <SettingsProvider><PanePressContext.Provider value={(machineId, paneId) => presses.push(`${machineId}/${paneId}`)}>
     <Stamping machines={machines} activity={options.activity ?? activity} />
-    <InboxList machines={machines} activity={options.activity ?? activity} watching={options.watching ?? false} wide={options.wide ?? false} current={options.current ?? null}
+    <InboxList ref={options.handle} machines={machines} activity={options.activity ?? activity} watching={options.watching ?? false} wide={options.wide ?? false} current={options.current ?? null}
       filter={options.filter ?? "all"} onFilter={options.onFilter ?? (() => {})} query={options.query ?? ""} onQuery={options.onQuery ?? (() => {})} scroll={scroll} focus={{ opening: options.opening ?? 1, taken, row: options.returnTo ?? null }}
-      onOpen={options.onOpen ?? (() => {})} onNew={options.onNew ?? (() => {})} questionReads={questionReads} summaryReads={summaryReads} more={options.more} note={options.note} onExit={options.onExit} connection={options.connection ?? null} failure={options.failure ?? null} />
+      onOpen={options.onOpen ?? (() => {})} onNew={options.onNew ?? (() => {})} questionReads={questionReads} summaryReads={summaryReads} more={options.more} note={options.note} connection={options.connection ?? null} failure={options.failure ?? null} />
   </PanePressContext.Provider></SettingsProvider>;
   const draw = async (machines: Machine[], options: DrawOptions = {}) => {
     nodes = new Map();
@@ -171,6 +176,8 @@ describe("InboxList", () => {
           set scrollTop(value: number) { top = Math.min(value, scrollMax); },
           // a row says which one it is by its spoken name
           focus(focusOptions?: FocusOptions) { focused.push({ node: name, options: focusOptions, ...(name === "inbox-row" ? { label } : {}) }); },
+          // drawn, unless the test says the search button is not (a column with the room for its field: InboxList.css)
+          getClientRects: () => (name === "inbox-search-toggle" && options.searchToggleHidden ? [] : [{}]),
         };
         nodes.set(name, node);
         return node;
@@ -547,15 +554,16 @@ describe("InboxList", () => {
     expect(line(root).map((node) => [node.props.className, text(node)])).toEqual([["visually-hidden", ""]]);
   });
 
-  it("gives the column's top row to the search field while it is open, the connection's word still said", async () => {
+  it("says nothing of the connection as the column beside a thread: the mode's rail says it there, whatever the list is handed", async () => {
     phone = false;
     const root = await draw(roster(), { wide: true, connection: "reconnecting" });
     await runFrames();
-    const line = () => byClass(root, "inbox-top")[0]!.findAll((node) => node.type === "p" && node.props.role === "status");
-    expect(line().map((node) => [node.props.className, text(node)])).toEqual([["inbox-connection", "Reconnecting…"]]);
+    // no line in the column's top row, drawn or only said, with its search field shut and with it open
+    const lines = () => byClass(root, "inbox-top")[0]!.findAll((node) => node.props.role === "status").length + byClass(root, "inbox-connection").length;
+    expect(lines()).toBe(0);
     await act(async () => { byClass(root, "inbox-search-toggle")[0]!.props.onClick(); });
     expect(byClass(root, "inbox-search-input").length).toBe(1);
-    expect(line().map((node) => [node.props.className, text(node)])).toEqual([["visually-hidden", "Reconnecting…"]]);
+    expect(lines()).toBe(0);
   });
 
   it("offers New workspace on the one connected PC, and none to a watching device", async () => {
@@ -617,6 +625,25 @@ describe("InboxList", () => {
     expect(focused).toEqual([{ node: "section", options: { preventScroll: true } }]);
     await act(async () => { byClass(root, "inbox-scroll")[0]!.props.onScroll({ currentTarget: { scrollTop: 610 } }); });
     expect(scroll.current).toBe(610);
+  });
+
+  it("goes to its top and takes the focus on its own section when the shell asks, and the kept place is the top from then on", async () => {
+    // Given a list scrolled down, whose kept place is still being reached (its rows' words are not all back).
+    const handle: { current: InboxListHandle | null } = { current: null };
+    await draw(roster(), { wide: true, scrollTop: 240, scrollMax: 200, focusTaken: 1, handle });
+    expect([nodes.get("inbox-scroll")!.scrollTop, focused]).toEqual([200, []]);
+
+    // When the shell asks for the list's top (the rail's current place).
+    await act(async () => { handle.current!.toTop(); });
+
+    // Then the list is at its top with the focus on its section, without a scroll of the page.
+    expect([nodes.get("inbox-scroll")!.scrollTop, scroll.current]).toEqual([0, 0]);
+    expect(focused).toEqual([{ node: "section", options: { preventScroll: true } }]);
+
+    // And words that land later do not take it back to the place it had.
+    scrollMax = Number.POSITIVE_INFINITY;
+    await answerSummaries({ "w1E:p1": said("All six export tests pass.", ago(6.5)) });
+    expect(nodes.get("inbox-scroll")!.scrollTop).toBe(0);
   });
 
   it("gives the focus to the row whose thread a Back just left, and to its own section when that row is not drawn", async () => {
@@ -883,12 +910,14 @@ describe("InboxList", () => {
       expect(byClass(root, "is-current")).toEqual([]);
     });
 
-    it("draws Search and New workspace in its top row and the filter and More at its foot, the state's mark at each row's end", async () => {
-      const root = await draw(roster(), { wide: true, more: { label: "More", expanded: true, popup: "menu", onPress() {} } });
+    it("draws Search, the state filter and New workspace in its top row and no foot, the state's mark at each row's end", async () => {
+      const root = await draw(roster(), { wide: true });
       const buttons = (zone: string) => byClass(root, zone)[0]!.findAll((node) => node.type === "button").map((node) => String(node.props.className).split(" ").find((name) => name.startsWith("inbox-") && name !== "inbox-round"));
-      expect(buttons("inbox-top")).toEqual(["inbox-search-toggle", "inbox-add"]);
-      expect(buttons("inbox-foot")).toEqual(["inbox-filter-toggle", "inbox-more"]);
-      expect(byClass(root, "inbox-more")[0]!.props["aria-expanded"]).toBe(true);
+      expect(buttons("inbox-top")).toEqual(["inbox-search-toggle", "inbox-filter-toggle", "inbox-add"]);
+      // the filter is the one the foot of a phone's list has: it says the filter that is on, and opens the same choice
+      const filter = byClass(root, "inbox-filter-toggle")[0]!;
+      expect([filter.props["aria-label"], filter.props["aria-haspopup"], filter.props["aria-expanded"]]).toEqual(["Filter by state", "menu", false]);
+      expect(byClass(root, "inbox-foot").length).toBe(0);
       const row = byClass(item(root, "w1D:p1"), "inbox-row")[0]!;
       // the mark is the row's last child, after the two lines, not on the words' line
       expect(byClass(row, "inbox-sub").length).toBe(0);
@@ -907,32 +936,35 @@ describe("InboxList", () => {
       expect(lines[2]).toStartWith("6m · ");
     });
 
-    it("draws Back to Ovis with the app's mark at its foot's start, and no way out where the list is the screen", async () => {
-      let left = 0;
-      const root = await draw(roster(), { wide: true, onExit: () => { left += 1; } });
-      const foot = byClass(root, "inbox-foot")[0]!;
-      const [exit] = foot.findAll((node) => node.type === "button");
-      expect(String(exit!.props.className)).toBe("btn btn-ghost sidebar-footer-action inbox-exit");
-      expect(text(exit!)).toBe("Back to Ovis");
-      expect(exit!.findByType("img").props.src).toBe("/icons/icon-192.png?v=sheep1");
-      await act(async () => { exit!.props.onClick(); });
-      expect(left).toBe(1);
-      await act(async () => { renderer?.unmount(); });
-      phone = true;
-      expect(byClass(await draw(roster(), { wide: false, onExit: () => {} }), "inbox-exit")).toEqual([]);
+    it("draws no More and no way out of its own: the mode's rail beside it holds them, whatever the shell hands the list", async () => {
+      // Given the column drawn with a More, as only the list that is the screen is given one.
+      const root = await draw(roster(), { wide: true, more: { label: "More", expanded: false, popup: "menu", onPress() {} } });
+
+      // Then the column draws neither More nor Back to Ovis, and no picture of the app's mark.
+      const drawn = root.findAll((node) => node.type === "button").map((node) => String(node.props["aria-label"] ?? text(node)));
+      expect(drawn.filter((name) => /Back to Ovis|More/.test(name))).toEqual([]);
+      expect([byClass(root, "inbox-more").length, byClass(root, "inbox-exit").length, root.findAll((node) => node.type === "img").length]).toEqual([0, 0, 0]);
     });
 
-    it("opens its search field on request, focused, and puts it away with Escape once it is empty", async () => {
+    it("draws its search field, Search, the filter and New workspace; in a column too narrow for the field Search opens it, focused, and Escape puts it away once it is empty", async () => {
       const queries: string[] = [];
       const root = await draw(roster(), { wide: true, onQuery: (query) => queries.push(query) });
       const toggle = () => byClass(root, "inbox-search-toggle")[0]!;
-      expect(byClass(root, "inbox-search").length).toBe(0);
-      expect(toggle().props["aria-expanded"]).toBe(false);
+      // the class by which a narrow column draws the field and lets the filter and New workspace give way (InboxList.css)
+      const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
+      /** the head's controls, in the order they are drawn and the keyboard walks them */
+      const head = () => byClass(root, "inbox-top")[0]!.findAll((node) => node.type === "button" || node.type === "input").map((node) => String(node.props.className).split(" ").find((name) => name.startsWith("inbox-") && name !== "inbox-round"));
+      // all four are drawn; the stylesheet shows the field or Search by the column's width
+      expect(head()).toEqual(["inbox-search-input", "inbox-search-toggle", "inbox-filter-toggle", "inbox-add"]);
+      expect([toggle().props["aria-expanded"], opened()]).toEqual([false, false]);
+      // the list's search says its scope, in its field, its button's name and its tooltip
+      expect([toggle().props["aria-label"], toggle().props.title]).toEqual(["Search agents", "Search agents"]);
 
       await act(async () => { toggle().props.onClick(); });
-      expect(byClass(root, "inbox-search").length).toBe(1);
-      expect(toggle().props["aria-expanded"]).toBe(true);
+      expect([toggle().props["aria-expanded"], opened()]).toEqual([true, true]);
       expect(focused.map((call) => call.node)).toContain("input");
+      const scoped = root.findByProps({ type: "search" });
+      expect([scoped.props.placeholder, scoped.props["aria-label"]]).toEqual(["Search agents", "Search agents"]);
 
       // with words in it, Escape takes the words and the field stays; empty, Escape puts it away
       await redraw({ query: "export" });
@@ -947,20 +979,51 @@ describe("InboxList", () => {
       await act(async () => { field().props.onKeyDown(escape()); });
       expect(queries).toEqual([""]);
       await redraw({ query: "" });
-      expect(byClass(root, "inbox-search").length).toBe(1);
+      expect(opened()).toBe(true);
       await act(async () => { field().props.onKeyDown(escape(true)); });
-      expect(byClass(root, "inbox-search").length).toBe(1);
+      expect(opened()).toBe(true);
       await act(async () => { field().props.onKeyDown(escape()); });
-      expect(byClass(root, "inbox-search").length).toBe(0);
+      expect([toggle().props["aria-expanded"], opened()]).toEqual([false, false]);
       // the field went from under the focus: the button that opened it has it, not nothing
       expect(focused.at(-1)?.node).toBe("inbox-search-toggle");
     });
 
-    it("keeps its search field shown while a query narrows the list, whatever its button is asked", async () => {
+    it("keeps a folded field open when Escape takes words typed before the column narrowed, and folds it on the next Escape", async () => {
+      const queries: string[] = [];
+      // the words were typed while the column had the room for the field, so Search was never pressed
+      const root = await draw(roster(), { wide: true, query: "export", onQuery: (query) => queries.push(query) });
+      const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
+      const field = () => root.findByProps({ type: "search" });
+      const escape = { key: "Escape", nativeEvent: { isComposing: false }, preventDefault() {} };
+      expect(opened()).toBe(true);
+      await act(async () => { field().props.onKeyDown(escape); });
+      expect(queries).toEqual([""]);
+      await redraw({ query: "" });
+      // the field holding the focus stays drawn
+      expect(opened()).toBe(true);
+      expect(focused.map((call) => call.node)).not.toContain("inbox-search-toggle");
+      await act(async () => { field().props.onKeyDown(escape); });
+      expect(opened()).toBe(false);
+      expect(focused.at(-1)?.node).toBe("inbox-search-toggle");
+    });
+
+    it("keeps its always-shown search field and the focus in it on an Escape where the column has the room for it", async () => {
+      const queries: string[] = [];
+      const root = await draw(roster(), { wide: true, searchToggleHidden: true, onQuery: (query) => queries.push(query) });
+      const field = () => root.findByProps({ type: "search" });
+      await act(async () => { field().props.onKeyDown({ key: "Escape", nativeEvent: { isComposing: false }, preventDefault() {} }); });
+      expect(queries).toEqual([]);
+      expect(focused.map((call) => call.node)).not.toContain("inbox-search-toggle");
+      expect(byClass(root, "inbox-search").length).toBe(1);
+    });
+
+    it("keeps its search field open while a query narrows the list, whatever its button is asked", async () => {
       const root = await draw(roster(), { wide: true, query: "export" });
-      expect(byClass(root, "inbox-search").length).toBe(1);
+      const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
+      expect(opened()).toBe(true);
       await act(async () => { byClass(root, "inbox-search-toggle")[0]!.props.onClick(); });
-      expect(byClass(root, "inbox-search").length).toBe(1);
+      // a narrow column's row stays the field's for as long as it holds words
+      expect(opened()).toBe(true);
     });
   });
 });

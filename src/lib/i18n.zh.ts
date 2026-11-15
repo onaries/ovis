@@ -135,6 +135,8 @@ const BASE: Record<string, string> = {
   // ---- settings ----
   "Settings": "设置",
   "PCs": "PC",
+  "PC {name}": "PC {name}",
+  "PCs, {n} of {m} connected": "{m} 台 PC 中已连接 {n} 台",
   "Chat": "聊天",
   "Agent default": "Agent 默认",
   "Devices and PCs": "设备和电脑",
@@ -425,6 +427,7 @@ const BASE: Record<string, string> = {
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "开启中继后将关闭设备门槛：此后新的浏览器需要配对码或访问令牌。",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新建标签页",
+  "New tab with agent…": "用 Agent 新建标签页…",
   "New worktree": "新建工作树",
   "Open worktree…": "打开工作树…",
   "Earlier sessions…": "之前的会话…",
@@ -445,6 +448,7 @@ const BASE: Record<string, string> = {
   "Split pane down": "向下拆分窗格",
   "Zoom or unzoom pane": "放大或取消放大窗格",
   "Close pane": "关闭面板",
+  "Close tab": "关闭标签页",
   "Plan: {done} of {total} done": "计划：已完成 {done}/{total}",
   "Plan": "计划",
   "Something went wrong": "出了点问题",
@@ -576,6 +580,7 @@ const BASE: Record<string, string> = {
   "Search": "搜索",
   "Choose one from the list to open its chat here.": "从列表中选择一项，它的聊天会在这里打开。",
   "Agent inbox": "Agent 收件箱",
+  "Inbox mode": "收件箱模式",
   "Open agent inbox": "打开 Agent 收件箱",
   "Back to Ovis": "返回 Ovis",
   "Remove PC": "移除 PC",

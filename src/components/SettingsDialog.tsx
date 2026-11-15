@@ -1187,7 +1187,8 @@ function ShortcutsPage() {
           const rowText = recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : confirming ? riskText(confirming.risk, compactKeys(bindingDisplayKeys(confirming.value))) : selectedRisk ? riskText(selectedRisk, compactKeys(displayedKeys)) : undefined;
           // a terminal app's close key is the browser's tab close, which Record refuses (exactChordRefusal); and
           // the two closes differ: the tab's leaves the pane running, the pane's ends it
-          const help = shortcut.id === "close-pane" ? t("{key} closes the browser tab, so it cannot be used here: record another key. Closing a browser tab only disconnects this view; Close pane stops what runs in the pane.", { key: platformIsMac ? "⌘W" : "Ctrl+W" }) : undefined;
+          const help = shortcut.id === "close-pane" ? t("{key} closes the browser tab, so it cannot be used here: record another key. Closing a browser tab only disconnects this view; Close pane stops what runs in the pane.", { key: platformIsMac ? "⌘W" : "Ctrl+W" })
+            : shortcut.id === "close-tab" ? t("{key} closes the browser tab, so it cannot be used here: record another key. Closing a browser tab only disconnects this view; Close tab stops what runs in the tab.", { key: platformIsMac ? "⌘W" : "Ctrl+W" }) : undefined;
           const resetShortcut = (): void => {
             const next = { ...settings.shortcutOverrides };
             delete next[shortcut.id];

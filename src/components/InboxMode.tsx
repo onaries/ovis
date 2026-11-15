@@ -1,8 +1,8 @@
 /**
  * What the inbox mode's shell draws around a thread (App.tsx decides where; the list is InboxList.tsx): a phone
  * thread's title in the app's header, and from 769px the zone that floats over the pane (the name chip and the
- * thread's round controls) and the line that stands in a pane with no thread. Each piece is one of the app's own
- * primitives with its tokens.
+ * thread's round controls) and the line that stands in a pane with no thread (the column's rail is InboxRail.tsx).
+ * Each piece is one of the app's own primitives with its tokens.
  */
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { Inbox } from "lucide-react";
@@ -20,6 +20,7 @@ import { paneMark } from "../lib/sidebarAgents.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { agentRowTitle } from "./AgentSidebar.tsx";
 import { InboxAvatar } from "./InboxList.tsx";
+import { InboxRailBlank } from "./InboxRail.tsx";
 import { displayPaneTitle } from "./Sidebar.tsx";
 import "./InboxMode.css";
 
@@ -110,8 +111,9 @@ export function ThreadTop({ thread, note, controls }: { thread: ThreadProps | nu
 /**
  * The mode's shell before the app knows whether this device may open it (App.tsx): what a page that opens on the
  * mode's own address paints first. The list's surface with one line where its rows will be, the screen on a phone
- * and the column beside an empty pane from 769px, at the width the column will have. No control is drawn: nothing
- * answers yet. Never the classic shell's header or sidebar, which a page that opens in the mode never shows.
+ * and the column beside an empty pane from 769px, at the width the column will have, its rail an empty surface so
+ * that nothing shifts when the list arrives. No control is drawn: nothing answers yet. Never the classic shell's
+ * header or sidebar, which a page that opens in the mode never shows.
  */
 export function InboxConnecting({ wide, sidebarWidth = null }: { wide: boolean; sidebarWidth?: number | null }) {
   const t = useT();
@@ -120,14 +122,14 @@ export function InboxConnecting({ wide, sidebarWidth = null }: { wide: boolean; 
     <section className={`mode-inbox${wide ? " is-wide" : ""}`} aria-label={t("Agent inbox")}>
       <div className="inbox-top" />
       <div className="inbox-scroll"><p className={shown === null ? "visually-hidden" : "inbox-empty"} role="status">{shown}</p></div>
-      <div className="inbox-foot" />
+      {!wide && <div className="inbox-foot" />}
     </section>
   );
   return (
     <div className={`app${wide ? "" : " sidebar-collapsed"} is-inbox ${wide ? "is-inbox-wide" : "is-inbox-list"}`}
       style={wide && sidebarWidth !== null ? { "--sidebar-user-w": `${sidebarWidth}px` } as CSSProperties : undefined}>
       <div className="app-body">
-        {wide && <aside className="sidebar inbox-column">{list}</aside>}
+        {wide && <aside className="sidebar inbox-column"><InboxRailBlank />{list}</aside>}
         <div className="pane-column"><div className="pane-split">{!wide && list}</div></div>
       </div>
     </div>

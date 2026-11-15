@@ -353,6 +353,8 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     ...(zoomPane && zoom && tabPanes > 1 ? [{ id: "zoom", label: t(zoom === "off" ? "Unzoom pane" : "Zoom pane"), icon: zoom === "off" ? Minimize2 : Maximize2, shortcut: "zoom-pane" as const, run: () => zoomPane(zoom) }] : []),
     // the pane menu's Close, its confirmation included (App, PaneCanvas)
     ...(actions.closePane && !overDialog ? [{ id: "close-pane", label: t("Close pane"), icon: X, shortcut: "close-pane" as const, run: () => { if (!modalOpenBesides(surface.current)) actions.closePane?.(); } }] : []),
+    // the open tab's Close, its confirmation included (App, TabStrip)
+    ...(actions.closeTab && !overDialog ? [{ id: "close-tab", label: t("Close tab"), icon: X, shortcut: "close-tab" as const, run: () => { if (!modalOpenBesides(surface.current)) actions.closeTab?.(); } }] : []),
     { id: "view", label: t(view === "chat" ? "Switch to terminal" : "Switch to chat"), icon: SwitchCamera, shortcut: "toggle-view", run: actions.toggleView },
     // the selected pane's chat, older pages included (ChatView's ConversationSearch)
     ...(actions.searchConversation ? [{ id: "search-conversation", label: t("Search conversation"), icon: TextSearch, run: actions.searchConversation }] : []),

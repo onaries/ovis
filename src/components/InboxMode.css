@@ -69,11 +69,24 @@
 
 /* ---------- from 769px: the list beside the thread ---------- */
 
-/* The list is the sidebar's column at the sidebar's own width, so the pane is as wide here as in the classic
-   shell and entering or leaving the mode refits no terminal. No bar crosses the window: the column's top
-   controls and the pane's zone share one band (--inbox-zone-h), and the seam runs from the window's top. */
+/* The list is in the sidebar's column, at the sidebar's own width (the shell's --sidebar-shown-w, styles.css), so
+   the pane is as wide here as in the classic shell and entering or leaving the mode refits no terminal. The
+   column's rail is cut out of that width, never added to it, at every width the sidebar can have: the list is what
+   the rail leaves, down to a sidebar at its least width (InboxList.css says how its top row fits there). No bar
+   crosses the window: the column's top controls and the pane's zone share one band (--inbox-zone-h), and the seam
+   runs from the window's top. */
 .app.is-inbox-wide {
   --inbox-control: var(--control-h);
+  /* the rail (InboxRail.css): as wide as the band over the list is tall, so its first control stands in a square
+     cell on the band's centre line, with the column's top controls and the thread's chip */
+  --inbox-rail-w: var(--inbox-zone-h);
+}
+
+/* the column is the rail, then the list, side by side where the classic sidebar stacks its sections. Its start safe
+   area is the rail's own (InboxRail.css), whose surface and buttons run to the window's edge */
+.app.is-inbox-wide .inbox-column {
+  flex-direction: row;
+  padding-left: 0;
 }
 
 .inbox-column,
@@ -283,8 +296,10 @@
     app-region: no-drag;
   }
 
+  /* the window's controls at its start reach past the rail only by what is left of them: the list begins after it
+     (the row's own start inset, and its gaps, count this one: InboxList.css) */
   .mode-inbox.is-wide .inbox-top {
-    padding-inline-start: calc(var(--space-4) + env(titlebar-area-x, 0px));
+    --inbox-top-start: calc(var(--inbox-top-inset) + max(0px, env(titlebar-area-x, 0px) - var(--inbox-rail-w)));
   }
 
   .thread-top {
@@ -295,6 +310,12 @@
 /* an iPad home-screen app in a window has the window's controls over its top-left corner (lib/viewport.ts) */
 :root[data-window-controls] .mode-inbox .inbox-top {
   padding-inline-start: calc(var(--window-controls-w, 72px) + env(safe-area-inset-left, 0px));
+}
+
+/* beside the rail the list begins after most of that corner: its top row keeps clear of what is left of it */
+:root[data-window-controls] .mode-inbox.is-wide .inbox-top {
+  --inbox-top-start: calc(var(--inbox-top-inset) + max(0px, var(--window-controls-w, 72px) - var(--inbox-rail-w)));
+  padding-inline-start: var(--inbox-top-start);
 }
 
 /* More's header over a thread (App.tsx gives the crumb .is-inbox in the mode only): its fixed lines never make a

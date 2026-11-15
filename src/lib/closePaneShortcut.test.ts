@@ -15,15 +15,17 @@ describe("the Close pane shortcut", () => {
   let listeners: ((event: KeyboardEvent) => void)[];
   let renderer: ReactTestRenderer | undefined;
   let closes: number;
+  let tabCloses: number;
   let modalOpen: boolean;
 
   beforeEach(() => {
     for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     listeners = [];
     closes = 0;
+    tabCloses = 0;
     modalOpen = false;
     // Settings gives it its key: it has none until one is chosen there
-    const stored = new Map<string, string>([[SETTINGS_STORAGE_KEY, JSON.stringify({ shortcutOverrides: { "close-pane": "ctrl+alt+x" } })]]);
+    const stored = new Map<string, string>([[SETTINGS_STORAGE_KEY, JSON.stringify({ shortcutOverrides: { "close-pane": "ctrl+alt+x", "close-tab": "ctrl+alt+t" } })]]);
     const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
     const media = { matches: false, addEventListener() {}, removeEventListener() {} };
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -57,8 +59,8 @@ describe("the Close pane shortcut", () => {
     useShortcuts(actions, true);
     return null;
   }
-  async function mount(closePane: AppActions["closePane"] = () => { closes += 1; }): Promise<void> {
-    await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Shortcuts, { actions: { closePane } as AppActions }))); });
+  async function mount(closePane: AppActions["closePane"] = () => { closes += 1; }, closeTab: AppActions["closeTab"] = () => { tabCloses += 1; }): Promise<void> {
+    await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Shortcuts, { actions: { closePane, closeTab } as AppActions }))); });
   }
   /** one keydown of Ctrl+Alt+X; true when the app took it from the browser and the page */
   function press({ repeat = false, target = element() as unknown, key = "x" } = {}): boolean {
@@ -116,5 +118,22 @@ describe("the Close pane shortcut", () => {
     await mount(null);
     expect(() => press()).not.toThrow();
     expect(closes).toBe(0);
+  });
+
+  it("closes the open tab with the Close tab binding under the same rules: once per press, never under a dialog or a modal (#3751)", async () => {
+    await mount();
+    expect(press({ key: "t" })).toBe(true);
+    for (let repeat = 0; repeat < 3; repeat++) expect(press({ key: "t", repeat: true })).toBe(true);
+    expect(press({ key: "t", target: element("[role='dialog']") })).toBe(false);
+    expect(press({ key: "t", target: element(null, true) })).toBe(false);
+    modalOpen = true;
+    expect(press({ key: "t" })).toBe(false);
+    modalOpen = false;
+    expect(tabCloses).toBe(1);
+    expect(closes).toBe(0);
+    await act(async () => renderer?.unmount());
+    await mount(undefined, null);
+    expect(() => press({ key: "t" })).not.toThrow();
+    expect(tabCloses).toBe(1);
   });
 });

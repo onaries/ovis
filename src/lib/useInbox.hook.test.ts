@@ -2,16 +2,34 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement, type RefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppLink } from "./deepLink.ts";
-import { INBOX_FROM_KEY, useInbox, useInboxShell } from "./useInbox.ts";
+import { INBOX_FROM_KEY, INBOX_LIST_KEY, useInbox, useInboxShell, wayInOpensThread } from "./useInbox.ts";
 import { QuestionReads } from "./useInboxQuestions.ts";
 import { SummaryReads } from "./useInboxSummaries.ts";
+
+describe("wayInOpensThread", () => {
+  const lone = { hasRow: true, view: "chat", peek: false, drawnPanes: 1, splitShown: false } as const;
+
+  it("opens the thread of a pane with a row, drawn alone, on its chat with no peek over it", () => {
+    expect(wayInOpensThread(lone)).toBe(true);
+  });
+
+  it.each([
+    ["no row in the list (a shell)", { hasRow: false }],
+    ["its terminal shown", { view: "terminal" }],
+    ["a terminal peek over its chat", { peek: true }],
+    ["its tab drawing a herdr split", { drawnPanes: 2 }],
+    ["the app's own split shown", { splitShown: true }],
+  ] as const)("enters on the list for %s", (_case, change) => {
+    expect(wayInOpensThread({ ...lone, ...change })).toBe(false);
+  });
+});
 
 describe("useInboxShell", () => {
   let renderer: ReactTestRenderer | undefined;
   let reactAct: PropertyDescriptor | undefined;
   let calls: string[];
   let shell: ReturnType<typeof useInboxShell>;
-  interface Place { inMode: boolean; shown: boolean; selectedPaneId: string | null; linkLanded: boolean; thread?: string | null; focusInput?: () => void }
+  interface Place { inMode: boolean; shown: boolean; selectedPaneId: string | null; linkLanded: boolean; thread?: string | null; here?: string | null; wide?: boolean; open?: () => void; focusInput?: () => void }
 
   beforeEach(() => {
     reactAct = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
@@ -31,7 +49,7 @@ describe("useInboxShell", () => {
   const setDrawerOpen = (open: boolean): void => { calls.push(`drawer ${open}`); };
   const hideFile = (): void => { calls.push("hide file"); };
   function Probe(place: Place) {
-    shell = useInboxShell({ thread: null, ...place, show, enter, setDrawerOpen, hideFile });
+    shell = useInboxShell({ thread: null, ...place, here: () => place.here ?? null, show, enter, setDrawerOpen, hideFile });
     return null;
   }
   const draw = async (place: Place): Promise<void> => {
@@ -47,6 +65,59 @@ describe("useInboxShell", () => {
     await act(async () => { shell.enterInbox(); });
     // the file is hidden before the mode's entry is pushed: its own entry stays under it, so Back shows it again
     expect(calls).toEqual(["drawer false", "hide file", "enter", "show"]);
+  });
+
+  const open = (): void => { calls.push("open"); };
+
+  it("enters a wide window on its list and then opens the thread of the pane the app is on, as its row does", async () => {
+    // Given the classic app on p1 at 769px or more, p1 an agent's pane with a row in the list.
+    await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true, here: "local:p1", wide: true, open });
+    // When the way in is taken: the list first, as every way in; then, once it stands, p1's row's own opening.
+    await act(async () => { shell.enterInbox(); });
+    expect(calls).toEqual(["drawer false", "hide file", "enter", "show"]);
+    await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true, here: "local:p1", wide: true, open });
+    expect(calls.filter((call) => call === "open")).toEqual(["open"]);
+  });
+
+  it("opens no thread for a pane with no row in the list (a shell) or one on its terminal: the list, as before", async () => {
+    await draw({ inMode: false, shown: false, selectedPaneId: "p2", linkLanded: true, here: null, wide: true, open });
+    await act(async () => { shell.enterInbox(); });
+    await draw({ inMode: true, shown: true, selectedPaneId: "p2", linkLanded: true, here: null, wide: true, open });
+    expect(calls).not.toContain("open");
+  });
+
+  it("enters a phone on its list, and on the thread it was left on while the classic app still shows that pane", async () => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { requestAnimationFrame: () => 0 } });
+    const classicOn = (pane: string): Place => ({ inMode: false, shown: false, selectedPaneId: pane, linkLanded: true, here: `local:${pane}`, open });
+    const listOf = (pane: string): Place => ({ ...classicOn(pane), inMode: true, shown: true });
+    const threadOf = (pane: string): Place => ({ ...classicOn(pane), inMode: true, thread: `local:${pane}` });
+    try {
+      // Given a phone in the classic app on p1, never in the mode: the list, and no thread.
+      await draw(classicOn("p1"));
+      await act(async () => { shell.enterInbox(); });
+      await draw(listOf("p1"));
+      expect(calls).not.toContain("open");
+
+      // Given the mode left by Back to Ovis from p1's thread: entering opens it again.
+      await draw(threadOf("p1"));
+      await draw(classicOn("p1"));
+      calls = [];
+      await act(async () => { shell.enterInbox(); });
+      await draw(listOf("p1"));
+      expect(calls.filter((call) => call === "open")).toEqual(["open"]);
+
+      // Given the classic app moved to p2 since: the list again.
+      await draw(threadOf("p1"));
+      await draw(classicOn("p2"));
+      calls = [];
+      await act(async () => { shell.enterInbox(); });
+      await draw(listOf("p2"));
+      expect(calls).not.toContain("open");
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "window", saved);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
   });
 
   it("names the row a Back onto the list returns to: the thread that was shown, and none for a list opened any other way", async () => {
@@ -216,6 +287,7 @@ describe("useInbox", () => {
   let historyState: unknown;
   let backs: number;
   let events: EventTarget;
+  let session: Map<string, string>;
   const drawerOpenRef: RefObject<boolean> = { current: false };
 
   beforeEach(() => {
@@ -224,11 +296,13 @@ describe("useInbox", () => {
     historyState = null;
     backs = 0;
     events = new EventTarget();
+    session = new Map();
     drawerOpenRef.current = false;
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       matchMedia: () => ({ matches: phone, addEventListener() {}, removeEventListener() {} }),
       history: { get state() { return historyState; }, back: () => { backs += 1; } },
+      sessionStorage: { getItem: (key: string) => session.get(key) ?? null, setItem: (key: string, value: string) => { session.set(key, value); } },
       addEventListener: events.addEventListener.bind(events),
       removeEventListener: events.removeEventListener.bind(events),
     } });
@@ -321,6 +395,26 @@ describe("useInbox", () => {
     await mount(true, paneLink);
 
     expect([inbox.enabled, inbox.shown]).toEqual([true, false]);
+  });
+
+  it("starts the list where the tab left it (its filter, search and scroll), and keeps each change for the tab", async () => {
+    session.set(INBOX_LIST_KEY, JSON.stringify({ filter: "blocked", query: "pay", scroll: 120 }));
+    await mount(true);
+    expect([inbox.filter, inbox.query, inbox.scroll.current]).toEqual(["blocked", "pay", 120]);
+
+    await act(async () => { inbox.setFilter("done"); });
+    expect(JSON.parse(session.get(INBOX_LIST_KEY) ?? "null")).toEqual({ filter: "done", query: "pay", scroll: 120 });
+
+    // the offset is stored as the page is hidden (a reload)
+    inbox.scroll.current = 300;
+    await act(async () => { events.dispatchEvent(new Event("pagehide")); });
+    expect(JSON.parse(session.get(INBOX_LIST_KEY) ?? "null")).toEqual({ filter: "done", query: "pay", scroll: 300 });
+  });
+
+  it("starts a fresh list from a stored value it cannot read", async () => {
+    session.set(INBOX_LIST_KEY, JSON.stringify({ filter: "everything", query: 4, scroll: -5 }));
+    await mount(true);
+    expect([inbox.filter, inbox.query, inbox.scroll.current]).toEqual(["all", "", 0]);
   });
 
   it("is never shown outside the mode", async () => {

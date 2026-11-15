@@ -88,6 +88,9 @@ export interface TabStripProps {
   /** the app asks this strip (shortcut, palette) to open the open tab's name field, as the menu's Rename does; `onRenameHandled` clears it */
   renameRequest?: RenameRequest | null;
   onRenameHandled?: () => void;
+  /** the app asks this strip (shortcut, palette) to close the open tab, as the menu's Close tab does; `onCloseHandled` clears it */
+  closeRequest?: RenameRequest | null;
+  onCloseHandled?: () => void;
   /** drawn at the row's far end, outside the scrolling tabs: a split view half's close (App) */
   end?: ReactNode;
   /** a phone: the header's title lists the tabs, so no row is drawn (App) */
@@ -110,7 +113,7 @@ const LONG_PRESS_SLOP = 8;
 /** the click a lifted long press still sends is the press's, not a pick; a later one (a key, a mouse) is a pick again */
 const LONG_PRESS_CLICK_MS = 600;
 
-export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNewTab, onNewTerminal, onMoveToWorkspace, paneActions, panelId = PANE_TABPANEL_ID, splitDrag = false, renameRequest = null, onRenameHandled, end, inHeader = false, sheet = null, onSheetClose, browserTabs = false, closable = true, phoneRow = false }: TabStripProps) {
+export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNewTab, onNewTerminal, onMoveToWorkspace, paneActions, panelId = PANE_TABPANEL_ID, splitDrag = false, renameRequest = null, onRenameHandled, closeRequest = null, onCloseHandled, end, inHeader = false, sheet = null, onSheetClose, browserTabs = false, closable = true, phoneRow = false }: TabStripProps) {
   const t = useT();
   const { settings } = useSettings();
   const machineId = useMachineId();
@@ -424,6 +427,14 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     if (tab && shown && !tabsHidden && editing?.tabId !== tab.tab_id && renameOffered) beginRename(tab);
     onRenameHandled?.();
   }, [renameRequest]);
+  // one press each, as the rename request: the open tab closes as its row's menu would, confirmation included
+  // (requestClose, below, is reached only while the strip is shown, after the return that skips it)
+  useLayoutEffect(() => {
+    if (closeRequest === null) return;
+    const tab = tabs.find((candidate) => candidate.tab_id === selectedPane.tab_id);
+    if (tab && shown && !tabsHidden && closable) requestClose(tab);
+    onCloseHandled?.();
+  }, [closeRequest]);
 
   // the More list is long (it holds every tab that does not fit): letters typed over it jump to the next tab whose
   // name starts with them, as a native menu's typeahead does (G-160). RowMenu's own type-ahead does it; a second

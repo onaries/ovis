@@ -131,6 +131,8 @@ const BASE: Record<string, string> = {
   // ---- settings ----
   "Settings": "설정",
   "PCs": "PC",
+  "PC {name}": "PC {name}",
+  "PCs, {n} of {m} connected": "PC {m}대 중 {n}대 연결됨",
   "Chat": "채팅",
   "Agent default": "에이전트 기본값",
   "Devices and PCs": "기기와 PC",
@@ -421,6 +423,7 @@ const BASE: Record<string, string> = {
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "릴레이를 켜면 기기 게이트가 닫힙니다. 그 뒤 새 브라우저는 페어링 코드나 접속 토큰이 필요합니다.",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "새 탭",
+  "New tab with agent…": "에이전트로 새 탭…",
   "New worktree": "새 워크트리",
   "Open worktree…": "워크트리 열기…",
   "Earlier sessions…": "이전 세션…",
@@ -441,6 +444,7 @@ const BASE: Record<string, string> = {
   "Split pane down": "패널을 아래로 분할",
   "Zoom or unzoom pane": "패널 확대 또는 해제",
   "Close pane": "패널 닫기",
+  "Close tab": "탭 닫기",
   "Plan: {done} of {total} done": "계획: {total}개 중 {done}개 완료",
   "Plan": "계획",
   "Something went wrong": "문제가 발생했습니다",
@@ -572,6 +576,7 @@ const BASE: Record<string, string> = {
   "Search": "검색",
   "Choose one from the list to open its chat here.": "목록에서 하나를 고르면 채팅이 여기에 열립니다.",
   "Agent inbox": "에이전트 인박스",
+  "Inbox mode": "인박스 모드",
   "Open agent inbox": "에이전트 인박스 열기",
   "Back to Ovis": "Ovis로 돌아가기",
   "Remove PC": "PC 제거",

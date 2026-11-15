@@ -574,6 +574,9 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
             await capture(page, theme, language, "menu-pressed");
             await page.mouse.move(box.x + box.width / 2, box.y - box.height);
             await page.mouse.up();
+            // the finger lifts: no pointer stays over the page. Left there, it hovers a Settings row drawn under it
+            // later, whose sentence opens once it has rested (SettingsControls' useRowSentence) and takes Escape
+            await page.mouse.move(0, 0);
           }
           await closeMenu(page);
           if (phone) {
@@ -635,7 +638,8 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
             await page.keyboard.press("ControlOrMeta+Shift+Comma");
             await page.locator(".settings-dialog").waitFor();
             const alerts = page.locator(".settings-dialog").getByRole("tab", { name: "Alerts", exact: true });
-            if (await alerts.count() > 0) await alerts.click();
+            // tapped on a phone, as a finger does: a mouse click would rest on the row the page draws under it
+            if (await alerts.count() > 0) await (phone ? alerts.tap() : alerts.click());
             await page.locator(".settings-save-error").waitFor({ timeout: 10_000 });
             await capture(page, theme, language, "save-error");
             fixture.error = false;

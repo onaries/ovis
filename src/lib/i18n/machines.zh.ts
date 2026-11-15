@@ -42,7 +42,6 @@ export const MACHINES_ZH: Record<string, string> = {
   "New workspace on {name}": "在 {name} 上新建工作区",
   "PCs and workspaces": "PC 和工作区",
   "Loading PCs…": "正在加载 PC…",
-  "PC {name}": "PC {name}",
   "Manage {name}": "管理 {name}",
   "Manage PC": "管理 PC",
   "PC name": "PC 名称",

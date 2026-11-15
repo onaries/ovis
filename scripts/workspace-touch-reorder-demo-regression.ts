@@ -753,7 +753,7 @@ try {
       await movedRow.locator(".row-menu-toggle").click();
       const workspaceSheet = page.locator(".row-sheet");
       await workspaceSheet.waitFor();
-      assert.deepEqual(await workspaceSheet.locator(".row-sheet-item").allTextContents(), ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close group", "New worktree", "Open worktree…", "Collapse"],
+      assert.deepEqual(await workspaceSheet.locator(".row-sheet-item").allTextContents(), ["Pin workspace", "New tab with agent…", "Rename workspace", "Earlier sessions…", "Close group", "New worktree", "Open worktree…", "Collapse"],
         "the touch menu of a repository contains its group's native actions, with no pane or reorder actions");
       await workspaceSheet.getByRole("button", { name: "Cancel", exact: true }).click();
       await workspaceSheet.waitFor({ state: "detached" });

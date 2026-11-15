@@ -2471,6 +2471,35 @@ button {
   height: var(--space-5);
 }
 
+/* the wordmark as the way into the inbox mode: a plain button around it, filled as an icon button is under a
+   hovering pointer and a press; a button, so the installed app's title-bar drag region gives it the click */
+.sidebar-brand.is-entry {
+  padding: var(--space-half) var(--space-1);
+  margin-left: calc(-1 * var(--space-1));
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .sidebar-brand.is-entry:hover {
+    background: var(--bg-hover);
+  }
+}
+
+/* under a finger (a tablet from 769px) as tall as the header's icon buttons there; a mouse keeps the slim one */
+@media (pointer: coarse) {
+  .sidebar-brand.is-entry {
+    min-height: var(--touch-target);
+  }
+}
+
+.sidebar-brand.is-entry:active {
+  background: var(--bg-elevated);
+}
+
 /* the pane's tools at the end of the header's row: Chat/Terminal, Files (and More beside them) as
    compact pills, as a browser keeps its actions apart from its tabs */
 .header-text-button {

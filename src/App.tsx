@@ -67,7 +67,7 @@ import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.t
 import { useHerdrPrefixKeys } from "./lib/herdrKeys.ts";
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
-import { CRAMPED_QUERY, paneContextPress, tabRowHidden } from "./lib/paneCanvas.ts";
+import { CRAMPED_QUERY, paneContextPress, soloPane, tabRowHidden } from "./lib/paneCanvas.ts";
 import { useTabSheet } from "./lib/useTabSheet.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import { removePushSubscription } from "./lib/push.ts";
@@ -114,7 +114,7 @@ import { LensToggle } from "./components/LensToggle.tsx";
 import { PcLoadStatus } from "./components/MachineStats.tsx";
 import logoDark from "./assets/brand/logo-dark.png";
 import logoLight from "./assets/brand/logo-light.png";
-import { nextWaitingTarget, sessionCountsAcross, tabPosition, useDrawerDialog, useWaitingRosters, waitingElsewhere } from "./lib/headerSessions.ts";
+import { nextWaitingTarget, sessionCountsAcross, tabPosition, useDrawerDialog, useWaitingRosters, waitingElsewhere, waitingTargets } from "./lib/headerSessions.ts";
 import { selectionStill } from "./lib/selectionMark.ts";
 import { carryMovedPane, movedView } from "./lib/paneMove.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
@@ -138,10 +138,13 @@ import { lensOwner, storedView, usePaneLens, usePaneLensState, usePaneViewPicks 
 import { useSplitLayout, useSplitRecheck, useSplitState } from "./lib/useSplitView.ts";
 import { linkSelects, useLinkLanding, useMachineGone, useNotificationTargets, useSelectedLayout, useSelectedMachine, useSelectedPane, useSelectionMark, useSelectionState, useSelectPane, useSelectTarget } from "./lib/useSelection.ts";
 import { useAddressBar } from "./lib/useAddressBar.ts";
-import { useInbox, useInboxShell } from "./lib/useInbox.ts";
+import { useInbox, useInboxShell, wayInOpensThread } from "./lib/useInbox.ts";
+import { inboxOrder } from "./lib/agentInbox.ts";
+import { layoutCells } from "./lib/layoutMap.ts";
 import { pageStartsInInbox, useInboxMode } from "./lib/inboxMode.ts";
 import { InboxList } from "./components/InboxList.tsx";
 import { InboxConnecting, InboxFootEntry, InboxUnchosen, ThreadTitle, ThreadTop } from "./components/InboxMode.tsx";
+import { InboxRail } from "./components/InboxRail.tsx";
 import { OvisMark } from "./components/OvisMark.tsx";
 import { catchTypeAhead } from "./lib/typeAhead.ts";
 import { goalStatusWord, sessionMenuLines, sizeWords, useSessionStats, workedWords } from "./lib/sessionStats.ts";
@@ -195,12 +198,21 @@ function ConnectionChip({ connected, word, title, quiet }: { connected: boolean;
   );
 }
 
-/** The sidebar's head (from 769px): the Ovis wordmark in the theme's colours (ovis-site's logo pair). */
-function SidebarBrand({ dark }: { dark: boolean }) {
-  return (
+/**
+ * The sidebar's head (from 769px): the Ovis wordmark in the theme's colours (ovis-site's logo pair). Where the inbox mode
+ * is offered it is a way into it, as the app icon at a desktop app's top left goes home.
+ */
+function SidebarBrand({ dark, onOpenInbox }: { dark: boolean; onOpenInbox: (() => void) | null }) {
+  const t = useT();
+  if (onOpenInbox === null) return (
     <div className="brand sidebar-brand">
       <img src={dark ? logoDark : logoLight} alt="Ovis" width="68" height="24" />
     </div>
+  );
+  return (
+    <button type="button" className="brand sidebar-brand is-entry" aria-label={t("Open agent inbox")} title={t("Open agent inbox")} onClick={onOpenInbox}>
+      <img src={dark ? logoDark : logoLight} alt="" width="68" height="24" />
+    </button>
   );
 }
 
@@ -283,6 +295,8 @@ export function App() {
     showsChat(pane, lens) && machineSessions.peek(machineId)?.socket.canSearchConversation() === true;
   // the Rename tab shortcut and palette action: the tab strip of the selected pane opens its name field
   const { renameRequest, requestRename, clearRenameRequest } = useRenameRequest(selectedMachineId, selectedPaneId);
+  // the Close tab shortcut's press, one-shot as Rename tab's: the open tab's row, or its pane's menu where it has none, closes it
+  const { renameRequest: closeTabRequest, requestRename: requestCloseTab, clearRenameRequest: clearCloseTabRequest } = useRenameRequest(selectedMachineId, selectedPaneId);
   // the header's More menu: its button
   // and, on a phone, the two groups it folds its find items and the pane's and tab's actions into (G-143)
   const moreMenu = useMoreMenu();
@@ -355,7 +369,26 @@ export function App() {
   // is still current: the push takes that entry over (lib/sheetHistory.ts), and no entry is left between. The shell's
   // own part (the drawer put away, the list shown for a mode with no pane) is lib/useInbox.ts useInboxShell.
   const { leave: leaveMode } = inboxMode;
-  const { enterInbox, returnTo } = useInboxShell({ inMode, shown: inbox.shown, show: inbox.show, enter: inboxMode.enter, setDrawerOpen, hideFile, selectedPaneId, linkLanded,
+  const { enterInbox, returnTo } = useInboxShell({ inMode, shown: inbox.shown, show: inbox.show,
+    // the way in opens the thread of the pane the app is on as its row would (InboxList's onOpen below), once the
+    // list has covered the panes
+    open: () => {
+      if (selectedPaneId === null) return;
+      activateSlotOf({ machineId: selectedMachineId, paneId: selectedPaneId });
+      selectTarget(selectedMachineId, selectedPaneId, "chat");
+    }, enter: inboxMode.enter, setDrawerOpen, hideFile, selectedPaneId, linkLanded, wide: wideScreen,
+    // only a pane drawn alone on its chat with a row in the list (lib/agentInbox.ts inboxOrder, as the list draws it);
+    // the panes its tab draws as PaneCanvas counts them (lib/paneCanvas.ts soloPane, lib/layoutMap.ts layoutCells)
+    here: () => {
+      if (selectedPaneId === null || !linkLanded) return null;
+      const layout = snapshot?.layouts.find((item) => item.tab_id === selectedPane?.tab_id) ?? null;
+      const cells = layout ? layoutCells(layout).map((cell) => cell.paneId) : [selectedPaneId];
+      return wayInOpensThread({
+        hasRow: inboxOrder(sidebarMachines, activity).some((row) => row.machine.id === selectedMachineId && row.entry.pane.pane_id === selectedPaneId),
+        view, peek: terminalPeek !== null && terminalPeek.machineId === selectedMachineId && terminalPeek.paneId === selectedPaneId,
+        drawnPanes: soloPane(layout, cells, selectedPaneId, !wideScreen) === null ? cells.length : 1, splitShown: splitOn,
+      }) ? sidebarPinKey(selectedMachineId, selectedPaneId) : null;
+    },
     thread: inMode && !inbox.shown && selectedPaneId !== null && linkLanded ? sidebarPinKey(selectedMachineId, selectedPaneId) : null,
     focusInput: () => paneControls.current?.focusInput() });
   // offered where the mode is, and not over the setup guide, which has the classic shell to itself
@@ -561,6 +594,8 @@ export function App() {
   // a pane hidden under the mode's list is not closed, typed into, split or zoomed by a key: the shortcuts listen on the window, past its inert slot
   // nor is an inbox mode thread: the mode's shell has no tab row, split or pane menu to close from
   const closeOffered = selectedPane !== null && auth?.role !== "watch" && !guideShown && !inbox.shown && !inMode && !paneLocked(selectedPane.pane_id);
+  // a tab holding a locked pane is refused by the row or menu that closes it (TabStrip, PaneCanvas), as their Close tab is absent
+  const tabCloseOffered = selectedPane !== null && tabStripMounted && auth?.role !== "watch" && !guideShown && !inbox.shown && !inMode;
   const actions = useMemo<AppActions>(
     () => ({
       selectPane,
@@ -759,8 +794,9 @@ export function App() {
         const target = snapshotRef.current?.panes.find((pane) => pane.pane_id === selectionRef.current.paneId);
         if (target) paneActionsRef.current?.(target).find((item) => item.id === "close" && !item.disabled)?.run();
       },
+      closeTab: !tabCloseOffered ? null : () => requestCloseTab(selectedMachineId, selectedPaneId!),
     }),
-    [closeOffered, inbox.shown, inMode, modeOffered, enterInbox, leaveMode, revealFiles, selectPane, selectTarget, selectedPaneId, selectedPane?.own_tab, selectedMachineId, appLayout, reorderCoordinator, tabStripMounted, setView, view, terminalPeek, endPeek, updateSettings, resolvedTheme, canSignOut, lock, bell.run, enableNotifications, load, layoutRefused, moveRefused, lenses, openSidebarFilter, selectedSearchable, requestSearch, split, soloSlot, settings.webLinks, settings.sidebarBackgroundWorkspaces, openWebPage],
+    [closeOffered, tabCloseOffered, requestCloseTab, inbox.shown, inMode, modeOffered, enterInbox, leaveMode, revealFiles, selectPane, selectTarget, selectedPaneId, selectedPane?.own_tab, selectedMachineId, appLayout, reorderCoordinator, tabStripMounted, setView, view, terminalPeek, endPeek, updateSettings, resolvedTheme, canSignOut, lock, bell.run, enableNotifications, load, layoutRefused, moveRefused, lenses, openSidebarFilter, selectedSearchable, requestSearch, split, soloSlot, settings.webLinks, settings.sidebarBackgroundWorkspaces, openWebPage],
   );
 
   useShortcuts(actions, locked === false);
@@ -807,7 +843,7 @@ export function App() {
   const keyboardLikely = useMediaQuery("(hover: hover) and (pointer: fine)");
   const paletteKeys = keyboardLikely ? formatKeys(shortcutDisplayKeys("palette", settings.shortcutOverrides)).join("+") : "";
   // A tooltip follows the platform and the current binding, including a removed shortcut.
-  const shortcutTitle = (label: string, id: "palette" | "toggle-sidebar" | "toggle-view"): string => {
+  const shortcutTitle = (label: string, id: "palette" | "toggle-sidebar" | "toggle-view" | "settings"): string => {
     const keys = formatKeys(shortcutDisplayKeys(id, settings.shortcutOverrides));
     return keys.length === 0 ? label : `${label} (${keys.join("+")})`;
   };
@@ -883,10 +919,11 @@ export function App() {
   // The inbox mode's More: what still means something in a shell with no drawer, tab row or status bar. On the list
   // only what is the app's own (the list already shows who waits first); in a thread also what is about the thread,
   // the pane menu's items for what it shows among them. Settings stands last: the mode has no sidebar foot to hold it.
-  // From 769px the list is beside the thread and each has a More of its own: the column's holds the app's items, the
-  // pane's the thread's. Which one is open is told by where its button stands.
+  // From 769px the app's own items are the buttons of the mode's rail (components/InboxRail.tsx), each in that one
+  // place: the column has no More, and the one over the pane holds the thread's items after the palette, which the
+  // rail draws no magnifier for (the list's search field is the screen's one): a touch screen has no shortcut.
   const fromMore = (id: string): RowMenuItem[] => moreItems.filter((item) => item.id === id);
-  const moreOnList = inbox.shown || (more !== null && more.anchor.closest(".mode-inbox") !== null);
+  const moreOnList = inbox.shown;
   const modeThreadItems: RowMenuItem[] = [
     // beside the list the next session that waits is its first row: the pane's More does not say it again
     ...(inboxWide ? [] : fromMore("next-waiting")), ...fromMore("find-group"), ...fromMore("find"),
@@ -894,12 +931,12 @@ export function App() {
     ...fromMore("files"), ...fromMore("copy-link"),
     ...paneMoreItems.filter((item) => item.id === "mirror-width" || item.id === "recover-unsent"),
   ].map((item) => ({ ...item, divider: false }));
-  // The way out first on a phone, whose shell has no drawer or sidebar to leave by. On a wide window the column's
-  // foot is the way out (InboxList.tsx), 40px under this menu, and More does not say it twice. The app's own mark
-  // stands for it wherever it is drawn. Then the palette, as near the top as in the classic More and for its
-  // reason: the mode's shell has no palette button, and a touch screen no shortcut
+  // The way out first on a phone, whose shell has no drawer or sidebar to leave by (a wide window's is the mark at
+  // its rail's top, and no More there says it). The app's own mark stands for it wherever it is drawn. Then the
+  // palette, as near the top as in the classic More and for its reason: a phone's shell has no palette button, and
+  // a touch screen no shortcut
   const modeLeadItems: RowMenuItem[] = [
-    ...(inboxWide ? [] : [{ id: "exit-inbox", label: t("Back to Ovis"), icon: PanelsTopLeft, glyph: <OvisMark />, run: leaveMode }]),
+    { id: "exit-inbox", label: t("Back to Ovis"), icon: PanelsTopLeft, glyph: <OvisMark />, run: leaveMode },
     ...fromMore("palette"),
   ];
   const modeEndItems: RowMenuItem[] = [
@@ -908,7 +945,9 @@ export function App() {
   ];
   const modeAppItems: RowMenuItem[] = [...modeLeadItems, ...modeEndItems];
   // a phone's thread has the one More: the way out and the palette, then the thread's items, then the rest of the app's
-  const modeMoreItems: RowMenuItem[] = moreOnList ? modeAppItems : inboxWide ? modeThreadItems
+  // beside the wide list with no thread open the pane's More is the palette's one way for a pointer or a finger
+  const paletteOnly = inboxWide && (inbox.shown || selectedPane === null);
+  const modeMoreItems: RowMenuItem[] = paletteOnly ? fromMore("palette") : moreOnList ? modeAppItems : inboxWide ? [...fromMore("palette"), ...modeThreadItems.map((item, index) => index === 0 ? { ...item, divider: true } : item)]
     : [...modeLeadItems, ...modeThreadItems.map((item, index) => index === 0 ? { ...item, divider: true } : item), ...modeEndItems];
 
   // the chat's surface is what the pane column shows: the header's pane zone and the tab strip
@@ -973,20 +1012,32 @@ export function App() {
   if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} consumePairCode={consumePairCode} pairingUnconfirmed={pairingUnconfirmed} onPaired={onPaired} onUnlocked={unlock} />;
 
   // The mode's list: the screen on a phone, where More is its own control (the shell draws no header over it) and
-  // the header's note stands between its top controls; the column from 769px, where its row for the open thread is
-  // the selected one. What the stream that feeds its rows has to say is said on the list, which otherwise shows its
-  // rows as they last were with no sign, whether or not a pane is mounted under it (a thread says its own pane's
-  // word): on a phone where the note stands, while there is no note.
+  // the header's note stands between its top controls; the column from 769px, after the mode's rail, where its row
+  // for the open thread is the selected one and it draws no More. What the stream that feeds its rows has to say
+  // is said beside them, which otherwise show as they last were with no sign, whether or not a pane is mounted
+  // under the list (a thread says its own pane's word): on a phone by the list, where the note stands, while there
+  // is no note; from 769px by the rail's PC, which draws its dot only while the open thread's chip does not say
+  // the same word (one fact, one place).
   const listNote = herdrPrefixWaiting ? t("herdr prefix: press a key") : note;
+  // a row opens its agent's thread on its chat; the half of the app's own split that shows the pane becomes the
+  // active one first, so the pick never moves that pane into the other half
+  const openThread = (machineId: string, paneId: string): void => { activateSlotOf({ machineId, paneId }); selectTarget(machineId, paneId, "chat"); };
   const modeList = (column: boolean): ReactNode => (
-    <InboxList machines={sidebarMachines} activity={activity} watching={auth?.role === "watch"} wide={column} filter={inbox.filter} onFilter={inbox.setFilter} query={inbox.query} onQuery={inbox.setQuery} scroll={inbox.scroll} focus={{ ...inbox.focus, row: returnTo }}
+    <InboxList ref={inbox.list} machines={sidebarMachines} activity={activity} watching={auth?.role === "watch"} wide={column} filter={inbox.filter} onFilter={inbox.setFilter} query={inbox.query} onQuery={inbox.setQuery} scroll={inbox.scroll} focus={{ ...inbox.focus, row: returnTo }}
       current={column && !inbox.shown && selectedPaneId !== null ? sidebarPinKey(selectedMachineId, selectedPaneId) : null}
-      onOpen={(machineId, paneId) => { activateSlotOf({ machineId, paneId }); selectTarget(machineId, paneId, "chat"); }}
+      onOpen={openThread}
       onNew={openNewOn} questionReads={inbox.questionReads} summaryReads={inbox.summaryReads}
-      more={{ label: moreBase, expanded: more !== null && moreOnList, popup: isSheetWidth ? "dialog" : "menu", onPress: (anchor) => setMore((open) => (open ? null : { anchor })) }}
-      onExit={leaveMode}
-      note={column ? undefined : <HeaderNote note={listNote} />} connection={column || listNote === null ? (column && !inbox.shown && selectedPane !== null && note === null && rosterConnection === headerConnection ? null : rosterConnection) : null} failure={error === null ? null : { error, retry: load }} />
+      more={column ? undefined : { label: moreBase, expanded: more !== null && moreOnList, popup: isSheetWidth ? "dialog" : "menu", onPress: (anchor) => setMore((open) => (open ? null : { anchor })) }}
+      note={column ? undefined : <HeaderNote note={listNote} />} connection={!column && listNote === null ? rosterConnection : null} failure={error === null ? null : { error, retry: load }} />
   );
+  // The rail's count (from 769px) is of the agents its press can open, and the press opens the next of them as its
+  // row would: both from one starting pane, the open thread's, or none while the list is alone (every waiting agent
+  // is another one then, the pane under the list included). So the button is drawn exactly while its press has a
+  // thread to open, and an agent that waits in a pane its tab's zoom hides, which no jump reaches, is not counted
+  // here, though More counts it over a phone's thread (lib/headerSessions.ts).
+  const railFrom = { machineId: selectedMachineId, paneId: inbox.shown ? null : selectedPaneId };
+  const railNext = inboxWide ? nextWaitingTarget(waitingRosters, railFrom) : null;
+  const railWaiting = railNext !== null ? { count: waitingTargets(waitingRosters, railFrom), open: () => openThread(railNext.machineId, railNext.paneId) } : null;
   // More's button: a square of the header's, or one of the mode's round controls over the wide pane
   const moreButton = (round: boolean): ReactNode => (
     <span className="header-more">
@@ -996,7 +1047,7 @@ export function App() {
         aria-label={round ? t("More") : moreLabel}
         title={round ? t("More") : moreLabel}
         aria-haspopup={isSheetWidth ? "dialog" : "menu"}
-        aria-expanded={(more !== null && !(inMode && moreOnList)) || groupItems.length > 0}
+        aria-expanded={(more !== null && !(inMode && moreOnList && !inboxWide)) || groupItems.length > 0}
         onClick={(event) => {
           const anchor = event.currentTarget;
           setMore((open) => (open ? null : { anchor }));
@@ -1005,7 +1056,7 @@ export function App() {
         <Ellipsis />
       </button>
       {/* the waiting dot carries the count (G-015): the number a phone otherwise reads only inside More */}
-      {/* the wide thread's More holds the thread's items alone: Alerts, and its dot's reason, are the column's */}
+      {/* the wide thread's More holds the thread's items alone: Alerts, and its dot's reason, are the rail's */}
       {waitingDot ? <span className="header-more-dot is-waiting" data-count={moreWaiting} aria-hidden="true" /> : alertsOffDot && !round && <span className="header-more-dot" aria-hidden="true" />}
     </span>
   );
@@ -1036,7 +1087,7 @@ export function App() {
             .header-side is the sidebar's own top row from 769px (styles.css); below that its
             buttons sit in the bar */}
         <div className="header-side">
-          {wideScreen && !sidebarCollapsed && !inMode && <SidebarBrand dark={resolvedTheme === "dark"} />}
+          {wideScreen && !sidebarCollapsed && !inMode && <SidebarBrand dark={resolvedTheme === "dark"} onOpenInbox={modeOffered ? enterInbox : null} />}
           {inboxBack ? <button type="button" id="inbox-back" className="icon-button inbox-back" aria-label={t("Back")} title={t("Back")} onClick={inbox.back}><ChevronLeft /></button> : <button
             type="button"
             id="drawer-toggle"
@@ -1081,6 +1132,8 @@ export function App() {
                 sheet={phoneTabRow ? tabSheet : null} onSheetClose={closeTabSheet} closable={auth?.role !== "watch"}
                 renameRequest={renameRequest?.machineId === selectedMachineId && renameRequest.paneId === selectedPane.pane_id ? renameRequest : null}
                 onRenameHandled={clearRenameRequest}
+                closeRequest={closeTabRequest?.machineId === selectedMachineId && closeTabRequest.paneId === selectedPane.pane_id ? closeTabRequest : null}
+                onCloseHandled={clearCloseTabRequest}
                 onNewTab={() => actions.openNewTab()}
                 onNewTerminal={() => actions.openTerminalTab()}
                 onMoveToWorkspace={(tabId, workspaceId) => actions.moveTabToWorkspace({ machineId: selectedMachineId, tabId, workspaceId })}
@@ -1226,8 +1279,16 @@ export function App() {
       <PanePressContext.Provider value={pressPane}>
       <div className="app-body">
         {/* the inbox mode has no drawer and no workspace tree: its list stands in the pane's place, and from 769px
-            in the sidebar's own column, at the sidebar's width, so the pane is as wide as in the classic shell */}
+            in the sidebar's own column, at the sidebar's width, so the pane is as wide as in the classic shell. The
+            mode's rail comes first in that column, then the list, then the column's edge: the keyboard follows
+            the drawn order */}
         {inMode ? (inboxWide && <aside className="sidebar inbox-column">
+          <InboxRail onExit={leaveMode} onInbox={() => inbox.list.current?.toTop()} waiting={railWaiting}
+            alerts={{ on: bell.on, title: bell.title, toggle: () => void bell.run() }} onSettings={actions.openSettings} shortcutTitle={shortcutTitle}
+            pcs={{ machines: sidebarMachines, selectedId: selectedMachineId, connection: rosterConnection,
+              saidByThread: !inbox.shown && selectedPane !== null && note === null && rosterConnection === headerConnection,
+              // a PC alone, as the classic app opens one: no thread of it is chosen, so the list stands with none open
+              onSelect: (machineId) => selectTarget(machineId, null) }} />
           {modeList(true)}
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>) : <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}${sidebarPeeking ? " is-peek" : ""}`} role={drawerModal ? "dialog" : undefined} aria-modal={drawerModal ? true : undefined} tabIndex={drawerModal ? -1 : undefined} aria-label={drawerModal ? t("Workspace list") : undefined}
@@ -1286,7 +1347,7 @@ export function App() {
               <LensToggle view={view} peek={terminalPeek !== null} terminalAttach={terminalAttach} thread round
                 title={(label) => shortcutTitle(label, "toggle-view")} onToggle={actions.toggleView} />
               {moreButton(true)}
-            </> : null} />}
+            </> : moreButton(true)} />}
           {(inbox.shown && inbox.cold ? [] : shownSlots).map((slot) => {
             const active = !splitOn || split!.active === slot;
             const other = active || threadDrawn ? undefined : others.get(slot);
@@ -1370,6 +1431,8 @@ export function App() {
                     inHeader={tabsInHeader} sheet={active ? tabSheet : null} onSheetClose={closeTabSheet} end={slotEnd} closable={auth?.role !== "watch"}
                     renameRequest={active && renameRequest?.machineId === machineId && renameRequest.paneId === pane.pane_id ? renameRequest : null}
                     onRenameHandled={clearRenameRequest}
+                    closeRequest={active && closeTabRequest?.machineId === machineId && closeTabRequest.paneId === pane.pane_id ? closeTabRequest : null}
+                    onCloseHandled={clearCloseTabRequest}
                     onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     onNewTerminal={() => actions.openTerminalTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     onMoveToWorkspace={(tabId, workspaceId) => actions.moveTabToWorkspace({ machineId, tabId, workspaceId })}
@@ -1396,6 +1459,7 @@ export function App() {
                     onMoveToWorkspace={(tabId, workspaceId) => actions.moveTabToWorkspace({ machineId, tabId, workspaceId })}
                     tabsInHeader={tabsInHeader || threadDrawn} solo={threadDrawn}
                     renameRequest={active && pane && renameRequest?.machineId === machineId && renameRequest.paneId === pane.pane_id ? renameRequest : null}
+                    closeTabRequest={active && pane && closeTabRequest?.machineId === machineId && closeTabRequest.paneId === pane.pane_id ? closeTabRequest : null}
                     renderPane={(item, itemActive, herdrSplit) =>
                       <PaneTerminal
                         onOpenFile={item ? (path) => openFile({ path, paneId: item.pane_id, machineId }) : null}

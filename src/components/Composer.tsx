@@ -46,6 +46,7 @@ import {
   MAX_COMPOSER_CHARS,
   namesHiddenCommand,
   rankSlashCommands,
+  sendsBarePick,
   slashCommandReplacement,
   submitNote,
   terminalCommand,
@@ -690,6 +691,8 @@ export function Composer({
   const uploadsRunning = useRef(0);
   /** paths placed so far, by attachment id: ids follow pick order */
   const placedMentions = useRef(new Map<number, string>());
+  /** the box's text right after a pick that goes bare when sent unchanged (sendsBarePick), or null */
+  const barePick = useRef<string | null>(null);
   /** finished uploads whose paths wait for a /command or an IME composition to end, or for room */
   const waitingMentions = useRef<{ id: number; path: string; name: string }[]>([]);
 
@@ -732,6 +735,7 @@ export function Composer({
       const replacement = typeof choice === "string" ? `@${choice} `
         : currentTrigger.kind === "slash" ? slashCommandReplacement(choice, agent, currentTrigger) : atSkillReplacement(choice);
       const completed = applyCompletion(text, currentTrigger, replacement);
+      barePick.current = typeof choice !== "string" && currentTrigger.kind === "slash" && sendsBarePick(choice, agent) ? completed.text : null;
       setTextAndCaret(completed.text, completed.caret);
       setMenuDismissed(true);
       if (typeof choice !== "string") {
@@ -852,7 +856,9 @@ export function Composer({
     if (composingRef.current) return false;
     if (viewOnly || !connected || uploading || roomless || sending || (text.trim().length === 0 && carried.length === 0)) return false;
     if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
-    const message = carried.length > 0 ? messageWithComments(carried, text) : text;
+    // the pick alone, unchanged: its space only closed the menu here, and OpenCode would send `/new ` as a prompt
+    const picked = carried.length === 0 && text === barePick.current && /^\/\S+ $/u.test(text);
+    const message = carried.length > 0 ? messageWithComments(carried, text) : picked ? text.trimEnd() : text;
     if (message.length > MAX_COMPOSER_CHARS) { setNote(t("Too long with the comments: remove a comment or shorten the message.")); return false; }
     const sentComments = carried;
     const sent = text;
@@ -1260,7 +1266,8 @@ export function Composer({
     <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined} inert={inert || undefined}>
       {greeting}
       {notices}
-      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
+      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it; a tap
+          on the grey words in the box only focuses it, so the tap that starts the user's own reply never takes it */}
       {settings.suggestionChip && offered !== null && text === "" && (
         <div className="composer-quick composer-suggestion-row">
           <button type="button" className="composer-quick-reply composer-suggestion" title={t("Use the suggestion")} onClick={acceptSuggestion}>
@@ -1493,7 +1500,7 @@ export function Composer({
           // in a frame, after the caret of dictation held through the composition has landed
           setTimeout(() => requestAnimationFrame(() => { if (mounted.current) placeWaitingMentions(); }), 0);
         }}
-          className={`composer-text${settings.suggestionChip && offered !== null && text === "" ? " has-suggestion" : ""}`}
+          className="composer-text"
           rows={1}
           maxLength={MAX_COMPOSER_CHARS}
           placeholder={placeholder}
@@ -1518,23 +1525,14 @@ export function Composer({
           }}
           onKeyUp={(event) => setCaret(event.currentTarget.selectionStart)}
           onChange={(event) => {
+            // typed or pasted: whatever the box holds now is the user's own text, never a pick (sendsBarePick)
+            barePick.current = null;
             setText(event.target.value);
             setCaret(event.target.selectionStart);
             setMenuDismissed(false);
             setNote((current) => typeof current === "object" && current !== null && "failure" in current ? current : pasteCutNote.current);
           }}
         />
-        {/* tapping the grey words takes the suggestion only when Settings asks for it: by default a tap there just focuses the box */}
-        {settings.suggestionChip && offered !== null && text === "" && (
-          <div className="composer-inline-suggestion">
-            <span role="button" tabIndex={-1} aria-label={t("Use the suggestion")}
-              onClick={acceptSuggestion} onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                acceptSuggestion();
-              }}>{offered}</span>
-          </div>
-        )}
         <textarea
           ref={measurementRef}
           className="composer-measure"

@@ -1,0 +1,206 @@
+/* The inbox mode's rail (InboxRail.tsx): the mode's ways out and around as one column of icon buttons at the far left
+   of its wide layout, before the list. Its width is the shell's (--inbox-rail-w, InboxMode.css), which cuts it out
+   of the sidebar's width. Every value is one of the app's tokens. */
+.inbox-rail {
+  /* the current place's glyph is drawn heavier, as the open row's name is */
+  --inbox-rail-stroke-current: 2.5;
+  /* the column's start safe area is the rail's: it stands clear of it, on a surface that runs to the window's edge */
+  --inbox-rail-box: calc(var(--inbox-rail-w) + env(safe-area-inset-left, 0px));
+  display: flex;
+  flex: 0 0 var(--inbox-rail-box);
+  flex-direction: column;
+  align-items: center;
+  /* the two groups never touch, in a window too short to part them */
+  gap: var(--space-2);
+  width: var(--inbox-rail-box);
+  min-height: 0;
+  /* --space-3 from each edge: the end inset counts the rail's hairline, as the column's own insets count its seam */
+  padding-block: var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  padding-inline: calc(var(--space-3) + env(safe-area-inset-left, 0px)) calc(var(--space-3) - var(--hairline));
+  /* the column's own surface, and a line inside a region: the rail and the list are one region */
+  background: var(--bg-nav);
+  border-inline-end: var(--hairline) solid var(--border);
+  /* A window too short for its buttons (a phone on its side) scrolls the rail by itself, so its last button is
+     still reached. No scrollbar is drawn: one would take a fifth of the rail and push every button off its line. */
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+}
+
+.inbox-rail::-webkit-scrollbar {
+  display: none;
+}
+
+/* a group keeps its buttons' size in a window too short for them: the rail scrolls, nothing is squeezed */
+.inbox-rail-group {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* the lower group is pushed to the rail's foot: its last button stands where the column's foot stood */
+.inbox-rail-group.is-lower {
+  margin-block-start: auto;
+}
+
+/* the icon button with no box at rest: a rail of raised discs would be the loudest thing in the window. It keeps
+   one box in every state; only its fill and its glyph's colour change. */
+.icon-button.inbox-rail-item {
+  /* the fill the button stands on, which a mark hung on its glyph is ringed with */
+  --rail-item-bg: var(--bg-nav);
+  /* how far in from the button's edge a mark stands so that it hangs on the glyph's corner, at either control size */
+  --rail-mark-inset: calc((var(--inbox-control) - var(--icon-size)) / 2 - var(--space-2));
+  position: relative;
+  width: var(--inbox-control);
+  height: var(--inbox-control);
+  background: var(--rail-item-bg);
+  color: var(--text-dim);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* A button answers from the window's start edge to the rail's end and half the gap above and below it, through
+   an expander that draws nothing; the first reaches the window's top and the last its foot, so the window's two
+   corners are targets. The insets count the button's own transparent hairline, and the safe areas the rail
+   keeps clear of: an expander ends at the rail's own edge, which clips what passes it. */
+.icon-button.inbox-rail-item::before {
+  content: "";
+  position: absolute;
+  inset-block: calc(var(--space-2) / -2 - var(--hairline));
+  inset-inline: calc(var(--space-3) * -1 - var(--hairline) - env(safe-area-inset-left, 0px)) calc(var(--space-3) * -1);
+}
+
+.inbox-rail-group.is-top > .inbox-rail-item:first-child::before {
+  inset-block-start: calc(var(--space-3) * -1 - var(--hairline));
+}
+
+.inbox-rail-group.is-lower > .inbox-rail-item:last-child::before {
+  inset-block-end: calc(var(--space-3) * -1 - var(--hairline) - env(safe-area-inset-bottom, 0px));
+}
+
+/* the way out stands apart from what follows it: twice the gap, which its own expander takes */
+.icon-button.inbox-rail-item.inbox-rail-exit {
+  margin-block-end: var(--space-2);
+}
+
+.icon-button.inbox-rail-item.inbox-rail-exit::before {
+  inset-block-end: calc(var(--space-2) / -2 - var(--space-2) - var(--hairline));
+}
+
+/* under a pointer that hovers: the sidebar's own hover fill and a stronger glyph */
+@media (hover: hover) {
+  .icon-button.inbox-rail-item:hover:not(:disabled) {
+    --rail-item-bg: var(--side-hover);
+    background: var(--rail-item-bg);
+    color: var(--text);
+  }
+}
+
+/* A button whose menu is open keeps the hover's fill, never the press's: an open list of PCs must not read as a
+   second current place. */
+.icon-button.inbox-rail-item[aria-expanded="true"] {
+  --rail-item-bg: var(--side-hover);
+  background: var(--rail-item-bg);
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* A press is the list row's own: half way from the selection's fill to the strong edge's colour. After the hover
+   and open-menu rules, which it must outweigh under the pointer that presses. It never takes the icon button's
+   accent edge. */
+.icon-button.inbox-rail-item:active:not(:disabled) {
+  --rail-item-bg: color-mix(in srgb, var(--side-selected), var(--border-strong));
+  background: var(--rail-item-bg);
+  border-color: transparent;
+  color: var(--text-strong);
+}
+
+/* The current place: the sidebar's own selection carried to a glyph, a tonal fill and a heavier, stronger glyph, as
+   the open row has the fill and a heavier name. No hue, border, stripe or outline. Hover adds nothing to it; a
+   press, which takes the list to its top, is the row's own. After the hover and press rules, which these outweigh. */
+.icon-button.inbox-rail-item[aria-current="page"],
+.icon-button.inbox-rail-item[aria-current="page"]:hover:not(:disabled) {
+  --rail-item-bg: var(--side-selected);
+  background: var(--rail-item-bg);
+  color: var(--text-strong);
+}
+
+.icon-button.inbox-rail-item[aria-current="page"]:active:not(:disabled) {
+  --rail-item-bg: color-mix(in srgb, var(--side-selected), var(--border-strong));
+  background: var(--rail-item-bg);
+}
+
+.icon-button.inbox-rail-item[aria-current="page"] svg {
+  stroke-width: var(--inbox-rail-stroke-current);
+}
+
+/* The count is the app's own waiting pill (styles.css, .header-more-dot.is-waiting[data-count]), hung on the
+   glyph's top end corner, with a ring of the fill under it so its digits never touch the glyph. The pill is drawn
+   round its dot's middle: the dot stands half the pill's height less its own down from where the pill begins. */
+.icon-button.inbox-rail-item > .header-more-dot {
+  top: calc(var(--rail-mark-inset) + (var(--fs-meta) * var(--lh-tight) - var(--dot-size)) / 2);
+  right: var(--rail-mark-inset);
+}
+
+.icon-button.inbox-rail-item > .header-more-dot.is-waiting[data-count]::after {
+  outline: var(--space-half) solid var(--rail-item-bg);
+}
+
+/* The PC's dot, on the glyph's lower end corner and ringed as the count is: drawn only while the connection has
+   something to say. Connected is the app's own connected dot; lost, it takes the reconnecting colour and pulses,
+   as the header's connection dot does (styles.css, .conn-dot). The word is the button's name and its tooltip. */
+.inbox-rail-dot {
+  position: absolute;
+  inset-block-end: calc(var(--rail-mark-inset) + var(--space-1-5));
+  inset-inline-end: calc(var(--rail-mark-inset) + var(--space-1-5));
+  width: var(--dot-size);
+  height: var(--dot-size);
+  border-radius: var(--radius-pill);
+  outline: var(--space-half) solid var(--rail-item-bg);
+  background: var(--status-done);
+  pointer-events: none;
+}
+
+.inbox-rail-dot.is-reconnecting {
+  background: var(--status-reconnecting);
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inbox-rail-dot.is-reconnecting {
+    animation: none;
+  }
+}
+
+/* the app's own mark (OvisMark.tsx) in the button's middle, at the size it has wherever it stands for Back to Ovis */
+.inbox-rail-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: var(--mark-size);
+  height: var(--mark-size);
+}
+
+/* a press fills a button, as an iPhone's list row; it does not dim (styles.css) */
+@media (hover: none) and (pointer: coarse) {
+  .icon-button.inbox-rail-item:active:not(:disabled) {
+    opacity: 1;
+  }
+}
+
+/* An installed desktop app with the title bar folded away draws the window's own controls over the window's top.
+   Where they stand at its start (macOS: the title bar's area begins after them), the rail begins under the title
+   bar; where they stand at its end, it begins where it always does. */
+@media (display-mode: window-controls-overlay) {
+  .inbox-rail {
+    padding-block-start: calc(var(--space-3) + min(env(titlebar-area-height, 0px), env(titlebar-area-x, 0px) * 1000));
+  }
+}
+
+/* an iPad home-screen app in a window has the window's controls over its top-left corner (lib/viewport.ts), where
+   the rail's first button would stand: the rail begins under the corner the classic header leaves free */
+:root[data-window-controls] .inbox-rail {
+  padding-block-start: calc(var(--header-h) + var(--space-3));
+}

@@ -63,6 +63,7 @@ export function actionAliases(t: Translate): Readonly<Record<string, string>> {
     "split-down-open": t("divide pane layout below"),
     zoom: t("maximize fullscreen full screen focus"),
     "close-pane": t("kill stop end remove pane split"),
+    "close-tab": t("kill stop end remove tab"),
     view: t("lens chat terminal conversation"),
     sidebar: t("panel drawer hide show"),
     "filter-sidebar": t("search find narrow sidebar"),

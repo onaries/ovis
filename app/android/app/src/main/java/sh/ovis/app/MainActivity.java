@@ -9,6 +9,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
+import android.os.SystemClock;
+import android.net.TrafficStats;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -95,8 +98,61 @@ public class MainActivity extends BridgeActivity {
     /** Covers the WebView, blank until the PC answers: which PC is opening, and Change PC (showOpening). */
     private View openingView;
 
-    /** Gives up on a PC that has not answered in ANSWER_SECONDS, where Chromium alone waits about two minutes. */
+    /**
+     * Looks at the open once a second while the cover is up (watchOpening): gives up on a PC from
+     * which nothing arrived in ANSWER_SECONDS, where Chromium alone waits about two minutes, and
+     * tells a slow or stalled link on the cover.
+     */
     private final Handler answerTimer = new Handler(Looper.getMainLooper());
+
+    /** What has arrived from the PC being opened, and when (null before the cover shows). */
+    private OpeningWatch watch;
+
+    /** The cover's spinner, its line and its Keep waiting, which change with the open's stage. */
+    private ProgressBar openingSpinner;
+    private TextView openingText;
+    private Button openingKeep;
+    private Button openingRetry;
+
+    /** The cover's bar once the PC has answered: how much of the page's files has come, when their sizes are known. */
+    private ProgressBar openingBar;
+
+    /** The PC being opened, and the sum of its page's file sizes (0 unknown, -1 not asked yet), from PAGE_SCRIPT. */
+    private String openingPc;
+    private long pageBytes = -1;
+
+    /** Whether the PC's page and all it starts with have loaded: a stall after that is the client not starting, which waiting does not help. */
+    private boolean pageLoaded;
+
+    /** How often the PC's page, once shown, is asked whether the client is up: the cover lifts within this of its first frame. */
+    private static final long PAGE_POLL_MS = 200;
+
+    /**
+     * Asked of the PC's page each second while the cover is up: whether the client is up (its root
+     * no longer holds index.html's loading spinner; null when the page has no root, so it is not
+     * the client), and the sum of the sizes of the page and the files it starts with, from a HEAD of
+     * each (0 when any of them gives no Content-Length, as a proxy that streams compressed files
+     * does; -1 until they answer).
+     */
+    private static final String PAGE_SCRIPT =
+        "(() => {" +
+        "  const root = document.getElementById('root');" +
+        "  const loading = document.readyState === 'loading';" +
+        "  if (!loading && window.__ovisOpeningSize === undefined) {" +
+        "    window.__ovisOpeningSize = -1;" +
+        "    const files = [location.origin + location.pathname, ...Array.from(document.querySelectorAll('script[src], link[rel=stylesheet][href], link[rel=modulepreload][href]'), (e) => e.src || e.href)];" +
+        "    Promise.all(files.map((file) => fetch(file, { method: 'HEAD', credentials: 'include', cache: 'no-store' }).then((r) => {" +
+        "      const size = Number(r.headers.get('content-length'));" +
+        "      if (!r.ok || !(size > 0)) throw new Error('no size');" +
+        "      return size;" +
+        "    }))).then((sizes) => { window.__ovisOpeningSize = sizes.reduce((a, b) => a + b, 0); }, () => { window.__ovisOpeningSize = 0; });" +
+        "  }" +
+        "  return JSON.stringify({ client: root ? !root.querySelector(':scope > .boot') && !loading : loading ? false : null, size: window.__ovisOpeningSize ?? -1 });" +
+        "})()";
+
+    /** The PC's name or address, as the cover names it, and its host:port, as the error page's reason names it. */
+    private String openingLabel;
+    private String openingHost;
 
     /** Whether the app gave up on the first page: the load it dropped may still report its end. */
     private boolean gaveUp;
@@ -339,14 +395,22 @@ public class MainActivity extends BridgeActivity {
                     @Override
                     public void onPageStarted(WebView webView) {
                         pageFailed = false;
+                        // WebView reports a main-frame page as started once its response has come: the
+                        // PC answered, and the page is on its way however slowly
+                        String url = webView.getUrl();
+                        if (watch != null && url != null && PCStore.belongs(url, pc)) watch.answered(SystemClock.elapsedRealtime());
                     }
 
                     @Override
                     public void onPageCommitVisible(WebView webView, String url) {
                         // the main frame's first page is on screen, before its pictures or scripts finish:
-                        // the PC's, a sign-in's or the error page
+                        // the PC's, a sign-in's or the error page. The PC's own page keeps the cover, with
+                        // its bar, until the client is up (watchOpening): until then it shows only its
+                        // loading spinner, for minutes on a slow link
                         pageShown = true;
-                        hideOpening();
+                        if (url == null || !PCStore.belongs(url, pc)) hideOpening();
+                        // from here the cover lifts as soon as the client is up, not at the next tick
+                        else answerTimer.post(MainActivity.this::pollPage);
                     }
 
                     @Override
@@ -360,6 +424,7 @@ public class MainActivity extends BridgeActivity {
                         PCStore.pendingStart = null;
                         PCStore.fail(null, null);
                         PCStore.redirects = 0;
+                        pageLoaded = true;
                         keepIfOvis(pc, url);
                     }
                 }
@@ -408,9 +473,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Covers the WebView until the PC answers (onPageCommitVisible), as the iOS app's cover does: which
-     * PC is opening, and Change PC, so an address that does not answer never leaves a blank screen.
-     * After ANSWER_SECONDS the app stops waiting and the error page says so, with Try again.
+     * Covers the WebView until the PC's page shows (onPageCommitVisible): which PC is opening, and
+     * Change PC, so an address that does not answer never leaves a blank screen. When nothing at all
+     * has arrived after ANSWER_SECONDS the app stops waiting and the error page says so, with Try
+     * again. A PC that answers over a slow link is never cut off while bytes arrive: the cover says
+     * the connection is slow and how much has come, and after STALL_MS with nothing more it offers
+     * Keep waiting (OpeningWatch).
      */
     private void showOpening(String pc) {
         String origin = PCStore.origin(pc);
@@ -419,6 +487,11 @@ public class MainActivity extends BridgeActivity {
         float density = getResources().getDisplayMetrics().density;
         int pad = Math.round(24 * density);
 
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#f0a830")));
+        bar.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#f0a830")));
+        bar.setVisibility(View.GONE);
         ProgressBar spinner = new ProgressBar(this);
         spinner.setIndeterminate(true);
         spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#f0a830")));
@@ -428,6 +501,25 @@ public class MainActivity extends BridgeActivity {
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         text.setGravity(Gravity.CENTER);
         text.setPadding(0, pad / 2, 0, pad);
+        Button keep = new Button(this);
+        keep.setText(korean() ? "계속 기다리기" : "Keep waiting");
+        keep.setAllCaps(false);
+        keep.setTextColor(Color.parseColor("#12100e"));
+        keep.setBackgroundColor(Color.parseColor("#f0a830"));
+        keep.setPadding(pad, pad / 2, pad, pad / 2);
+        keep.setVisibility(View.GONE);
+        keep.setOnClickListener(v -> {
+            if (watch != null) watch.keepWaiting(SystemClock.elapsedRealtime());
+            showStage();
+        });
+        Button retry = new Button(this);
+        retry.setText(korean() ? "다시 시도" : "Try again");
+        retry.setAllCaps(false);
+        retry.setTextColor(Color.parseColor("#f2ebdf"));
+        retry.setBackgroundColor(Color.parseColor("#181613"));
+        retry.setPadding(pad, pad / 2, pad, pad / 2);
+        retry.setVisibility(View.GONE);
+        retry.setOnClickListener(v -> retry());
         Button change = new Button(this);
         change.setText(korean() ? "PC 바꾸기" : "Change PC");
         change.setAllCaps(false);
@@ -441,7 +533,12 @@ public class MainActivity extends BridgeActivity {
         stack.setGravity(Gravity.CENTER);
         stack.setPadding(pad, pad, pad, pad);
         stack.addView(spinner);
+        stack.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         stack.addView(text);
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        gap.bottomMargin = pad / 2;
+        stack.addView(keep, gap);
+        stack.addView(retry, gap);
         stack.addView(change);
         FrameLayout cover = new FrameLayout(this);
         cover.setBackgroundColor(Color.parseColor("#12100e"));
@@ -450,14 +547,119 @@ public class MainActivity extends BridgeActivity {
         cover.addView(stack, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
         addContentView(cover, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         openingView = cover;
-        answerTimer.postDelayed(() -> {
-            if (openingView == null || isFinishing() || isDestroyed()) return;
+        openingSpinner = spinner;
+        openingText = text;
+        openingKeep = keep;
+        openingRetry = retry;
+        openingBar = bar;
+        openingPc = pc;
+        openingLabel = label;
+        openingHost = origin == null ? pc : Uri.parse(origin).getAuthority();
+        watch = new OpeningWatch(SystemClock.elapsedRealtime(), answerDelay(), TrafficStats.getUidRxBytes(Process.myUid()));
+        answerTimer.postDelayed(this::watchOpening, 1000);
+    }
+
+    /** Each second while the cover is up and the app is in front: what arrived, and what the cover says (OpeningWatch). */
+    private void watchOpening() {
+        if (openingView == null || isFinishing() || isDestroyed()) return;
+        long now = SystemClock.elapsedRealtime();
+        watch.received(now, TrafficStats.getUidRxBytes(Process.myUid()));
+        if (watch.stage(now) == OpeningWatch.Stage.NO_ANSWER) {
             gaveUp = true;
-            String host = origin == null ? pc : Uri.parse(origin).getAuthority();
-            PCStore.fail(host + " did not answer within " + PCStore.ANSWER_SECONDS + " seconds.", "timeout");
+            PCStore.fail(
+                watch.connectedOnly()
+                    ? openingHost + " accepted the connection but sent no page."
+                    : openingHost + " did not answer within " + PCStore.ANSWER_SECONDS + " seconds.",
+                "timeout"
+            );
             bridge.getWebView().stopLoading();
             bridge.getWebView().loadUrl(bridge.getErrorUrl());
-        }, answerDelay());
+            return;
+        }
+        showStage();
+        askPage();
+        answerTimer.postDelayed(this::watchOpening, 1000);
+    }
+
+    /** Every PAGE_POLL_MS once the PC's page is shown, while the cover is up and the app in front: is the client up yet. */
+    private void pollPage() {
+        if (openingView == null || isFinishing() || isDestroyed()) return;
+        askPage();
+        answerTimer.postDelayed(this::pollPage, PAGE_POLL_MS);
+    }
+
+    /** Asks the PC's page, once it has answered, whether the client is up and how big its files are (PAGE_SCRIPT). */
+    private void askPage() {
+        WebView view = bridge.getWebView();
+        String url = view.getUrl();
+        if (!watch.isAnswered() || url == null || !PCStore.belongs(url, openingPc)) return;
+        view.evaluateJavascript(PAGE_SCRIPT, (value) -> {
+            if (openingView == null || value == null || "null".equals(value)) return;
+            try {
+                org.json.JSONObject page = new org.json.JSONObject(new org.json.JSONArray("[" + value + "]").getString(0));
+                long size = page.optLong("size", -1);
+                if (size >= 0) pageBytes = size;
+                // the client drew its first frame, or this page is not the client: the cover goes
+                if (page.isNull("client") ? pageShown : page.optBoolean("client")) hideOpening();
+            } catch (org.json.JSONException unreadable) {
+                // a page that answered something else: asked again in a second
+            }
+        });
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // the cover's tick stops in the background (onStop); back in front it looks again at once
+        if (openingView != null && watch != null) {
+            answerTimer.removeCallbacksAndMessages(null);
+            answerTimer.post(this::watchOpening);
+            if (pageShown) answerTimer.post(this::pollPage);
+        }
+    }
+
+    @Override
+    public void onStop() {
+        answerTimer.removeCallbacksAndMessages(null);
+        super.onStop();
+    }
+
+    /** The cover's line, spinner and Keep waiting for the open's stage now. */
+    private void showStage() {
+        if (openingView == null) return;
+        OpeningWatch.Stage stage = watch.stage(SystemClock.elapsedRealtime());
+        boolean ko = korean();
+        long kb = watch.bytesSoFar() / 1024;
+        long totalKb = pageBytes > 0 ? (pageBytes + 1023) / 1024 : 0;
+        int permille = watch.permille(pageBytes);
+        String amount = kb <= 0 ? "" : totalKb > 0
+            ? (ko ? String.format(Locale.getDefault(), "\n%,dKB / %,dKB 받음", Math.min(kb, totalKb), totalKb) : String.format(Locale.getDefault(), "\n%,d KB of %,d KB", Math.min(kb, totalKb), totalKb))
+            : (ko ? String.format(Locale.getDefault(), "\n%,dKB 받음", kb) : String.format(Locale.getDefault(), "\n%,d KB so far", kb));
+        String text;
+        if (stage == OpeningWatch.Stage.SLOW) {
+            text = (ko ? "연결이 느립니다. " + openingLabel + " 여는 중…" : "Slow connection. Still opening " + openingLabel + "…") + amount;
+        } else if (stage == OpeningWatch.Stage.STALLED && pageLoaded) {
+            // everything arrived, and the client still did not start: nothing more is coming
+            text = ko
+                ? openingLabel + "의 페이지는 받았지만 앱이 시작되지 않았습니다."
+                : "The page from " + openingLabel + " arrived, but the app did not start.";
+        } else if (stage == OpeningWatch.Stage.STALLED) {
+            long seconds = OpeningWatch.STALL_MS / 1000;
+            text = ko
+                ? openingLabel + "에서 " + seconds + "초 동안 아무것도 오지 않았습니다. 연결이 끊겼을 수 있습니다."
+                : "Nothing has come from " + openingLabel + " for " + seconds + " seconds. The connection may have dropped.";
+        } else {
+            text = ko ? openingLabel + " 여는 중…" : "Opening " + openingLabel + "…";
+        }
+        openingText.setText(text);
+        // the spinner until the PC answers; then the bar, filling when the page's sizes are known
+        boolean bar = watch.isAnswered() && stage != OpeningWatch.Stage.STALLED;
+        openingBar.setVisibility(bar ? View.VISIBLE : View.GONE);
+        openingBar.setIndeterminate(permille < 0);
+        if (permille >= 0) openingBar.setProgress(permille);
+        openingSpinner.setVisibility(bar ? View.GONE : stage == OpeningWatch.Stage.STALLED ? View.INVISIBLE : View.VISIBLE);
+        openingKeep.setVisibility(stage == OpeningWatch.Stage.STALLED && !pageLoaded ? View.VISIBLE : View.GONE);
+        openingRetry.setVisibility(stage == OpeningWatch.Stage.STALLED ? View.VISIBLE : View.GONE);
     }
 
     /**

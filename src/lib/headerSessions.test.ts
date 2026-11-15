@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { create } from "react-test-renderer";
 import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot, TabInfo } from "../../shared/protocol.ts";
-import { nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, waitingElsewhere, type MachineRoster } from "./headerSessions.ts";
+import { nextWaitingTarget, sessionCounts, sessionCountsAcross, tabPosition, useWaitingRosters, waitingElsewhere, waitingTargets, type MachineRoster } from "./headerSessions.ts";
 
 const pane = (pane_id: string, agent_status: AgentStatus, tab_id = "t1", workspace_id = "w1", extra: Partial<HerdrPane> = {}): HerdrPane =>
   ({ pane_id, agent_status, tab_id, workspace_id, focused: false, agent: "claude", ...extra }) as HerdrPane;
@@ -82,6 +82,56 @@ it("skips a waiting pane its tab's zoom hides, which a pick would never reach", 
   expect(nextOnOnePc(panes, "a", zoomed)).toBe("c");
   expect(nextOnOnePc(panes, "c", zoomed)).toBeNull();
   expect(nextOnOnePc(panes, "a")).toBe("b");
+});
+
+it("counts for a count on the jump exactly the panes its presses open, never one a tab's zoom hides", () => {
+  type At = { machineId: string; paneId: string | null };
+  const key = (at: At): string => `${at.machineId}:${at.paneId}`;
+  const zoomed = (...tabs: [tab: string, onto: string][]) => tabs.map(([tab_id, focused_pane_id]) => ({ tab_id, zoomed: true, focused_pane_id })) as unknown as MachineRoster<HerdrPane>["layouts"];
+  /** the panes the jump opens from `from`, each press starting where the last one landed, until it comes round */
+  const pressedThrough = (rosters: MachineRoster<HerdrPane>[], from: At): string[] => {
+    const opened: string[] = [];
+    for (let at = nextWaitingTarget(rosters, from); at !== null && key(at) !== key(from) && !opened.includes(key(at)); at = nextWaitingTarget(rosters, at)) opened.push(key(at));
+    return opened;
+  };
+
+  // one PC: a is open and works, b waits behind the zoom onto a, c waits in another tab
+  const onePc = [{ machineId: "local", panes: [pane("a", "working", "t1"), pane("b", "blocked", "t1"), pane("c", "blocked", "t2")], status: raw, layouts: zoomed(["t1", "a"]) }];
+  expect([waitingElsewhere(onePc, { machineId: "local", paneId: "a" }), waitingTargets(onePc, { machineId: "local", paneId: "a" })]).toEqual([2, 1]);
+  expect(pressedThrough(onePc, { machineId: "local", paneId: "a" })).toEqual(["local:c"]);
+  // on c the hidden one is all that is left: More still counts it, and the jump has nothing to open
+  expect([waitingElsewhere(onePc, { machineId: "local", paneId: "c" }), waitingTargets(onePc, { machineId: "local", paneId: "c" })]).toEqual([1, 0]);
+  expect(nextWaitingTarget(onePc, { machineId: "local", paneId: "c" })).toBeNull();
+  expect(waitingTargets(onePc, { machineId: "local", paneId: null })).toBe(1);
+
+  const fixtures: MachineRoster<HerdrPane>[][] = [
+    onePc,
+    // every other waiter is behind a zoom
+    [{ machineId: "local", panes: [pane("a", "working", "t1"), pane("b", "blocked", "t1")], status: raw, layouts: zoomed(["t1", "a"]) }],
+    // three PCs, two of which reuse a pane id; a zoom onto a waiter itself hides only its siblings
+    [
+      { machineId: "local", panes: [pane("a", "idle", "t1"), pane("b", "blocked", "t1"), pane("c", "blocked", "t2")], status: raw, layouts: zoomed(["t1", "a"]) },
+      { machineId: "work", panes: [pane("b", "blocked", "t1"), pane("d", "working", "t1"), pane("e", "blocked", "t2")], status: raw, layouts: zoomed(["t2", "e"]) },
+      { machineId: "lab", panes: [pane("f", "blocked", "t1"), pane("g", "blocked", "t1")], status: raw, layouts: zoomed(["t1", "f"]) },
+    ],
+    // a zoom onto a pane that is gone hides nothing; a DAG viewer beside another pane is never a pane to pick,
+    // however the roster draws it
+    [{ machineId: "local", panes: [pane("a", "blocked", "t1"), pane("b", "blocked", "t1"), pane("v", "idle", "t2", "w1", { agent: undefined, label: "DAG · flow" }), pane("w", "idle", "t2")],
+      status: (each) => (each.pane_id === "v" ? "blocked" : raw(each)), layouts: zoomed(["t1", "gone"]) }],
+    [{ machineId: "local", panes: [pane("a", "idle"), pane("b", "working")], status: raw }],
+    [],
+  ];
+  expect(fixtures.map((rosters) => waitingTargets(rosters, { machineId: "elsewhere", paneId: null }))).toEqual([1, 0, 4, 2, 0, 0]);
+  for (const rosters of fixtures) {
+    const starts: At[] = [{ machineId: "elsewhere", paneId: null }, { machineId: "elsewhere", paneId: "b" },
+      ...rosters.flatMap((roster) => [null, ...roster.panes.map((each) => each.pane_id)].map((paneId) => ({ machineId: roster.machineId, paneId })))];
+    for (const from of starts) {
+      const count = waitingTargets(rosters, from);
+      // the count is above zero exactly when a press has a pane to open, and the presses open that many panes
+      expect([key(from), count > 0]).toEqual([key(from), nextWaitingTarget(rosters, from) !== null]);
+      expect([key(from), pressedThrough(rosters, from).length]).toEqual([key(from), count]);
+    }
+  }
 });
 
 it("counts the selected PC's waiting panes, and jumps to them, while the sidebar hides that PC", async () => {

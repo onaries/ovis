@@ -1,6 +1,6 @@
 /* The inbox mode's list (InboxList.tsx). On a phone it is the screen: one flat surface, two round controls floating
    at its top and a round button and a search pill at its foot, the rows scrolling under both. From 769px it is the
-   column beside the thread it opens (.is-wide), its controls in a top row and a foot of its own. */
+   column beside the thread it opens (.is-wide), after the mode's rail (InboxRail.css), its controls in a top row. */
 .mode-inbox {
   /* a round control's size (--inbox-control) and the band the column's top controls are centred in
      (--inbox-zone-h) are the shell's, which the pane's own controls share: InboxMode.css, .app.is-inbox */
@@ -509,7 +509,8 @@
 
 /* ---------- from 769px: the column beside the thread ---------- */
 
-/* its rows fill as the sidebar's do (--side-hover, --side-selected: Sidebar.css, .sidebar) */
+/* its rows fill as the sidebar's do (--side-hover, --side-selected: Sidebar.css, .sidebar); it takes what the
+   column's rail leaves of the column's width (InboxMode.css) */
 .mode-inbox.is-wide {
   --inbox-avatar: var(--avatar-size);
   position: relative;
@@ -518,78 +519,70 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   background: var(--bg-nav);
 }
 
-/* the column ends in its seam (the sidebar's own edge, a hairline): the end insets are counted from the column's
-   edge, so each takes the seam off */
-.mode-inbox.is-wide .inbox-top,
-.mode-inbox.is-wide .inbox-foot {
+/* The column ends in its seam (the sidebar's own edge, a hairline): the end inset is counted from the column's
+   edge, so it takes the seam off. Search, the state filter and New workspace stand at the row's end.
+   The rail is cut out of the sidebar's width, so a sidebar near its least width leaves a list narrower than this row
+   at its full insets (under a coarse pointer, whose controls are larger). The row then gives way, in this order:
+   its side insets, down to the rows' own (--space-3); its gaps, down to none; then the controls themselves, down to
+   their least size (below). Until that is reached its controls are inside the list and none stands over another.
+   The list is the size container this reads (cqi, below). */
+.mode-inbox.is-wide .inbox-top {
+  /* the row holds three controls at most */
+  --inbox-top-controls: calc(var(--inbox-control) * 3);
+  --inbox-top-inset: clamp(var(--space-3), calc((100cqi - var(--inbox-top-controls) - var(--space-2-5) * 2) / 2), var(--space-4));
+  /* the start inset is the row's own unless the window's controls ask for more (InboxMode.css, --inbox-top-start) */
+  --inbox-top-pad-start: var(--inbox-top-start, var(--inbox-top-inset));
+  --inbox-top-pad-end: calc(var(--inbox-top-inset) - var(--hairline));
   position: static;
   flex: 0 0 auto;
-  padding-inline: var(--space-4) calc(var(--space-4) - var(--hairline));
+  justify-content: flex-end;
+  gap: clamp(0px, calc((100cqi - var(--inbox-top-controls) - var(--inbox-top-pad-start) - var(--inbox-top-pad-end)) / 2), var(--space-2-5));
+  height: var(--inbox-zone-h);
+  padding-inline: var(--inbox-top-pad-start) var(--inbox-top-pad-end);
   pointer-events: auto;
 }
 
-.mode-inbox.is-wide .inbox-top {
-  justify-content: flex-end;
-  gap: var(--space-2-5);
-  height: var(--inbox-zone-h);
-}
-
-/* in the column the top row floats over nothing: the connection's words lead it as a plain line, on the column's
-   own surface */
-.mode-inbox.is-wide .inbox-top > .inbox-connection {
-  position: static;
+/* In a list too narrow for the row's controls at their size with no gap between them (a phone on its side, whose
+   side safe area the rail takes out of the column; a window's own controls over the row's start), they shrink
+   together and stay round, never under the least target a pointer gets (--pointer-target); their glyphs keep their
+   size. Wherever the row has the room they are exactly --inbox-control. */
+.mode-inbox.is-wide .inbox-top > .icon-button.inbox-round {
   flex: 0 1 auto;
-  width: auto;
-  min-width: 0;
+  min-width: var(--pointer-target);
   height: auto;
-  margin: 0;
-  margin-inline-end: auto;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
+  aspect-ratio: 1;
 }
 
-.mode-inbox.is-wide .inbox-foot {
-  gap: var(--space-2);
-  padding-block: var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+/* An open search field takes what the row has left, and gives it up before its button shrinks: down to its own
+   insets (its start padding and its clear button's room, between its two edges), narrower than which the field
+   cannot be drawn and would stand over its button. */
+.mode-inbox.is-wide .inbox-top > .inbox-search {
+  flex-basis: 0;
+  min-width: calc(var(--space-3) + var(--inbox-control) + var(--hairline) * 2);
 }
 
-.mode-inbox .inbox-foot-start {
-  flex: 1 1 auto;
-  min-width: 0;
+/* A list with the room for it (256px and more: the default sidebar with a mouse) always shows its search field at the
+   row's start, before the filter and New workspace, and draws no Search button: the rail has no magnifier, so the
+   field is the only one on the screen. A narrower list, in which the field could not hold its own placeholder, folds it
+   into Search: the field is drawn only while it is open, and then takes the row, the filter and New workspace giving
+   way until it is put away. */
+@container (min-width: 256px) {
+  .mode-inbox.is-wide .inbox-top > .inbox-search-toggle {
+    display: none;
+  }
 }
 
-/* Back to Ovis: the sidebar foot's own action (Sidebar.css), as wide as its words, where the classic sidebar's
-   foot has the way in. The app's mark stands in its icon's place, on the column's inset: the fill under a pointer
-   reaches --space-2 past it. */
-.mode-inbox .inbox-exit {
-  flex: 0 1 auto;
-  gap: var(--space-2-5);
-  width: auto;
-  min-width: 0;
-  height: var(--inbox-control);
-  margin-inline-start: calc(-1 * var(--space-2));
-  padding: 0 var(--space-3) 0 var(--space-2);
-}
-
-.mode-inbox .inbox-exit-mark {
-  display: block;
-  flex: 0 0 auto;
-  width: var(--mark-size);
-  height: var(--mark-size);
-}
-
-.mode-inbox .inbox-exit-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+@container (max-width: 255.98px) {
+  .mode-inbox.is-wide .inbox-top:not(.is-search-open) > .inbox-search,
+  .mode-inbox.is-wide .inbox-top.is-search-open > .inbox-filter-toggle,
+  .mode-inbox.is-wide .inbox-top.is-search-open > .inbox-add {
+    display: none;
+  }
 }
 
 /* the column's controls rest on its surface: no shadow, and the smaller glyph of a pointer's control */
@@ -613,13 +606,14 @@
   height: var(--icon-size-md);
 }
 
-/* the first row starts --space-4 under the top controls: the band's own --space-3 and this */
+/* the first row starts --space-4 under the top controls: the band's own --space-3 and this. The rows run to the
+   column's foot, which holds nothing, and end clear of the bottom safe area. */
 .mode-inbox.is-wide .inbox-scroll {
   position: static;
   flex: 1 1 auto;
   min-height: 0;
   /* no end padding: the rows' own width leaves the end inset (below), and a scrollbar stands in it */
-  padding: var(--space-1) 0 var(--space-3) var(--space-3);
+  padding: var(--space-1) 0 calc(var(--space-3) + env(safe-area-inset-bottom, 0px)) var(--space-3);
   scroll-padding-block: var(--space-1);
 }
 
@@ -647,9 +641,8 @@
 
 /* A press is a step past hover that reads as one in both themes: the open row's own press, half way from the
    selection's fill to the strong edge's colour. After the hover rule, which it must outweigh under a pointer that is
-   over the row it presses. Back to Ovis at the foot answers a press the same way. */
-.mode-inbox.is-wide .inbox-row:active:not(:disabled),
-.mode-inbox.is-wide .inbox-exit:active:not(:disabled) {
+   over the row it presses. The rail's buttons answer a press the same way (InboxRail.css). */
+.mode-inbox.is-wide .inbox-row:active:not(:disabled) {
   background: color-mix(in srgb, var(--side-selected), var(--border-strong));
 }
 

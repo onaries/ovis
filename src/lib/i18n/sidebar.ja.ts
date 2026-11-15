@@ -40,6 +40,7 @@ export const SIDEBAR_JA: Record<string, string> = {
   "You: {text}": "自分: {text}",
   "Turn failed": "エラー",
   "Filter by state": "状態で絞り込む",
+  "Search agents": "エージェントを検索",
   "Filter by state: {state}": "状態で絞り込む: {state}",
   "Expand worktrees of {name}": "{name} のワークツリーを展開",
   "Collapse worktrees of {name}": "{name} のワークツリーを折りたたむ",

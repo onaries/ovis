@@ -3,8 +3,8 @@
  * portal at fixed coordinates: the roster scrolls, and a menu inside it would be cut off at the
  * list's edge. At phone width it is the modal primitive, which is already a bottom sheet there.
  * The system Back closes the sheet (lib/sheetHistory.ts).
- * Escape, a press outside, focus leaving it (the palette opening over it, a Tab out) and, on a
- * desktop, a scroll of what holds the button or a resize close it. Focus goes back to the button when the menu goes,
+ * Escape, focus leaving it (the palette opening over it, a Tab out), a tap on the sheet's dimmed page and, on a
+ * desktop, a press outside, a scroll of what holds the button or a resize close it. Focus goes back to the button when the menu goes,
  * unless what an item mounted (a rename field, a confirm) takes it first: the button is focused
  * in a layout cleanup, before a new field's autoFocus and a dialog's own focus.
  */
@@ -105,6 +105,10 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, alert,
   const [place, setPlace] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   // where the button was when the menu was placed: a scroll that leaves it there is not a reason to close
   const placedAt = useRef<{ top: number; left: number } | null>(null);
+  // whether the press that ends in the scrim's click began on the scrim: a press begun in the sheet and let go
+  // over the dimmed page (a selection dragged out) is no tap on it. The press keeps the focus in the sheet: its
+  // blur would close it on the mousedown, and the mouseup after it would land on what lies behind
+  const pressedScrim = useRef(false);
 
   useLayoutEffect(() => {
     const node = surface.current;
@@ -188,8 +192,11 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, alert,
       onClose();
     };
     window.addEventListener("keydown", onKey, true);
-    window.addEventListener("pointerdown", onPointer, true);
+    // the popover goes on a press outside, which goes on to what was pressed. The sheet is modal and goes on its
+    // scrim's click (below): closed on the press, its scrim would let the rest of that tap (the touch's end, the
+    // mouse events and the click a browser sends after it) through to the row or the pane behind it
     if (!sheet) {
+      window.addEventListener("pointerdown", onPointer, true);
       window.addEventListener("scroll", onScroll, true);
       window.addEventListener("resize", onClose);
     }
@@ -267,7 +274,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, alert,
 
   if (sheet) {
     return createPortal(
-      <div className={`modal-scrim${overModal ? " is-over-modal" : ""}`}>
+      <div className={`modal-scrim${overModal ? " is-over-modal" : ""}`} onPointerDown={(event) => { pressedScrim.current = event.target === event.currentTarget; }} onMouseDown={(event) => { if (event.target === event.currentTarget) event.preventDefault(); }} onClick={(event) => { if (event.target === event.currentTarget && pressedScrim.current) onClose(); }}>
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
           {/* a header of the menu's own stands in for the title and subtitle; the detail still follows it */}

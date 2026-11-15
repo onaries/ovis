@@ -42,7 +42,6 @@ export const MACHINES_KO: Record<string, string> = {
   "New workspace on {name}": "{name}에 새 워크스페이스",
   "PCs and workspaces": "PC와 워크스페이스",
   "Loading PCs…": "PC 불러오는 중…",
-  "PC {name}": "PC {name}",
   "Manage {name}": "{name} 관리",
   "Manage PC": "PC 관리",
   "PC name": "PC 이름",

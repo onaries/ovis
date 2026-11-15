@@ -1656,7 +1656,7 @@ try {
   const repoMenu = page.getByRole("menu");
   await repoMenu.waitFor();
   const repoActions = await repoMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(repoActions, ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close group", "New worktree", "Open worktree…", "Expand"],
+  assert.deepEqual(repoActions, ["Pin workspace", "New tab with agent…", "Rename workspace", "Earlier sessions…", "Close group", "New worktree", "Open worktree…", "Expand"],
     "a folded repository group has native workspace and worktree actions");
   await page.keyboard.press("Escape");
   await repoMenu.waitFor({ state: "detached" });
@@ -1785,7 +1785,7 @@ try {
   const childMenu = page.getByRole("menu");
   await childMenu.waitFor();
   const childActions = await childMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(childActions, ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace", "Delete worktree checkout…"], "a worktree workspace's menu");
+  assert.deepEqual(childActions, ["Pin workspace", "New tab with agent…", "Rename workspace", "Earlier sessions…", "Close workspace", "Delete worktree checkout…"], "a worktree workspace's menu");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
   await childHeader.locator(".workspace-select").click({ button: "right" });
@@ -2498,7 +2498,7 @@ try {
   const rowMenu = page.getByRole("menu");
   await rowMenu.waitFor();
   const rowActions = await rowMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(rowActions, ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace"], "the workspace menu keeps workspace scope");
+  assert.deepEqual(rowActions, ["Pin workspace", "New tab with agent…", "Rename workspace", "Earlier sessions…", "Close workspace"], "the workspace menu keeps workspace scope");
   // Escape puts the menu away and the focus back on the row
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });

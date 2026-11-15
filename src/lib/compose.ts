@@ -475,6 +475,29 @@ export function commandGroup(command: SlashCommand): CommandGroup {
   return command.source;
 }
 
+/**
+ * OpenCode's TUI built-ins that take no argument, which its own menu runs when picked: v2.2.7's `slash` entries without
+ * `arguments: true` (packages/tui/src: app.tsx, routes/session, component/prompt, feature-plugins) and v1.19.5's
+ * `slashName` entries, which take none. Not here: `cd`, `rename` and `btw`, which v2 types with a space for an argument,
+ * and the server's commands (`init`, `review`, custom, project and plugin ones), which its menu only types.
+ */
+const OPENCODE_BARE_BUILTINS: ReadonlySet<string> = new Set([
+  "agents", "clear", "compact", "connect", "copy", "debug", "diff", "editor", "exit", "export", "fork", "help",
+  "highlights", "mcps", "models", "move", "new", "open", "org", "pair", "plugins", "redo", "reload", "restart",
+  "sessions", "settings", "skills", "stats", "status", "terminal", "themes", "thinking", "timeline", "timestamps",
+  "undo", "update", "usage", "variants", "warp", "workspaces", "worktrees",
+]);
+
+/**
+ * Whether a command picked from the menu and sent unchanged goes without the space the pick put after it. OpenCode runs
+ * a built-in that takes no argument only from its own menu, and sends `/new ` as a prompt (#3813). Its other commands
+ * only type `/name ` from its menu, and that space is what lets Enter send them, so they keep it, as every other
+ * agent's commands do.
+ */
+export function sendsBarePick(command: SlashCommand, agent: string | null): boolean {
+  return agent === "opencode" && command.source === "builtin" && (command.trigger ?? "/") === "/" && OPENCODE_BARE_BUILTINS.has(command.name);
+}
+
 /** Multi-trigger skills use the typed prefix; others use the command's wire trigger. */
 export function slashCommandReplacement(command: SlashCommand, agent: string | null, trigger: ActiveTrigger): string {
   const prefix = skillSyntax(agent).skillTriggers.length > 1 ? trigger.prefix ?? "/" : command.trigger ?? "/";

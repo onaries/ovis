@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { AGENT_INPUT_DRAFT_MESSAGE, CLAUDE_FOLDED_DRAFT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentDisplayLabel, claudeMainAtRest, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain, draftSendNote, endsWithTurn, stoppedTurn } from "./compose.ts";
-import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, namesHiddenCommand, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
+import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, namesHiddenCommand, sendsBarePick, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
 import type { ConversationTurn, SlashCommand } from "../../shared/protocol.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -72,6 +72,20 @@ describe("omo command completion", () => {
       expect(completed).toEqual({ text: expected, caret: expected.length });
     }
     expect(slashCommandReplacement(builtin, "omo", slash)).toBe("/model ");
+  });
+
+  it("sends a picked OpenCode built-in that takes no argument bare, and every other pick with its space (#3813)", () => {
+    const row = (name: string, source: SlashCommand["source"] = "builtin"): SlashCommand => ({ name, description: "", source });
+    expect(sendsBarePick(row("new"), "opencode")).toBeTrue();
+    expect(sendsBarePick(row("compact"), "opencode")).toBeTrue();
+    // OpenCode's own menu only types these, with their space, for Enter to send
+    for (const name of ["rename", "cd", "btw"]) expect(sendsBarePick(row(name), "opencode")).toBeFalse();
+    // the server's own commands, which Ovis lists as builtins (server/skills/opencode.ts), and any name OpenCode's TUI lacks
+    for (const name of ["init", "review", "hello"]) expect(sendsBarePick(row(name), "opencode")).toBeFalse();
+    for (const source of ["user", "project", "plugin", "skill"] as const) expect(sendsBarePick(row("hello", source), "opencode")).toBeFalse();
+    expect(sendsBarePick({ ...row("customize-opencode", "skill"), trigger: "@" }, "opencode")).toBeFalse();
+    // any other agent's pick keeps its space
+    for (const agent of ["claude", "codex", "omo", "pi", null]) expect(sendsBarePick(row("new"), agent)).toBeFalse();
   });
 
   it("keeps Claude, Codex and pi filtering and insertion unchanged", () => {

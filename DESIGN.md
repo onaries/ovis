@@ -1075,7 +1075,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--pane-bar-h` | `30px` | — | Split pane header bar height |
 | `--split-hit-w` | `8px` | — | Split divider hit band |
 | `--segmented-inset` | `6px` | — | What the segmented track takes from `--control-h` above and below an option (its `2px` padding and the hairline, both sides): an option is `--control-h` less this, and on a coarse pointer so is the pill inside its `--touch-target` hit box |
-| `--touch-target` | `44px` | — | Coarse-pointer minimum: every control a finger can reach is at least this in both dimensions |
+| `--touch-target` | `44px` | — | Coarse-pointer minimum: every control a finger can reach is at least this in both dimensions (one exception: the inbox mode's top row in a list too narrow for its three controls, under The list's top row) |
 | `--pointer-target` | `24px` | — | Fine-pointer minimum hit area: a glyph button under `--control-h` (the chat's copy and format buttons, an attachment tile's X) keeps its look and reaches it through an invisible `::before` expander |
 | `--touch-target-header` | `44px` | — | The phone header's controls (`<=768px`) |
 | `--keybar-h` | `48px` | — | Terminal key bar |
@@ -1176,7 +1176,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   not live, the offline pill and the More menu (`⋯`). From `769px` with one pane in view the row is
   a browser's tab strip (Chrome's, sized after the Herdr app's tab bar, THIRD_PARTY_NOTICES.md):
   the sidebar's head (`.header-side`: the Ovis wordmark, `src/assets/brand/logo-light.png`
-  or `logo-dark.png` by the resolved theme, then the palette and the sidebar toggle, as the Herdr
+  or `logo-dark.png` by the resolved theme, a button into the inbox mode (Inbox mode, below) wherever
+  the mode is offered, then the palette and the sidebar toggle, as the Herdr
   app orders them), then the workspace's tabs (`.header-tabs`), `+` right after the last tab,
   flexible space, and at the far end the Chat/Terminal switch, Files (`.header-files-button`, its
   glyph alone) and More as compact pills. The row is tinted with the accent (16% of `--accent`
@@ -1281,8 +1282,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Icons and selected context remain.
 - In the inbox mode (Inbox mode, below) the shell draws no header's zones over the list: on a
   phone the list is the screen and a thread keeps the app's header with its own controls; from
-  `769px` no header is drawn at all, the list takes the sidebar's column at the sidebar's width
-  and a zone of its own floats over the pane.
+  `769px` no header is drawn at all, the mode's rail and its list take the sidebar's column at
+  the sidebar's width and a zone of its own floats over the pane.
 - Layout: inbox mode list (phone, and any window under 769px) - two floating control rows stay
   put while the rows scroll -> scroll-body-shell
   (https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/scroll-body-shell.md);
@@ -1294,8 +1295,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (https://github.com/changeroa/StyleGallery/blob/main/patterns/split-sidebar/list-detail.md);
   scroll owner: `.inbox-scroll` for the column and the chat's transcript for the pane, each for
   its own region; anti-patterns: the window scrolling, the two regions scrolling as one, a drawn
-  order the keyboard does not follow (the list comes first in the document), a pane that
-  changes width when the mode is entered.
+  order the keyboard does not follow (the rail comes first in the document, then the list, then
+  the pane), a pane that changes width when the mode is entered.
+- Layout: inbox mode from 769px, the rail - the mode's own controls stay put at the far left
+  while the list and the thread scroll, and take no width from the pane -> fixed-sidenav-shell
+  (https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/fixed-sidenav-shell.md)
+  around the list-detail above; scroll owner: none of its own (`.inbox-scroll` for the column
+  and the chat's transcript for the pane, as above; in a window too short for its buttons the
+  rail scrolls by itself, apart from both); anti-patterns: a rail that scrolls away with the
+  list or the thread, a rail that narrows the pane, a control drawn both in the rail and in the list, a drawn order the
+  keyboard does not follow (the rail is first in the document, then the list, then the pane).
 
 ## 5. Components
 
@@ -1460,9 +1469,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   whole): a touch screen too wide for the sheet has no tooltip either. There it is the menu's
   description (`aria-describedby`): a screen reader inside a menu reads the items alone. The
   rows scroll between the head and Cancel (`.row-sheet-items`), which stay put, when the sheet's
-  92% of the screen cannot hold them. Escape, a press outside and
-  focus leaving it close it (on a desktop a scroll or a resize too), and focus returns to the
-  `⋯`. Arrow keys move between items. A row that leaves the roster takes its open menu with it.
+  92% of the screen cannot hold them. Escape and focus leaving it close it, and focus returns to
+  the `⋯`. A tap on the dimmed page closes a sheet and goes nowhere else: it closes on the
+  scrim's own click, so no part of the tap reaches the row or the pane behind, as a native
+  action sheet does. A press outside closes a popover and goes on to what was pressed; on a
+  desktop a scroll or a resize closes it too. Arrow keys move between items. A row that leaves the roster takes its open menu with it.
   A workspace right-click opens at the pointer and leaves pane selection and keyboard focus
   unchanged. It follows herdr's workspace scope: Rename, Close workspace/group, repository
   worktree actions, and Expand/Collapse for a group. Dismissal restores the prior focus. The
@@ -2177,7 +2188,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   where it lands. Alt+Up/Down moves the focused row one step at a time.
   Dragging is disabled while a name field is open. Each workspace's `⋯` opens its row menu
   (`.row-menu-toggle`: no width at rest; shown on hover, focus, selection and while its menu is
-  open; always on touch; not drawn on a desktop, where a right-click opens the menu). Inline server failures
+  open; always on touch; not drawn on a desktop, where a right-click opens the menu). Second in
+  that menu, after Pin, **New tab with agent…** (lucide `Bot`, the tab row's own item) opens the
+  New tab dialog aimed at that workspace without opening it first (#3772), as the Codex app and
+  T3 Code start a thread from a project's row; it is left out on a watching device and on a PC
+  that is not connected. Inline server failures
   stay beside their workspace. A repository's workspace moves past the
   next or previous group with its worktrees, and a worktree moves among its siblings only.
   A dropped order shows at once and stays until herdr is known to have it, drawn in the same rows
@@ -2304,10 +2319,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   sidebar foot names whose account it is and switches it in one tap. Settings → Phone & devices
   keeps its Change PC row. A PC's own app never shows it: its sidebar lists its PCs itself.
 
-### Inbox mode (`.mode-inbox`, `.thread-title`, `.thread-top`)
+### Inbox mode (`.mode-inbox`, `.inbox-rail`, `.thread-title`, `.thread-top`)
 - The agent inbox is a mode of the app: the list of agents and the thread a row opens, in the
-  shell's place, on a phone and on a desktop (lib/inboxMode.ts, InboxList.tsx, InboxMode.tsx,
-  lib/agentInbox.ts, lib/useInbox.ts). Its address says so (`?app=inbox`, a parameter
+  shell's place, on a phone and on a desktop (lib/inboxMode.ts, InboxList.tsx, InboxRail.tsx,
+  InboxMode.tsx, lib/agentInbox.ts, lib/useInbox.ts). Its address says so (`?app=inbox`, a parameter
   lib/deepLink.ts leaves in place while the app moves between panes, carried in the hosted
   shell's fragment with the rest of the page's query), so a reload, a link, Back and Forward
   agree on the mode. Every build offers it, its entries drawn and its address read, except while
@@ -2316,15 +2331,45 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   it has connected (`InboxConnecting`): the list's surface with one `--text-dim` line where
   its rows will be (**Connecting to Ovis…**, a status line), the screen on a phone and the
   column beside an empty pane from 769px, at the width the column will have, with no control,
-  since nothing answers yet. It never draws the classic header or sidebar, not for a frame.
+  since nothing answers yet. From 769px the column begins with the rail's empty surface at the
+  rail's width (a plain box with no control in it, so no landmark), and nothing shifts when
+  the list and the rail's buttons arrive. It never draws the classic header or sidebar, not for
+  a frame.
 - **Open agent inbox** enters it: More's last group in the classic header at every width, a row
-  at the sidebar's foot (the drawer's on a phone; Sidebar roster row and footer), and a row of
-  the command palette. **Back to Ovis** leaves it: first in a phone's More, at the column's
-  foot on a wide window (whose More does not say it a second time 40px above: one fact, one
-  place), and in the palette, the app's own mark (`OvisMark`) standing for it in each. Entering leaves a file open over the pane behind,
+  at the sidebar's foot (the drawer's on a phone; Sidebar roster row and footer), a row of
+  the command palette, and from `769px` the Ovis wordmark at the sidebar's head
+  (`.sidebar-brand.is-entry`, a button named and titled **Open agent inbox**; drawn only with
+  the sidebar shown, so a phone has no such button; a button, so the installed app's title-bar
+  drag region gives it the click). Its hover and press fill as an icon button's. The design
+  follows this app's own entries into the mode: the wordmark runs the same way in as More's
+  item, the sidebar's foot row and the palette, under the same name. **Back to Ovis** leaves it: first in a phone's More, the
+  Ovis mark at the top of the rail on a wide window (the rail, below; no More there says it a
+  second time: one fact, one place), and in the palette, the app's own mark (`OvisMark`) standing for it in each. Entering leaves a file open over the pane behind,
   as a move to another pane does: its viewer closes, its own entry stays under the mode's, and
   Back shows the pane with its file again. The setup guide has the classic shell to itself
   and shows no entry. A watching device may use the mode and is offered no New workspace.
+- The classic app and the mode are two views of one place: the conversation the classic app
+  shows is the thread the mode opens, and a thread opened in the mode is the pane the classic
+  app shows when the mode is left. Opening a row is selecting its pane; browsing the list (its
+  filter, search, scroll) selects nothing. A draft and a chat's scroll are the pane's own
+  (lib/composerDraft.ts, lib/chatScrollMemory.ts), so each view shows the other's; nothing
+  typed is sent, a draft waits in the composer. From `769px` every way in opens on the
+  conversation the classic app shows when the pane it is on has a row in the list and the app
+  draws it alone (no split of the app's own shown, and its tab draws that one pane: a one-pane
+  tab or one zoomed onto it), on its chat with no terminal peek over it (lib/useInbox.ts
+  `wayInOpensThread`): its thread opens beside the list, as a row opens it (the list's entry,
+  then the thread's, so the thread's Back is the list). Every other pane (on its terminal,
+  under a peek, beside another pane, with no row, or none chosen) enters on the list with
+  nothing chosen, as before: its thread alone would hide or unmount what else is drawn, end the
+  peek or change the lens, each of which gives up or asks a pty's size. So the way in, and an
+  untouched Back to Ovis, send no attach, detach, size or release to any pane. On a phone,
+  whose list is the mode's screen, a way in opens the list, unless the mode was left on the
+  thread of that same pane: then that thread. The list's filter, search text and scroll are
+  kept in the tab's session storage, beside the chat positions and the split: leaving, entering
+  again and a reload find them as left, and a duplicated tab starts from a copy. The wordmark
+  under a coarse pointer is as tall as the header's touch targets there. The design follows
+  this app's own model, not another app's: one selection, one draft store and one chat-scroll memory that
+  both views read, so neither view keeps a copy to save and restore.
 - Settings → Appearance → More settings → Sidebar → **Start in the agent inbox on a phone** (this device's
   choice, off by default, its stored key unchanged) is where a phone starts: a window at most
   640px wide (`SHEET_QUERY`) whose address is the app's own start opens the mode's list, and
@@ -2349,11 +2394,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   every agent's row with its name, state and words; search; the four state filters; New
   workspace; More with Back to Ovis; the three empty lines; the rows of a PC that is away.
 - Brief, the wide layout. Primary action: opening a row, and in the thread the composer's Send
-  as in the classic shell. Priorities: the open thread; the list, with who needs the user; the
-  monitor button and More. Left out on purpose: a bar across the window, the tab strip, the
-  status bar, the Chat and Terminal switch, a time on rows. Required content: the phone list's,
-  plus the open row's selection, the chip with the state's word, and the line that stands in an
-  empty pane.
+  as in the classic shell; no button of the rail is drawn as primary. Priorities: the open
+  thread; the list, with who needs the user; the rail, the mode's ways out and around and the
+  quietest thing in the window. Left out on purpose: a bar across the window, the tab strip, the
+  status bar, the Chat and Terminal switch, a time on rows, a foot under the list; in the rail,
+  labels under the icons, a wordmark, an accent colour, a stripe or an outline for the current
+  place, a raised disc per button, counts of working or finished agents, a PC's dot drawn all
+  the time. Required content: the phone list's, each control by name and in one place (what a
+  phone's More holds is the rail's: Back to Ovis, Search panes and actions, Alerts, Settings),
+  plus the open row's selection, the chip with the state's word, the line that stands in an
+  empty pane, the count of the agents that wait and the PCs with their states.
 - The mode's shell has no drawer, no workspace tree, no tab row or tab sheet, no Chat and
   Terminal switch, no Files button, no status bar and no split: a thread is one pane
   (`PaneCanvas` `solo`), whatever split the classic shell left. A shortcut or a palette row
@@ -2362,7 +2412,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   mode is left.
 - The list (InboxList.tsx) is every agent pane of every PC the device shows. It has no title,
   no heading and no brand: its section is named for a screen reader (`aria-label`, "Agent
-  inbox") and nothing drawn says what the list is.
+  inbox") and nothing drawn says what the list is, but for the wide list's search field, whose
+  placeholder says its scope (**Search agents**, below).
 - On a phone, and in any window under 769px, the list is the screen: one flat `--bg` surface
   from the top safe area down, with no header bar and no rule. Two round controls float at its
   top, `--space-2` under the top safe area (`--inbox-top-gap`: they touch no edge, under a
@@ -2480,8 +2531,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   and `aria-busy`, so a press keeps the focus and asks for nothing more; it is dimmed by its
   colour, not faded, as Settings' Retry on its way. A read that fails again is a new alert. Rows
   already drawn stay over a refresh that failed.
-  None says what the rows are, as nothing else in the mode's chrome does; the classic Agents
-  list keeps its own lines. The filter, the query and the scroll offset are kept while a thread
+  None says what the rows are, as nothing else in the mode's chrome does but the wide list's
+  search field; the classic Agents list keeps its own lines. The filter, the query and the scroll offset are kept while a thread
   is open.
 - A phone's thread is the agent's existing chat under the app's glass header (`--header-h`),
   with its prompt card docked above the composer and nothing restyled. The header holds
@@ -2499,35 +2550,134 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   one quiet line (`.inbox-connection`, `role="status"`, `--fs-xs`, `--text-dim`). On a phone it
   floats over the rows as the two round controls do, so it is drawn as they are: a small fully
   round pill on the raised surface (`--bg-elevated`, the hairline `--border`,
-  `--shadow-card`), centred between the two controls on their centre line. On a wide window
-  the column's top row floats over nothing, and the word leads it as a plain line; the search
-  field takes its place while open (the word is still said, not drawn). Nothing is
+  `--shadow-card`), centred between the two controls on their centre line. Nothing is
   drawn while the connection has nothing to say, and on a phone the header's note, which
   stands in the same place, goes first. The word is the one of the stream that feeds the list's
   rows (the roster's event stream, lib/useMachineRoster.ts `rosterConnection`), whether or not a
   pane is mounted under the list, a cold load of the mode's own address included: Reconnecting…
   while it is lost after the page had it, Connected for a moment when it is back. A thread says
-  its own pane's word under its name; on a wide window, with a thread open beside the list, the
-  column says its word only where it differs from the one the thread's chip says: one fact, one
-  place.
+  its own pane's word under its name. On a wide window the list draws no line: the rail's PC
+  says the word (the rail, below), in its name and its tooltip and with a dot, which is drawn
+  only while the open thread's chip does not say the same word: one fact, one place.
 - The monitor button (`LensToggle` `thread`; lucide `Monitor`, **Show the terminal**, then
   **Show the chat**) runs the lens switch for the thread's pane: the terminal already mounted
   under the chat is shown in the thread's place and no second connection is made. Everything
   the terminal view owns stays: the key bar on touch, "· soon" for a Windows PC whose live
   terminal is not there yet, no take-over, no change of herdr's focus.
-- From 769px the list is the column beside the thread (`.mode-inbox.is-wide` in
-  `.sidebar.inbox-column`), on `--bg-nav`, at the sidebar's own width (`--sidebar-shown-w`,
-  with the sidebar's resizer, which lets a mouse on the list's drawn scrollbar under it through
-  to that scrollbar as it does in the sidebar), so the pane is as wide in the mode as in the
-  classic shell. No
+- From 769px the mode has the sidebar's column beside the thread (`.sidebar.inbox-column`), on
+  `--bg-nav`, at the sidebar's own width (`--sidebar-shown-w`, with the sidebar's resizer, which
+  lets a mouse on the list's drawn scrollbar under it through to that scrollbar as it does in
+  the sidebar): the rail first, then the list (`.mode-inbox.is-wide`). The rail is cut out of
+  that width, never added to it, at every width the sidebar can have: the list is the
+  sidebar's width less the rail (262px at the default 320; 182px at the sidebar's least width
+  of 240px, 172px there under a coarse pointer), and the pane has the x and the width it has
+  in the classic shell beside its sidebar. A thread that shows its terminal has the box the
+  classic shell gives that pane, at every width of the sidebar, and leaving the mode from it
+  sends its pty no size (the cases where a thread's box is not classic's, a collapsed classic
+  sidebar among them, are under "A thread opens on its chat" below). No
   bar crosses the window: the column's top row and the zone over the pane are one band,
   `--control-h` plus twice `--space-3` tall, and the seam between the panes (`--divider`) runs
   from the window's top.
-  - The column's top row has two round controls at its end, `--space-2-5` apart and `--space-4`
-    from the column's edge: **Search** and **New workspace**. The search field opens in the
-    row's free part when asked for, takes the focus, stays while it holds words (a query never
-    narrows the list unseen), and Escape first clears it, then puts it away.
-  - Rows are `--row-h` tall, `--space-1` apart and `--space-3` in from both column edges, with
+  - The rail (`nav.inbox-rail`, named **Inbox mode**; InboxRail.tsx) is one column of icon
+    buttons at the column's start. It is drawn only from 769px: a phone, and any window under
+    769px, never has one and keeps its list's own controls. It is as wide as the band is tall
+    (`--inbox-rail-w: var(--inbox-zone-h)`: 58px with a mouse, 68px under a coarse pointer,
+    where its buttons are `--touch-target`), so its first button stands in a square cell on the
+    band's centre line, with the list's top controls and the thread's chip. Its surface is the
+    column's (`--bg-nav`) with a hairline `--border` at its end: the rail and the list are one
+    region. Its buttons stand `--space-3` from its top, its foot and both sides (the end inset
+    counts the hairline) and `--space-2` apart, twice that after the first. From the top: the
+    Ovis mark (**Back to Ovis**: `OvisMark` at `--mark-size`; it leaves the mode by one history
+    entry, on the pane of the open thread), **Agent inbox** (lucide `Inbox`: the mode's one
+    place, always the current one, `aria-current="page"`; a press takes the list to its top and
+    gives it the keyboard's focus). It draws no magnifier: the list's search field is the
+    screen's one, and the command palette is under its shortcut and in the thread's More
+    (below), where a touch screen with no keyboard reaches it. Pushed to the foot, so that
+    the last one stands where the list's foot stood: the count of the agents that wait (below),
+    **Alerts** (lucide `Bell`, `BellOff` while they are off, `aria-pressed`, the bell's own
+    sentence as its tooltip: this device's alerts), **Settings** (lucide `Settings`, its
+    shortcut in the tooltip) and the PC (below). Each of them is in the rail and nowhere else
+    on a wide window. The list's own search says its scope: **Search agents**, in its field and
+    in its button's name and tooltip.
+  - A rail button is the icon button at `--inbox-control`, `--radius-md`, with an `--icon-size`
+    glyph, and no box at rest (a `--text-dim` glyph on the rail's surface): six raised discs
+    would be the loudest thing in the window. Under a hovering pointer it fills with
+    `--side-hover` and its glyph takes `--text`; a press fills it half way from
+    `--side-selected` to `--border-strong` under a `--text-strong` glyph, the list row's own
+    press; a button whose menu is open keeps the hover's fill, never the press's. It never takes
+    the icon button's accent edge, and keeps one box in every state. The current place is the
+    sidebar's selection carried to a glyph: the `--side-selected` fill, a `--text-strong` glyph
+    and a heavier stroke (2.5 against 2), with no hue, border, stripe or outline; hover adds
+    nothing to it. The keyboard's focus draws the app's ring, which fits inside the rail's
+    insets. A button answers from the window's start edge to the rail's end and half the gap
+    above and below it, through an expander that draws nothing; the first reaches the window's
+    top and the last its foot. Its tooltip is the native `title`. In a window too short for its
+    buttons (a phone on its side) the rail scrolls by itself, with no scrollbar drawn, so its
+    last button is still reached; nothing in it is squeezed.
+  - The count is a button of its own: lucide `CircleHelp` under the app's waiting pill
+    (`.header-more-dot.is-waiting[data-count]`), which hangs on the glyph's top end corner and
+    is ringed with the fill it stands on, so its digits never touch the glyph. It counts the
+    agents its press can open: those that wait other than the open thread's, every one that
+    waits while no thread is open, and never one in a pane its tab's zoom hides, which no jump
+    reaches (`waitingTargets` beside `nextWaitingTarget`, lib/headerSessions.ts, both from one
+    starting pane). An agent that waits behind a zoom keeps its row in the list, which says
+    that it waits; a press on that row opens the pane its tab is zoomed onto, the one herdr
+    shows, as every pick of a pane a zoom hides does (lib/useSelection.ts). The button is
+    named **N waiting for you**, its tooltip says **Open the next session waiting
+    for you**, and a press opens the next of them as its row would. The pill is hidden from a
+    screen reader. With none to open the button is not drawn; it is the first of the lower
+    group, so nothing under it moves when it comes or goes.
+  - The PC is the rail's last button (lucide `Monitor`; `MonitorOff` only while every PC is
+    away). Its name and its tooltip say the one PC and how it stands (**PC workstation ·
+    Connected**, **Reconnecting…**, **Offline**), or with several PCs how many are connected
+    (**PCs, 2 of 3 connected**); Reconnecting… is said of every PC while the page has lost the
+    stream its rows come from. Its dot (`.inbox-rail-dot`, `--dot-size`, on the glyph's lower
+    end corner, ringed as the count is) is drawn only while the connection has something to
+    say, as the list's line was: `--status-reconnecting`, pulsing, while it is lost after the
+    page had it, `--status-done` for the moment after it is back, and not at all while the open
+    thread's chip says the same word. The word is also announced from a status line that is in
+    the document before it. A press opens the list of PCs as a menu (`RowMenu`): one row per PC
+    with its name and its state in words, the one the app is on marked (`aria-current`). A row
+    of another connected PC opens that PC as the classic app opens one, with no thread chosen;
+    a PC that is away opens nothing, as its rows in the list.
+  - The design follows the strip of icon-only controls that Claude's web app (claude.ai) draws
+    down the left edge of a wide window: its controls near the top, the account at its foot,
+    the current place on a pale rounded fill. The mode's rail begins with the way out of the
+    mode instead, and its foot holds the agents that wait, this device's alerts, Settings and
+    the PC. Zed opens its panels from buttons in its status bar, Warp's vertical tabs are a
+    sidebar, and T3 Code lists its threads in a sidebar: the mode's list is already
+    that sidebar, and its shell draws no status bar. No icon, colour or markup of any of them
+    is used.
+  - The list's top row holds its search field, always shown, then two round controls at its end,
+    `--space-2-5` apart and `--space-4` from the column's edge: the state filter and **New
+    workspace** (where New workspace is not drawn, the field takes its room). The field has no
+    button of its own while the list has the room for it: 256px and more, the default sidebar
+    with a mouse, where it shows about 94px of words (138px without New workspace); under a
+    coarse pointer a list just over 256px clips the field's placeholder. A narrower
+    list, in which the field could not hold its own placeholder (at the sidebar's least width it
+    would show one character), folds it into a round **Search** button at the row's start, and
+    the row is three round controls. In a
+    list too narrow for the row at those insets (a sidebar near its least width under a coarse
+    pointer, whose controls are 44px) the row gives way, in this order: its side insets, down
+    to the rows' own `--space-3`; its gaps, down to none; then its controls, which shrink
+    together and stay round, their glyphs at their size, never under `--pointer-target`
+    (24px). The last step is the one place a control under a finger is smaller than
+    `--touch-target`: a phone on its side, whose side safe area the rail takes out of the
+    column, with the sidebar at its least width leaves a list of about 112px to 124px, and
+    the other way to fit three controls there is to draw one over the rail. Down to that
+    least size the controls are inside the list and none stands over another; an open search
+    field gives up its room before its button shrinks, down to its own insets (its start
+    padding and its clear button's room), under which it could not be drawn beside the
+    button. The rows truncate their words as they always do, and nothing scrolls sideways. In
+    such a list the search field opens when asked for and takes the row: the filter and New
+    workspace give way until it is put away, so a query has the room to be read (the field is
+    then the whole row but its Search button). It takes the focus, stays while it holds words
+    (a query never narrows the list unseen), and Escape first clears it, then puts it away.
+    Where the field is always shown, Escape clears it and it stays, with the focus.
+    Nothing in the row is filled but the filter's button while a filter other than All is on,
+    the round control's own rule (above).
+  - Rows are `--row-h` tall, `--space-1` apart and `--space-3` in from the list's two edges (the
+    rail's end and the column's own edge), with
     `--radius-lg`: the mark at `--avatar-size`, `--space-2-5` before the name (`--fs-md`) over
     the words (`--fs-sm`), the state's mark at the row's end on its middle, `--space-2` inside
     the row's box. A wide row draws no time; its tooltip says the name and the words whole and
@@ -2545,12 +2695,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
     colours as the transcript's is, stands in the end inset beside them. The classic sidebar's
     lists give a scrollbar its width out of their rows; the mode's does not. In a window
     narrower than 769px the same rule keeps a row's time and mark where they are.
-  - The column's foot is one line, `--space-3` above the window's edge: at its start **Back to
-    Ovis** beside the Ovis mark (the sidebar foot's own action, where the classic sidebar has
-    the way in; `--side-hover` under a hovering pointer, a row's press under a press), at
-    its end the state filter and **More** as round controls, `--space-2`
-    apart. Nothing in the foot is filled but the filter's button while a filter other than All
-    is on, the round control's own rule (above).
+  - The column has no foot: the rows run to the window's edge, `--space-3` and the bottom safe
+    area under the last one. What the foot held is in the list's top row (the state filter) and
+    in the rail (Back to Ovis, and More's items as buttons of their own).
   - Over the pane (`.thread-top`) a name chip (`.thread-chip`) stands on the pane's middle: an
     opaque pill, `--control-h` tall, `--bg-elevated` inside a hairline `--border`, holding the
     agent's round mark at `--mark-size`, the name (`--fs-md`, `--fw-medium`) and, after it, the
@@ -2569,15 +2716,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
     the chat and in the column a coarse pointer grows the round controls to `--touch-target` and
     the band with them.
   - A pane with no agent chosen says so in one centred `--text-dim` line (`.inbox-unchosen`,
-    `role="status"`): "Choose one from the list to open its chat here." It names no agent: the word is
-    drawn nowhere in the mode's own chrome.
+    `role="status"`): "Choose one from the list to open its chat here." It names no agent: in the
+    mode's own chrome the word is drawn only in the wide list's search field, which says its scope.
 - The focus. The list takes the keyboard focus, on its own section, each time it opens: the
   page's start on it, a way in, a Back onto it. Opened by Back from a thread it gives the focus
   to that thread's row while the list still draws it (a filter or a search may leave it out:
   then the section), so a keyboard or a screen reader keeps its place. A change of width that
   only draws it again takes none: a window widened past a phone's with a thread open leaves the
-  focus in the thread's composer. The column's search field, put away by Escape, gives the focus
-  to the round Search button that opened it. Back to Ovis takes the control that was pressed away with the mode's
+  focus in the thread's composer. The column's search field, put away by Escape in a list too
+  narrow to show it always, gives the focus to the round Search button that opened it. On a wide window the keyboard's order is the drawn
+  one, which is the document's: the rail's buttons from the Ovis mark down to the PC, each a
+  plain Tab stop that Enter and Space press, then the list's top row, its rows, the column's
+  resize grip, and the thread. The rail's Agent inbox gives the focus to the list's section,
+  as an opening does, and the list of PCs gives it back to its button when it closes. Back to Ovis takes the control that was pressed away with the mode's
   shell: a focus left nowhere goes to the classic header's workspace-list toggle (the drawer's
   on a phone, the sidebar's from 769px), as it does whenever the control that held it is gone
   (lib/focus.ts). Where something took it meanwhile it stays there: the pane's composer on a
@@ -2590,14 +2741,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   mirror's width, unsent text), under More's header of the pane's title, place and path, whose fixed lines never scroll there:
   only a path longer than six lines scrolls, in its own lines (`.header-more-crumb.is-inbox`; the
   classic app's header scrolls as a whole). On a
-  wide window each side has a More of its own: the column's holds the list's items but Back to
-  Ovis, which stands in the foot under it, and the pane's the thread's. A More whose button leaves the screen closes with it: the system Back
+  wide window the column has no More: Back to Ovis, Alerts and Settings are buttons of the rail,
+  each in that one place, and the one More, over the pane, holds **Search panes and actions**
+  (the rail draws no magnifier, and a touch screen has no shortcut) and then the thread's items.
+  With the list alone, that More holds **Search panes and actions** alone: the palette's one way
+  there for a pointer or a finger. A More whose button leaves the screen closes with it: the system Back
   from a wide thread takes the pane's More away, and its open menu goes too (lib/moreMenu.ts).
 - What More counts in the mode. Over a phone's thread its dot and its name count the sessions
   that wait other than the thread's own, whose question is on the screen in its prompt card,
   and the next waiting agent is offered only when there is another. From 769px no More carries
-  a count and the pane's More has no next waiting agent: the list beside the thread shows who
-  waits, first, and one fact has one place. The list's More never counted.
+  a count and the pane's More has no next waiting agent: the rail's count says both, in that
+  one place (the rail, above), and it stays true while the list is scrolled or filtered to
+  Working or Done. A phone's More counts an agent that waits behind a tab's zoom, which the
+  rail's count, of what its press opens, leaves out. The list's More never counted.
 - The history. A change of mode is one entry in either direction, and Back undoes it: entered
   from a pane, the pane stays mounted under the list and Back on the list returns to it; left
   from a thread, the classic shell opens on that thread's pane. On a phone More's item runs
@@ -4870,8 +5026,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   for five or more, a stepper (minus, value in `--font-mono`, plus, in one bordered well) and a
   text field; inside a card they sit on `--bg-input`. The terminal and chat font sizes' value can
   be typed in its place, and a number out of range is refused, never clamped (G-179, after Warp's
-  Appearance settings); full-width digits from an IME (１６) are read as the number. Each page but
-  About opens with one dim line saying what it holds
+  Appearance settings); full-width digits from an IME (１６) are read as the number. At the
+  smallest or largest value the minus or plus stays a button, `aria-disabled` and faded as a
+  disabled `.icon-button` is, and a press does nothing and shows no pressed look, so a keyboard's
+  focus is not dropped to the page, as the header's waiting button and the account's Check again
+  keep it. Each page but About opens with one dim line saying what it holds
   (`.settings-page-note`, G-173, after Codex's settings panes); About stays sentence-free. On a phone a control that needs the line
   (three or more segments, a text field, or a long sentence above it) goes under its label at
   the card's width, its segments sharing it equally; the rest stay on the label's line. Where the
@@ -6099,6 +6258,13 @@ until then the card's hairline is its edge in light.
   or file suggestions are; the palette opened over another dialog lists no Close pane. A second
   close in the same workspace waits until the roster has dropped the first, so it never takes the
   workspace's last pane without asking. There is no undo: herdr ends the pane's processes.
+  Close tab (a shortcut and a palette row, #3751) is the same verb one level up, as herdr's own
+  prefix+& and the Codex app's and T3 Code's close keys, again with no default key (⌘W and Ctrl+W
+  are the browser's): it runs the open tab's own Close from its row's menu, or from the pane's menu
+  where a lone tab on a cramped screen draws no row, so a busy tab or a workspace's last one asks
+  first, a tab holding a locked pane has none, and a watching device, the setup guide and the inbox
+  mode have no Close tab. One close per press, and none under a dialog, sheet, menu or open
+  suggestions, as Close pane.
 - Text-field selection and IME composition keep their keys. Focus-local list/tab navigation and
   reordering are separate from global bindings; they must not intercept terminal input.
   Global actions target the selected pane, and the original handled chord must never also reach its PTY.
@@ -6200,7 +6366,7 @@ command opens on a typed address; no code is copied.
 
 ## Touch prompt suggestions
 
-The empty composer follows Claude Code's [prompt suggestion model](https://code.claude.com/docs/en/interactive-mode): accept into an editable draft, then send separately. On a touch screen with Settings → Chat → Composer buttons → Suggestion on (off by default), the grey words also accept a tap; with it off, a tap there only focuses the box, so a user who taps the words to write their own reply never gets the suggestion inserted. Only the words receive taps; the surrounding input keeps native focus and scrolling. Tab and the optional suggestion chip share the same acceptance function. A focused inline suggestion also accepts Enter and Space. A suggestion that exceeds the message limit leaves the draft unchanged and shows the limit in the existing alert. No code or visual assets are copied.
+The empty composer follows Claude Code's [prompt suggestion model](https://code.claude.com/docs/en/interactive-mode): accept into an editable draft, then send separately. A phone has no Tab key: Settings → Chat → Composer buttons → Suggestion (off by default) adds a chip above the box that takes it. The grey words themselves never take a tap, with the chip on or off: that tap is how the box is focused to type one's own reply, and a suggestion of normal length covers most of the first line, so taking it there filled the box on most taps meant to start typing (#3807). An explicit action takes the suggestion, as Tab does in Claude Code's own input; focusing the box does not. Tab and the chip share the same acceptance function. A suggestion that exceeds the message limit leaves the draft unchanged and shows the limit in the existing alert. gjc's `promptSuggestions` and omp's `composer.predictions` draw their suggestion the same way, as ghost text in the theme's dim color in their empty box, and the composer offers it as it offers Claude's; one they cut short at the box's edge (ending in `…`) is not offered, since only part of it would go into the draft. Typed text there must never read as a suggestion, so omp's is offered only in the `dim` of one of its built-in themes and in no color any of them types in; the dim `Queueing` header of a queue draft is not offered either. The theme on screen is not known, so a custom omp theme whose text color is exactly one of those dim colors is a known limit: its typed text reads as a suggestion. No code or visual assets are copied.
 
 gjc's `promptSuggestions` and omp's `composer.predictions` draw their suggestion the same way, as ghost text in the theme's dim color in their empty box, and the composer offers it as it offers Claude's; one they cut short at the box's edge (ending in `…`) is not offered, since only part of it would go into the draft. Typed text there must never read as a suggestion, so omp's is offered only in the `dim` of one of its built-in themes and in no color any of them types in; the dim `Queueing` header of a queue draft is not offered either. The theme on screen is not known, so a custom omp theme whose text color is exactly one of those dim colors is a known limit: its typed text reads as a suggestion.
 

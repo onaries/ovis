@@ -33,7 +33,7 @@ const snapshot: SessionSnapshot = {
 };
 const machines: Machine[] = [{ id: "local", name: "Host", kind: "local", enabled: true, state: "connected", error: null, snapshot }];
 // App's actions on each PC: split and zoom as the PC offers them (lib/layoutActions.ts, tested there)
-const actionsOf = (offer: LayoutOffer, own: Partial<AppActions> = {}) => new Proxy({ splitPane: offer.split ? () => {} : null, zoomPane: offer.arrange ? () => {} : null, enableNotifications: null, openFiles: null, lock: null, openLocalPage: null, inboxMode: null, ...own }, { get: (own, key) => key in own ? own[key as keyof typeof own] : () => {} }) as unknown as AppActions;
+const actionsOf = (offer: LayoutOffer, own: Partial<AppActions> = {}) => new Proxy({ splitPane: offer.split ? () => {} : null, zoomPane: offer.arrange ? () => {} : null, enableNotifications: null, openFiles: null, lock: null, openLocalPage: null, inboxMode: null, closeTab: null, ...own }, { get: (own, key) => key in own ? own[key as keyof typeof own] : () => {} }) as unknown as AppActions;
 const LAYOUT_ROWS = ["Rename tab", "Split pane right", "Split pane down", "Split pane right and open it", "Split pane down and open it", "Zoom pane"];
 
 describe("the command palette on a PC the Herdr app lays out", () => {
@@ -106,6 +106,14 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     (document as unknown as { querySelectorAll: () => unknown[] }).querySelectorAll = () => [{}];
     expect(await rows(TUI, "p1", ">close pane", closing)).toEqual([]);
     expect(closes).toBe(0);
+  });
+
+  it("lists Close tab where App offers it, and not when opened over another dialog (#3751)", async () => {
+    const closing = actionsOf(TUI, { closeTab: () => {} });
+    expect(await rows(TUI, "p1", ">close tab", closing)).toEqual(["Close tab"]);
+    expect(await rows(TUI, "p1", ">close tab")).toEqual([]);
+    (document as unknown as { querySelectorAll: () => unknown[] }).querySelectorAll = () => [{}];
+    expect(await rows(TUI, "p1", ">close tab", closing)).toEqual([]);
   });
 
   it("keeps Rename tab where a lone tab draws no row, whose dialog stands in for the row's field", async () => {

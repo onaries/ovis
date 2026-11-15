@@ -377,14 +377,34 @@ private final class RefuseRedirects: NSObject, URLSessionTaskDelegate {
 /// (docs/native-app.md, Spike results), so opening a PC builds a new one of these.
 class HerdrBridgeViewController: CAPBridgeViewController {
     private var failureProxy: NavigationFailureProxy?
-    /// Covers the web view, which stays blank until the PC's page has loaded.
+    /// Covers the web view until the client is up: before that it is blank, then index.html's
+    /// loading spinner, for minutes on a slow link.
     private var openingView: UIView?
-    /// Gives up on a PC that has not answered, instead of WebKit's own wait of a minute or more.
-    private var answerTimeout: DispatchWorkItem?
-    /// The cover's spinner, text and Try again, which change when the PC does not open in time.
+    /// Looks at the open five times a second while the cover is up (tick): gives up on a PC that has not
+    /// answered, instead of WebKit's own wait of a minute or more, and tells a slow page.
+    private var ticker: Timer?
+    private var watch: OpeningWatch?
+    /// The cover's spinner, bar, text and Try again, which change with the open's stage.
     private var openingSpinner: UIActivityIndicatorView?
+    private var openingBar: UIProgressView?
     private var openingLabel: UILabel?
     private var openingRetry: UIButton?
+    /// The PC's name or address, as the cover names it.
+    private var openingName = ""
+    /// Whether the cover has given up and shows why (showNoAnswer).
+    private var gaveUp = false
+
+    /// Asked of the PC's page while the cover is up: whether the client is up, its root no longer
+    /// holding index.html's loading spinner, or the page is no client at all (no root). The PC
+    /// answers before its page commits, and until then the web view holds its first, empty
+    /// document (about:blank), which has no root either: only an http(s) page counts.
+    private static let clientUpScript = """
+        (() => {
+          if (!/^https?:$/.test(location.protocol) || document.readyState === 'loading') return false;
+          const root = document.getElementById('root');
+          return !root || !root.querySelector(':scope > .boot');
+        })()
+        """
     /// A page has finished loading in this one: later failures are left to the page.
     private var firstPageDone = false
     /// How long a PC may take to answer the first request.
@@ -432,11 +452,11 @@ class HerdrBridgeViewController: CAPBridgeViewController {
             let proxy = NavigationFailureProxy(inner: webView.navigationDelegate) { [weak self] webView, reason in
                 self?.showFailure(in: webView, reason: reason)
             }
-            // the PC answered: WebKit shows its page from here, as it did before the cover existed
-            proxy.onAnswer = { [weak self] in self?.hideOpening() }
+            // the PC answered: the cover stays, with its bar, until the client is up (tick)
+            proxy.onAnswer = { [weak self] in self?.watch?.answer(at: ProcessInfo.processInfo.systemUptime) }
             proxy.onLoaded = { [weak self] in
                 self?.firstPageDone = true
-                self?.hideOpening()
+                self?.askPage()
             }
             // a first page that broke off after it started: the error page; one cancelled on purpose
             // leaves the cover up, which the timeout turns into Try again. Only the PC's answer or a
@@ -453,20 +473,65 @@ class HerdrBridgeViewController: CAPBridgeViewController {
             webView.navigationDelegate = proxy
         }
         super.viewDidLoad()
-        if let webView = webView, let origin = PCStore.current {
+        if webView != nil, let origin = PCStore.current {
             showOpening(origin)
-            let timeout = DispatchWorkItem { [weak self, weak webView] in
-                // said on the cover itself: while the PC's connection hangs, WebKit did not show the
-                // error page either (it stayed unpainted), in this web view or a new one
-                webView?.stopLoading()
-                self?.showNoAnswer(origin)
-            }
-            answerTimeout = timeout
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(Self.answerSeconds), execute: timeout)
+            watch = OpeningWatch(now: ProcessInfo.processInfo.systemUptime, answerLimit: TimeInterval(Self.answerSeconds))
+            // often enough that the cover lifts within a fifth of a second of the client's first frame
+            ticker = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.tick(origin) }
         }
     }
 
-    deinit { answerTimeout?.cancel() }
+    deinit { ticker?.invalidate() }
+
+    /// Each tick while the cover is up: how far the page has come, and what the cover says.
+    private func tick(_ origin: String) {
+        guard let webView, openingView != nil, !gaveUp, var watch else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        watch.progress(webView.estimatedProgress)
+        let stage = watch.stage(at: now)
+        let shown = watch.shownProgress()
+        self.watch = watch
+        if stage == .noAnswer {
+            // said on the cover itself: while the PC's connection hangs, WebKit did not show the
+            // error page either (it stayed unpainted), in this web view or a new one
+            gaveUp = true
+            webView.stopLoading()
+            showNoAnswer(origin)
+            return
+        }
+        showStage(stage, shown: shown, answered: watch.answered)
+        askPage()
+    }
+
+    /// Asks the page whether the client is up (clientUpScript): then the cover goes. A page that is
+    /// not the PC's (the bundled error page) takes the cover away once it has loaded.
+    private func askPage() {
+        guard let webView, openingView != nil, !gaveUp else { return }
+        guard let url = webView.url, let current = PCStore.current, PCStore.belongs(url, to: current) else {
+            if firstPageDone { hideOpening() }
+            return
+        }
+        webView.evaluateJavaScript(Self.clientUpScript) { [weak self] up, _ in
+            if (up as? Bool) == true { self?.hideOpening() }
+        }
+    }
+
+    /// The cover's text, spinner, bar and buttons for the open's stage.
+    private func showStage(_ stage: OpeningWatch.Stage, shown: Double, answered: Bool) {
+        let ko = Self.korean
+        switch stage {
+        case .slow:
+            openingLabel?.text = ko ? "연결이 느립니다. \(openingName) 여는 중…" : "Slow connection. Still opening \(openingName)…"
+        case .opening, .noAnswer:
+            openingLabel?.text = ko ? "\(openingName) 여는 중…" : "Opening \(openingName)…"
+        }
+        // the spinner until the PC answers; then the bar, filled as WebKit estimates the page's load
+        openingBar?.isHidden = !answered
+        openingBar?.setProgress(Float(shown), animated: true)
+        openingSpinner?.isHidden = answered
+        // a slow open can always be started again
+        openingRetry?.isHidden = stage != .slow
+    }
 
     private static var korean: Bool { Locale.preferredLanguages.first?.lowercased().hasPrefix("ko") ?? false }
 
@@ -501,8 +566,13 @@ class HerdrBridgeViewController: CAPBridgeViewController {
         retry.tintColor = UIColor(red: 0xf0 / 255, green: 0xa8 / 255, blue: 0x30 / 255, alpha: 1)
         retry.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         retry.isHidden = true
+        let bar = UIProgressView(progressViewStyle: .default)
+        bar.progressTintColor = retry.tintColor
+        bar.trackTintColor = UIColor(white: 1, alpha: 0.12)
+        bar.isHidden = true
+        bar.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = UIStackView(arrangedSubviews: [spinner, label, retry, change])
+        let stack = UIStackView(arrangedSubviews: [spinner, bar, label, retry, change])
         stack.axis = .vertical
         stack.alignment = .center
         stack.spacing = 16
@@ -529,13 +599,16 @@ class HerdrBridgeViewController: CAPBridgeViewController {
             stack.topAnchor.constraint(greaterThanOrEqualTo: content.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24)
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            bar.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         view.addSubview(cover)
         openingView = cover
         openingSpinner = spinner
         openingLabel = label
         openingRetry = retry
+        openingBar = bar
+        openingName = host
     }
 
     /// The cover once the PC has not answered in time: why, what to check, Try again and Change PC.
@@ -545,7 +618,12 @@ class HerdrBridgeViewController: CAPBridgeViewController {
         var text = PCStore.failure.map { "\(host): \($0)" } ?? (Self.korean
             ? "\(host)이(가) \(Self.answerSeconds)초 안에 응답하지 않았습니다."
             : "\(host) did not answer within \(Self.answerSeconds) seconds.")
-        if Self.tailnet(host) {
+        if PCStore.failure == nil, !OpeningWatch.homeHost(host) {
+            // a public server: no home network or firewall of the PC to blame
+            text += Self.korean
+                ? "\n\n서버가 꺼져 있거나, 이 휴대폰의 연결(또는 VPN)이 서버에 닿지 않을 수 있습니다."
+                : "\n\nThe server may be down, or this phone's connection (or a VPN on it) may not reach it."
+        } else if Self.tailnet(host) {
             text += Self.korean
                 ? "\n\nTailscale 주소입니다. 이 휴대폰에서 Tailscale이 꺼져 있을 수 있습니다. Tailscale 앱에서 연결을 켠 뒤 다시 시도를 누르세요."
                 : "\n\nThis is a Tailscale address, and Tailscale may be off on this phone. Turn it on in the Tailscale app, then tap Try again."
@@ -556,6 +634,7 @@ class HerdrBridgeViewController: CAPBridgeViewController {
         }
         openingSpinner?.stopAnimating()
         openingSpinner?.isHidden = true
+        openingBar?.isHidden = true
         openingLabel?.text = text
         openingRetry?.isHidden = false
     }
@@ -570,7 +649,8 @@ class HerdrBridgeViewController: CAPBridgeViewController {
     }
 
     private func hideOpening() {
-        answerTimeout?.cancel()
+        ticker?.invalidate()
+        ticker = nil
         openingView?.removeFromSuperview()
         openingView = nil
     }

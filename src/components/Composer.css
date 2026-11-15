@@ -444,7 +444,6 @@
 }
 
 .composer-text,
-.composer-inline-suggestion,
 .composer-measure {
   grid-area: text;
   width: 100%;
@@ -487,7 +486,6 @@
    by Settings → Chat font size, as ChatView.css scales the transcript's --chat-fs-body */
 @media (hover: hover) and (pointer: fine) {
   .composer-text,
-  .composer-inline-suggestion,
   .composer-measure {
     font-size: calc(var(--fs-chat) * var(--chat-scale, 1));
     line-height: var(--lh-code);
@@ -1078,7 +1076,6 @@
   }
 
   .composer-text,
-  .composer-inline-suggestion,
   .composer-measure {
     padding: var(--space-3) var(--space-3) 0;
   }
@@ -1586,30 +1583,5 @@
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
-  }
-}
-
-/* Only the suggested words receive taps. Blank input space and scroll gestures stay native. */
-.composer-inline-suggestion {
-  display: none;
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  color: var(--text-dim);
-  white-space: pre-wrap;
-}
-
-@media (pointer: coarse) {
-  .composer-text.has-suggestion::placeholder {
-    color: transparent;
-  }
-
-  .composer-inline-suggestion {
-    display: block;
-  }
-
-  .composer-inline-suggestion > span {
-    pointer-events: auto;
-    cursor: pointer;
   }
 }

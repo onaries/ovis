@@ -40,6 +40,7 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "You: {text}": "我：{text}",
   "Turn failed": "出错",
   "Filter by state": "按状态筛选",
+  "Search agents": "搜索 Agent",
   "Filter by state: {state}": "按状态筛选：{state}",
   "Expand worktrees of {name}": "展开 {name} 的工作树",
   "Collapse worktrees of {name}": "折叠 {name} 的工作树",

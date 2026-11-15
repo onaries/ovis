@@ -141,6 +141,21 @@ export function sentenceHoles(tip: ScreenBox, controls: readonly ScreenBox[]): S
 }
 
 /**
+ * What a row's sentence must not lie on: the other rows' controls, and every other control in its dialog, as the
+ * page's Back above the first row, a fold's toggle (a summary) and a button in another row's condition. The pointer
+ * there is the control's.
+ */
+function sentenceControls(row: HTMLElement): HTMLElement[] {
+  const rowControls = [...(row.closest(".modal-body") ?? document).querySelectorAll<HTMLElement>(".settings-row")].filter((other) => other !== row)
+    .flatMap((other) => [...other.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.classList.contains("settings-row-text")));
+  const others = [...(row.closest("[role='dialog']") ?? row.closest(".modal-body") ?? document).querySelectorAll<HTMLElement>("button, a[href], input, select, textarea, summary")]
+    // a control in another row's own controls is counted with them; one in a row's text (its condition) is not
+    .filter((control) => !row.contains(control) && control.closest(".settings-help, .settings-help-copy") === null
+      && (control.closest(".settings-row") === null || control.closest(".settings-row > .settings-row-text") !== null));
+  return [...rowControls, ...others];
+}
+
+/**
  * Where a row's sentence goes when it shows over the page (#3275): above the row, its left edge on the name's,
  * so it covers neither the row's own control nor the row below, which the pointer goes to next. `clear` is the
  * top of the highest thing in the row it must stay above (the name, or a taller control beside it) and `under`
@@ -385,7 +400,6 @@ function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObj
       const tip = box.current;
       if (!tip) return;
       const rowBox = row.getBoundingClientRect();
-      const pageEl = row.closest(".modal-body");
       if (!inPageView(row)) {
         drawn.current = false;
         setAt(null);
@@ -400,9 +414,7 @@ function RowSentence({ row, drawn, children }: { row: HTMLElement; drawn: RefObj
       const clear = Math.min(name.top, line?.top ?? name.top, ...beside.map((side) => side.top));
       const under = Math.max(text?.getBoundingClientRect().bottom ?? rowBox.bottom, ...beside.map((side) => side.bottom));
       const screen = { width: window.innerWidth, height: window.innerHeight };
-      // the other rows' controls: what a sentence over those rows must not lie on
-      const controls = [...(pageEl ?? document).querySelectorAll<HTMLElement>(".settings-row")].filter((other) => other !== row)
-        .flatMap((other) => [...other.children].filter((child) => !child.classList.contains("settings-row-text"))).map((child) => child.getBoundingClientRect()).filter((side) => side.height > 0);
+      const controls = sentenceControls(row).map((child) => child.getBoundingClientRect()).filter((side) => side.height > 0);
       const measure = () => placeSentence(rowBox, name, clear, under, { width: tip.offsetWidth, height: tip.offsetHeight }, screen);
       // at its own width first, then as narrow as the controls under it ask; a narrower sentence is taller and may
       // reach another row's control, so once more; where that leaves no room, back to its own width
@@ -646,8 +658,9 @@ export function Stepper({ label, value, text, min, max, decreaseLabel, increaseL
   pending.current = () => { if (typed !== null && typed !== value) onChange(typed); };
   useEffect(() => () => pending.current(), []);
   const stepper = (
+    // aria-disabled at an end, not disabled: a press keeps the focus on the button instead of dropping it to the page
     <div className="settings-stepper" role="group" aria-label={label} aria-describedby={sentence}>
-      <button type="button" className="icon-button" aria-label={decreaseLabel} title={decreaseLabel} disabled={current <= min} onClick={() => step(-1)}><Minus aria-hidden="true" /></button>
+      <button type="button" className="icon-button" aria-label={decreaseLabel} title={decreaseLabel} aria-disabled={current <= min || undefined} onClick={() => { if (current > min) step(-1); }}><Minus aria-hidden="true" /></button>
       {unit === undefined ? <output aria-live="polite">{text}</output> : <span className="settings-stepper-field">
         <input className="settings-stepper-value" type="text" inputMode="numeric" aria-label={label} title={range} value={shown}
           aria-describedby={range === undefined ? undefined : rangeId}
@@ -662,7 +675,7 @@ export function Stepper({ label, value, text, min, max, decreaseLabel, increaseL
         {/* the field is not announced as it changes: the size the -/+ buttons or a typed number set is */}
         <output className="visually-hidden" aria-live="polite">{text}</output>
       </span>}
-      <button type="button" className="icon-button" aria-label={increaseLabel} title={increaseLabel} disabled={current >= max} onClick={() => step(1)}><Plus aria-hidden="true" /></button>
+      <button type="button" className="icon-button" aria-label={increaseLabel} title={increaseLabel} aria-disabled={current >= max || undefined} onClick={() => { if (current < max) step(1); }}><Plus aria-hidden="true" /></button>
     </div>
   );
   if (unit === undefined || range === undefined) return stepper;

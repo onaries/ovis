@@ -133,6 +133,8 @@ const BASE: Record<string, string> = {
   // ---- settings ----
   "Settings": "設定",
   "PCs": "PC",
+  "PC {name}": "PC {name}",
+  "PCs, {n} of {m} connected": "PC {m} 台のうち {n} 台が接続済み",
   "Chat": "チャット",
   "Agent default": "エージェントの既定",
   "Devices and PCs": "デバイスと PC",
@@ -423,6 +425,7 @@ const BASE: Record<string, string> = {
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "リレーをオンにするとデバイスゲートが閉じます。以後、新しいブラウザーにはペアリングコードかアクセストークンが必要です。",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新しいタブ",
+  "New tab with agent…": "エージェントで新しいタブ…",
   "New worktree": "新しいワークツリー",
   "Open worktree…": "ワークツリーを開く…",
   "Earlier sessions…": "以前のセッション…",
@@ -443,6 +446,7 @@ const BASE: Record<string, string> = {
   "Split pane down": "ペインを下に分割",
   "Zoom or unzoom pane": "ペインのズームまたは解除",
   "Close pane": "ペインを閉じる",
+  "Close tab": "タブを閉じる",
   "Plan: {done} of {total} done": "計画: {total} 件中 {done} 件完了",
   "Plan": "計画",
   "Something went wrong": "問題が発生しました",
@@ -574,6 +578,7 @@ const BASE: Record<string, string> = {
   "Search": "検索",
   "Choose one from the list to open its chat here.": "リストから選ぶと、チャットがここに開きます。",
   "Agent inbox": "エージェント受信トレイ",
+  "Inbox mode": "受信トレイモード",
   "Open agent inbox": "エージェント受信トレイを開く",
   "Back to Ovis": "Ovis に戻る",
   "Remove PC": "PC を削除",

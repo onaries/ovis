@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref, type RefObject } from "react";
 import { Ellipsis, ListFilter, Monitor, Plus, Search, Terminal, TriangleAlert, X } from "lucide-react";
 
 import type { Machine } from "../../shared/machines.ts";
@@ -18,17 +18,17 @@ import { SHEET_QUERY } from "../lib/sheets.ts";
 import type { SidebarActivity } from "../lib/sidebarActivity.tsx";
 import { agentContext, agentTabName, paneMark } from "../lib/sidebarAgents.ts";
 import { useAgentStateStamps } from "../lib/useAgentStateSince.ts";
+import type { InboxListHandle } from "../lib/useInbox.ts";
 import { questionTargets, useInboxQuestions, type QuestionReads } from "../lib/useInboxQuestions.ts";
 import { summaryTargets, useInboxSummaries, type RowSummary, type SummaryReads } from "../lib/useInboxSummaries.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { AgentMark } from "./AgentMark.tsx";
-import { OvisMark } from "./OvisMark.tsx";
 import { agentRowTitle, blockedNote, stateAge } from "./AgentSidebar.tsx";
 import { RowMenu } from "./RowMenu.tsx";
 import { compactWorktreeName, StatusBadge } from "./Sidebar.tsx";
 import "./InboxList.css";
 
-/** More, drawn by the list (the top start control on a phone, the column's foot from 769px); the shell owns its menu. */
+/** More, drawn by the list where it is the screen (its top start control); the shell owns its menu. From 769px the mode's rail holds what it lists. */
 export interface InboxMore {
   label: string;
   expanded: boolean;
@@ -38,6 +38,8 @@ export interface InboxMore {
 }
 
 export interface InboxListProps {
+  /** what the shell may ask of the list (lib/useInbox.ts): the rail's current place asks it for its top */
+  ref?: Ref<InboxListHandle>;
   machines: Machine[];
   activity: SidebarActivity;
   /** this device only watches: it is offered no New workspace */
@@ -62,12 +64,14 @@ export interface InboxListProps {
   questionReads: QuestionReads;
   /** the page's reader of each row's last words (lib/useInbox.ts), which outlives this list */
   summaryReads: SummaryReads;
+  /** drawn only where the list is the screen: the column beside a thread has none */
   more?: InboxMore;
-  /** the way out of the mode, drawn at the column's foot where the classic sidebar's foot has the way in */
-  onExit?: () => void;
   /** the header's note, between a phone's two top controls: the list has no header to say it in */
   note?: ReactNode;
-  /** what the connection has to say (lib/headerConnection.ts), which a thread says under its name: one quiet line here */
+  /**
+   * what the connection has to say (lib/headerConnection.ts), which a thread says under its name: one quiet line here,
+   * where the list is the screen. Beside a thread the mode's rail says it (components/InboxRail.tsx), and the list none
+   */
   connection?: HeaderConnection;
   /** why the roster's last load failed (the read's own message), and the way to load it again: the read it starts, which
    *  the list waits on to say a Retry is on its way */
@@ -103,7 +107,7 @@ export function InboxAvatar({ mark }: { mark: string | null }) {
  * The inbox mode's list: every shown PC's agents, the ones that need the reader first, each a row of two lines.
  * A row opens its agent's chat; nothing is answered or typed from here.
  */
-export function InboxList({ machines, activity, watching, wide, filter, onFilter, query, onQuery, scroll, focus, current = null, onOpen, onNew, questionReads, summaryReads, more, onExit, note, connection = null, failure = null }: InboxListProps) {
+export function InboxList({ ref, machines, activity, watching, wide, filter, onFilter, query, onQuery, scroll, focus, current = null, onOpen, onNew, questionReads, summaryReads, more, note, connection = null, failure = null }: InboxListProps) {
   const t = useT();
   const pressPane = useContext(PanePressContext);
   const root = useRef<HTMLElement>(null);
@@ -161,6 +165,16 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
   // (the clamp's own) is not kept as the place; once they do, the place is theirs and is never set again
   const restoring = useRef<number | null>(scroll.current);
   const stopRestoring = (): void => { restoring.current = null; };
+  // asked for its top, the list is there at once (the place is the reader's from then on) and has the focus, on its
+  // own section as when it opens: the next Tab is its first control
+  useImperativeHandle(ref, () => ({
+    toTop() {
+      restoring.current = null;
+      if (scroller.current !== null) scroller.current.scrollTop = 0;
+      scroll.current = 0;
+      root.current?.focus({ preventScroll: true });
+    },
+  }), [scroll]);
   useLayoutEffect(() => {
     const node = scroller.current;
     if (node === null || restoring.current === null) return;
@@ -181,7 +195,8 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
 
   const [pcMenu, setPcMenu] = useState<HTMLElement | null>(null);
   const [filterMenu, setFilterMenu] = useState<HTMLElement | null>(null);
-  // the column's search field opens on request and stays while it holds words: a query never narrows the list unseen
+  // A column with the room always shows its search field (InboxList.css); a narrower one folds it into its button, and
+  // there it opens on request and stays while it holds words: a query never narrows the list unseen
   const [searchAsked, setSearchAsked] = useState(false);
   const searchOpen = !wide || searchAsked || query !== "";
   useLayoutEffect(() => { if (wide && searchAsked) search.current?.focus(); }, [wide, searchAsked]);
@@ -272,14 +287,21 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
     if (event.key !== "Escape" || !wide || event.nativeEvent.isComposing || event.keyCode === 229) return;
     // a first Escape takes the words away, the next one the field
     event.preventDefault();
-    if (query !== "") onQuery("");
-    // the field goes from under the focus: the button that opened it takes it
-    else { setSearchAsked(false); searchToggle.current?.focus(); }
+    // in a column that folds the field (Search is drawn), words typed before it narrowed held it open: the field keeps
+    // the focus, so it stays open once they go
+    const folds = searchToggle.current !== null && searchToggle.current.getClientRects().length > 0;
+    if (query !== "") { onQuery(""); if (folds) setSearchAsked(true); }
+    // empty, in a column that folds the field, it goes from under the focus and the button that opened it takes it;
+    // where the field is always shown it stays
+    else if (folds) { setSearchAsked(false); searchToggle.current?.focus(); }
   };
-  const searchField = searchOpen && (
+  // Beside the rail the list's search says its scope, in its field and its button's name: the palette, which searches
+  // panes and actions, is under its shortcut and the thread's More. Where the list is the screen it is the one search.
+  const searchLabel = wide ? t("Search agents") : t("Search");
+  const searchField = (searchOpen || wide) && (
     <div className="inbox-search" role="search">
       {!wide && <Search className="inbox-search-glass" aria-hidden="true" />}
-      <input ref={search} className="input inbox-search-input" type="search" value={query} placeholder={t("Search")} aria-label={t("Search")}
+      <input ref={search} className="input inbox-search-input" type="search" value={query} placeholder={searchLabel} aria-label={searchLabel}
         autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search" onChange={(event) => onQuery(event.currentTarget.value)} onKeyDown={closeSearch} />
       {query !== "" && <button type="button" className="inbox-search-clear" aria-label={t("Clear search")} onClick={() => { onQuery(""); search.current?.focus(); }}><X aria-hidden="true" /></button>}
     </div>
@@ -303,9 +325,9 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
     </button>
   );
   // The connection's word, in the document before its words (lib/useAnnouncedText.ts) and drawn by nothing while there
-  // is none. The column's top row is the search field's while that is open: the word is still said, not drawn.
+  // is none: a phone's line, between its two top controls.
   const connectionWord = useAnnouncedText(connection === null ? null : t(connection === "connected" ? "Connected" : "Reconnecting…"));
-  const connectionLine = <p className={connectionWord === null || (wide && searchOpen) ? "visually-hidden" : "inbox-connection"} role="status">{connectionWord}</p>;
+  const connectionLine = <p className={connectionWord === null ? "visually-hidden" : "inbox-connection"} role="status">{connectionWord}</p>;
   const moreButton = more && (
     <button type="button" className="icon-button inbox-round inbox-more" aria-label={more.label} title={more.label}
       aria-haspopup={more.popup} aria-expanded={more.expanded} onClick={(event) => more.onPress(event.currentTarget)}>
@@ -316,14 +338,17 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
   return (
     <section className={`mode-inbox${wide ? " is-wide" : ""}`} aria-label={t("Agent inbox")} tabIndex={-1} ref={root}
       onWheel={stopRestoring} onTouchStart={stopRestoring} onPointerDown={stopRestoring} onKeyDown={stopRestoring}>
-      <div className="inbox-top">
+      <div className={`inbox-top${wide && searchOpen ? " is-search-open" : ""}`}>
+        {/* The column's head, in one place: the search field, the state filter and New workspace. A column too narrow
+            for the field beside them shows Search in its place; the field then opens on request and takes the row,
+            the filter and New workspace giving way until it is put away (InboxList.css). */}
         {wide ? <>
-          {connectionLine}
           {searchField}
-          <button type="button" ref={searchToggle} className="icon-button inbox-round inbox-search-toggle" aria-label={t("Search")} title={t("Search")} aria-expanded={searchOpen}
+          <button type="button" ref={searchToggle} className="icon-button inbox-round inbox-search-toggle" aria-label={searchLabel} title={searchLabel} aria-expanded={searchOpen}
             onClick={() => { if (!searchOpen) setSearchAsked(true); else if (query === "") setSearchAsked(false); else search.current?.focus(); }}>
             <Search aria-hidden="true" />
           </button>
+          {filterButton}
           {newButton}
         </> : <>
           {moreButton}
@@ -392,20 +417,11 @@ export function InboxList({ machines, activity, watching, wide, filter, onFilter
           </ul>
         )}
       </div>
-      <div className="inbox-foot">
-        {wide ? <>
-          {onExit ? <button type="button" className="btn btn-ghost sidebar-footer-action inbox-exit" onClick={onExit}>
-            <OvisMark width="22" height="22" className="inbox-exit-mark" />
-            <span className="inbox-exit-label">{t("Back to Ovis")}</span>
-          </button> : null}
-          <span className="inbox-foot-start" />
-          {filterButton}
-          {moreButton}
-        </> : <>
-          {filterButton}
-          {searchField}
-        </>}
-      </div>
+      {/* the column has no foot: its filter is in its head, and the mode's rail holds the rest */}
+      {!wide && <div className="inbox-foot">
+        {filterButton}
+        {searchField}
+      </div>}
       {pcMenu !== null && !watching && connected.length > 1 && <RowMenu anchor={pcMenu} title={t("New workspace")} onClose={() => setPcMenu(null)}
         items={connected.map((machine) => ({ id: machine.id, label: machine.name, icon: Monitor, run: () => onNew(machine.id) }))} />}
       {filterMenu !== null && <RowMenu anchor={filterMenu} title={t("Filter by state")} choice onClose={() => setFilterMenu(null)}
