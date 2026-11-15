@@ -121,6 +121,7 @@
   --fs-lg: calc(16px * var(--ui-scale));
   --fs-xl: calc(18px * var(--ui-scale));
   --fs-display: calc(22px * var(--ui-scale));
+  --fs-title: calc(28px * var(--ui-scale)); /* a dialog's own title over the app: the setup guide's steps */
   /* the pairing code: a size of its own, still on the density scale (compact overrides it) */
   --fs-pairing: calc(32px * var(--ui-scale));
   --fs-input: 16px; /* the one size iOS Safari does not zoom on focus */
@@ -342,7 +343,6 @@
   --outline-w: 240px;
   --file-panel-min-w: 320px;
   --qr-size: 132px;
-  --guide-w: 552px;
   --voice-wave-h: 20px;
   --kbd-h: 18px;
   --btn-submit-min-w: 88px;

@@ -51,7 +51,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
  * before both, which answers a name it does not know with its usage and exit 2 as the real one does
  * (in single quotes there: the installer tells a release by the words `"link"` and COMMAND_ALIASES).
  */
-function pluginScript(knows: "add" | "link" | "neither" = "add"): string {
+function pluginScript(knows: "add" | "link" | "neither" = "add", tui = false): string {
   const record = `{
   const { appendFileSync, existsSync } = await import("node:fs");
   if (!existsSync(process.env.SCRATCH + "/running")) { console.error("Ovis is not running at http://127.0.0.1:7317; start it first"); process.exit(1); }
@@ -62,7 +62,7 @@ function pluginScript(knows: "add" | "link" | "neither" = "add"): string {
   if (existsSync(process.env.SCRATCH + "/add-waits")) { console.log("waiting for an approval"); await Bun.sleep(60_000); }
   process.exit(existsSync(process.env.SCRATCH + "/add-fails") ? 1 : 0);
 }`;
-  return `${knows === "add" ? "// COMMAND_ALIASES: this release knows add and login\n" : ""}const [command = "status", ...rest] = process.argv.slice(2);
+  return `${tui ? '// "tui": this release knows ovis tui\n' : ""}${knows === "add" ? "// COMMAND_ALIASES: this release knows add and login\n" : ""}const [command = "status", ...rest] = process.argv.slice(2);
 if (command === "phone") console.log("the phone step");
 else if (command === "status" && (await import("node:fs")).existsSync(process.env.SCRATCH + "/running")) console.log("running http://127.0.0.1:7317 (pid 1234)");
 else if (['add', 'login', 'link'].includes(command) && ${knows === "neither" ? "true" : knows === "link" ? `command !== "link"` : "false"}) { console.error("usage: bun scripts/plugin.ts <start|stop|status|pair|phone|phone-setup>"); process.exit(2); }
@@ -164,12 +164,12 @@ class Pc {
    * add step records as the release that ran; `checkout` is another checkout at the same commit that
    * keeps its releases in the same state dir.
    */
-  release(root: string, knows: "add" | "link" | "neither", options: { port?: number | string; state?: string; label?: string; checkout?: string; reader?: "new" | "old" } = {}): string {
+  release(root: string, knows: "add" | "link" | "neither", options: { port?: number | string; state?: string; label?: string; checkout?: string; reader?: "new" | "old"; tui?: boolean } = {}): string {
     const state = options.state ?? join(this.scratch, ".config", "ovis");
     const updates = join(state, "updates", createHash("sha256").update(`${options.checkout ?? root}:${options.port ?? 7317}`).digest("hex").slice(0, 16));
     const release = join(updates, "release-1");
     mkdirSync(join(release, "scripts"), { recursive: true });
-    writeFileSync(join(release, "scripts", "plugin.ts"), `process.env.RELEASE = ${JSON.stringify(options.label ?? "updated")};\n${pluginScript(knows)}`);
+    writeFileSync(join(release, "scripts", "plugin.ts"), `process.env.RELEASE = ${JSON.stringify(options.label ?? "updated")};\n${pluginScript(knows, options.tui)}`);
     if (knows !== "neither") writeFileSync(join(release, "scripts", "plugin-link.ts"), readerScript(options.reader ?? "new"));
     writeFileSync(join(updates, "current.json"), JSON.stringify({ source_revision: this.git(root, "rev-parse", "HEAD"), directory: release }));
     return release;
@@ -336,7 +336,8 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     expect(real).toContain("COMMAND_ALIASES");
     expect(real).toContain('"link"');
     expect(real).toContain('"phone"');
-    for (const [name, pattern] of [["find_add_name", "grep -qs 'COMMAND_ALIASES' "], ["find_add_name", `grep -qs '"link"' `], ["launcher_text", "grep -qs COMMAND_ALIASES "], ["launcher_text", `grep -qs '"link"' `]] as const) {
+    expect(real).toContain('"tui"');
+    for (const [name, pattern] of [["find_add_name", "grep -qs 'COMMAND_ALIASES' "], ["find_add_name", `grep -qs '"link"' `], ["launcher_text", "grep -qs COMMAND_ALIASES "], ["launcher_text", `grep -qs '"link"' `], ["launcher_text", `grep -qs '"tui"' `]] as const) {
       expect(fn(name)).toContain(pattern);
     }
   });
@@ -452,6 +453,24 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     pc.updated("first-install-2", "link");
     expect(pc.ovis(["add"]).code).toBe(0);
     expect(pc.addCalls().at(-1)).toMatchObject({ release: "updated", command: "link" });
+  });
+
+  it("hands tui on from a checkout from before it to the release that knows it, and says to update where none does", () => {
+    const pc = new Pc().written();
+    const release = pc.release(pc.checkout("first-install"), "add", { tui: true });
+    expect(JSON.parse(pc.ovis(["tui", "--session", "s"]).out)).toMatchObject({ root: join(release, "scripts"), command: "tui", rest: ["--session", "s"] });
+    const stale = new Pc().written();
+    stale.updated("first-install", "add");
+    const ran = stale.ovis(["tui"]);
+    expect(ran.code).toBe(1);
+    expect(ran.out.trim().split("\n")).toEqual(["ovis: this Ovis is from before ovis tui. Update it in Settings → Updates, then run this again"]);
+  });
+
+  it("runs tui on a checkout that knows it, from that checkout", () => {
+    const pc = new Pc().written();
+    const root = pc.checkout("current");
+    writeFileSync(join(root, "scripts", "plugin.ts"), pluginScript("add", true));
+    expect(JSON.parse(pc.ovis(["tui"]).out)).toMatchObject({ root: join(root, "scripts"), command: "tui" });
   });
 
   it("says to update, in one line, where no installed release can add a PC", () => {

@@ -109,6 +109,7 @@ run_script scripts/settings-segmented-demo-regression.ts
 run_script scripts/ideal-state-idle-regression.ts
 run_script scripts/agent-entry-points-demo-regression.ts
 run_script scripts/agents-sign-in-demo-regression.ts
+run_script scripts/setup-dialog-demo-regression.ts
 run_script scripts/interface-font-demo-regression.ts
 run_script scripts/file-text-size-demo-regression.ts
 run_script scripts/files-panel-demo-regression.ts
@@ -222,6 +223,8 @@ run_script scripts/chat-outcome-note-browser-qa.ts
 run_script scripts/prompt-card-lifetime-browser-qa.ts
 run_script scripts/sidebar-activity-demo-regression.ts
 run_script scripts/inbox-mode-demo-regression.ts
+run_script scripts/inbox-mode-panes-demo-regression.ts
+run_script scripts/inbox-mode-rail-demo-regression.ts
 run_script scripts/sheet-outside-tap-demo-regression.ts
 run_script scripts/sidebar-filter-demo-regression.ts
 run_script scripts/sidebar-declutter-demo-regression.ts

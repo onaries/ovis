@@ -49,9 +49,9 @@ On Windows, in PowerShell:
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on, choose **Show the QR code** and scan it. A computer in an Ovis account asks the phone to sign in instead. The Android app is on [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app); the [iPhone app](https://ovis.sh/beta/#iphone) is in beta on TestFlight. [Phone setup →](docs/guide.md#on-your-phone)
+**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on, choose **Show the QR code** and scan it. A computer in an Ovis account asks the phone to sign in instead. The iPhone app is on the [App Store](https://apps.apple.com/app/id6824664162) and the Android app is on [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app). [Phone setup →](docs/guide.md#on-your-phone)
 
-<a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-en.svg" alt="Get it on Google Play" height="48"></a>
+<a href="https://apps.apple.com/app/id6824664162"><img src="ovis-site/assets/app-store/badge-en.svg" alt="Download on the App Store" height="48"></a> <a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-en.svg" alt="Get it on Google Play" height="48"></a>
 
 ## Features
 
@@ -79,7 +79,7 @@ irm https://ovis.sh/install.ps1 | iex
 
 ## Documentation
 
-- **[User guide](docs/guide.md):** [quick start](docs/guide.md#quick-start) · [supported agents](docs/guide.md#supported-agents) · [phone](docs/guide.md#on-your-phone) · [remote PCs](docs/remote-pcs.md) · [configuration](docs/guide.md#configuration) · [FAQ](docs/guide.md#faq)
+- **[User guide](docs/guide.md):** [quick start](docs/guide.md#quick-start) · [supported agents](docs/guide.md#supported-agents) · [phone](docs/guide.md#on-your-phone) · [remote PCs](docs/remote-pcs.md) · [terminal client](docs/tui.md) · [configuration](docs/guide.md#configuration) · [FAQ](docs/guide.md#faq)
 - **[INSTALL.md](INSTALL.md):** every way to install, step by step.
 - **[Demo](https://ovis.sh/demo/)** · **[Changelog](CHANGELOG.md)**
 

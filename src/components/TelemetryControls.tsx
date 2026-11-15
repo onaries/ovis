@@ -10,12 +10,15 @@ import { SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
 /**
  * The one-time line about anonymous usage counts: the install and update events and the daily
  * active message with the harness kinds (shared/telemetry.ts). Showing it is what lets the
- * server send, so it is recorded once it has been painted in a visible
- * tab, and the server still waits a while before the first event so the switch behind What is sent
+ * server send, so it is recorded once it has been painted in a visible tab, wholly in view, with no dialog
+ * over it (and never while `enabled` is false, when it is not drawn), and the server still waits a while before the first event so the switch behind What is sent
  * stops it. It stays one line on any width: its text opens Settings, which says what is sent in
  * full, and Turn off is the switch's off in one tap. Closing it only hides it in this tab.
+ * `inline` draws it as a line of the setup guide's welcome (components/SetupGuide.tsx), which a dialog
+ * over the page would otherwise cover: the sentence still opens Settings and Turn off is still there; the
+ * welcome itself goes, so it has no close of its own.
  */
-export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen: () => void }) {
+export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: boolean; onOpen: () => void; inline?: boolean }) {
   const t = useT();
   const [shown, setShown] = useState(false);
   const [closed, setClosed] = useState(false);
@@ -31,12 +34,21 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
   const settingsSignature = JSON.stringify(settingsSnapshot);
   const settingsSnapshotRef = useRef(settingsSnapshot);
   settingsSnapshotRef.current = settingsSnapshot;
-  const submittedSettingsSignature = useRef<string | null>(null);
+  // shared by every copy of the line: the setup guide draws one per step, and a new copy must not tell the
+  // server the same snapshot again
+  const submittedSettingsSignature = submittedNotice;
   // the server's word on the switch, the environment and the notice: the snapshot is told only where
   // an event may go out, so an install that is off, blocked or has not seen the notice keeps its
   // settings to itself. The first snapshot rides with the acknowledgement below.
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
-  const allowed = status !== null && status.enabled && !status.blocked_by_env && status.notice_seen;
+  // Turn off in any copy on this page is every copy's: the others hide and tell the server nothing more
+  const [, offHeard] = useState(0);
+  useEffect(() => {
+    const heard = (): void => offHeard((count) => count + 1);
+    noticeOff.listeners.add(heard);
+    return () => { noticeOff.listeners.delete(heard); };
+  }, []);
+  const allowed = status !== null && status.enabled && !status.blocked_by_env && status.notice_seen && !noticeOff.current;
   useEffect(() => {
     if (!enabled || !allowed || submittedSettingsSignature.current === settingsSignature) return;
     submittedSettingsSignature.current = settingsSignature;
@@ -50,42 +62,63 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
     fetchTelemetry().then((current) => {
       if (!live || !current) return;
       setStatus(current);
-      if (!current.notice_seen && current.enabled && !current.blocked_by_env) setShown(true);
+      // shown on this page already (the guide's welcome), it stays on the next step's copy and the page's own, so its
+      // one-tap Turn off is not gone the moment it is recorded; a new page shows it only while unseen
+      if ((!current.notice_seen || noticeShownHere.current) && current.enabled && !current.blocked_by_env && !noticeOff.current) { noticeShownHere.current = true; setShown(true); }
     }, (error: unknown) => console.error("telemetry status", error));
     return () => { live = false; };
   }, [enabled]);
+  // the line as drawn: it is recorded as seen only while it is in view and nothing modal covers it
+  const [line, setLine] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    if (!shown) return;
+    if (!shown || !enabled || line === null) return;
     let recorded = false;
     let frame = 0;
+    // wholly inside the viewport and every scrolling box around it (a guide's body scrolled past it is not);
+    // where the page cannot tell, as drawn
+    let inView = typeof IntersectionObserver === "undefined";
     // two frames after the commit the line has been painted; a hidden tab paints nothing
     const afterPaint = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => { frame = requestAnimationFrame(record); });
     };
     const record = () => {
-      if (recorded || document.visibilityState !== "visible") return;
+      // recorded once a page: the next step's copy of the same line shows it without telling it again
+      if (recorded || noticeRecorded.current || document.visibilityState !== "visible" || !inView || coveredByModal(line)) return;
       recorded = true;
+      noticeRecorded.current = true;
       const snapshot = settingsSnapshotRef.current;
       changeTelemetry({
         notice_seen: true,
         notice_version: NOTICE_VERSION,
         settings: snapshot,
       }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); if (!turnedOff.current) setStatus(next); },
-        (error: unknown) => console.error("telemetry notice", error));
+        (error: unknown) => { noticeRecorded.current = false; console.error("telemetry notice", error); });
     };
     const onVisibility = () => { if (document.visibilityState === "visible") afterPaint(); };
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
+      inView = entry !== undefined && entry.isIntersecting && entry.intersectionRatio >= 0.99;
+      if (inView) afterPaint();
+    }, { threshold: [0, 1] });
+    observer?.observe(line);
     afterPaint();
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { recorded = true; cancelAnimationFrame(frame); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [shown]);
-  if (!shown || closed) return null;
+    // a dialog over it that closes hands the keyboard back: look again then
+    document.addEventListener("focusin", afterPaint);
+    return () => { recorded = true; cancelAnimationFrame(frame); observer?.disconnect(); document.removeEventListener("visibilitychange", onVisibility); document.removeEventListener("focusin", afterPaint); };
+  }, [shown, enabled, line]);
+  // a disabled line is not drawn: under a dialog it would be neither read nor reachable
+  if (!shown || closed || !enabled || (noticeOff.current && !offFailed)) return null;
   const turnOff = () => {
     turnedOff.current = true;
     setTurningOff(true);
     setOffFailed(false);
     // a refusal brings the line back, even after a close, and says so: the off is never taken for granted
-    changeTelemetry({ enabled: false }).then((next) => { setStatus(next); setClosed(true); }, (error: unknown) => {
+    changeTelemetry({ enabled: false }).then((next) => {
+      setStatus(next); setClosed(true);
+      noticeOff.current = true;
+      for (const heard of noticeOff.listeners) heard();
+    }, (error: unknown) => {
       console.error("telemetry off", error);
       turnedOff.current = false;
       setTurningOff(false);
@@ -94,11 +127,30 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
     });
   };
   const text = offFailed ? t("Couldn't turn the counts off. Open Settings to use the switch.") : t("Ovis sends anonymous usage counts to improve it.");
-  return <div className="update-notice is-line is-telemetry" role={offFailed ? "alert" : "status"}>
+  if (inline) return <p ref={setLine} className="setup-note setup-note-usage" role={offFailed ? "alert" : "status"}>
+    <ChartColumn aria-hidden="true" />
+    <button type="button" className="setup-link" aria-haspopup="dialog" onClick={onOpen}>{text}</button>
+    <button type="button" className="btn btn-ghost setup-note-off" disabled={turningOff} onClick={turnOff}>{t("Turn off")}</button>
+  </p>;
+  return <div ref={setLine} className="update-notice is-line is-telemetry" role={offFailed ? "alert" : "status"}>
     <button type="button" className="update-notice-text" title={text} aria-haspopup="dialog" onClick={() => { setClosed(true); onOpen(); }}>{text}</button>
     <button type="button" className="btn btn-ghost" disabled={turningOff} onClick={turnOff}>{t("Turn off")}</button>
     <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => setClosed(true)}><X /></button>
   </div>;
+}
+
+/** The settings snapshot last told along with the notice (TelemetryNotice), for every copy of the line on this page. */
+const submittedNotice: { current: string | null } = { current: null };
+/** The line was shown on this page (TelemetryNotice): later copies keep showing it, with Turn off, until it is dismissed. */
+const noticeShownHere = { current: false };
+/** The line was recorded as seen from this page: another copy does not record it again. */
+const noticeRecorded = { current: false };
+/** Counts were turned off from a copy of the line on this page: every copy hides and sends no snapshot. */
+const noticeOff = { current: false, listeners: new Set<() => void>() };
+
+/** A modal surface open over `node` (one that does not hold it): what is under it can be neither read nor reached. */
+function coveredByModal(node: HTMLElement): boolean {
+  return [...document.querySelectorAll<HTMLElement>("[aria-modal='true']")].some((modal) => !modal.contains(node) && modal.getClientRects().length > 0);
 }
 
 /** every field of the messages, explained */

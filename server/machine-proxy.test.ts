@@ -23,6 +23,14 @@ const remote = Bun.serve({
     const path = new URL(request.url).pathname;
     if (path === "/api/pane/conversation/image") return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
     if (path === "/api/pane/conversation/tool-output") return new Response("complete remote output", { headers: { "content-type": "text/plain; charset=utf-8" } });
+    // a PC that answers a file, or a stat that called it a PDF, with a document of its own and a policy that lets it run
+    // a PDF's type with another one after it: not a PDF
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".mixed")) {
+      return new Response("<script>document.title = 'ran'</script>", { headers: { "content-type": "application/pdf, text/html" } });
+    }
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".html")) {
+      return new Response("<script>parent.document.title = 'ran'</script>", { headers: { "content-type": "text/html", "content-security-policy": "script-src *", "x-content-type-options": "sniff" } });
+    }
     if (path === "/api/fs/file") return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf" } });
     if (path === "/api/session") return Response.json({ snapshot: { workspaces: [], tabs: [], panes: [{ pane_id: "w1:p1", workspace_id: "w1", tab_id: "t1", agent: "claude", tokens: { quota: "off · private", eta: "soon" } }], agents: [] } });
     if (path === "/api/sessions/history") {
@@ -246,6 +254,35 @@ it("opens a PC's file from a navigation another site started, and keeps every ot
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "invalid_origin" } });
   }
+});
+
+it("regression: a PC's answer never runs as this app's origin, whatever type and policy it names", async () => {
+  const opened = "http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.html";
+  for (const url of [opened, `${opened}&download=1`]) {
+    const response = await handleMachineRequest(new Request(url, { headers: { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" } }), manager);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  }
+  // a page drawn with its scripts keeps that PC's policy, under a sandbox of this server's that no policy loosens
+  const page = await handleMachineRequest(new Request(`${opened}&render=1`), manager);
+  expect(page.headers.get("content-security-policy")).toBe("script-src *, sandbox allow-scripts");
+  expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+  // a real PDF is still drawn by the browser's viewer, which refuses a sandbox
+  const pdf = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.pdf"), manager);
+  expect(pdf.headers.get("content-type")).toBe("application/pdf");
+  expect(pdf.headers.get("content-security-policy")).toBeNull();
+  expect(pdf.headers.get("x-content-type-options")).toBe("nosniff");
+  for (const method of ["GET", "HEAD"]) {
+    const mixed = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.mixed", { method }), manager);
+    expect(mixed.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
+    expect(mixed.headers.get("x-content-type-options")).toBe("nosniff");
+  }
+  // nor does any other route of that PC's answer as a document of this origin
+  const other = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/pane/conversation/tool-output?pane_id=w1:p1&ref=call"), manager);
+  expect(other.status).toBe(200);
+  expect(other.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+  expect(other.headers.get("x-content-type-options")).toBe("nosniff");
 });
 
 it("asks a PC for a folder's project icon once, with the bridge's own credential, and only from this app", async () => {

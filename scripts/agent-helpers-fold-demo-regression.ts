@@ -68,6 +68,9 @@ try {
         try {
           // the sidebar's Filter field is off until chosen (Settings → Sidebar filter); this check types in it
           await context.addInitScript((value) => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); }, theme);
+          // the helpers' agent is the Claude pane: its turn stays at work, or on a slow runner the end the
+          // demo times 4.5s in redraws its family mid-check
+          await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
           const page = await context.newPage();
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));

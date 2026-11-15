@@ -157,13 +157,13 @@ try {
         assert.match((await page.evaluate(() => (window as unknown as { cancels: string[] }).cancels))[0]!, /"login":"demo-login-\d+"/, `Escape cancels the running sign-in ${at}`);
         console.log(`PASS closing the dialog stops the sign-in it was following (${at})`);
 
-        // the setup guide offers the first sign-in under its tiles
+        // the setup guide offers the first sign-in beside its tiles, for the agent picked
         // the dialog that just closed steps off its history entry first: a page load asked for before that is dropped
         await sheetEntryLeft(page);
         await page.goto(`${root}&settings=agents`);
         await page.locator(".agents-item").first().waitFor();
         await press(page.getByRole("button", { name: "Open setup guide", exact: true }));
-        const guide = page.getByRole("region", { name: "Setup guide", exact: true });
+        const guide = page.getByRole("dialog", { name: "Set up Ovis", exact: true });
         await guide.waitFor();
         const guideSignIn = guide.getByRole("button", { name: "Sign in to Claude Code", exact: true });
         await guideSignIn.waitFor();

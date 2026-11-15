@@ -756,6 +756,7 @@ floor of `--fs-meta` holds at scale 1 and only grows with it.
 | Title | `--fs-xl` | `calc(18px * var(--ui-scale))` | `calc(17px * var(--ui-scale))` | Compact heading |
 | Heading 3 | `--fs-h3` | `calc(19px * var(--ui-scale))` | `calc(18px * var(--ui-scale))` | Markdown h3 (1.25x+ over reading body) |
 | Display | `--fs-display` | `calc(22px * var(--ui-scale))` | `calc(21px * var(--ui-scale))` | The empty chat's greeting |
+| Title | `--fs-title` | `calc(28px * var(--ui-scale))` | `calc(28px * var(--ui-scale))` | A dialog step's title over the app: the setup guide (`.setup-title`) |
 | Heading 2 | `--fs-h2` | `calc(24px * var(--ui-scale))` | `calc(23px * var(--ui-scale))` | Markdown h2 (1.25x+ over h3) |
 | Heading 1 | `--fs-h1` | `calc(30px * var(--ui-scale))` | `calc(29px * var(--ui-scale))` | Markdown h1 (1.25x+ over h2) |
 | Input | `--fs-input` | `16px` | `16px` | Mobile-safe text input |
@@ -1112,7 +1113,6 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--outline-w` | `240px` | — | Markdown outline column width |
 | `--file-panel-min-w` | `320px` | — | Docked file panel minimum width |
 | `--qr-size` | `132px` | — | Pairing QR code box |
-| `--guide-w` | `552px` | — | Onboarding guide column width |
 | `--btn-submit-min-w` | `88px` | — | Modal primary submit button minimum width (stable across idle/pending) |
 | `--content-w` | `820px` | — | Settings and dialog content |
 | `--pending-max-h` | `min(20dvh, 12rem)` | — | Pending-message stack ceiling |
@@ -5809,22 +5809,44 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   "running tasks will be interrupted" confirmation, since nothing here is.
 
 ### Setup guide (`.setup-*`)
-- Follows the Claude and Codex apps' first runs: one screen in the pane area, the sidebar left in
-  place, nothing modal. It opens by itself once, on a fresh install only (no herdr workspace, no
-  saved settings, no shared settings, no paired device); Settings opens it again. A watching device
-  never sees it.
-- The welcome is centered: the app mark, "Is this your first time using Ovis?" and two big choice rows
-  (`--radius-xl` cards on `--bg-panel`, an accent border on hover; keyboard focus is the ring alone).
-- Then one screen in a 552px column, "Set up Ovis" and "Skip setup" over it, no progress bar. It first
-  shows Ovis checking the PC (GET /api/agent-catalog): every coding agent in a two-column `--bg-panel`
-  list, each line a spinner until the answer, then "Installed · v…" in `--status-done` or "Not
-  installed" dim. The check is on screen at least 300ms, so an instant one is still seen.
-- Then every coding agent as a tile, the same whatever the check found, two to a line on `--bg-panel`
-  (two on a phone too): Claude Code and Codex first, then the others the PC has, then the rest. An
-  installed one is picked by a tap (an accent ring and a check; Claude Code, else Codex, else the
-  first); a missing one is dim, with a small Install (a download icon alone on a phone, its name kept
-  for screen readers). The heading is "You're set up" under a `--status-done` check circle when one is
-  installed, else "Pick an AI coding helper" with "Nothing is installed until you tap Install."
+- A dialog over the app, as Orca's and Linear's first runs are, not a page in the main area (the Claude
+  and Codex apps' way, which this guide followed before): `.modal` at a fixed 16:9 size, 1200x675
+  (`min(100%, …)` each way), centred, over the app's own scrim, so the app the user is about to use stays
+  visible behind it and a step never moves the card's edges. At 640px and below it is the app's bottom
+  sheet. It opens by itself once, on a fresh install only (no herdr workspace, no saved settings, no
+  shared settings, no paired device); Settings → Agents opens it again. A watching device never sees it.
+- Layout: a 56px head (the app mark and "Set up Ovis" at the left, close at the right; the steps' list
+  joins it in the middle once there is more than one step), a body in two columns (the step at the left,
+  5fr; its result or preview at the right, 6fr, a `--bg` panel with a hairline) that is the dialog's one
+  scroll owner, and a 64px footer. Below 960px the right column goes under the left. Each step's title is
+  `--fs-title` (28px), the one size the app adds for it: the largest a screen's own title took before was
+  `--fs-display` (22px), and `--fs-h1`/`--fs-h2` are Markdown headings.
+- The footer: a ghost **Start now, finish setup later** at the left edge (the fast path: it starts the
+  agent picked at once, two clicks from the welcome), **Back** and **Continue** (the step's one primary)
+  at the right. With no agent installed the ghost is **Skip setup** and Continue waits for one. Close and
+  Escape close the guide without a question, since Settings → Agents opens it again; a phone's Back does
+  too. The keyboard starts on the welcome's first choice, then on each step's title as it opens, and Tab
+  stays inside the dialog.
+- The welcome: "Welcome to Ovis", "Is this your first time using Ovis?" and two big choice rows
+  (`--radius-xl` cards on `--bg-panel`, an accent border on hover; keyboard focus is the ring alone), the
+  account's sign-in under them where the page has an account service, and the one-time line about
+  anonymous usage counts, which the page would otherwise show under the scrim. Its right column says what
+  setup does.
+- The agent step first shows Ovis checking the PC (GET /api/agent-catalog): every coding agent in a
+  two-column `--bg-panel` list, each line a spinner until the answer, then "Installed · v…" in
+  `--status-done` or "Not installed" dim. The check is on screen at least 300ms, so an instant one is
+  still seen.
+- Then "Pick your coding agent" and the installed agents as tiles, two to a line on `--bg-panel` (two on
+  a phone too): Claude Code and Codex first, then the others the PC has; the rest wait behind **Install
+  another agent (N)**, as in Settings → Agents. One is picked for you (the one just installed here, else
+  Claude Code, else Codex, else the first: an accent ring and a check), and the right column says what
+  Start will do with it: installed and its version, its sign-in (Claude Code and Codex) when it has none,
+  and the folder it starts in. With nothing installed the step lists every agent as a tile, dim, with a
+  small Install (a download icon alone on a phone, its name kept for screen readers), under "Pick an AI
+  coding helper" and "Nothing is installed until you tap Install."
+- Done: "Ovis is ready", what Start will open, and the choices made as rows (`.setup-list`, a
+  `--status-done` check each); Start with … is the primary. Its right column holds Connect your phone
+  (below).
 - Install is the one tap: the official installer runs in a terminal tab while a spinner turns on the
   tile (a tap on it opens that tab); once the catalog lists the agent the tile is an installed one,
   picked. Several can install at once, and Start does not wait for them: an install runs on in its
@@ -5832,7 +5854,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the agent asks for its own when it first starts. On a first run, plan usage turns on by itself for
   accounts already signed in; the guide opened again from Settings changes no setting (nor says it
   will).
-- "Start with …" and beside it a plain "Connect your phone", which opens a `--bg-panel` box under them.
+- Done's right column has a plain "Connect your phone", which opens a `--bg-panel` box under it.
   On a first run on the PC itself (the desktop app, or a browser on its loopback) the box is open from
   the start, as a phone is the next device to add; it leads with the relay only, so where the relay
   cannot lead it stays closed instead of sending the page to Settings → Phone untapped. The relay stays
@@ -5855,8 +5877,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   loopback), or the server does not say how this browser got in, it opens Settings → Phone instead. Start opens the folder this browser used last, else the server's home, without asking.
   Alerts are not offered here: they hang on the browser's permission and, on an iPhone, on the app
   being on the home screen first, so they stay in Settings → Alerts. A failed check says "Couldn't
-  check this PC" with its error and Look again. On a phone Start and Connect your phone take the full
-  width.
+  check this PC" with its error and Look again.
 - The tile is `AgentTile` (`AgentTile.css`), shared with a creation dialog's Add another agent… and
   Settings → Agents, where the PC's agents that can be installed are the same tiles (an
   installed one there is only shown, never picked). Settings → Agents starts with **Open

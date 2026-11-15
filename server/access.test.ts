@@ -47,6 +47,26 @@ describe("decideAccess", () => {
     expect(via({ loopback: false, gated: true })).toBe("refused:pairing_required");
   });
 
+  it("regression: a loopback request whose Host is a rebound name is never open", () => {
+    for (const host of ["rebind.example", "rebind.example:7317", `${NODE}.rebind.example`, "100.64.0.8", "[fd7a::1]:7317"]) {
+      expect(via({ loopback: true, forwarded: true, host })).toBe("refused:pairing_required");
+      expect(via({ loopback: true, forwarded: true, host, dnsName: NODE, tailnetIp: IP })).toBe("refused:pairing_required");
+    }
+    // control: this PC's own names, and a proxy that keeps them, are as before
+    for (const host of ["127.0.0.1:7317", "localhost:7317", "[::1]:7317", NODE, `${IP}:7317`]) {
+      expect(via({ loopback: true, forwarded: true, host, dnsName: NODE, tailnetIp: IP })).toBe("open");
+    }
+    // a LAN client of a deliberate non-loopback bind names whatever it reached the PC by
+    expect(via({ loopback: false, forwarded: true, host: "pc.lan:7317" })).toBe("open");
+  });
+
+  it("regression: a Tailscale login stated under a rebound name lets nobody in", () => {
+    const login = { forwarded: true, tailscaleLogin: "me@example.com", owner: "me@example.com", dnsName: NODE, tailnetIp: IP } as const;
+    for (const host of ["rebind.example", "rebind.example:7317", `${NODE}.rebind.example`]) expect(via({ ...login, host })).toBe("refused:pairing_required");
+    // control: tailscale serve keeps the device's Host, this PC's tailnet name or address
+    for (const host of [NODE, `${NODE}:443`, IP, `${IP}:7317`, "127.0.0.1:7317"]) expect(via({ ...login, host })).toBe("tailscale");
+  });
+
   it("never treats a Funnel request as open", () => {
     expect(via({ loopback: true, forwarded: true, funnel: true })).toBe("refused:pairing_required");
     expect(via({ loopback: true, forwarded: true, funnel: true, device })).toBe("device");

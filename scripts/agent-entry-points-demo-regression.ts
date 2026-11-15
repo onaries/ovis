@@ -120,15 +120,18 @@ try {
           counted.asked = 0;
           window.addEventListener("ovis:open-setup-guide", () => { counted.asked += 1; });
         });
-        assert.equal(await page.getByRole("region", { name: "Setup guide", exact: true }).count(), 0, `an existing user's app shows no guide by itself ${at}`);
+        assert.equal(await page.getByRole("dialog", { name: "Set up Ovis", exact: true }).count(), 0, `an existing user's app shows no guide by itself ${at}`);
         await press(body.getByRole("button", { name: "Open setup guide", exact: true }));
         await page.getByRole("dialog", { name: "Settings" }).waitFor({ state: "detached" });
         assert.equal(await page.evaluate(() => (window as unknown as { asked: number }).asked), 1, `Open setup guide asks for the guide once ${at}`);
         // the first-run guide (components/SetupGuide.tsx) answers it: it checks the PC again, then the tiles
-        const guide = page.getByRole("region", { name: "Setup guide", exact: true });
+        const guide = page.getByRole("dialog", { name: "Set up Ovis", exact: true });
         await guide.waitFor();
         await guide.locator(".setup-found .setup-tile").first().waitFor();
         await shot("5-guide-reopened");
+        // the guide is a dialog over the app now: closed, so the rows behind it can be reached again
+        await page.keyboard.press("Escape");
+        await guide.waitFor({ state: "detached" });
         console.log(`PASS Settings lists ${installed.map((row) => `${row.name} ${row.version}`).join(", ")} and the tiles to install; Open setup guide opens the guide (${at})`);
 
         if (width === 1280) {

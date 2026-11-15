@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { GUIDE_STORAGE_KEY, REOPENED, WELCOME, type GuideState } from "./setupGuideFlow.ts";
-import { useSetupGuide } from "./useSetupGuide.ts";
+import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
+import { useSetupGuide, type SetupGuideFacts } from "./useSetupGuide.ts";
 
 // The real hook over a fake browser: one tab's storage, and the storage events another tab's writes send.
 describe("the setup guide closed in another tab", () => {
@@ -51,6 +52,14 @@ describe("the setup guide closed in another tab", () => {
     Object.defineProperties(event, { key: { value: GUIDE_STORAGE_KEY }, newValue: { value } });
     await act(async () => { events.dispatchEvent(event); });
   }
+
+  it("is settled once another tab closes the guide, though this one never decided", async () => {
+    function Fresh() { hook = useSetupGuide({ enabled: true, workspaces: null, pairingGate: undefined, watching: false }); return null; }
+    await act(async () => { renderer = create(createElement(Fresh)); });
+    expect(hook.settled).toBe(false);
+    await otherTabWrites(JSON.stringify({ status: "closed" }));
+    expect(hook.settled).toBe(true);
+  });
 
   it("opens the first workspace's pane only when the user stayed on the guide", async () => {
     await resumeAt(REOPENED);
@@ -208,5 +217,37 @@ describe("the setup guide on a watching device", () => {
     expect(hook.guide?.step).toBe("setup");
     await act(async () => { renderer!.update(createElement(Probe, { watching: true })); });
     expect(hook.guide).toBeNull();
+  });
+
+  /** The hook with `facts`, rendered again whenever they change; no server answers (fetch is absent). */
+  async function mountFacts(facts: SetupGuideFacts): Promise<(next: SetupGuideFacts) => Promise<void>> {
+    let current = facts;
+    function Probe() { hook = useSetupGuide(current); return null; }
+    await act(async () => { renderer = create(createElement(Probe)); });
+    return async (next) => { current = next; await act(async () => { renderer!.update(createElement(Probe)); }); };
+  }
+
+  it("is settled at once where the guide cannot open by itself: a record of it, saved settings, a watching device", async () => {
+    records.set(GUIDE_STORAGE_KEY, JSON.stringify({ status: "closed" }));
+    await mountFacts({ enabled: true, workspaces: null, pairingGate: undefined, watching: false });
+    expect(hook.settled).toBe(true);
+    await act(async () => { renderer?.unmount(); });
+    records.clear();
+    records.set(SETTINGS_STORAGE_KEY, "{}");
+    await mountFacts({ enabled: true, workspaces: null, pairingGate: undefined, watching: false });
+    expect(hook.settled).toBe(true);
+    await act(async () => { renderer?.unmount(); });
+    records.clear();
+    await mountFacts({ enabled: true, workspaces: null, pairingGate: undefined, watching: true });
+    expect(hook.settled).toBe(true);
+  });
+
+  it("is not settled on a fresh browser until the first-run decision is made", async () => {
+    const update = await mountFacts({ enabled: true, workspaces: null, pairingGate: undefined, watching: false });
+    expect(hook.settled).toBe(false);
+    // the facts arrive; the shared-settings read fails here (no server), which decides against opening
+    await update({ enabled: true, workspaces: 0, pairingGate: "open", watching: false });
+    await act(async () => { await Promise.resolve(); });
+    expect(hook.settled).toBe(true);
   });
 });

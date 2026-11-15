@@ -70,6 +70,9 @@ try {
             viewport.dispatchEvent(new Event("resize"));
           };
         });
+        // the running session below is the Claude pane's turn: it stays at work, or on a slow runner the
+        // demo ends it (4.5s in) before the header is read
+        await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
         const page = await context.newPage();
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));

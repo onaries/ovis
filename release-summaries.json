@@ -1,4 +1,98 @@
 {
+  "0.5.4": {
+    "en": {
+      "new": [
+        "An agent inbox lists every agent, the ones that need you first.",
+        "Settings explains each setting where you look: hover, focus or tap.",
+        "Plan limits show Claude accounts used through Oh My Pi or Gajae Code.",
+        "Antigravity's questions show as cards you can answer in Chat.",
+        "Close pane and Close tab can be bound to keys in Settings."
+      ],
+      "improved": [
+        "Installers and remote PCs run one verified, compiled server.",
+        "On a phone, the tabs are a row under the header again.",
+        "On a phone, the + for a new workspace is on each PC's row.",
+        "The Android app is on Google Play and the iPhone app on the App Store.",
+        "Every agent row shows how long its agent has been in its state."
+      ],
+      "fixed": [
+        "Ovis asks to pair when this PC opens it by a name other than localhost",
+        "Files from another PC open with this server's own protections",
+        "A chat message no longer joins text already typed in an agent's box.",
+        "Codex and Claude Code errors show under the message in Chat.",
+        "On a phone, Back closes what is open before it leaves the page."
+      ]
+    },
+    "ko": {
+      "new": [
+        "에이전트 인박스가 모든 에이전트를, 나를 기다리는 것부터 보여 줘요.",
+        "설정의 각 항목이 무엇을 하는지 마우스·포커스·탭으로 바로 알려 줘요.",
+        "Oh My Pi나 Gajae Code로만 쓰는 Claude 계정의 사용 한도도 보여요.",
+        "Antigravity의 질문이 채팅에서 답할 수 있는 카드로 보여요.",
+        "패널 닫기와 탭 닫기를 설정에서 단축키로 지정할 수 있어요."
+      ],
+      "improved": [
+        "설치기와 원격 PC가 검증된 하나의 컴파일된 서버로 돌아가요.",
+        "휴대폰에서 탭이 다시 헤더 아래 한 줄로 보여요.",
+        "휴대폰에서 새 워크스페이스 + 가 각 PC 줄에 있어요.",
+        "Android 앱이 Google Play에, iPhone 앱이 App Store에 나왔어요.",
+        "에이전트 줄마다 지금 상태로 얼마나 있었는지 보여요."
+      ],
+      "fixed": [
+        "이 PC에서 localhost가 아닌 이름으로 열면 먼저 페어링을 요청해요.",
+        "다른 PC의 파일이 이 서버의 보호 설정으로 열려요.",
+        "채팅 메시지가 에이전트 입력창에 이미 쓴 글에 붙어 가지 않아요.",
+        "Codex와 Claude Code의 오류가 채팅의 메시지 아래에 보여요.",
+        "휴대폰에서 뒤로 가기가 열린 것을 먼저 닫고 나서 페이지를 떠나요."
+      ]
+    },
+    "ja": {
+      "new": [
+        "エージェントの受信箱が、対応待ちのものから全エージェントを並べます。",
+        "設定の各項目の説明が、ホバー・フォーカス・タップでその場に出ます。",
+        "Oh My Pi や Gajae Code だけで使う Claude アカウントの上限も出ます。",
+        "Antigravity の質問が、チャットで答えられるカードで出ます。",
+        "ペインを閉じる・タブを閉じるに設定でキーを割り当てられます。"
+      ],
+      "improved": [
+        "インストーラーとリモート PC が、検証済みの 1 つのコンパイル済みサーバーで動きます。",
+        "スマホで、タブが再びヘッダーの下に 1 列で並びます。",
+        "スマホで、新しいワークスペースの + が各 PC の行にあります。",
+        "Android アプリは Google Play、iPhone アプリは App Store で公開されました。",
+        "各エージェントの行に、今の状態がどれだけ続いているかが出ます。"
+      ],
+      "fixed": [
+        "このPCで localhost 以外の名前で開くと、先にペアリングを求めます。",
+        "別のPCのファイルが、このサーバー自身の保護設定で開きます。",
+        "チャットのメッセージが、エージェントの入力欄の書きかけに付かなくなりました。",
+        "Codex と Claude Code のエラーが、チャットのメッセージの下に出ます。",
+        "スマホで、戻るは開いているものを閉じてからページを離れます。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "智能体收件箱列出所有智能体，需要你的排在最前。",
+        "设置中的每一项在悬停、聚焦或轻点时说明它的作用。",
+        "仅通过 Oh My Pi 或 Gajae Code 使用的 Claude 账户也显示用量限制。",
+        "Antigravity 的提问显示为可在聊天中回答的卡片。",
+        "关闭窗格和关闭标签页可在设置中绑定快捷键。"
+      ],
+      "improved": [
+        "安装程序和远程 PC 运行一个经过验证的编译版服务器。",
+        "在手机上，标签页重新显示为页眉下的一行。",
+        "在手机上，新建工作区的 + 位于每台 PC 的行上。",
+        "Android 应用已上架 Google Play，iPhone 应用已上架 App Store。",
+        "每个智能体行都会显示它处于当前状态的时长。"
+      ],
+      "fixed": [
+        "在本机用 localhost 以外的名称打开时，会先要求配对。",
+        "来自其他电脑的文件会按本服务器自己的保护设置打开。",
+        "聊天消息不再接在智能体输入框里已输入的文字后面。",
+        "Codex 和 Claude Code 的错误显示在聊天消息下方。",
+        "在手机上，返回会先关闭打开的内容再离开页面。"
+      ]
+    }
+  },
   "0.5.3": {
     "en": {
       "new": [

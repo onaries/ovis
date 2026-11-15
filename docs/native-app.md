@@ -7,7 +7,8 @@ Status: Phase 1 step 2 built for iOS (checked in a simulator) and Android (check
 (FCM), and deployed at `push.ovis.sh` on 2026-10-24, where its APNs and FCM credentials passed
 their authentication tests. Steps 4 and 5, the client's push through the app and the iOS
 Notification Service Extension, are built, 2026-10-24 (see [Push in the app](#push-in-the-app));
-a push received on a real device is still to be checked. iOS 1.0 (build 2) is in App Review.
+a push received on a real device is still to be checked. iOS 1.0 (build 8) is on the App Store
+since 2026-11-15 (<https://apps.apple.com/app/id6824664162>), and Android 1.0.1 (8) on Google Play.
 
 Ovis ships as a store app for iOS first, Android later. The goal is reach: the app is
 found in the App Store and installs in one tap, where the web app needs "Add to Home Screen". It
@@ -96,7 +97,7 @@ relay's FCM credentials are a service account key of the app's Firebase project,
 5. Notification Service Extension that decrypts. Built 2026-10-24 (`OvisNotifications`), see
    [Push in the app](#push-in-the-app).
 6. App Store listing, privacy answers, review notes pointing at the demo mode. Version 1.0
-   (build 2) was submitted for review on 2026-10-24, to be released by hand once approved.
+   (build 8) was submitted for review on 2026-11-08 and released on the App Store on 2026-11-15.
 
 ## Phase 2 and later
 

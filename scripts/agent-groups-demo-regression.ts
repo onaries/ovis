@@ -26,6 +26,9 @@ async function run(browser: Browser, origin: string, width: number, theme: "ligh
   const tag = `${width} ${theme}`;
   const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, ...(phone ? { deviceScaleFactor: 3, isMobile: true, hasTouch: true } : {}), locale: "en-US", colorScheme: theme });
   await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ language: "en", theme, agentNamedGroups: true, agentGroupNames: ["Agents", "Tasks"] }));
+  // the Claude pane's row is the one moved: its turn stays at work, or on a slow runner the end the
+  // demo times 4.5s in changes the row while its menu is open
+  await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

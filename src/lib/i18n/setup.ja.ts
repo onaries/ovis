@@ -35,7 +35,6 @@ export const SETUP_JA: Record<string, string> = {
   "It took too long. Try again.": "時間がかかりすぎています。もう一度お試しください。",
   "{agent} did not install. {reason}": "{agent} のインストールが終わりませんでした。{reason}",
   "Accounts are read on the PC Ovis runs on: they are under Other accounts.": "アカウントは Ovis が動いている PC で読み取ります。「その他のアカウント」にあります。",
-  "Install another agent ({count})": "別のエージェントをインストール ({count})",
   "Not signed in": "未ログイン",
   "Sign-in unreadable: {command} is not installed": "ログイン情報を読めません: {command} がインストールされていません",
   "Ovis reads {agent}'s sign-in from the desktop keyring with {command}, which this PC does not have. Install it (the libsecret-tools package on Debian and Ubuntu, libsecret on Fedora and Arch), then open this page again.": "Ovis は {agent} のログイン情報をデスクトップのキーリングから {command} で読みますが、この PC にはありません。インストールしてから(Debian と Ubuntu では libsecret-tools パッケージ、Fedora と Arch では libsecret)、このページを開き直してください。",

@@ -3024,7 +3024,7 @@ for (const name of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) Object.
 
 // The Claude pane is mid-turn when the demo opens (RUN); a few seconds later the metric lands and
 // the turn ends, so the first thing a visitor sees move is a status, the way it does for real.
-setTimeout(() => {
+function finishOpeningTurn(): void {
   const chat = chats.get("api");
   const paneId = panesFixture.api;
   const turn = chat?.turns.filter((turn) => turn.role === "assistant" && !turn.end_ts).at(-1);
@@ -3037,7 +3037,12 @@ setTimeout(() => {
   turn.end_ts = now();
   conversationChanged(paneId);
   finishDemoTurn(paneId);
-}, 4500);
+}
+// A browser regression that needs the pane working sets `__ovisDemoHoldTurn` before this loads:
+// on a slow runner its checks can come after 4.5s, so the turn then ends only when it calls
+// `__ovisDemoFinishTurn`. A visitor's demo keeps the timer.
+if (Reflect.get(window, "__ovisDemoHoldTurn") === true) Reflect.set(window, "__ovisDemoFinishTurn", finishOpeningTurn);
+else setTimeout(finishOpeningTurn, 4500);
 
 // ---- what the demo opens first ------------------------------------------------------------------
 

@@ -11,6 +11,16 @@ import { forgetPageMedia, PAGE_MEDIA_LIFETIME_MS, pageFileHooks, pageMediaRespon
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
+/**
+ * Opens Settings from the keyboard with no pointer resting where it draws a row. A mouse left by an earlier click on a
+ * spot Settings comes to cover would open that row's sentence (SettingsControls' useRowSentence), which takes the next
+ * Escape for itself, as it should, and a check that Escape closes Settings would wait on it.
+ */
+async function openSettingsByKeys(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+}
+
 /** a file action: its button in the header, or up to 600px the item in the header's More menu */
 async function fileAction(scope: Locator | Page, name: string): Promise<Locator> {
   const link = scope.getByRole("link", { name, exact: true });
@@ -423,7 +433,7 @@ try {
     await videoLink.click();
     await preview.waitFor();
     const previewEntry = await page.evaluate(() => history.state["ovis:file-preview"]);
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsByKeys(page);
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
     await settings.waitFor();
     await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
@@ -472,7 +482,7 @@ try {
     // System Back follows the same order, preserving the document instead of closing the file.
     await videoLink.click();
     await preview.waitFor();
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsByKeys(page);
     await settings.waitFor();
     await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
     await page.goBack();
@@ -490,7 +500,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 800 });
   await videoLink.click();
   await preview.waitFor();
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsByKeys(page);
   const settingsOverPreview = page.getByRole("dialog", { name: "Settings", exact: true });
   await settingsOverPreview.waitFor();
   await openSettingsPage(page, "Devices and PCs");
@@ -528,7 +538,7 @@ try {
   // With no preview beneath it, Settings stays on the layer every dialog shares, so the palette
   // its shortcut opens is drawn above Settings instead of taking focus and Escape unseen.
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsByKeys(page);
   const settingsAlone = page.getByRole("dialog", { name: "Settings", exact: true });
   await settingsAlone.waitFor();
   await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
@@ -553,7 +563,7 @@ try {
   // focus and Escape, so it must not be drawn beneath either of them.
   await videoLink.click();
   await preview.waitFor();
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsByKeys(page);
   await settingsAlone.waitFor();
   await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
   await page.keyboard.press("ControlOrMeta+Shift+K");
@@ -1935,7 +1945,7 @@ try {
     await webReportLink.tap();
     const popup = reportPage.locator(".web-panel-popup");
     await popup.waitFor();
-    await reportPage.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsByKeys(reportPage);
     const settings = reportPage.getByRole("dialog", { name: "Settings", exact: true });
     await settings.waitFor();
     await reportPage.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
@@ -1966,7 +1976,7 @@ try {
   await reportPage.setViewportSize({ width: 1280, height: 800 });
   await webReportLink.click();
   await reportPage.locator(".web-panel").waitFor();
-  await reportPage.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsByKeys(reportPage);
   const settingsOverDocked = reportPage.getByRole("dialog", { name: "Settings", exact: true });
   await settingsOverDocked.waitFor();
   await reportPage.setViewportSize({ width: 900, height: 800 });

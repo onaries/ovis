@@ -63,6 +63,9 @@ try {
             await page.clock.install();
             // the sidebar's Filter field is off until chosen (Settings → Sidebar filter); the focus check below uses it
             await context.addInitScript((value) => { if (localStorage.getItem("ovis:settings") === null) { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); } }, theme);
+            // the row opened from the peek is the Claude pane's: its turn stays at work, or on a slow runner
+            // the end the demo times 4.5s in folds that row away first
+            await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
 
             // never chosen: resting on the toggle shows nothing
             await page.goto(url("&sidebar=hidden"));

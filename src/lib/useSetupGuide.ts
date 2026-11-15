@@ -36,6 +36,9 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
   pausedRef.current = paused;
   const [sharedRevision, setSharedRevision] = useState<number | null>(null);
   const decided = useRef(record !== null);
+  // the same, as state: the page's own notices wait for it, as the guide may still open over them
+  // (a browser with saved settings is settled from the start: the guide never opens by itself there, autoOpen)
+  const [settled, setSettled] = useState(record !== null || savedSettings);
   // this tab opened the guide itself (the welcome, or Settings): its progress may replace a closed record once
   const openedHere = useRef(false);
   // the record this tab wrote last: a close that storage no longer holds is older than it
@@ -57,13 +60,14 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
     if (decided.current || !enabled || pairingGate === undefined) return;
     if (workspaces === null || sharedRevision === null) return;
     decided.current = true;
+    setSettled(true);
     if (autoOpen({ workspaces, savedSettings, sharedRevision, pairingGate, watching })) { openedHere.current = true; setGuide(WELCOME); }
   }, [enabled, workspaces, sharedRevision, pairingGate, watching, savedSettings]);
 
   useEffect(() => {
     const reopen = () => {
       if (watchingRef.current || !enabledRef.current) return;
-      decided.current = true; openedHere.current = true; setGuide(REOPENED); setPaused(false);
+      decided.current = true; setSettled(true); openedHere.current = true; setGuide(REOPENED); setPaused(false);
     };
     // closed in another tab of this browser: closed here too, read from the event itself (storage may
     // already hold this tab's own later write)
@@ -73,7 +77,7 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
       // a close that arrives after this tab opened the guide again and wrote it is the older of the two
       const store = storage();
       if (store !== null && lastWrite.current !== null && store.getItem(GUIDE_STORAGE_KEY) === lastWrite.current) return;
-      decided.current = true; openedHere.current = false; setGuide(null); setPaused(false);
+      decided.current = true; setSettled(true); openedHere.current = false; setGuide(null); setPaused(false);
     };
     window.addEventListener("storage", onStorage);
     const stop = onSetupGuideRequest(reopen);
@@ -129,7 +133,7 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
     return () => tickets.current === mine && openRef.current;
   }, []);
   const voidTickets = useCallback(() => { tickets.current += 1; }, []);
-  return { guide: watching ? null : guide, paused, dispatch, close, resume, stepAside, finish, ticket, voidTickets };
+  return { guide: watching ? null : guide, settled: settled || watching, paused, dispatch, close, resume, stepAside, finish, ticket, voidTickets };
 }
 
 /**

@@ -615,6 +615,8 @@ const BASE: Record<string, string> = {
   "Plan · {plan}": "方案 · {plan}",
   "{used}/{max} PCs": "{used}/{max} 台电脑",
   "{used} / {cap} relay data": "中继流量 {used} / {cap}",
+  "Agent": "Agent",
+  "Install another agent ({count})": "安装其他代理（{count}）",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

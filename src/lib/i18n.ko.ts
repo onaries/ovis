@@ -611,6 +611,8 @@ const BASE: Record<string, string> = {
   "Plan · {plan}": "플랜 · {plan}",
   "{used}/{max} PCs": "PC {used}/{max}대",
   "{used} / {cap} relay data": "릴레이 데이터 {used} / {cap}",
+  "Agent": "에이전트",
+  "Install another agent ({count})": "다른 에이전트 설치 ({count})",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

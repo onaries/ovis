@@ -117,7 +117,8 @@ export async function checkTelemetrySettings(browser: Browser): Promise<void> {
     const notice = page.locator(".update-notice").filter({ hasText: "Ovis sends anonymous usage counts" }).first();
     await notice.waitFor({ state: "visible" });
     await until(async () => (await statusAt(origin)).notice_seen, "the visible notice is reacknowledged");
-    assert.ok(changes.some((change) => change.notice_seen === true && change.notice_version === NOTICE_VERSION), "the browser acknowledges exactly the current notice version");
+    // the server can hold the acknowledgement a moment before Playwright reports the request that carried it
+    await until(async () => changes.some((change) => change.notice_seen === true && change.notice_version === NOTICE_VERSION), "the browser acknowledges exactly the current notice version");
     assert.equal(changes.findIndex((change) => change.settings !== undefined), changes.findIndex((change) => change.notice_seen === true),
       "no settings snapshot leaves the browser before the notice is acknowledged; the first rides with the acknowledgement");
     await until(async () => {

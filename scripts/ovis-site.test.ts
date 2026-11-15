@@ -13,6 +13,7 @@ const PAGES = files("ovis-site/**/*.html");
 const HOME = "ovis-site/index.html";
 /** The Android app's Google Play page, where the home page's Google Play icons lead. */
 const PLAY = "https://play.google.com/store/apps/details?id=sh.ovis.app";
+const APP_STORE = "https://apps.apple.com/app/id6824664162";
 /** Visible FAQ questions left out of the FAQPage on purpose, each with why. */
 const LEFT_OUT: Record<string, string> = {
   "How much does Ovis cost?": "its \"no analytics\" sentence is under review: the PC side sends anonymous usage counts by default",
@@ -122,31 +123,33 @@ describe("ovis.sh beta page", () => {
       "Set each link in BETA_LINKS (ovis-site/assets/beta.js) to the address its comment names, or to \"\" to keep its section hidden; a new key needs its shape in SHAPES in scripts/ovis-site.test.ts:");
   });
 
-  it("ships each phone section hidden, with its link and its note, for beta.js to show", () => {
+  it("ships each phone test line hidden, with its link, for beta.js to show", () => {
     const offenders = BETA_PAGES.flatMap((file) => {
       const page = html(file);
       if (!page.includes("<script src=\"/assets/beta.js\"></script>")) return [`${file}: does not load /assets/beta.js`];
-      return Object.keys(links).flatMap((key) => [
-        !new RegExp(`<section (?:id="[\\w-]+" )?data-beta="${key}" hidden>`).test(page) && `${file}: no <section data-beta="${key}" hidden>`,
-        !page.includes(`<a data-beta-link="${key}">`) && `${file}: no <a data-beta-link="${key}">`,
-        !page.includes(`data-beta-pending="${key}"`) && `${file}: no data-beta-pending="${key}" note`,
-      ].filter((problem): problem is string => !!problem));
+      return Object.keys(links).flatMap((key) => {
+        const line = new RegExp(`<(section|p)(?: [\\w-]+="[^"]*")* data-beta="${key}" hidden>(.*?)</\\1>`).exec(page);
+        return [
+          !line && `${file}: no <section> or <p> with data-beta="${key}" hidden`,
+          line && !line[2]!.includes(`<a data-beta-link="${key}">`) && `${file}: its data-beta="${key}" element holds no <a data-beta-link="${key}">`,
+        ].filter((problem): problem is string => !!problem);
+      });
     });
-    fail(offenders, "Each beta page loads /assets/beta.js and, for every key of BETA_LINKS, ships <section data-beta=\"<key>\" hidden> (with an id first, if any) holding an <a data-beta-link=\"<key>\"> with no href, plus a data-beta-pending=\"<key>\" note; beta.js shows the section and hides the note once the link is set:");
+    fail(offenders, "Each beta page loads /assets/beta.js and, for every key of BETA_LINKS, ships a <section> or <p> with data-beta=\"<key>\" hidden holding an <a data-beta-link=\"<key>\"> with no href; beta.js shows it once the link is set:");
   });
 
-  it("is where the home page's App Store icons and a phone's download button lead, and Google Play is where Android's lead", () => {
+  it("leads the home page's App Store and Google Play icons, and a phone's download button, to the stores", () => {
     // each download row's icons, and the iPhone and Android buttons assets/platform.js puts on a phone
     const rows = html(HOME).split("<div class=\"dl-row\"").slice(1).map((rest) => rest.split("</div>")[0]!);
     const platform = read("ovis-site/assets/platform.js");
-    const links = [["ios", "/beta/#iphone"], ["android", PLAY]];
+    const links = [["ios", APP_STORE], ["android", PLAY]];
     fail([
       ...(rows.length === 2 ? [] : [`${HOME} has ${rows.length} download rows (<div class="dl-row">), not the hero's and the closing one`]),
       ...rows.flatMap((row, index) => links.filter(([, href]) => !row.includes(`<a class="dl-icon" href="${href}"`))
         .map(([, href]) => `${HOME} download row ${index + 1}: no <a class="dl-icon" href="${href}">`)),
       ...links.filter(([key, href]) => !platform.split("\n").some((line) => line.startsWith(`    ${key}: {`) && line.includes(`href: "${href}"`)))
         .map(([key, href]) => `ovis-site/assets/platform.js: BUTTONS.${key} has no href: "${href}"`),
-    ], `The iPhone app is in beta and the Android app is on Google Play: the App Store icons in both download rows of the home page link to /beta/#iphone and the Google Play icons to ${PLAY}, and so do the iPhone and Android buttons in assets/platform.js:`);
+    ], `The iPhone app is on the App Store and the Android app is on Google Play: the App Store icons in both download rows of the home page link to ${APP_STORE} and the Google Play icons to ${PLAY}, and so do the iPhone and Android buttons in assets/platform.js:`);
   });
 
   it("has the section each home page link names", () => {

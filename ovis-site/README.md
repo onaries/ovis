@@ -2,8 +2,8 @@
 
 The website of Ovis, the phone, desktop and browser client for herdr: the home page, the privacy
 policy (`/privacy/`) and the support page (`/support/`) the App Store and Google Play ask for, and
-the beta page (`/beta/`) that walks testers through joining the iPhone test and links the Android
-app on Google Play.
+the beta page (`/beta/`) that links the iPhone app on the App Store and the Android app on Google
+Play, and offers the iPhone TestFlight test for upcoming builds.
 It is plain HTML with no build, so edit the files and the next deploy serves them.
 
 - The home page (`index.html`) carries its own styles and scripts. It is English as written;
@@ -73,7 +73,12 @@ A preview deploy serves it too, so a pull request can check `/demo/` on its prev
   (docs/account.md, "Who is asking") and what the direct connections listen on (docs/relay.md,
   "Direct on the same network"). Change it, and its date, in both
   languages when any of those changes, before the release that changes them.
-- The beta page ships its iPhone section hidden; `assets/beta.js` shows it once its link is set
+- The beta page's iPhone section is the app's App Store page behind Apple's own "Download on the
+  App Store" badge (`assets/app-store/`, the black badge in each language, from Apple's App Store
+  Marketing Tools, unmodified), shown as tall as Google's badge (Apple's minimum is 40px) with a
+  quarter of its height clear around it, and Apple's trademark lines under the page, as Apple's
+  marketing guidelines ask; the black badge because Google's sits next to it. Under it, the
+  TestFlight line for upcoming builds ships hidden; `assets/beta.js` shows it once its link is set
   in `BETA_LINKS` there (the TestFlight public link). Its Android section is the app's Google Play
   page behind Google's own "Get it on Google Play" badge (`assets/google-play/`, one per language,
   from Google's Partner Marketing Hub, unmodified), with a quarter of its height clear around it
@@ -86,9 +91,10 @@ A preview deploy serves it too, so a pull request can check `/demo/` on its prev
   Mac's, or the AppImages for Linux beyond Debian and Ubuntu; on Windows, how to get past
   SmartScreen while the desktop app is not code-signed). The install command stays a second
   way in the download row.
-  The sections carry `id="iphone"` and `id="android"`: the home page's App Store icon, and its
-  download button on an iPhone (`assets/platform.js`), link to `/beta/#iphone`; its Google Play
-  icon and the button on an Android phone link straight to the app's Google Play page. The Google
+  The sections carry `id="iphone"` and `id="android"`; the home page's FAQ links to `/beta/#iphone`
+  for the TestFlight test. Its App Store and Google Play icons, and the download button on an
+  iPhone or an Android phone (`assets/platform.js`), link straight to the app's App Store and
+  Google Play pages. The Google
   Play icon is the Android robot, not Google Play's own logo, which Google's brand rules keep out
   of marketing.
 - The support page names app labels (**Scan QR code**, **Forget**, **Change PC**) and Ovis server

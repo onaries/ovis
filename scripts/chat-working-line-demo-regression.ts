@@ -121,6 +121,9 @@ try {
         localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
         for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
       }, [panes.api, panes.flaky, panes.omp]);
+      // the first check reads the Claude pane's running turn: it stays at work, or on a slow runner the
+      // demo ends it (4.5s in) before the check comes
+      await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));

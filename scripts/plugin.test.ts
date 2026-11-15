@@ -845,9 +845,10 @@ describe("add and login", () => {
     const result = await run("constructor", { HERDR_PLUGIN_CONFIG_DIR: configDir });
     expect(result.exitCode).toBe(2);
     expect(result.err).toBe([
-      "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup>",
+      "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup|tui>",
       "add (also login, link): sign this PC in, then scan its QR code with a device of your Ovis account to add it (--approve: approve that device here instead; --print: write the QR code where there is no terminal).",
       "link --code: show a code and a QR code to pair one device instead.",
+      "tui: herdr-core's terminals in this terminal, as herdr shows them.",
       "",
     ].join("\n"));
   });

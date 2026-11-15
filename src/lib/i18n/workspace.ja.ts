@@ -42,7 +42,6 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Resuming…": "再開中…",
   "Started {started} · last active {updated}": "開始 {started} · 最終使用 {updated}",
   "Close dialog": "ダイアログを閉じる",
-  "Agent": "エージェント",
   "Directory": "作業フォルダー",
   "absolute path or ~/…": "絶対パスまたは ~/…",
   "Optional workspace label": "ワークスペース名 (任意)",

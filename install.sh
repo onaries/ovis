@@ -342,7 +342,7 @@ EOF
 # gets the name it knows, `link`. herdr's checkout stays at the version first installed, so one from
 # before `link` cannot hand on at all: for it the launcher finds the release that runs, as
 # running_code does below (release_js, which the launcher carries), and runs that; where that one has
-# no `link` either, it says to update.
+# no `link` either, it says to update. `tui` is handed on the same way.
 launcher_text() {
   printf '%s\n' '#!/bin/sh' "$LAUNCHER_MARK"
   cat <<'EOF'
@@ -421,6 +421,17 @@ case "${1:-}" in
     else
       echo "ovis: this Ovis is from before it could add a PC to an account. Update it in Settings → Updates, then run this again" >&2
       exit 1
+    fi
+    ;;
+  tui)
+    # a checkout from before ovis tui: the release Settings → Updates installed may know it
+    if ! grep -qs '"tui"' "$root/scripts/plugin.ts"; then
+      code=$(bun -e "$release_js" "$root" 2>/dev/null </dev/null) || code=$root
+      [ -n "$code" ] || code=$root
+      if ! grep -qs '"tui"' "$code/scripts/plugin.ts"; then
+        echo "ovis: this Ovis is from before ovis tui. Update it in Settings → Updates, then run this again" >&2
+        exit 1
+      fi
     fi
     ;;
 esac

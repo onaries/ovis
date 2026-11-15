@@ -770,7 +770,7 @@ async function welcomeSignIn(browser: import("playwright-core").Browser, url: st
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(url);
-        const guide = page.getByRole("region", { name: "Setup guide", exact: true });
+        const guide = page.getByRole("dialog", { name: "Set up Ovis", exact: true });
         await guide.getByRole("button", { name: /I've used Ovis before/ }).waitFor();
         const signIn = guide.locator(".setup-signin");
         const shot = async (name: string) => {

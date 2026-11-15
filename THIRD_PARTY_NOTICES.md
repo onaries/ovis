@@ -107,6 +107,17 @@ graceful-fs and semver (ISC), and sax (Blue Oak Model License 1.0.0). Their lice
 their copyright notices, ship in the app as `out/THIRD_PARTY_LICENSES.txt`, which
 `app/electron/scripts/build.ts` writes from the packages the bundle took in.
 
+## hc-tui
+
+The terminal client (`crates/ovis-tui`) builds on [hc-tui](https://github.com/followcat/hc-tui) at
+revision `a37bddb98627c51838939c92e4a574fde8482974` (v0.1.6), under Apache-2.0, Copyright 2026
+followcat. Its sources are not in this repository: `crates/ovis-tui/prepare.sh` fetches that
+revision, and `crates/ovis-tui/patches/` holds our changes to it, which quote lines of its files.
+Its `NOTICE` names material it derives from herdr, herdr-app and herdr-core (Apache-2.0) and
+Ghostty's libghostty-vt (MIT, Mitchell Hashimoto and contributors), which it links. The Apache-2.0
+text below applies. A build of `ovis-tui` that is distributed ships hc-tui's `LICENSE` and
+`NOTICE` beside it, as `crates/ovis-tui/README.md` says.
+
 ## oh-my-pi figure tokens
 
 `src/lib/svgFigure.ts` adapts the figure token vocabulary and the token and root-tag resolution of

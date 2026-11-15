@@ -1,34 +1,99 @@
-/* the first-run setup guide (SetupGuide), in the pane area beside the sidebar */
-.setup-guide {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-8) var(--space-6);
-  background: var(--bg);
+/* the first-run setup guide (SetupGuide): a dialog over the app, as Settings is (.modal), at a fixed 16:9
+   size so a step never moves its edges. At 640px and below the app's own rule makes it a bottom sheet */
+.setup-scrim[hidden] {
+  display: none;
 }
 
-.setup-guide-inner {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  width: 100%;
-  max-width: var(--guide-w);
-  margin: 0 auto;
+.setup-dialog {
+  --setup-w: 1200px;
+  --setup-h: 675px;
+  --setup-head-h: 56px;
+  --setup-foot-h: 64px;
+  width: min(100%, var(--setup-w));
 }
 
-/* the screen's one title, the page's h1: the sidebar beside it holds no heading */
-.setup-guide h1,
-.setup-guide h2 {
+@media (min-width: 641px) {
+  .setup-dialog {
+    height: min(100%, var(--setup-h));
+    max-height: none;
+  }
+}
+
+/* the head: the name at the left, the steps' list in the middle (once there are several), close at the right */
+.setup-head {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--setup-head-h);
+  padding: 0 var(--space-8);
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.setup-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.setup-brand img {
+  flex: none;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-sm);
+}
+
+/* the close glyph, not its hover box, ends on the body's gutter */
+.setup-head > .icon-button {
+  justify-self: end;
+  margin-inline-end: calc(-1 * var(--space-2));
+}
+
+/* the body: the dialog's one scroll owner (.modal-body), two columns: the step at the left, its result
+   or preview at the right */
+.setup-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  align-items: start;
+  column-gap: var(--space-8);
+  padding: var(--space-8);
+}
+
+.setup-body-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* the left column is plain block flow: 8px under the title, 24px under the lead, 16px between controls */
+.setup-main {
+  min-width: 0;
+}
+
+/* written under .setup-dialog so they outrank the margin: 0 of the lines they space (.setup-note, .setup-error, …) */
+.setup-dialog .setup-main > * {
+  margin-block: 0;
+}
+
+.setup-dialog .setup-main > * + * {
+  margin-top: var(--space-4);
+}
+
+.setup-title {
   margin: 0;
   color: var(--text-strong);
-  font-size: var(--fs-xl);
+  font-size: var(--fs-title);
   font-weight: var(--fw-semibold);
   line-height: var(--lh-tight);
+  text-wrap: balance;
 }
 
-/* the heading takes focus as its step opens, for a screen reader; no ring for that */
-.setup-guide h1:focus,
-.setup-guide h2:focus {
+/* the title takes focus as its step opens, for a screen reader; no ring for that */
+.setup-title:focus {
   outline: none;
 }
 
@@ -37,6 +102,130 @@
   color: var(--text-dim);
   font-size: var(--fs-md);
   line-height: var(--lh-base);
+}
+
+.setup-dialog .setup-main > .setup-lead {
+  max-width: 34em;
+  margin-top: var(--space-2);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  text-wrap: balance;
+}
+
+.setup-dialog .setup-main > .setup-lead + * {
+  margin-top: var(--space-6);
+}
+
+/* the right column: a tonal surface as tall as its content, its hairline kept in a theme whose --bg is the dialog's own */
+.setup-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-6);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+.setup-label {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.setup-text {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+/* the picked agent at the top of the side panel: its mark, its name, its version */
+.setup-agent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+}
+
+/* rows of a 16px glyph and a sentence; .is-done colours the glyph */
+.setup-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.setup-item > svg {
+  flex: none;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  margin-top: calc((var(--fs-md) * var(--lh-base) - var(--icon-size-md)) / 2);
+  color: var(--text-dim);
+}
+
+.setup-item.is-done > svg {
+  color: var(--status-done);
+}
+
+/* a sign-in link inside a sentence keeps the sentence's line */
+.setup-item .setup-link {
+  min-height: 0;
+  font-size: inherit;
+}
+
+/* Done's summary: a name column, then what was set */
+.setup-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.setup-summary-name {
+  min-width: 6em;
+  color: var(--text-dim);
+}
+
+/* the footer: the ghost fast path at the left edge (its label on the body's gutter), Back and Continue at the right */
+.setup-foot {
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: var(--setup-foot-h);
+  padding: var(--space-3) var(--space-8);
+}
+
+.setup-foot > .btn-ghost {
+  margin-inline: calc(-1 * var(--space-3)) auto;
+}
+
+.setup-foot .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.setup-foot .btn svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+/* line breaks come from text-wrap alone: no hand-placed breaks in the strings */
+.setup-dialog :is(p, li, .setup-choice-text > span) {
+  text-wrap: pretty;
 }
 
 .setup-muted {
@@ -62,6 +251,22 @@
   margin-top: var(--space-px-3);
 }
 
+/* the welcome's line about usage counts: its sentence opens Settings, Turn off beside it */
+.setup-note-usage {
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-3);
+}
+
+.setup-note-usage svg {
+  margin-top: 0;
+}
+
+.setup-note-usage .setup-link {
+  min-height: 0;
+  text-align: start;
+}
+
 .setup-error {
   margin: 0;
   padding: var(--space-2) var(--space-3);
@@ -71,8 +276,8 @@
   font-size: var(--fs-sm);
 }
 
-/* a quiet text button: Skip setup, Look again. Its words stay small; its box reaches the pointer
-   floor, and the touch floor on a phone, so the one way out of the guide is not a 20px line */
+/* a quiet text button: Look again, Not now. Its words stay small; its box reaches the pointer floor,
+   and the touch floor on a phone */
 .setup-link {
   display: inline-flex;
   align-items: center;
@@ -104,29 +309,12 @@
   }
 }
 
-/* the welcome */
-.setup-welcome {
-  align-items: center;
-  padding-top: var(--space-8);
-  text-align: center;
-}
-
-.setup-welcome-mark {
-  border-radius: var(--radius-2xl);
-}
-
-.setup-welcome .setup-choices {
-  align-self: stretch;
-  text-align: left;
-}
-
 /* the welcome's sign-in: the account's buttons, Not now under them */
 .setup-signin {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
-  align-self: stretch;
   padding: var(--space-4);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-xl);
@@ -225,23 +413,6 @@
   font-size: var(--fs-sm);
 }
 
-/* Set up Ovis, and Skip setup */
-.setup-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-}
-
-/* one screen */
-.setup-step {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
 .setup-actions {
   display: flex;
   flex-wrap: wrap;
@@ -260,7 +431,7 @@
   height: var(--icon-size-sm);
 }
 
-/* the PC check, and the agents Start can open */
+/* the PC check */
 .setup-check {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -307,32 +478,15 @@
   color: var(--status-done);
 }
 
-/* You're set up */
-.setup-done-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-.setup-done-head > svg {
-  flex: none;
-  width: var(--pointer-target);
-  height: var(--pointer-target);
-  padding: var(--space-px-3);
-  border: var(--space-half) solid var(--status-done);
-  border-radius: 50%;
-  color: var(--status-done);
-}
-
-.setup-done-head > div {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-half);
-}
-
 .setup-again {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-6);
+}
+
+.setup-again > span {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
@@ -350,29 +504,36 @@
   font-size: var(--fs-sm);
 }
 
-@media (max-width: 768px) {
-  .setup-guide {
-    padding: var(--space-5) var(--space-4);
-  }
-
-  .setup-welcome {
-    padding-top: var(--space-4);
-  }
-
-  /* a phone reaches Start sooner: the agents screen's blocks sit a step closer (G-192) */
-  .setup-step {
-    gap: var(--space-3);
-  }
-
-  /* Start, then Connect your phone below it, each the full width */
-  .setup-actions .btn:not(.btn-ghost) {
-    flex: 1 1 100%;
-    justify-content: center;
-    min-height: var(--touch-target);
+/* one column below 960px: the side panel goes under the step */
+@media (max-width: 960px) {
+  .setup-body {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-6);
   }
 }
 
-/* Connect your phone: the QR code and the address, under Start */
+@media (max-width: 640px) {
+  .setup-body {
+    padding: var(--space-5);
+  }
+
+  .setup-head,
+  .setup-foot {
+    padding-inline: var(--space-5);
+  }
+
+  .setup-foot .btn:not(.btn-ghost) {
+    min-height: var(--touch-target);
+  }
+
+  /* the fast path takes its own line above Back and Continue, so those two keep a row together */
+  .setup-foot > .btn-ghost {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+}
+
+/* Connect your phone: the QR code and the address, in the Done screen's side panel */
 .setup-phone-qr {
   display: flex;
   flex-wrap: wrap;

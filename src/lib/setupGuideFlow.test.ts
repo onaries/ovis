@@ -42,6 +42,12 @@ describe("guideStep", () => {
     const setup = guideStep(WELCOME, { type: "begin" });
     expect(guideStep(setup, { type: "begin" })).toBe(setup);
   });
+
+  it("goes back to the welcome from the first step, except when Settings opened it", () => {
+    expect(guideStep(guideStep(WELCOME, { type: "begin" }), { type: "back" })).toBe(WELCOME);
+    expect(guideStep(REOPENED, { type: "back" })).toBe(REOPENED);
+    expect(guideStep(WELCOME, { type: "back" })).toBe(WELCOME);
+  });
 });
 
 describe("readGuide and saveGuide", () => {

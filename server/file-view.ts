@@ -965,6 +965,9 @@ const askCollection = () => {
   Bun.gc(false);
 };
 
+/** A file that is not a page or a PDF: a document with no origin, no script and nothing from elsewhere. */
+export const FILE_POLICY = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
+
 export async function fileResponse(info: FileInfo, download: boolean, render = false, media: PageMedia | null = null, request: Request | null = null, watched?: ReturnType<typeof watchPageMedia>, within: string | null = null, stream = false): Promise<Response> {
   const name = encodeURIComponent(info.name);
   const headers = new Headers({
@@ -976,7 +979,7 @@ export async function fileResponse(info: FileInfo, download: boolean, render = f
   // a PDF is drawn by the browser's own viewer, which refuses a sandboxed document; its
   // scripts stay inside that viewer, never on this origin
   if (page) headers.set("content-security-policy", pagePolicy(media?.source ?? null));
-  else if (info.kind !== "pdf") headers.set("content-security-policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
+  else if (info.kind !== "pdf") headers.set("content-security-policy", FILE_POLICY);
   // text shows as text, whatever its extension says it runs as
   const type = page ? "text/html; charset=utf-8" : info.kind === "text" && info.mime !== "image/svg+xml" ? "text/plain; charset=utf-8" : info.mime;
   const gone = () => jsonResponse({ error: { code: "not_found", message: "no readable file at that path" } }, 404);

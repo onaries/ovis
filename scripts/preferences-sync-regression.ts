@@ -95,6 +95,16 @@ async function windows(opened: readonly Opened[], count = 3): Promise<void> {
   for (let index = 0; index < count; index++) for (const { page } of opened) await page.clock.runFor(600);
 }
 const isPut = (response: Response) => response.url().endsWith("/api/preferences") && response.request().method() === "PUT";
+/**
+ * A held save reaching the route. Bounded: a save that never goes fails here, saying what the page shows (its PUTs so
+ * far, whether its save is paused), instead of holding the run until the browser lane's limit stops it with no word.
+ */
+async function reached(onWay: Promise<void>, what: string, state: () => Promise<string>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const came = await Promise.race([onWay.then(() => true), new Promise<false>((done) => { timer = setTimeout(() => done(false), 60_000); })]);
+  clearTimeout(timer);
+  if (!came) throw new Error(`${what}: no save reached the server in 60 s; ${await state()}`);
+}
 /** The next PUT's answer: the virtual clock steps a second at a time until one is sent (a send window, or a RETRY_MS wait). */
 async function nextPut(opened: Opened): Promise<Response> {
   const answered = opened.page.waitForResponse(isPut);
@@ -200,7 +210,7 @@ try {
     });
     await a.page.goto(`${origin}/?settings=appearance`);
     const changed = chooseMode(a, "Dark");
-    await onWay.promise;
+    await reached(onWay.promise, "the held PUT", async () => `${a.puts.length} PUTs sent`);
     const aPalette = settingsHold(a.page, { lightTheme: "catppuccin", theme: "dark" });
     const bDark = settingsHold(b.page, { theme: "dark", lightTheme: "catppuccin" });
     await write({ palette: "catppuccin" });
@@ -257,6 +267,7 @@ try {
       const f = await browserAt(browser);
       await e.page.goto(`${origin}/?settings=appearance`);
       const alert = e.page.locator(".settings-save-error");
+      const saveState = async (): Promise<string> => `${e.puts.length} PUTs sent, ${await alert.count() === 0 ? "no alert" : `the alert ${await alert.getAttribute("data-paused") === null ? "not paused" : "paused"}: ${await alert.innerText()}`}`;
       const retry = alert.getByRole("button", { name: "Retry", exact: true });
       const mode = (name: "Light" | "Dark" | "System") => e.page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name, exact: true }).click();
       await e.page.locator(".settings-dialog").waitFor();
@@ -311,7 +322,7 @@ try {
       assert.equal(await retry.isDisabled(), true, "Retry is disabled while its save is on the way");
       await retry.dispatchEvent("click");
       await e.page.clock.runFor(600);
-      await onWay.promise;
+      await reached(onWay.promise, "retry-confirms-latest", saveState);
       const retried = e.puts[4];
       assert.equal(retried?.settings["theme"], "system");
       assert.deepEqual(retried?.pins, pins);
@@ -369,7 +380,7 @@ try {
       failing = true;
       await mode("Light");
       await e.page.clock.runFor(600);
-      await onWay.promise;
+      await reached(onWay.promise, "undone-while-refused", saveState);
       await mode("Dark");
       const refused = e.page.waitForResponse(isPut);
       hold.resolve();
@@ -433,7 +444,7 @@ try {
       onWay = Promise.withResolvers<void>();
       hold = Promise.withResolvers<void>();
       await e.page.clock.runFor(5_600);
-      await onWay.promise;
+      await reached(onWay.promise, "retry-during-automatic-send", saveState);
       assert.equal(e.puts.length, putsFirst + 2);
       await retry.click();
       const confirmedAnswer = e.page.waitForResponse(isPut);
