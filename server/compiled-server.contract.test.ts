@@ -22,6 +22,8 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "ovc-")));
 const binary = join(root, "bin", binaryName(platform));
 const probe = join(root, "probe", binaryName(platform));
 const children: ReturnType<typeof Bun.spawn>[] = [];
+/** homes outside root (in /tmp), removed with it once the children are gone */
+const homes: string[] = [];
 
 beforeAll(async () => {
   mkdirSync(join(root, "probe-src"), { recursive: true });
@@ -39,7 +41,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const child of children) child.kill();
   await Promise.all(children.map((child) => child.exited));
-  rmSync(root, { recursive: true, force: true });
+  for (const dir of [root, ...homes]) rmSync(dir, { recursive: true, force: true });
 });
 
 function isolatedEnv(home: string): Record<string, string> {
@@ -109,7 +111,10 @@ describe("the compiled server", () => {
   it.skipIf(!posix)("as a remote PC's bridge, keeps the bundle number for the bridge protocol and tells the app's version in /api/health", async () => {
     const herdr = Bun.which("herdr");
     expect(herdr).not.toBeNull();
-    const home = mkdtempSync(join(root, "h-"));
+    // the herdr this bridge starts keeps its sockets under home, the longest herdr-client.sock: under a TMPDIR set deeper
+    // by hand it passes a socket path's 108 bytes and herdr refuses to start, so home is in /tmp (canonical, as root)
+    const home = realpathSync(mkdtempSync("/tmp/ovc-h-"));
+    homes.push(home);
     const session = `c${process.pid % 100_000}`;
     const env = { ...isolatedEnv(home), HERDR_REMOTE_SESSION: session, HERDR_REMOTE_START_NEW: "1", OVIS_HERDR_BIN: herdr! };
     const socket = join(home, "x", "herdr", "sessions", session, "herdr.sock");

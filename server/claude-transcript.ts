@@ -1,4 +1,5 @@
 import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../shared/protocol.ts";
+import { readBytes } from "./claude-subagents.ts";
 import { invokedSkill } from "./skill-activity.ts";
 import { claudeCommandEcho } from "./skill-invocations/claude.ts";
 import { agentTaskResult, CLAUDE_HANDBACK_POINTER, claudeHandback, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary, type TranscriptParser } from "./transcript-records.ts";
@@ -846,5 +847,86 @@ export function parseClaudeTranscript(text: string, maxTurns = MAX_TURNS, option
   claudeTranscriptParser(options, state).write(text);
   // No writer survives this call, so its owned turns need no detached snapshot.
   return state.turns.filter((turn) => turn.parts.length > 0).slice(-maxTurns);
+}
+
+/** How a Claude transcript's last turn stands: ended on an API error, answered, still under way, or no turn read at all. */
+export type ClaudeTurnEnd = "failed" | "answered" | "running" | null;
+
+/** A local command's output and bash mode's lines, which Claude Code writes as user entries of its own: no turn. */
+const LOCAL_LINE_RE = /^<(?:local-command-(?:stdout|stderr|caveat)|bash-(?:input|stdout|stderr))>/;
+/**
+ * A user entry Claude Code wrote of its own (LOCAL_LINE_RE): bash mode's lines only when they carry no origin and no
+ * permission mode, as parseClaudeTranscript reads them; a person's prompt that opens on such a tag is a prompt.
+ */
+const localLine = (entry: TranscriptEntry, content: unknown): boolean => typeof content === "string" && LOCAL_LINE_RE.test(content)
+  && (content.startsWith("<local-command-") || (!("origin" in entry) && !("permissionMode" in entry)));
+
+/**
+ * How a Claude transcript's last turn stands, by the last entry of the session's own that tells it: `failed` when
+ * that is the answer Claude Code wrote for a request the API refused (`isApiErrorMessage`: a rate limit, a cooldown,
+ * an overloaded model), `answered` when it is an answer (one a retry got after such an error included), `running`
+ * when it is a prompt (one sent while Claude worked and taken in from the queue included: a `queued_command` record,
+ * as parseClaudeTranscript reads it), a tool's result or a tool call. A subagent's entries (`isSidechain`), Claude
+ * Code's own records (meta entries, a compaction's summary, a local command's output) and every other entry tell nothing.
+ */
+export function claudeTurnEnd(text: string): ClaudeTurnEnd {
+  let end: ClaudeTurnEnd = null;
+  for (const line of text.split("\n")) {
+    if (!line.includes('"assistant"') && !line.includes('"user"') && !line.includes('"queued_command"')) continue;
+    let entry: (TranscriptEntry & { isSidechain?: unknown }) | null;
+    try { entry = JSON.parse(line) as typeof entry; } catch { continue; /* a record cut by the tail read */ }
+    if (entry === null || typeof entry !== "object" || entry.isSidechain === true || entry.isMeta === true || entry.isCompactSummary === true) continue;
+    const content = entry.message?.content;
+    if (entry.type === "assistant") {
+      if (entry.isApiErrorMessage === true) { end = "failed"; continue; }
+      const calling = entry.message?.stop_reason === "tool_use"
+        || (Array.isArray(content) && content.some((block: unknown) => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "tool_use"));
+      end = calling ? "running" : "answered";
+    } else if (entry.type === "user" && !localLine(entry, content)) end = "running";
+    else if (entry.type === "attachment" && entry.attachment?.type === "queued_command" && entry.attachment.commandMode === "prompt") end = "running";
+  }
+  return end;
+}
+
+/**
+ * How the turn that wrote a Claude transcript's bytes from `from` to the end `plain` found (`file`) stands: what
+ * claudeTurnEnd reads in them (their last `tailBytes`). Read at once and as the subagent tracker reads the same file
+ * (claude-subagents.ts readBytes): only the plain file looked at, never a FIFO or a link put in its place. A record
+ * still being written, or a file not read, leaves the turn's end unknown: it is read whole once the file grows.
+ */
+export function claudeLastTurnEnd(path: string, file: { size: number; exact: string }, from: number, tailBytes = 256 * 1024): ClaudeTurnEnd {
+  const start = Math.max(from, file.size - tailBytes);
+  const text = readBytes(path, file.exact, start, file.size - start)?.toString("utf8");
+  return text?.endsWith("\n") === true ? claudeTurnEnd(text) : null;
+}
+
+/**
+ * When a Claude transcript a turn began began: the earlier of the time of its first entry that carries one and the time
+ * of its first entry that tells a turn (claudeTurnEnd), which must be a prompt, within its first `headBytes`, read as
+ * claudeLastTurnEnd reads (`file`: what `plain` found). null while no such prompt is written whole, or when that first
+ * entry is no prompt: a file that opens on an answer, a tool call or its result (entries a session continued into it
+ * copied, freshly stamped) holds a turn this one did not write.
+ */
+export function claudeTranscriptStart(path: string, file: { size: number; exact: string }, headBytes = 64 * 1024): number | null {
+  const head = readBytes(path, file.exact, 0, Math.min(file.size, headBytes))?.toString("utf8") ?? "";
+  const stamp = (value: unknown): number | null => {
+    const time = typeof value === "string" ? Date.parse(value) : Number.NaN;
+    return Number.isNaN(time) ? null : time;
+  };
+  let first: number | null = null;
+  for (const line of head.split("\n").slice(0, -1)) {
+    let entry: (TranscriptEntry & { isSidechain?: unknown }) | null;
+    try { entry = JSON.parse(line) as typeof entry; } catch { return null; }
+    if (entry === null || typeof entry !== "object") continue;
+    first ??= stamp(entry.timestamp);
+    if (entry.isSidechain === true || entry.isMeta === true || entry.isCompactSummary === true) continue;
+    const content = entry.message?.content;
+    if (entry.type === "assistant") return null;
+    if (entry.type !== "user" || localLine(entry, content)) continue;
+    const result = Array.isArray(content) && content.some((block: unknown) => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "tool_result");
+    const at = stamp(entry.timestamp);
+    return result || at === null ? null : Math.min(first ?? at, at);
+  }
+  return null;
 }
 

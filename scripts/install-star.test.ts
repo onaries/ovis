@@ -427,6 +427,24 @@ describe.skipIf(platform() === "win32")("install.sh without a terminal", () => {
     expect(existsSync(join(pc.scratch, "plugin-source"))).toBe(false);
   });
 
+  it.concurrent("says the installed commit on a rerun with OVIS_REF also where mktemp cannot make a file for git's stderr", async () => {
+    const pc = new Pc().installed();
+    const plugin = join(pc.scratch, "plugin");
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", plugin, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const head = (await new Response(Bun.spawn(["git", "-C", plugin, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    // a mktemp that fails, as on a full or read-only temporary folder
+    const mktemp = join(pc.scratch, "bin", "mktemp");
+    rmSync(mktemp);
+    writeFileSync(mktemp, "#!/bin/sh\necho 'mktemp: failed to create file' >&2\nexit 1\n");
+    chmodSync(mktemp, 0o755);
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x" });
+    expect(exitCode, out).toBe(0);
+    // regression (fails on main: without the file the commit was not read at all)
+    expect(out).toContain(`the installed checkout is at commit ${head.slice(0, 12)}; OVIS_REF does not move`);
+  });
+
   it.concurrent("says no commit when herdr names no plugin root, rather than the one of the directory it runs in", async () => {
     const pc = new Pc().installed();
     writeFileSync(join(pc.scratch, "no-json"), "");
@@ -451,6 +469,48 @@ describe.skipIf(platform() === "win32")("install.sh without a terminal", () => {
     expect(exitCode, out).toBe(0);
     expect(out).toContain("OVIS_REF does not move an installed Ovis");
     expect(out).not.toContain(around.slice(0, 12));
+  });
+
+  it.concurrent("says what git said where it fails at the checkout's top level, and no commit", async () => {
+    const pc = new Pc().installed();
+    const plugin = join(pc.scratch, "plugin");
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", plugin, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const head = (await new Response(Bun.spawn(["git", "-C", plugin, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    // git refusing a repository it takes for another user's, with no config of this PC's that trusts every folder
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x", GIT_TEST_ASSUME_DIFFERENT_OWNER: "1", GIT_CONFIG_GLOBAL: join(pc.scratch, "no-config"), GIT_CONFIG_NOSYSTEM: "1" });
+    expect(exitCode, out).toBe(0);
+    expect(out).toContain("git could not read the installed checkout's commit (fatal: detected dubious ownership");
+    expect(out).not.toContain(head.slice(0, 12));
+  });
+
+  it.concurrent("reads only git's stdout as the prefix and the commit, also where git warns on stderr while it answers", async () => {
+    const pc = new Pc().installed();
+    const plugin = join(pc.scratch, "plugin");
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", plugin, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const head = (await new Response(Bun.spawn(["git", "-C", plugin, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    // git answering, and warning on stderr as it does about a config file it cannot read
+    const git = join(pc.scratch, "bin", "git");
+    rmSync(git);
+    writeFileSync(git, `#!/bin/sh\necho "warning: unable to access '/nowhere/.config/git/config': Permission denied" >&2\nexec '${Bun.which("git")}' "$@"\n`);
+    chmodSync(git, 0o755);
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x" });
+    expect(exitCode, out).toBe(0);
+    // regression (fails on main): the warning was read as the prefix of a folder inside another repository, so no commit was said
+    expect(out).toContain(`the installed checkout is at commit ${head.slice(0, 12)}; OVIS_REF does not move`);
+    expect(out).not.toContain("unable to access");
+  });
+
+  it.concurrent("says nothing of git for a plugin folder git says is no repository", async () => {
+    const pc = new Pc().installed();
+    // nothing above the scratch folder is read as the repository around it
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x", GIT_CEILING_DIRECTORIES: pc.scratch });
+    expect(exitCode, out).toBe(0);
+    expect(out).toContain("OVIS_REF does not move an installed Ovis");
+    expect(out).not.toContain("git could not read");
   });
 
   // gh sleeps 60 seconds: the installer ended within RUN_ENDS_WITHIN_MS, so it did not wait for gh, and gh is gone

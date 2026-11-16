@@ -59,6 +59,8 @@ describe("chat/terminal switches in the usage counts", () => {
       const { picks, picked } = await mount("chat", true);
       await act(async () => { picks.setView("terminal", "header"); });
       expect(picked.length).toBe(1);
+      await act(async () => { picks.pickView("local", "p2", "terminal", "pane"); });
+      expect(picked.length).toBe(2);
       expect(logged).toHaveBeenCalled();
     } finally { logged.mockRestore(); }
   });

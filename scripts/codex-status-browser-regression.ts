@@ -149,7 +149,7 @@ try {
       await patchRow.click();
       await images.click();
       assert.equal(await page.locator(".work-block.is-live:not(.is-waiting)").count(), 0, "a failed turn must not still say Working");
-      assert.match(await page.locator(".work-block-head").innerText(), /Needs you|내 응답 필요/);
+      assert.match(await page.locator(".work-block-head").innerText(), /Needs you|응답 필요/);
       await notice.scrollIntoViewIfNeeded();
       if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `codex-capacity-${width}-${theme}.png`) }); }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page overflow on phones");

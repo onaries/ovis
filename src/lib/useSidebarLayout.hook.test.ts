@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement, type RefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppLink } from "./deepLink.ts";
-import { useSidebarLayout } from "./useSidebarLayout.ts";
+import { SECOND_TAP_MS, useSidebarLayout } from "./useSidebarLayout.ts";
 
 describe("useSidebarLayout", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -71,6 +71,20 @@ describe("useSidebarLayout", () => {
 
     await mount({ current: false }, shownLink);
     expect(layout.drawerOpen).toBe(true);
+  });
+
+  it("pairs a tap on the open drawer's mark with the menu button's click that opened it, within SECOND_TAP_MS of it only", async () => {
+    await mount();
+    expect(layout.secondTapOfOpening(1_000)).toBe(false);
+    await act(async () => { layout.toggleDrawerByButton(1_000); });
+    expect(layout.drawerOpen).toBe(true);
+    expect(layout.secondTapOfOpening(1_100)).toBe(true);
+    expect(layout.secondTapOfOpening(1_000 + SECOND_TAP_MS - 1)).toBe(true);
+    expect(layout.secondTapOfOpening(1_000 + SECOND_TAP_MS)).toBe(false);
+    // closed another way (a swipe, Back), then opened by a swipe: nothing is left to pair with
+    await act(async () => { layout.setDrawerOpen(false); });
+    await act(async () => { layout.setDrawerOpen(true); });
+    expect(layout.secondTapOfOpening(1_100)).toBe(false);
   });
 
   it("closes an open drawer however it is blocked", async () => {

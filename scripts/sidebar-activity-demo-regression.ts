@@ -687,7 +687,9 @@ try {
             mkdirSync(evidence, { recursive: true });
             await page.screenshot({ path: join(evidence, "finish-drawer-phone.png") });
           }
-          await page.locator('button[aria-controls="workspace-drawer"]').tap();
+          // the open drawer's head is the Ovis mark: a tap on the dimmed pane beside it closes it
+          await page.touchscreen.tap(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
+          await page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
           await agent(page, INFRA).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
         }, true);
         console.log("PASS a phone drawer covering the selected pane preserves both DONE dots until uncovered");

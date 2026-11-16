@@ -88,10 +88,10 @@ describe("telemetry report: button counts", () => {
     expect(rows(COUNTS_INSTALLS)).toEqual([{ width: "narrow", installs: 2 }, { width: "wide", installs: 1 }]);
     const buckets = rows(COUNTS_BUCKETS);
     expect(buckets).toEqual([
-      { width: "narrow", counter: "chat_send", installs: 1, days_1_2: 0, days_3_9: 1, days_10_29: 0, days_30_up: 1 },
-      { width: "narrow", counter: "view_terminal_by_header", installs: 1, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
-      { width: "narrow", counter: "view_terminal_claude", installs: 1, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
-      { width: "wide", counter: "chat_send", installs: 1, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
+      { width: "narrow", counter: "chat_send", installs: 1, of: 2, days_1_2: 0, days_3_9: 1, days_10_29: 0, days_30_up: 1 },
+      { width: "narrow", counter: "view_terminal_by_header", installs: 1, of: 2, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
+      { width: "narrow", counter: "view_terminal_claude", installs: 1, of: 2, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
+      { width: "wide", counter: "chat_send", installs: 1, of: 1, days_1_2: 1, days_3_9: 0, days_10_29: 0, days_30_up: 0 },
     ]);
     expect(rows(COUNTS_SHOWN)).toEqual([{ width: "narrow", control: "composer", installs: 2 }, { width: "narrow", control: "composer_voice", installs: 1 }]);
     expect(rows(SWITCHES_BY_AGENT)).toEqual([
@@ -120,8 +120,9 @@ describe("telemetry report: button counts", () => {
     expect(shares([["a", [3]], ["b", [3, 2, 3]], ["c", [1]]]).middle_install_day).toBe("10-29");
     // the base it is a share of is printed with it: a share over one install says so
     expect(shares([["a", [2]]])).toMatchObject({ installs: 1, of: 10, percent: 10 });
-    // a row that came between two queries cannot make a share over 100%
-    expect(counterShares([{ width: "wide", installs: 1 }], [{ width: "wide", counter: "chat_send", installs: 2 }], []).at(0)).toMatchObject({ installs: 2, of: 1, percent: 100 });
+    // the base comes with the users from one statement; were it ever smaller, the share is a dash, not a capped 100%
+    expect(counterShares([{ width: "wide", installs: 1 }], [{ width: "wide", counter: "chat_send", installs: 2 }], []).at(0)).toMatchObject({ installs: 2, of: 1, percent: "-" });
+    expect(counterShares([], [{ width: "wide", counter: "chat_send", installs: 1, of: 4 }], []).at(0)).toMatchObject({ installs: 1, of: 4, percent: 25 });
     expect(atDay("SELECT 1 WHERE day >= date('now', '-7 days') AND day < date('now')", "2026-11-15")).toBe("SELECT 1 WHERE day >= date('2026-11-15', '-7 days') AND day < date('2026-11-15')");
   });
 
@@ -145,7 +146,7 @@ describe("telemetry report: button counts", () => {
     active.run(day, "d", "[]");
     expect(db.query(QUERIES.find((query) => query.title === SWITCHES_BY_AGENT)!.sql).all()).toEqual([
       { width: "wide", agent: "claude", running: 3, switched: 2 },
-      { width: "wide", agent: "shell", running: null, switched: 1 },
+      { width: "wide", agent: "shell", running: "-", switched: 1 },
     ]);
     db.close();
   });

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { discoverHerdrSessions, parseFoundHerdrSessions } from "./herdr-discovery.ts";
+import { chosenHerdrSocketStatus, discoverHerdrSessions, parseFoundHerdrSessions, profileGroups } from "./herdr-discovery.ts";
+import { harmlessGroups } from "./herdr-core/discovery.ts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.listen>[] = [];
@@ -10,9 +11,14 @@ afterEach(() => {
   for (const listener of listeners.splice(0)) listener.stop(true);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+// macOS reaches its temp folder through a link and caps a socket path at 104 bytes: a short root, by its real path
+function tempRoot(prefix: string) {
+  const root = realpathSync(mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), prefix)));
+  roots.push(root);
+  return root;
+}
 function fixture() {
-  const home = mkdtempSync(join(tmpdir(), "herdr-discovery-"));
-  roots.push(home);
+  const home = tempRoot("herdr-discovery-");
   const procRoot = join(home, "proc");
   mkdirSync(procRoot);
   return { home, procRoot, platform: "linux" as const, uid: process.getuid?.() ?? 0 };
@@ -44,8 +50,7 @@ describe("running herdr discovery", () => {
     const f = fixture();
     // a desktop herdr under an XDG root outside HOME (its path holding a space), served by a program not named herdr: no
     // process line names it
-    const outside = mkdtempSync(join(tmpdir(), "herdr discovery xdg-"));
-    roots.push(outside);
+    const outside = tempRoot("herdr discovery xdg-");
     const socket = join(outside, "herdr/sessions/work/herdr.sock");
     listening(socket);
     mkdirSync(join(f.procRoot, "net"));
@@ -57,6 +62,15 @@ describe("running herdr discovery", () => {
     // An explicit XDG root authorizes only its herdr directory, including paths containing spaces.
     expect(await discoverHerdrSessions({ ...f, xdg: outside })).toEqual([{ socket_path: socket, session: "work", label: "work" }]);
     expect(await discoverHerdrSessions({ ...f, home: join(f.home, "sandbox") })).toEqual([]);
+  });
+
+  it("accepts a real listening socket on this platform", async () => {
+    // no faked platform, uid or probe: the real connection check reaches the listener
+    const home = tempRoot("hd-");
+    const socket = join(home, ".config/herdr/sessions/work/herdr.sock"); listening(socket);
+    const host = { home, platform: process.platform, uid: process.getuid?.() };
+    expect(await chosenHerdrSocketStatus(socket, host)).toBe("usable");
+    expect(await discoverHerdrSessions(host)).toEqual([{ socket_path: socket, session: "work", label: "work" }]);
   });
 
   it("keeps configured sessions when proc is unavailable", async () => {
@@ -179,5 +193,16 @@ describe("running herdr discovery", () => {
     expect(await discoverHerdrSessions(f)).toEqual([]);
     writeFileSync(join(f.procRoot, "100/cmdline"), "/usr/bin/herdr\0server\0");
     expect(await discoverHerdrSessions({ ...f, uid: f.uid + 1 })).toEqual([]);
+  });
+});
+
+describe("the machine profile's own folders", () => {
+  it("trust this account's private group alone, not macOS's admin group under Homebrew's prefixes", () => {
+    // the account's private group is 20 here, as a fake answer: no macOS needed
+    const own = () => 20;
+    // control: the rule of main's other callers trusts admin (80) there on macOS
+    expect(harmlessGroups("darwin", own)(80, "/opt/homebrew/var/herdr")).toBe(true);
+    const groups = profileGroups(own);
+    expect([groups(80, "/opt/homebrew/var/herdr"), groups(80, "/usr/local/state"), groups(20, "/Users/me/.config"), groups(21, "/Users/me/.config")]).toEqual([false, false, true, false]);
   });
 });

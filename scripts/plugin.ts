@@ -23,6 +23,7 @@
 import { mergeEnvLayers } from "../server/legacy-env.ts";
 import { acquireOwnerDirectory, guardPath, type OwnerLease } from "../server/owner-guard.ts";
 import { parseBirth, readProcessBirth } from "../server/process-owner.ts";
+import { writeStateDocument } from "../server/state-document.ts";
 import { defaultStateDir } from "../server/update-state.ts";
 import { COMPILED, entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
 import { version as builtVersion } from "../package.json";
@@ -31,14 +32,14 @@ import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSy
 import { homedir, platform, uptime } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 
-import qrcode from "qrcode-generator";
-
+// No application package (node_modules) is loaded with this file: `stop` and `status` must work in a checkout whose
+// install was cut off, so a server that runs from it can be stopped. The commands that need one (the QR code, the
+// relay's and the account's code, through scripts/plugin-link.ts and shared/relay-offer.ts) import it where they use it.
 import { DEFAULT_PORT } from "../shared/protocol.ts";
-import { decodeOffer } from "../shared/relay-offer.ts";
 import type { RemoteAccess } from "../shared/protocol.ts";
 import { canServe, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
-import { approveWaiting, COMMAND_ALIASES, discardTyped, link as linkPc, type WaitingDevice } from "./plugin-link.ts";
-import { activePluginScript } from "./plugin-runtime.ts";
+import type { WaitingDevice } from "./plugin-link.ts";
+import { activePluginScript, COMMAND_ALIASES } from "./plugin-runtime.ts";
 import { runTui } from "./plugin-tui.ts";
 import { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE } from "../server/static.ts";
 import { herdrStateDir } from "./plugin-state.ts";
@@ -199,11 +200,24 @@ function link(url: string): string {
   return process.stdout.isTTY ? `\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\` : url;
 }
 
-function qr(text: string): string {
-  const code = qrcode(0, "M");
-  code.addData(text);
-  code.make();
-  return code.createASCII(1, 1);
+/**
+ * What draws a QR code, from its package. A command that draws one loads it before it changes anything (a pairing code,
+ * Tailscale), so in a checkout whose install was cut off it fails with nothing changed.
+ */
+async function qrDrawer(): Promise<(text: string) => string> {
+  const { default: qrcode } = await import("qrcode-generator");
+  return (text) => {
+    const code = qrcode(0, "M");
+    code.addData(text);
+    code.make();
+    return code.createASCII(1, 1);
+  };
+}
+
+/** What `pair` draws and checks a relay offer with, loaded before it asks for a code (see qrDrawer) */
+async function pairingParts(): Promise<{ qr: (text: string) => string; decodeOffer: (url: string) => unknown }> {
+  const [qr, { decodeOffer }] = await Promise.all([qrDrawer(), import("../shared/relay-offer.ts")]);
+  return { qr, decodeOffer };
 }
 
 async function health(): Promise<boolean> {
@@ -565,16 +579,9 @@ async function startInTurn(): Promise<number> {
   return failStart(why, `; ${LOG_FILE} ends with:\n${logSince(log, logged)}`, log);
 }
 
-/** Written whole or not at all: a reader never finds half a record. */
+/** Written whole or not at all, and flushed before it replaces the old one: a reader never finds half a record, nor an empty one after a power cut. */
 function writeRecord(file: string, text: string): void {
-  const staging = `${file}.tmp`;
-  try {
-    writeFileSync(staging, text, { mode: 0o600 });
-    renameSync(staging, file);
-  } catch (error) {
-    rmSync(staging, { force: true });
-    throw error;
-  }
+  writeStateDocument(file, text, false);
 }
 
 /** Removes the records that name `pid`, and only those: a start that ran meanwhile may have recorded its own server. */
@@ -767,6 +774,7 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     // Never send another kill to a number Windows may have reassigned after taskkill.
     if (existsSync(PID_FILE) && statSync(PID_FILE).mtimeMs === recordedAt
       && Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE);
+    // install.ps1 reads a stdout line starting `stopped ` as "this stop stopped a server" (scripts/plugin-stop-identity.test.ts pins it)
     process.stdout.write(`stopped Ovis (pid ${pid})\n`);
     return 0;
   } else {
@@ -810,6 +818,7 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
   }
   // a start that ran meanwhile may have recorded its own server: leave that one's records alone
   forgetServer(pid);
+  // install.ps1 reads a stdout line starting `stopped ` as "this stop stopped a server" (scripts/plugin-stop-identity.test.ts pins it)
   process.stdout.write(`stopped Ovis (pid ${pid})${killed && !handedOn ? `; it was still running after ${STOP_TIMEOUT_MS / 1000}s, so it was killed` : ""}\n`);
   return 0;
 }
@@ -819,8 +828,9 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
  * open Settings → Devices in, so this is how its owner lets a phone in: the code, the address the
  * phone opens (when Tailscale serves one), and that address as a QR code for a screen to scan.
  */
-async function pair(): Promise<number> {
+async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<number> {
   if (process.argv.includes("--approve")) return approvePairings();
+  const { qr, decodeOffer } = parts ?? await pairingParts();
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
     return 1;
@@ -884,6 +894,8 @@ async function pair(): Promise<number> {
  * itself, so this is approval on this PC (docs/account.md, "Who may admit a device").
  */
 async function approvePairings(): Promise<number> {
+  // loaded before a request is decided, as qrDrawer is
+  const { approveWaiting, discardTyped } = await import("./plugin-link.ts");
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
     return 1;
@@ -925,6 +937,31 @@ async function approvePairings(): Promise<number> {
 }
 
 /**
+ * Runs the release Settings → Updates installed (its scripts/plugin.ts, `active`) with `args` in this terminal, and gives
+ * back its exit code: the checkout survives in-app updates, and the release that runs has the command that fits its
+ * server. A SIGINT, SIGTERM or SIGHUP sent to this process is passed on, and this process waits for the release, which
+ * ends with it and takes back what it handed out (link's code). A Ctrl+C on the terminal they share reaches the release
+ * itself too, so it gets that SIGINT twice: every release ends at the first or catches each (link). On Windows a SIGINT
+ * is not passed on: there Bun ends a child outright for any signal it is sent, without the clean-up the release's own
+ * Ctrl+C gives it, and a Ctrl+C reaches every process of the console anyway.
+ * Listening starts before the release does, so a signal that comes while it starts no longer ends this process with the
+ * release left running: Bun runs the listener from the event loop, after `child` is set. A release that could not be
+ * started has nothing to pass one on to, and the listeners go on every way out.
+ */
+async function handOn(active: string, args: readonly string[]): Promise<number> {
+  let child: Bun.Subprocess | undefined;
+  const pass = (signal: NodeJS.Signals) => () => { child?.kill(signal); };
+  const handlers = { SIGINT: process.platform === "win32" ? () => undefined : pass("SIGINT"), SIGTERM: pass("SIGTERM"), SIGHUP: pass("SIGHUP") } as const;
+  for (const [signal, handler] of Object.entries(handlers)) process.on(signal, handler);
+  try {
+    child = Bun.spawn([process.execPath, active, ...args], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    return await child.exited;
+  } finally {
+    for (const [signal, handler] of Object.entries(handlers)) process.off(signal, handler);
+  }
+}
+
+/**
  * `link [--code | --approve] [--print] [--github | --google]`, also `add` and `login`: this PC joins the relay from
  * its own terminal (scripts/plugin-link.ts), signed in to the account by a device code and then added by a QR code
  * (`--approve`: by an approval here), or with a code to type and a QR code.
@@ -932,17 +969,10 @@ async function approvePairings(): Promise<number> {
 async function linkCommand(): Promise<number> {
   // the checkout survives in-app updates: the release that runs has the link that fits its server (as phone-setup)
   const active = activePluginScript(ROOT, port, APP_STATE_DIR);
-  if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
-    // Ctrl+C reaches the release's link too, which takes its code back; this one waits for it.
-    // Always "link", whichever name it was run by: a release from before `add` and `login` knows only that one
-    process.on("SIGINT", () => undefined);
-    // a SIGTERM or SIGHUP sent to this process alone is passed on, so the release takes its code back too.
-    // Listening starts before the release does, so a signal that comes while it starts no longer ends this
-    // process with the release left running: Bun runs the listener from the event loop, after `child` is set.
-    for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
-    const child = Bun.spawn([process.execPath, active, "link", ...process.argv.slice(3)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    return await child.exited;
-  }
+  // Always "link", whichever name it was run by: a release from before `add` and `login` knows only that one
+  if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) return await handOn(active, ["link", ...process.argv.slice(3)]);
+  // loaded before anything is asked or listened for, as qrDrawer is
+  const { discardTyped, link: linkPc, linkSettings } = await import("./plugin-link.ts");
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
     return 1;
@@ -966,6 +996,8 @@ async function linkCommand(): Promise<number> {
   return linkPc(process.argv.slice(3), {
     origin, headers, signal: stop.signal,
     accountService: accountServiceOrigin(env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE),
+    // the fleet preview, the command's name and the app the server pairs with, from the settings the server it starts gets
+    ...linkSettings(env),
     out: (text) => process.stdout.write(text),
     lines: console[Symbol.asyncIterator](),
     // a pipe, a file or a closed stdin approves nothing, whatever it carries and whenever (`yes | ovis add`)
@@ -985,6 +1017,8 @@ async function linkCommand(): Promise<number> {
  * server nor startup ever calls it.
  */
 async function phone(): Promise<number> {
+  // before `tailscale serve` (see qrDrawer)
+  const qr = await qrDrawer();
   const say = (line = "") => process.stdout.write(line + "\n");
   const running = await health();
   say(`Ovis on this PC: ${link(origin)}${running ? "" : " (not running yet: it starts with herdr)"}`);
@@ -1051,10 +1085,9 @@ async function phone(): Promise<number> {
 /** The marketplace action has a real pane, so its address, QR and pairing code stay visible. */
 async function phoneSetup(): Promise<number> {
   const active = activePluginScript(ROOT, port, APP_STATE_DIR);
-  if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
-    const child = Bun.spawn([process.execPath, active, "phone-setup"], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    return await child.exited;
-  }
+  if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) return await handOn(active, ["phone-setup"]);
+  // before the pairing code is asked for (see qrDrawer), and not taken for a failed read of the app below
+  const parts = await pairingParts();
   process.stdout.write(`Phone setup\n\nApp on this PC: ${link(origin)}\n`);
   let code = 0;
   if (!(await health())) {
@@ -1071,7 +1104,7 @@ async function phoneSetup(): Promise<number> {
         if (access.tailscale.serve_command) process.stdout.write(`To make a phone address, run this on the PC, then reopen Phone setup:\n\n  ${access.tailscale.serve_command}\n\n`);
         else process.stdout.write("For a phone address, set up Tailscale on both devices, or use your own HTTPS proxy. Settings → Phone shows the connection options.\n\n");
       }
-      code = await pair();
+      code = await pair(parts);
     } catch {
       process.stderr.write("Could not read phone setup. Check the app's token and connection, then reopen this pane.\n");
       code = 1;
@@ -1121,17 +1154,12 @@ export async function runPlugin(): Promise<void> {
   else if (command === "link") process.exit(await linkCommand());
   else if (command === "phone") process.exit(await phone());
   else if (command === "phone-setup") process.exit(await phoneSetup());
-  else if (command === "tui") process.exit(await runTui(process.argv.slice(3), { platform: platform(), where: { root: ROOT, home: homedir() }, caller: process.env, settings: env, err: (text) => process.stderr.write(text), on: (signal, handler) => process.on(signal, handler) }));
+  else if (command === "tui") process.exit(await runTui(process.argv.slice(3), { platform: platform(), where: { root: ROOT, home: homedir() }, caller: process.env, settings: env, err: (text) => process.stderr.write(text), on: (signal, handler) => { process.on(signal, handler); return () => process.off(signal, handler); } }));
   else {
     // a launcher runs the checkout's own script, which stays at the version first installed: a
     // command it does not know may be one of the release Settings → Updates installed since
     const active = activePluginScript(ROOT, port, APP_STATE_DIR);
-    if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
-      process.on("SIGINT", () => undefined);
-      const child = Bun.spawn([process.execPath, active, ...process.argv.slice(2)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-      for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
-      process.exit(await child.exited);
-    }
+    if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) process.exit(await handOn(active, process.argv.slice(2)));
     process.stderr.write([
       "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup|tui>",
       "add (also login, link): sign this PC in, then scan its QR code with a device of your Ovis account to add it (--approve: approve that device here instead; --print: write the QR code where there is no terminal).",

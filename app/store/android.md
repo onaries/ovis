@@ -185,7 +185,7 @@ Answers:
 | Audio > Music files, Other audio files | audio files the user attaches in the composer | optional, user-initiated | App functionality |
 | Files and docs | files the user attaches in the composer, and files opened in the file viewer | optional, user-initiated | App functionality |
 | App activity > Other user-generated content | what is typed into terminals | required | App functionality |
-| App activity > App interactions | the app settings the user chose (theme, font sizes, language, alert and voice options and the like), in the PC's usage counts to the developer | optional (can be turned off) | Analytics |
+| App activity > App interactions | the app settings the user chose (theme, font sizes, language, alert and voice options and the like), the kinds of screen the app was opened on and how they reached the PC, how many prompt answers were sent and alerts delivered and tapped, and how often the app's buttons were used each day, whether by button, menu, shortcut or palette, and which of these controls were shown (counts as ranges and a list of control names, never what was typed), in the PC's usage counts to the developer | optional (can be turned off) | Analytics |
 | Device or other IDs | the sign-in cookie a PC gives the phone when it is paired, or for a PC paired through the Ovis relay the public half of the key the phone makes for it (to the PC); that PC's relay ID, in the requests to the developer's `relay.ovis.sh` (or `relay-ap.ovis.sh`) and `app.ovis.sh` that open it; the random ID the PC makes for its usage counts (to the developer); the phone's FCM push token, kept by the developer's push relay to forward the PC's encrypted alerts, only once alerts are turned on | required (cookie); optional (ID, push token) | App functionality (cookie, push token); Analytics (ID) |
 | Location > Approximate location | the country (two letters) the developer's receiver reads from the address the usage counts come from; the address is not stored | optional (can be turned off) | Analytics |
 | App info and performance > Diagnostics | connection traces the page reports to the PC for troubleshooting | required | Analytics |
@@ -202,16 +202,20 @@ provider), and FCM carries the encrypted alerts, as service providers.
 developer):
 
 - **When**: one event when the server is installed and one per new version, plus one message per
-  UTC day it is in use. Nothing goes out before the client has shown its one-line notice ("Ovis
-  sends anonymous usage counts"), and the first event waits 10 minutes after that, so it can be
-  turned off first.
+  UTC day it is in use and, once that day has ended, one with how often the app's buttons were
+  used that day. Nothing goes out before the client has shown its one-line notice ("Button use
+  and other anonymous usage counts are sent to improve Ovis"), and the first event waits 10
+  minutes after that, so it can be turned off first.
 - **On or off**: **on by default (opt-out)**. The switch is under Settings > About > Anonymous
   usage counts, in the PC's browser and in the app alike, next to the exact messages. The PC's
   owner can also block it with `OVIS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
-- **What they hold**: a random ID made on the PC, the Ovis version, the PC's operating system and
+- **What they hold**: a random ID made on the PC, the Ovis version (and the one an update replaced, left out of an update still owed across an off and on or made while off, and of a new state's first message; other updates name it), the terminal
+  runtime it serves (herdr or herdr-core), the PC's operating system and
   CPU type, how Ovis was installed, the allowlisted settings snapshot of the last browser or phone
-  that opened it (no free-form text, paths or account names), and the kinds of coding agents
-  running (such as `claude`). The receiver adds the country and never stores the address. Never
+  that opened it (no free-form text, paths or account names), the kinds of coding agents
+  running (such as `claude`), the kinds of screen the app was opened on and how they reached the PC,
+  how many prompt answers were sent and alerts delivered and tapped, and how often the app's buttons were used each day (fixed names such
+  as `chat_send`, each count only a range such as 3-9, narrow and wide screens apart, with whether a button, menu, shortcut or palette was used for a few actions (also a range) and the list of which of these controls were shown). The receiver adds the country and never stores the address. Never
   included: pane names, paths, terminal content, code or messages.
 
 `https://ovis.sh/privacy/` (and `/ko/privacy/`) says the same.

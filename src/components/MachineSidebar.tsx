@@ -34,7 +34,8 @@ import { serverIdOfPath, shellMode } from "../lib/shellMode.ts";
 import { canHideMachine, HIDDEN_MACHINES_MAX, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 
 /** the width under which the sidebar is a drawer (src/styles.css), as AgentSidebar.tsx reads it */
-const DRAWER_QUERY = "(max-width: 768px)";
+/** the widths where the sidebar is a drawer over the pane, and its foot keeps to the gear (Change PC is in Settings' list there) */
+export const DRAWER_QUERY = "(max-width: 768px)";
 
 /** the release a PC's own Ovis offers as its card shows it: an update installs only that one (docs/remote-pcs.md) */
 const shownRevision = (machine: Machine) => machine.ovis_update?.revision ? { revision: machine.ovis_update.revision } : undefined;
@@ -49,6 +50,11 @@ export function pcListExit(page: { nativeApp: boolean; relayShell: boolean; path
   if (page.nativeApp) return "app";
   if (page.relayShell && serverIdOfPath(page.pathname) !== null) return "shell";
   return null;
+}
+
+/** Goes back to the list of PCs `exit` names (pcListExit). */
+export function leavePcList(exit: "app" | "shell"): void {
+  if (exit === "app") void changePc(); else window.location.assign("/");
 }
 
 /** The PC header's state word; "connected" is the quiet default and shows as a dot alone, every other state also writes its word under the name. */
@@ -92,7 +98,8 @@ export function MachineSidebar(props: Props) {
   const loneHost = props.machines.length === 1 && props.machines[0]!.kind === "local" ? props.machines[0]!.id : null;
   const unnamed = useMemo(() => new Set(loneHost === null ? [] : [loneHost]), [loneHost]);
   const exitToPcs = useMemo(() => pcListExit({ nativeApp: inNativeApp(), relayShell: shellMode() === "relay", pathname: window.location.pathname }), []);
-  const leaveForPcs = () => { if (exitToPcs === "app") void changePc(); else window.location.assign("/"); };
+  // a phone's drawer keeps its foot to the gear: Change PC is the last row of Settings' list there (SettingsDialog)
+  const drawerWidth = useMediaQuery(DRAWER_QUERY);
   const loneHostName = loneHost === null ? null : props.machines[0]!.name || null;
   const filter = useMemo(() => sidebarFilter(query, props.machines, { machineId: props.selectedMachineId, paneId: props.selectedPaneId }, t, branchLabels, unnamed), [query, props.machines, props.selectedMachineId, props.selectedPaneId, t, branchLabels, unnamed]);
   const filterView = useMemo(() => ({ filter, reportBranches }), [filter, reportBranches]);
@@ -290,8 +297,8 @@ export function MachineSidebar(props: Props) {
       {props.footerStart}
       {/* one PC of the phone's several: which one, and back to the list in one tap, as a team switcher at a
           sidebar's foot does (Slack, Discord); Settings → Phone & devices keeps its Change PC row too */}
-      {exitToPcs !== null && (
-        <button type="button" className="btn btn-ghost sidebar-footer-action sidebar-footer-pc" onClick={leaveForPcs}>
+      {exitToPcs !== null && !drawerWidth && (
+        <button type="button" className="btn btn-ghost sidebar-footer-action sidebar-footer-pc" onClick={() => leavePcList(exitToPcs)}>
           <Monitor aria-hidden="true" />
           <span className="sidebar-footer-pc-name">{loneHostName ?? t("Change PC")}</span>
           {loneHostName !== null && <span className="sidebar-footer-pc-action">{t("Change PC")}</span>}

@@ -701,7 +701,7 @@ describe("telemetry settings snapshot", () => {
     });
     const snapshot = telemetrySettingsSnapshot(settings);
 
-    expect(NOTICE_VERSION).toBe(5);
+    expect(NOTICE_VERSION).toBe(6);
     expect(snapshot).toMatchObject({
       terminalInputMode: "direct",
       theme: "light",

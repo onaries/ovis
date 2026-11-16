@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, expect, it, jest } from "bun:test";
-import { HerdrSocket } from "./ws.ts";
+import { backoffDelay, HerdrSocket } from "./ws.ts";
 import { nativeTransport, setTransport, type WebSocketLike } from "./transport.ts";
 import type { ClientConnectionTrace, PendingMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
+import { RECONNECT_GRACE_MS } from "./reconnectGrace.ts";
 
 /** A WebSocket the test drives: it opens, receives and records what the client sends. */
 class FakeSocket {
@@ -1479,10 +1480,12 @@ it("reconnects at once when the page wakes instead of waiting out the backoff, a
 
 it("backs off repeated short-lived opens, even when each receives a snapshot and terminal readiness", () => {
   jest.useFakeTimers();
+  const random = jest.spyOn(Math, "random").mockReturnValue(0);
   const { client, socket } = liveClient([]);
   try {
     let current = socket;
-    for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
+    // main's fixed steps up to 2s, then the 4s and 5s steps at the bottom of their jittered window
+    for (const delay of [250, 500, 1000, 2000, 2000, 2500, 2500]) {
       current.disconnect();
       expect(client.state).toBe("waiting");
       jest.advanceTimersByTime(delay - 1);
@@ -1499,6 +1502,7 @@ it("backs off repeated short-lived opens, even when each receives a snapshot and
     }
   } finally {
     client.close();
+    random.mockRestore();
     jest.useRealTimers();
   }
 });
@@ -1578,6 +1582,66 @@ it("still bypasses a flapping connection's backoff on wake and resets its next r
     expect(FakeSocket.last).not.toBe(woken);
   } finally {
     client.close();
+    jest.useRealTimers();
+  }
+});
+
+/** The largest value Math.random returns: just under 1, never 1. */
+const TOP_DRAW = 1 - 2 ** -53;
+
+it("reconnects after a 3.75s server restart on main's schedule whatever the draw, inside the pane's grace", () => {
+  jest.useFakeTimers();
+  const random = jest.spyOn(Math, "random");
+  try {
+    for (const draw of [0, TOP_DRAW]) {
+      random.mockReturnValue(draw);
+      const { client, socket } = liveClient([]);
+      try {
+        socket.disconnect();
+        let current = socket;
+        let elapsed = 0;
+        // the server is down for 3.75s: the attempts before that fail, the fourth finds it back
+        for (const delay of [250, 500, 1000, 2000]) {
+          if (current !== socket) current.disconnect();
+          jest.advanceTimersByTime(delay - 1);
+          expect(FakeSocket.last).toBe(current);
+          jest.advanceTimersByTime(1);
+          expect(FakeSocket.last).not.toBe(current);
+          current = FakeSocket.last;
+          elapsed += delay;
+        }
+        current.open();
+        expect(client.connected).toBe(true);
+        expect(elapsed).toBeLessThan(RECONNECT_GRACE_MS);
+      } finally {
+        client.close();
+      }
+    }
+  } finally {
+    random.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+it("schedules the first jittered reconnect, at the 4s step, at the top of its window", () => {
+  jest.useFakeTimers();
+  const random = jest.spyOn(Math, "random").mockReturnValue(TOP_DRAW);
+  const { client, socket } = liveClient([]);
+  try {
+    socket.disconnect();
+    // the fixed steps 0.25, 0.5, 1 and 2s, each attempt failing
+    for (const delay of [250, 500, 1000, 2000]) {
+      jest.advanceTimersByTime(delay);
+      FakeSocket.last.disconnect();
+    }
+    const failed = FakeSocket.last;
+    jest.advanceTimersByTime(5999);
+    expect(FakeSocket.last).toBe(failed);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(failed);
+  } finally {
+    client.close();
+    random.mockRestore();
     jest.useRealTimers();
   }
 });
@@ -2537,7 +2601,7 @@ it("never reconnects from a backoff retry left pending once the server stopped o
   client.on((message) => { if (message.type === "error") errors.push(message.code); });
   try {
     client.connect();
-    // failed attempts back the retry off to 4s
+    // failed attempts back the retry off to the 4s step, the first jittered one
     for (const delay of [250, 500, 1_000, 2_000]) {
       FakeSocket.last.disconnect();
       jest.advanceTimersByTime(delay);
@@ -3010,4 +3074,24 @@ it("forgets machine event capability on disconnect before a replacement subscrib
   socket.disconnect();
   expect(client.machineEventsAvailable).toBeNull();
   client.close();
+});
+
+it("backoffDelay keeps main's steps up to 2s whatever the draw, and jitters from the 4s step on", () => {
+  const random = jest.spyOn(Math, "random");
+  try {
+    for (const draw of [0, TOP_DRAW]) {
+      random.mockReturnValue(draw);
+      expect([0, 1, 2, 3].map(backoffDelay)).toEqual([250, 500, 1000, 2000]);
+    }
+    // from the 4s step, capped at 5s, successive draws move the delay within half a step either side
+    for (const [retries, step] of [[4, 4000], [5, 5000], [30, 5000]] as const) {
+      random.mockReturnValueOnce(0).mockReturnValueOnce(TOP_DRAW);
+      expect(backoffDelay(retries)).toBe(step / 2);
+      const top = backoffDelay(retries);
+      expect(top).toBeGreaterThan(step * 1.499);
+      expect(top).toBeLessThanOrEqual(step * 1.5);
+    }
+  } finally {
+    random.mockRestore();
+  }
 });

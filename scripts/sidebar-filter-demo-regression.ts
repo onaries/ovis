@@ -200,9 +200,9 @@ const fixture = (page: Page, call: string) => page.evaluate((expression) => {
   return run((window as unknown as { sidebarFilterFixture: unknown }).sidebarFilterFixture);
 }, call);
 
-const DRAWER_LABEL: Record<Language, { open: string; close: string }> = {
-  en: { open: "Open workspace list", close: "Close workspace list" },
-  ko: { open: "워크스페이스 목록 열기", close: "워크스페이스 목록 닫기" },
+const DRAWER_LABEL: Record<Language, { open: string }> = {
+  en: { open: "Open workspace list" },
+  ko: { open: "워크스페이스 목록 열기" },
 };
 
 async function openDrawer(page: Page, language: Language = "en"): Promise<void> {
@@ -210,8 +210,9 @@ async function openDrawer(page: Page, language: Language = "en"): Promise<void> 
   await page.locator(".sidebar.is-open").waitFor();
 }
 
-async function closeDrawer(page: Page, language: Language = "en"): Promise<void> {
-  await page.getByRole("button", { name: DRAWER_LABEL[language].close, exact: true }).click();
+/** a tap on the dimmed pane beside the drawer: its X is the Ovis mark now */
+async function closeDrawer(page: Page): Promise<void> {
+  await page.mouse.click(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
   await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
 }
 
@@ -589,7 +590,7 @@ async function selectedNonMatch(browser: Browser, scene: Scene): Promise<void> {
     if (scene.language === "ko") await capture(page, scene, "retained-selection");
     assert.deepEqual(await storageView(page), storageBefore, `${name}: the fold and everything else in storage stay as they were`);
     if (scene.phone) {
-      await closeDrawer(page, scene.language);
+      await closeDrawer(page);
       await openDrawer(page, scene.language);
       assert.equal(await input.inputValue(), "", `${name}: closing the drawer clears the filter`);
       await waitWorkspaceIds(page, `ids.length === ${before.groups.reduce((sum, group) => sum + group.workspaces.length, 0)}`);

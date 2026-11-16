@@ -512,7 +512,7 @@ try {
           await phone.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
           const page = await phone.newPage();
           await page.goto(`${url}?ws=${wsOf(INFRA)}&pane=${encodeURIComponent(INFRA)}&sidebar=shown`);
-          await page.locator('.drawer-toggle[aria-expanded="true"]').waitFor();
+          await page.locator("#workspace-drawer.is-open").waitFor();
           await waitQuery(page, "sidebar", null);
           await page.goto(`${url}?ws=${wsOf(panes.api)}-cli-tools&pane=${encodeURIComponent(panes.api)}`);
           await page.locator(".header-note").waitFor();

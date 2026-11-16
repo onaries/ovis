@@ -1,9 +1,9 @@
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, statSync } from "node:fs";
 
 import type { AgentStatus, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrSocketPath } from "./herdr/client.ts";
 import { isNamedPipe, pipeIdentity } from "./herdr-core/pipe.ts";
+import { writeStateDocument } from "./state-document.ts";
 
 /**
  * `done` for agents herdr loses track of on the way, and for the pane herdr has focused.
@@ -279,10 +279,8 @@ export class CompletionTracker {
     const state = this.serialize(herdr);
     if (state === this.saved) return;
     try {
-      mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
-      const temporary = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(temporary, state, { mode: 0o600 });
-      renameSync(temporary, this.file);
+      // flushed before the rename, and the rename recorded after it: a power cut never leaves it empty
+      writeStateDocument(this.file, state, false);
       this.saved = state;
     } catch (error) {
       // a full disk costs the state after a restart, never the status itself

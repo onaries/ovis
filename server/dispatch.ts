@@ -1,3 +1,4 @@
+import { machineHealth, machineRouteRestricted, machineTcpAnswer, machineUnauthorized } from "./machine-profile.ts";
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
 import { handleAlertWebhookRequest } from "./alert-webhook.ts";
 import { connectionData, type createCore, type SocketData } from "./core/index.ts";
@@ -10,7 +11,7 @@ import type { OrderSequence } from "./order-sequence.ts";
 import type { DevicePairedEvent, DeviceRemovedEvent, HealthAuth, RelayPairingsEvent, RemotePairingsEvent, SecuritySummary, SessionSnapshot } from "../shared/protocol.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
 import { authClient, deviceAuthorizationValue, deviceCookieValue, bearerMatches, handleAuthRequest, isAuthenticated, isSecureRequest, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
-import { bindScope, cameThroughProxy, decideAccess, forwardingHeaders, inTailnet, isLoopbackAddress, isServeOwnerRequest, lanExposed, observedIngress, ownerAccess } from "./access.ts";
+import { bindScope, cameThroughProxy, decideAccess, decideMachineAccess, forwardingHeaders, inTailnet, isLoopbackAddress, isServeOwnerRequest, lanExposed, machineForwardingHeaders, observedIngress, ownerAccess } from "./access.ts";
 import { type DeviceStore, handleDeviceRequest, newStreamKey, sameBrowser, streamCookie, streamKeys, type DeviceMatch } from "./devices.ts";
 import { handlePreferencesRequest, type PreferenceStore } from "./preferences.ts";
 import { handleSeenRequest, type SeenStore } from "./seen.ts";
@@ -136,6 +137,11 @@ export interface ServerContext {
   readonly services: RequestServices;
   readonly relayBodyBudget?: EventStreamBudget;
   /**
+   * The request came in on the machine profile's owner socket (`<state folder>/serve.sock`): set by the
+   * server for that listener alone, never read from the request. Only there is a local owner of the profile.
+   */
+  readonly ownerSocket?: boolean;
+  /**
    * The request came to the opt-in LAN HTTPS listener (server/lan-https.ts), from a private IPv4 peer:
    * it gets in only with the token or a paired device, never as an open install, by the bridge token,
    * and its wrong tokens share one budget with every other peer there.
@@ -160,7 +166,9 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   const url = new URL(request.url);
   let { pathname } = url;
   const relayPeer = ctx.peer.kind === "relay" ? ctx.peer.device : undefined;
-  const bridgeAuthorized = relayPeer === undefined && ctx.lanHttps !== true && isAuthenticated(request, bridgeToken);
+  // the machine profile on TCP: its liveness for every caller; no credential or header of the request is read
+  if (options.profile === "machine" && relayPeer === undefined && ctx.ownerSocket !== true) return machineTcpAnswer(request, pathname);
+  const bridgeAuthorized = options.profile !== "machine" && relayPeer === undefined && ctx.lanHttps !== true && isAuthenticated(request, bridgeToken);
   // the connection server that reaches this one as its PC reads its update status and asks for the
   // update on offer: an Ovis run on this PC by itself is updated through its own updater, never
   // replaced (server/machines.ts ownOffer). An install still names the offered revision and the
@@ -190,7 +198,8 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   let pairedDevice: DeviceMatch | null;
   try {
     // a script's `Authorization: Device` header stands for the cookie a browser holds (#2744)
-    pairedDevice = relayPeer ?? devices.match(deviceAuthorizationValue(request) ?? deviceCookieValue(parseCookies(request.headers.get("cookie"))));
+    // the machine profile reads no device cookie: it lets in no device but through the relay
+    pairedDevice = relayPeer ?? (options.profile === "machine" ? null : devices.match(deviceAuthorizationValue(request) ?? deviceCookieValue(parseCookies(request.headers.get("cookie")))));
   } catch (error) {
     // First-cookie confirmation is an authorization write, not best-effort telemetry.
     return errorResponse(error);
@@ -204,7 +213,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     : { owner: null, tagged: false, soleLogin: null, dnsName: null, tailnetIp: null };
   // Portal reaches this server over loopback, never the LAN listener: its proof is not a way in there
   const portalProven = relayPeer === undefined && ctx.lanHttps !== true && (options.portal?.vouches(request.headers.get("x-portal-proof") ?? null) ?? false);
-  const access = decideAccess({
+  const access = options.profile === "machine" ? decideMachineAccess({ relayPeer, ownerSocket: ctx.ownerSocket === true, host: requestHost, forwarded: machineForwardingHeaders(request.headers) }) : decideAccess({
     relayPeer,
     ...requestShape,
     host: requestHost,
@@ -222,6 +231,9 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   });
   const authenticated = access.level === "full" || (bridgePath && bridgeAuthorized);
 
+  // on the owner's socket a request naming another host or showing a proxy gets nothing, its health included
+  if (options.profile === "machine" && access.level !== "full") return machineUnauthorized(pathname);
+
   if (requiresAuth(pathname) && !authenticated) {
     setRequestRoute("auth-refusal");
     // a script's Bearer guess is told to wait; a browser's cookie gets the usual 401 and its sign-in form
@@ -229,6 +241,13 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     // The WS client never parses a body, so the upgrade refusal stays plain text.
     return pathname === "/ws" ? new Response("unauthorized", { status: 401 }) : unauthorizedJson(access.level === "none" ? access.reason : "token_required");
   }
+
+  if (options.profile === "machine" && machineRouteRestricted(pathname)) {
+    setRequestRoute("machine-profile-refusal");
+    return jsonResponse({ error: { code: "machine_profile", message: "This control is unavailable in the machine profile" } }, 409);
+  }
+  // a herdr that started after the profile is looked for here too, not only at a health check: a device may read its session first
+  if (options.profile === "machine" && (pathname === "/api/session" || pathname === "/ws")) await options.machineRefusal?.();
 
   const readOnly = access.level === "full" && access.role === "watch";
   // who started a followed sign-in: only that device (or that signed-in browser) reaches it again
@@ -619,6 +638,13 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     const owner = access.level === "full" && access.role === "drive" && access.via !== "open" && access.via !== "portal";
     // the connection server that reaches this PC with its bridge token shows its move badge from them
     const herdr_runtime = owner || bridgeAuthorized ? options.runtimeService?.facts() : undefined;
+    if (options.profile === "machine") {
+      const health = await machineHealth(options.machineEngine ?? "herdr", await options.machineRefusal?.());
+      return jsonResponse({ ok: true, auth, version, runtime: "herdr", ...relay, ...health,
+        ...(health.herdr ? { herdr: attachableIdentity(health.herdr, sidecar) } : {}),
+        ...(security ? { security } : {}), web_ui: { boot_id: bootId, ...(serverId ? { server_id: serverId } : {}) },
+      }, 200, { "cache-control": "no-store" });
+    }
     // the boot id lets the launcher know its own new bridge without waiting on herdr (server/supervisor.ts);
     // the runtime facts ride along, so Settings can switch back while herdr's TUI is stopped
     if (url.searchParams.get("scope") === "bridge") return jsonResponse({ ok: true, auth, bridge_protocol: BRIDGE_PROTOCOL, ...relay, ...(security ? { security } : {}), web_ui: { boot_id: bootId }, runtime: runtime(), ...(options.launchAccepted ? { accepted: options.launchAccepted() } : {}), ...(herdr_runtime ? { herdr_runtime } : {}) }, 200, securityHeaders);

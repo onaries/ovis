@@ -5,6 +5,14 @@ import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./filePanelWidth.ts
 import { storedSidebarWidth } from "./sidebarWidth.ts";
 import { useMediaQuery } from "./useMediaQuery.ts";
 
+/** a tap on the open drawer's Ovis mark this soon after the menu button's click that opened the drawer, on the same spot, is that double tap's second half */
+export const SECOND_TAP_MS = 400;
+
+/** Whether a tap at `at` on the open drawer's Ovis mark is the second half of the double tap whose first, at `openedAt`, opened it. */
+export function secondTapOf(openedAt: number | null, at: number): boolean {
+  return openedAt !== null && at - openedAt < SECOND_TAP_MS;
+}
+
 export interface SidebarLayoutParams {
   initialLink: AppLink | null;
   /** while true the shell has no drawer (the inbox mode, lib/inboxMode.ts): nothing opens one, a swipe included */
@@ -26,6 +34,16 @@ export function useSidebarLayout({ initialLink, drawerBlocked }: SidebarLayoutPa
   useEffect(() => { if (wideScreen) setDrawerOpen(false); }, [wideScreen]);
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
   useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
+  // when the menu button last opened the drawer (that click's timeStamp): the Ovis mark takes the button's place in the
+  // open drawer's head (App.tsx), and a tap on it within SECOND_TAP_MS of that click is no way into the inbox
+  const drawerOpenedAt = useRef<number | null>(null);
+  const toggleDrawerByButton = useCallback((at: number) => {
+    if (!drawerOpenRef.current) drawerOpenedAt.current = at;
+    setDrawerOpen((open) => !open);
+  }, [setDrawerOpen]);
+  const secondTapOfOpening = useCallback((at: number): boolean => secondTapOf(drawerOpenedAt.current, at), []);
+  // closed any way at all, the drawer has no opening tap left to pair with
+  useEffect(() => { if (!drawerOpen) drawerOpenedAt.current = null; }, [drawerOpen]);
   // While the drawer is out on a phone it holds the keyboard as a dialog does (G-003): App.tsx's useDrawerDialog
   // (lib/headerSessions.ts) owns its Tab and Escape and gives the focus back when it closes
   // a desktop opened by a link that says so starts with the sidebar collapsed, and the address says so while it is
@@ -42,5 +60,5 @@ export function useSidebarLayout({ initialLink, drawerBlocked }: SidebarLayoutPa
     else setSidebarCollapsed(false);
     setSidebarFilterRequest((count) => count + 1);
   }, []);
-  return { drawerOpen, setDrawerOpen, drawerOpenRef, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter };
+  return { drawerOpen, setDrawerOpen, drawerOpenRef, toggleDrawerByButton, secondTapOfOpening, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter };
 }

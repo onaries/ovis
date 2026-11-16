@@ -133,17 +133,20 @@ last browser or phone that opened it into its anonymous usage counts, which it s
 developer's telemetry Worker (`server/telemetry.ts`, stored by `telemetry/worker.ts`). They are on
 by default (opt-out), start only after the client has shown its notice, and stop when turned off
 under Settings > About > Anonymous usage counts (in the app or on the PC), or with
-`OVIS_TELEMETRY=0` on the PC. They hold a random ID made on the PC, the Ovis version, the PC's
+`OVIS_TELEMETRY=0` on the PC. They hold a random ID made on the PC, the Ovis version (and the one an update replaced, left out of an update still owed across an off and on or made while off, and of a new state's first message; other updates name it), the
+terminal runtime it serves (herdr or herdr-core), the PC's
 operating system, CPU and install method, the allowlisted settings snapshot (no free-form text,
-paths or account names), the kinds of coding agents running, and the country the receiver reads
-from the PC's address (the address is not stored).
+paths or account names), the kinds of coding agents running, the kinds of screen the app was opened on and how they reached
+the PC, how many prompt answers were sent and alerts delivered and tapped, once a day has ended how often the
+app's buttons were used that day (fixed names, each count a rough range, narrow and wide screens apart, for a few actions whether by button, menu, shortcut or palette,
+and the list of which of these controls were shown, never what was typed or which pane), and the country the receiver reads from the PC's address (the address is not stored).
 
 Get Started > *Do you or your third-party partners collect data from this app?* **Yes, we collect
 data from this app.** Then declare:
 
 | Data type | Use | Linked to the user | Tracking |
 |---|---|---|---|
-| Usage Data > Product Interaction (the settings chosen in the app, and daily use) | Analytics | Yes | No |
+| Usage Data > Product Interaction (the settings chosen in the app, daily use, how often its buttons are used, whether by button, menu, shortcut or palette, and which of them were shown) | Analytics | Yes | No |
 | Identifiers > Device ID (the random install ID the PC makes) | Analytics | Yes | No |
 | Location > Coarse Location (the country, two letters) | Analytics | Yes | No |
 

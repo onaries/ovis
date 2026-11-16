@@ -1,19 +1,20 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import type { TelemetryCountsChange, TelemetryStatus } from "../../shared/telemetry.ts";
 import { NOTICE_VERSION } from "../../shared/telemetry-notice.ts";
 import { actionsCan, actionUse, createUsageCounters, usageCounters } from "./usageCounters.ts";
 
-const status = (overrides: Partial<TelemetryStatus> = {}) => ({ enabled: true, blocked_by_env: false, notice_seen: true, ...overrides }) as TelemetryStatus;
+const status = (overrides: Partial<TelemetryStatus> = {}) => ({ enabled: true, blocked_by_env: false, notice_seen: true, counts_generation: 0, ...overrides }) as TelemetryStatus;
 
 function setup(answer: TelemetryStatus | null = status(), on = true) {
   const sent: { counts: TelemetryCountsChange; keepalive: boolean }[] = [];
+  const days: (string | undefined)[] = [];
   const timers: { fn: () => void; ms: number; cleared: boolean }[] = [];
   const clock = { now: Date.parse("2026-11-15T10:00:00Z"), narrow: false };
   let asked = 0;
   let reply: TelemetryStatus | null = answer;
   const counters = createUsageCounters({
     on,
-    send: async (counts, keepalive) => { sent.push({ counts, keepalive }); return reply; },
+    send: async ({ day, ...counts }, keepalive) => { days.push(day); sent.push({ counts, keepalive }); return reply; },
     status: async () => { asked += 1; return reply; },
     narrow: () => clock.narrow,
     now: () => clock.now,
@@ -26,7 +27,7 @@ function setup(answer: TelemetryStatus | null = status(), on = true) {
     timer.fn();
   };
   const armed = () => timers.filter((timer) => !timer.cleared).length;
-  return { counters, sent, clock, fire, armed, asked: () => asked, answer: (next: TelemetryStatus | null) => { reply = next; } };
+  return { counters, sent, days, clock, fire, armed, asked: () => asked, answer: (next: TelemetryStatus | null) => { reply = next; } };
 }
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -65,8 +66,8 @@ describe("usage counters", () => {
     fire();
     await settle();
     expect(sent).toEqual([
-      { counts: { width: "narrow", add: { composer_voice: 1 }, shown: [] }, keepalive: false },
-      { counts: { width: "wide", add: { chat_send: 2 }, shown: [] }, keepalive: false },
+      { counts: { width: "narrow", add: { composer_voice: 1 }, shown: [], generation: 0 }, keepalive: false },
+      { counts: { width: "wide", add: { chat_send: 2 }, shown: [], generation: 0 }, keepalive: false },
     ]);
     // told: the next flush has nothing to tell
     counters.flush(true);
@@ -80,18 +81,22 @@ describe("usage counters", () => {
     counters.count("composer_attach");
     counters.flush(true);
     await settle();
-    expect(sent).toEqual([{ counts: { width: "wide", add: { composer_attach: 1 }, shown: [] }, keepalive: true }]);
+    expect(sent).toEqual([{ counts: { width: "wide", add: { composer_attach: 1 }, shown: [], generation: 0 }, keepalive: true }]);
   });
 
   test("no counting while the server is off, blocked or its notice is unseen, and a no in an answer drops the batch", async () => {
-    for (const no of [status({ enabled: false }), status({ blocked_by_env: true }), status({ notice_seen: false }), null]) {
-      const { counters, sent } = setup();
+    // an older PC says nothing of a counting generation: its notice_seen is for a notice that said nothing of counts
+    // (the hosted app reaching it), so nothing is counted there and nothing is posted to it
+    for (const no of [status({ enabled: false }), status({ blocked_by_env: true }), status({ notice_seen: false }), status({ counts_generation: undefined }), null]) {
+      const { counters, sent, fire, armed } = setup(no);
       counters.heard(no);
       counters.count("chat_send");
       counters.shown("composer");
       counters.flush(false);
       await settle();
       expect(sent).toEqual([]);
+      expect(armed()).toBe(0);
+      expect(fire).toThrow();
     }
     const { counters, sent, answer } = setup();
     counters.heard(status());
@@ -116,6 +121,19 @@ describe("usage counters", () => {
     counters.flush(false);
     await settle();
     expect(sent).toEqual([]);
+  });
+
+  test("a control still drawn is told as shown again after an off and on: the off cleared the PC's day", async () => {
+    const { counters, sent } = setup();
+    counters.heard(status());
+    counters.draw("composer");
+    counters.flush(false);
+    await settle();
+    // another tab turned the counts off and on again: the PC's day is gone, and so is what it knew was shown
+    counters.heard(status({ counts_generation: 1 }));
+    counters.flush(false);
+    await settle();
+    expect(sent.map((batch) => [batch.counts.generation, batch.counts.shown])).toEqual([[0, ["composer"]], [1, ["composer"]]]);
   });
 
   test("a control is told as shown once a day per width", async () => {
@@ -150,7 +168,7 @@ describe("usage counters", () => {
     counters.paneUse("chat_send", "local");
     counters.flush(false);
     await settle();
-    expect(sent).toEqual([{ counts: { width: "wide", shown: [], add: {
+    expect(sent).toEqual([{ counts: { width: "wide", shown: [], generation: 0, add: {
       view_terminal_claude: 1, view_terminal_by_header: 1,
       view_chat_shell: 1, view_chat_by_shortcut: 1,
       view_terminal_other: 1, view_terminal_by_palette: 1,
@@ -298,5 +316,66 @@ describe("usage counters", () => {
     // and actionUse counts nothing App cannot do: a sidebar shortcut in the mode is no use of the sidebar
     expect(actionUse("sidebar", "shortcut", { machineId: "local", can: actionsCan({ ...now, inMode: true }) })).toBeNull();
     expect(actionUse("files", "menu", { machineId: "local", can: actionsCan(now) })).toBe("files_by_menu");
+  });
+
+  test("a batch names the counting generation it heard, and a new one (an off in another tab) drops what was kept", async () => {
+    const { counters, sent } = setup();
+    counters.heard({ ...status(), counts_generation: 2 });
+    counters.count("chat_send");
+    counters.flush(false);
+    await settle();
+    counters.count("composer_attach");
+    counters.heard({ ...status(), counts_generation: 3 });
+    counters.count("composer_voice");
+    counters.flush(false);
+    await settle();
+    expect(sent.map(({ counts }) => [counts.generation, Object.keys(counts.add)])).toEqual([[2, ["chat_send"]], [3, ["composer_voice"]]]);
+  });
+
+  test("a batch names the UTC day it was counted on, and a use after midnight sends the day before first", async () => {
+    const { counters, sent, days, clock } = setup();
+    clock.now = Date.parse("2026-11-15T23:59:30Z");
+    counters.heard(status());
+    counters.count("chat_send");
+    clock.now = Date.parse("2026-11-16T00:00:10Z");
+    counters.count("composer_voice");
+    counters.flush(false);
+    await settle();
+    expect(sent.map(({ counts }) => Object.keys(counts.add))).toEqual([["chat_send"], ["composer_voice"]]);
+    expect(days).toEqual(["2026-11-15", "2026-11-16"]);
+  });
+
+  test("a late answer from before an off neither turns counting on again nor brings back its generation", async () => {
+    const { counters, sent } = setup();
+    counters.heard({ ...status(), counts_generation: 4 });
+    counters.heard({ ...status(), enabled: false, counts_generation: 5 });
+    // the answer to a batch sent before the off arrives now
+    counters.heard({ ...status(), counts_generation: 4 });
+    counters.count("chat_send");
+    counters.flush(false);
+    await settle();
+    expect(sent).toEqual([]);
+  });
+
+  test("a control whose count fails as it is drawn is still let go of: it is not told as shown once it is gone", async () => {
+    const sent: TelemetryCountsChange[] = [];
+    let failing = true;
+    let now = Date.parse("2026-11-15T10:00:00Z");
+    const counters = createUsageCounters({
+      on: true, now: () => now, setTimer: () => () => {}, status: async () => status(),
+      narrow: () => { if (failing) throw new Error("matchMedia gone"); return false; },
+      send: async (counts) => { sent.push(counts); return status(); },
+    });
+    counters.heard(status());
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let undo: () => void = () => {};
+    try { undo = counters.draw("composer"); } finally { logged.mockRestore(); }
+    failing = false;
+    undo();
+    now += 86_400_000;
+    counters.count("chat_send");
+    counters.flush(false);
+    await settle();
+    expect(sent.map((counts) => counts.shown)).toEqual([[]]);
   });
 });

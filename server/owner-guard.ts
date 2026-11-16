@@ -41,7 +41,7 @@ export const guardLibrary: { path: string; posix?(calls: PosixGuardCalls): Posix
   path: process.platform === "darwin" ? "libSystem.B.dylib" : process.platform === "win32" ? "kernel32.dll" : "libc.so.6",
 };
 
-const LOCK_EX = 2, LOCK_NB = 4, LOCK_UN = 8, EINTR = 4;
+const LOCK_SH = 1, LOCK_EX = 2, LOCK_NB = 4, LOCK_UN = 8, EINTR = 4;
 /** what flock sets when LOCK_NB finds the lock held (EWOULDBLOCK, which is EAGAIN) */
 const EWOULDBLOCK = process.platform === "darwin" ? 35 : 11;
 const GENERIC_READ_WRITE = 0xc000_0000, FILE_SHARE_READ_WRITE = 3, OPEN_ALWAYS = 4, FILE_ATTRIBUTE_NORMAL = 0x80, LOCKFILE_EXCLUSIVE_LOCK = 2;
@@ -87,9 +87,10 @@ const describeError = (error: unknown) => (error as NodeJS.ErrnoException)?.code
  * Blocks until this process holds the guard (or, with `wait` false, throws OwnerGuardBusy at once
  * while another holds it); the returned function releases it. Every native failure is reported:
  * the handle or descriptor is always closed, and a failed unlock or close throws
- * OwnerGuardReleaseFailed instead of passing for a clean release.
+ * OwnerGuardReleaseFailed instead of passing for a clean release. `shared` (POSIX only) lets other
+ * shared holders in and keeps an exclusive one out.
  */
-function lockGuard(path: string, wait = true): () => void {
+function lockGuard(path: string, wait = true, shared = false): () => void {
   if (process.platform === "win32") {
     const loaded: WindowsGuardCalls = (library() as ReturnType<typeof windowsLibrary>).symbols;
     const calls = guardLibrary.windows ? guardLibrary.windows(loaded) : loaded;
@@ -117,7 +118,7 @@ function lockGuard(path: string, wait = true): () => void {
   try { fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600); }
   catch (error) { throw new OwnerGuardUnavailable(`${path} could not be opened: ${describeError(error)}`); }
   for (;;) {
-    if (calls.flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) === 0) break;
+    if (calls.flock(fd, (shared ? LOCK_SH : LOCK_EX) | (wait ? 0 : LOCK_NB)) === 0) break;
     const code = calls.errno();
     if (code === EINTR) continue;
     let closed = "";
@@ -135,6 +136,17 @@ function lockGuard(path: string, wait = true): () => void {
 }
 
 export function guardPath(lockPath: string): string { return `${lockPath}.guard`; }
+
+/**
+ * Holds the file `path` (made 0600 where absent, never through a link) for the rest of this process, POSIX
+ * only: `shared` beside other shared holders, `exclusive` alone. Never waited for: OwnerGuardBusy while
+ * another process holds it the other way, OwnerGuardUnavailable when it cannot be opened or locked. The
+ * kernel drops the hold when the process ends, however it ends, so a killed holder keeps nobody out. Returns
+ * its release, for a start that gives the file back before it ends (claimServerState).
+ */
+export function holdForLife(path: string, kind: "shared" | "exclusive"): () => void {
+  return lockGuard(path, false, kind === "shared");
+}
 
 /**
  * Runs `fn` while holding the guard of `lockPath`; `fn` must be synchronous. Throws
@@ -215,12 +227,18 @@ function describe(lock: string, state: OwnerSample): string {
   return named.record ? `lock ${lock}, owner pid ${named.pid} generation ${named.record.generation}` : `lock ${lock}, owner pid ${named.pid}`;
 }
 
+/** Who holds `lock` as a start judges it (acquireOwnerDirectory), for a message; null when it is absent or its owner is provably gone. */
+export function liveOwner(lock: string): string | null {
+  const state = sample(lock);
+  return verdict(state) === "live" ? describe(lock, state) : null;
+}
+
 /** How long a release that does not wait retries a guard another process holds. */
 const RELEASE_WAIT_MS = 5_000;
 
 /** Test seams, each called synchronously: before the guard is taken, once it is held, after the stale owner is re-proved, and with the complete staged directory before it is renamed into place. */
 export interface OwnerLockHooks { observed?(): void; locked?(): void; validated?(): void; staged?(staging: string): void }
-export interface OwnerLease { record: OwnerRecord; release(): void }
+export interface OwnerLease { record: OwnerRecord; release(): void; amend(write: (directory: string) => void): void }
 
 /**
  * Takes the owner directory `lock` for this process. A live owner (or one that cannot be proved
@@ -282,6 +300,24 @@ export function acquireOwnerDirectory(lock: string, errors: { running: string; s
           if (error instanceof OwnerGuardBusy && Date.now() < deadline) { Bun.sleepSync(25); continue; }
           console.error(`Releasing the startup lock ${lock} failed: ${error instanceof Error ? error.message : error}`);
           return;
+        }
+      }
+    },
+    /** Writes into the lock directory while it is still this acquisition's, so that release still knows it as its own. */
+    amend(write) {
+      const deadline = Date.now() + RELEASE_WAIT_MS;
+      for (;;) {
+        try {
+          withOwnerGuard(lock, () => {
+            const now = sample(lock);
+            if (now.directory !== published || now.owner === null || parseOwnerRecord(now.owner)?.generation !== record.generation) throw new Error(`the startup lock ${lock} is no longer this process's (${describe(lock, now)})`);
+            write(lock);
+            published = directoryIdentity(lock);
+          }, { wait });
+          return;
+        } catch (error) {
+          if (error instanceof OwnerGuardBusy && Date.now() < deadline) { Bun.sleepSync(25); continue; }
+          throw error;
         }
       }
     },

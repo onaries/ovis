@@ -142,7 +142,10 @@ export function InboxUnchosen() {
   return <p className="inbox-unchosen" role="status">{t("Choose one from the list to open its chat here.")}</p>;
 }
 
-/** The way into the mode at the sidebar's foot (a phone's drawer's): a row of the footer's own, above its gear. */
+/**
+ * The way into the mode at the sidebar's foot where the Ovis mark at its head is not drawn (a phone's drawer, a
+ * collapsed sidebar's peek): a row of the footer's own, above its gear.
+ */
 export function InboxFootEntry({ onOpen }: { onOpen(): void }) {
   const t = useT();
   return (

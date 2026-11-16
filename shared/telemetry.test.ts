@@ -36,4 +36,10 @@ describe("button counts", () => {
       null,
     ]) expect(telemetryCountsChange(bad)).toBeNull();
   });
+
+  test("a change may name its counting generation, a whole number, and nothing else new", () => {
+    expect(telemetryCountsChange({ width: "wide", add: { chat_send: 1 }, shown: [], generation: 4 })?.generation).toBe(4);
+    for (const generation of [-1, 1.5, "4", null]) expect(telemetryCountsChange({ width: "wide", add: {}, shown: [], generation })).toBeNull();
+    expect(telemetryCountsChange({ width: "wide", add: {}, shown: [], tab: 2 })).toBeNull();
+  });
 });

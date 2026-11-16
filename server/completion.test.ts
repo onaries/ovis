@@ -1,9 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
+import { privateStateFs } from "./private-state.ts";
 
 const snapshot = (panes: { id: string; status: string; agent?: string | null; focused?: boolean }[]): SessionSnapshot => ({
   panes: panes.map((pane) => ({ pane_id: pane.id, agent: pane.agent === undefined ? "claude" : pane.agent, agent_status: pane.status, focused: pane.focused ?? false })),
@@ -305,6 +307,31 @@ describe("CompletionTracker", () => {
       const again = new CompletionTracker(file, () => "herdr-a");
       expect(again.present(snapshot([{ id: "finished", agent: "gjc", status: "idle" }])).panes[0]!.agent_status).toBe("idle");
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("flushes the kept finishes before they replace the old file, and the folder after", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-completion-flush-"));
+    const file = join(dir, "completions.json");
+    const tracker = new CompletionTracker(file, () => "herdr-a");
+    // the first save, of nothing finished yet, is not the one watched
+    tracker.observe("p", "working", "gjc");
+    const order: string[] = [];
+    const flush = ((fd: number) => { order.push(`fsync ${fs.fstatSync(fd).isDirectory() ? "directory" : "file"}`); }) as never;
+    const fsync = spyOn(fs, "fsyncSync").mockImplementation(flush);
+    // the folder is flushed through private-state.ts
+    const directoryFsync = spyOn(privateStateFs, "fsyncSync").mockImplementation(flush);
+    const rename = spyOn(fs, "renameSync");
+    rename.mockImplementation(((from: string, to: string) => { order.push("rename"); rename.mockRestore(); fs.renameSync(from, to); }) as never);
+    try {
+      expect(tracker.observe("p", "idle", "gjc")).toBe("done");
+      fsync.mockRestore(); directoryFsync.mockRestore(); rename.mockRestore();
+      expect(order).toEqual(process.platform === "win32" ? ["fsync file", "rename"] : ["fsync file", "rename", "fsync directory"]);
+      expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ herdr: "herdr-a", finished: ["p"] });
+      expect(fs.readdirSync(dir)).toEqual(["completions.json"]);
+    } finally {
+      fsync.mockRestore(); directoryFsync.mockRestore(); rename.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps a Codex finish across a restart while herdr still reports unknown", () => {

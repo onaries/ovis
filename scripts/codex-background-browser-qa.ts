@@ -7,6 +7,7 @@ import { chromium } from "playwright-core";
 import { build as viteBuild } from "vite";
 import { CodexBackgroundTasks } from "../server/codex-background.ts";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
+import { Telemetry } from "../server/telemetry.ts";
 import { chromePath } from "./chrome-path.ts";
 import type {} from "./codex-background-fixture.tsx";
 
@@ -33,6 +34,7 @@ const parallelStarted = record({ id: "parent-session" }, "session_meta")
   + record({ type: "custom_tool_call", name: "exec", input: 'text(await Promise.all([tools.spawn_agent({message:"First parallel assignment"}),tools.spawn_agent({message:"Second parallel assignment"})]));', call_id: "batch" })
   + record({ type: "custom_tool_call_output", call_id: "batch", output: [{ type: "text", text: JSON.stringify([{ agent_id: parallelId, nickname: "Parallel QA Two" }, { agent_id: agentId, nickname: "Parallel QA One" }]) }] });
 const tracker = new CodexBackgroundTasks(() => {}, Date.now, root);
+const telemetry = new Telemetry({ stateDir: root, version: "fixture", env: { OVIS_TELEMETRY: "0" }, fetch });
 let activityReads = 0;
 try {
   if (evidence) mkdirSync(evidence, { recursive: true });
@@ -44,6 +46,7 @@ try {
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url), pane = url.searchParams.get("pane_id");
     assert.equal(request.method, "GET", "the UI must remain read-only");
+    if (url.pathname === "/api/telemetry") return Response.json(telemetry.status());
     if (url.pathname === "/api/pane/omo-tasks") {
       activityReads += 1;
       tracker.poll("parent", parent);

@@ -332,7 +332,7 @@ async function filterHidden(browser: Browser, scene: Scene): Promise<void> {
     assert.equal(await filterRow(page).count(), 0, `${sceneName(scene)}: the filter row is out`);
     await capture(page, scene, "filter-off");
     if (scene.phone) {
-      await page.getByRole("button", { name: "Close workspace list", exact: true }).click();
+      await page.mouse.click(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
       await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
     }
     await paletteFilter(page);
@@ -376,7 +376,7 @@ async function filterHidden(browser: Browser, scene: Scene): Promise<void> {
       assert.deepEqual(await shownWorkspaces(page), LABELS);
     } else {
       await paletteFilter(page);
-      await page.getByRole("button", { name: "Close workspace list", exact: true }).click();
+      await page.mouse.click(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
       await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
       assert.equal(await filterRow(page).count(), 0);
     }

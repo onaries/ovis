@@ -3,6 +3,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { updateStateDir } from "../server/update-state.ts";
 
+/**
+ * The names `link` (scripts/plugin-link.ts) also answers to: what a person looks for when a PC is to join their account.
+ * Here, where scripts/plugin.ts reads them with no package loaded, and install.sh tells a release that knows them by this
+ * name in that file.
+ */
+export const COMMAND_ALIASES: Readonly<Record<string, "link">> = { add: "link", login: "link" };
+
 /** The plugin checkout survives updates; pane entrypoints must follow its active release. */
 export function activePluginScript(root: string, port: number, stateDir: string): string {
   const own = join(resolve(root), "scripts", "plugin.ts");

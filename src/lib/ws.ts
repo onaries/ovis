@@ -71,6 +71,18 @@ const NOT_TRANSMITTED: SubmitResult = { ok: false, code: "not_transmitted", mess
 const CAPABILITIES_UNKNOWN: SubmitResult = { ok: false, code: "capabilities_unknown", message: "this PC has not said yet what it supports; nothing was sent" };
 
 /**
+ * Reconnect delay for the browser's WebSocket. `step` is `min(5000, 250 * 2 ** retries)`. The first four
+ * steps (0.25, 0.5, 1, 2 s) stay fixed: the pane hides a drop for RECONNECT_GRACE_MS (reconnectGrace.ts),
+ * sized to them so that a server restart of up to 3.75 s is never shown, and stretching them would show it.
+ * From the 4 s step on the delay is `step * (0.5 + random)`: centred on the step, it keeps the number of
+ * attempts while spreading them, so tabs no longer retry in lockstep while the server stays down.
+ */
+export function backoffDelay(retries: number): number {
+  const step = Math.min(5000, 250 * 2 ** retries);
+  return retries < 4 ? step : step * (0.5 + Math.random());
+}
+
+/**
  * Where the connection stands. `connected` and the input checks still read the socket itself:
  * a frozen page's socket can turn CLOSED before any event updates this.
  * - idle: connect() was never called
@@ -781,7 +793,7 @@ export class HerdrSocket {
 
   private scheduleReconnect(): void {
     if (this.disposed || this.reconnectTimer !== null) return;
-    const delay = Math.min(5000, 250 * 2 ** this.retries);
+    const delay = backoffDelay(this.retries);
     this.retries += 1;
     this.connectionState = "waiting";
     this.reconnectTimer = window.setTimeout(() => {

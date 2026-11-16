@@ -83,6 +83,9 @@ async function withPhone(browser: Browser, base: string, path: string, what: str
       localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "light" }));
     });
     await context.addInitScript(recordTaps);
+    // the Claude pane's turn stays at work: on a slow runner the end the demo times 4.5s in raises its finish droplet
+    // over the top of the screen, where the taps outside a sheet land, before they come
+    await context.addInitScript(() => Reflect.set(window, "__ovisDemoHoldTurn", true));
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(`${what}: ${error.message}`));
     try {
@@ -149,7 +152,14 @@ try {
         }, undefined, { timeout: 5_000 });
         const top = await topOf(page, ".settings-dialog");
         assert.ok(top >= 8, `Settings leaves a gap above it to tap: its top is at ${top}`);
-        const seen = await tap(page, { x: PHONE.width / 2, y: Math.round(top / 2) });
+        const point = { x: PHONE.width / 2, y: Math.round(top / 2) };
+        // Settings closes on a press on its scrim alone: nothing else may be over the point
+        const under = await page.evaluate(({ x, y }) => {
+          const nodes = document.elementsFromPoint(x, y);
+          return { scrim: nodes[0] === document.querySelector(".settings-dialog")?.parentElement, names: nodes.slice(0, 3).map((node) => `${node.tagName.toLowerCase()}.${node.className}`) };
+        }, point);
+        assert.ok(under.scrim, `the tap above Settings lands on its scrim: under it are ${under.names.join(", ")}`);
+        const seen = await tap(page, point);
         await page.locator(".settings-dialog").waitFor({ state: "detached", timeout: 5_000 });
         const at = await address(page);
         assert.ok(await page.locator(".mode-inbox").count() === 1 && at.app === "inbox" && at.pane === null, `the list stays: the address says ${JSON.stringify(at)}`);

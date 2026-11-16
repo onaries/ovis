@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Inbox, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
+import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeftRight, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Inbox, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -58,7 +58,7 @@ import { SignOutRow } from "./SignOutRow.tsx";
 import { failureText, openOwnOffer, RelayDirectRow, statusText } from "./RelayPanel.tsx";
 import { AccountSection, accountServiceHere, type AccountState } from "./AccountSection.tsx";
 import { AccountPcRows, NoAccountPcHint, removePcFromAccount } from "./AccountPcs.tsx";
-import { STATE_WORD } from "./MachineSidebar.tsx";
+import { DRAWER_QUERY, leavePcList, pcListExit, STATE_WORD } from "./MachineSidebar.tsx";
 import { pcAccountStatus } from "../lib/account/join.ts";
 import { AccountService } from "../lib/account/service.ts";
 import { indexedAccountStore } from "../lib/account/store.ts";
@@ -1920,6 +1920,11 @@ function matchedGroups(result: Element | null, words: readonly string[]): string
 function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, herdrRuntimeFacts = null, picturesByDefault = false, bootId = null, onServerRestarted, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
+  // one PC of the phone app's list or the relay shell's: a phone's list of pages ends in the way back to them, which
+  // its drawer no longer holds (MachineSidebar.tsx), so it is two taps from the drawer: the gear, then Change PC
+  const pcExit = useMemo(() => pcListExit({ nativeApp: inNativeApp(), relayShell: shellMode() === "relay", pathname: window.location.pathname }), []);
+  // at the drawer's widths, whose foot has no Change PC row, the same as the drawer: not only where the list is a page of its own
+  const drawerWidth = useMediaQuery(DRAWER_QUERY);
   // opened by Forward, the dialog shows what that entry of the history showed
   const [restored] = useState(() => shownBy(settingsEntry(window.history.state)));
   // a phone opens on the list of pages; a wider dialog shows the list beside the first page. A
@@ -2174,6 +2179,12 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
                 </button>
               ))}
             </div>
+            {drawerWidth && pcExit !== null && !searching && (
+              <button type="button" className="settings-tab settings-change-pc" onClick={() => leavePcList(pcExit)}>
+                <ArrowLeftRight aria-hidden="true" />
+                <span>{t("Change PC")}</span>
+              </button>
+            )}
           </nav>
         )}
         {searching ? (

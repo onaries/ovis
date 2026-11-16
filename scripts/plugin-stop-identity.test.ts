@@ -13,12 +13,13 @@ import { readProcessBirth } from "../server/process-owner.ts";
  */
 const root = join(import.meta.dir, "..");
 
-async function runStop(scratch: string, body: string): Promise<{ code: number; out: string; err: string }> {
+/** `body` with plugin.ts's stop in scope, or `argv` (an entry and its arguments) run as is */
+async function runStop(scratch: string, body: string, argv?: string[]): Promise<{ code: number; out: string; err: string }> {
   const script = join(scratch, "stop.ts");
   writeFileSync(script, `const { stop } = await import(${JSON.stringify(join(root, "scripts", "plugin.ts"))});\n${body}`);
   const newFolder = join(scratch, "new installation", "checkout");
   mkdirSync(newFolder, { recursive: true });
-  const child = Bun.spawn([process.execPath, script], {
+  const child = Bun.spawn([process.execPath, ...argv ?? [script]], {
     env: { ...process.env, HERDR_PLUGIN_ROOT: newFolder, HERDR_PLUGIN_STATE_DIR: join(scratch, "state"), HERDR_PLUGIN_CONFIG_DIR: join(scratch, "config"), OVIS_PLUGIN_CHECKOUT: "" },
     stdout: "pipe", stderr: "pipe", windowsHide: true,
   });
@@ -50,6 +51,8 @@ it("stops, from a new installation folder, the server another folder started: by
     const { code, out, err } = await runStop(scratch, windowsCase(1700000000000, oldFolderServer));
     expect(code, err).toBe(0);
     expect(JSON.parse(out.trim().split("\n").at(-1)!), err).toEqual({ result: 0, stopped: true });
+    // install.ps1 takes a stdout line starting `stopped ` for "this stop stopped a server"
+    expect(out).toMatch(new RegExp(`^stopped Ovis \\(pid ${process.pid}\\)$`, "m"));
     expect(existsSync(join(scratch, "state", "server.pid")), "the next start finds no server recorded").toBe(false);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }, 30_000);
@@ -83,6 +86,30 @@ it("stops a real process recorded the way start records it, from another folder,
     // the child ends whatever failed above, before or after its record was written
     if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
     if (scratch) rmSync(scratch, { recursive: true, force: true });
+  }
+}, 60_000);
+
+// install.ps1 decides whether the repair's stop stopped a server ($said -match '^stopped ') by this line, from the stop of
+// the checkout's sources and from the release binary's (`ovis-server plugin stop`, whose entry is server/main.ts)
+it("says `stopped ` at the start of a stdout line for the server it stopped, and only then, from source and as the release binary runs it", async () => {
+  for (const entry of [[join(root, "scripts", "plugin.ts"), "stop"], [join(root, "server", "main.ts"), "plugin", "stop"]]) {
+    const server = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { detached: true, stdio: "ignore", windowsHide: true });
+    let scratch = "";
+    try {
+      const pid = server.pid!;
+      const birth = readProcessBirth(pid);
+      if (birth.state !== "identified") throw new Error(`no birth for ${pid}: ${birth.state}`);
+      scratch = scratchWithRecord(pid, birth.birth);
+      const stopped = await runStop(scratch, "", entry);
+      expect(stopped.code, `${entry[0]}\n${stopped.out}\n${stopped.err}`).toBe(0);
+      expect(stopped.out).toMatch(new RegExp(`^stopped Ovis \\(pid ${pid}\\)`, "m"));
+      const none = await runStop(scratch, "", entry);
+      expect(none.code, none.err).toBe(0);
+      expect(none.out).not.toMatch(/^stopped /m);
+    } finally {
+      if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
+    }
   }
 }, 60_000);
 

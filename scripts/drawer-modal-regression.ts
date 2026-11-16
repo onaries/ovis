@@ -5,6 +5,19 @@ import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { SHEET_HISTORY_KEY } from "../src/lib/historyKeys.ts";
+
+declare global {
+  interface Window {
+    /** the timeStamp of every click on the header's drawer toggle (the menu button, then the mark in its place) */
+    toggleClicks: number[];
+    /** the phone app's calls this page made, as `plugin.method` (a stand-in for the app's Capacitor bridge) */
+    nativeCalls: string[];
+  }
+}
+
+/** the time a tap on the mark after the menu button's tap counts as that double tap's second half (lib/useSidebarLayout.ts SECOND_TAP_MS) */
+const SECOND_TAP_MS = 400;
 
 const root = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ovis-drawer-modal-"));
 const app = join(root, "app");
@@ -41,6 +54,14 @@ try {
   assert.deepEqual(owned, ["drawer-toggle"], "the open drawer owns the header's toggle");
   for (const id of owned) assert.equal(await page.locator(`.app-header #${id}`).count(), 1, `the owned ${id} is the header's own control`);
   assert.equal(await page.locator(".app-header .new-workspace-button").count(), 0, "the header draws no + over the open drawer");
+  // the X is the Ovis mark, the way into the agent inbox; the drawer starts with a named way out, and its foot is the gear
+  const mark = page.locator(".app-header #drawer-toggle");
+  assert.deepEqual(await mark.evaluate((node) => [node.getAttribute("aria-label"), node.getAttribute("title"), node.getAttribute("aria-expanded"), node.querySelector("img") !== null]),
+    ["Open agent inbox", "Open agent inbox", null, true], "the open drawer's head is the Ovis mark, named and titled for the inbox");
+  const namedClose = drawer.getByRole("button", { name: "Close workspace list", exact: true });
+  assert.equal(await namedClose.count(), 1, "the drawer holds a named close for a screen reader");
+  assert.deepEqual(await drawer.locator(".sidebar-footer > *").evaluateAll((nodes) => nodes.filter((node) => node.getClientRects().length > 0).map((node) => node.className)),
+    ["sidebar-footer-row"], "the drawer's foot is the gear's row alone");
   // a tap that opened it shows no focus ring: the drawer holds the focus itself, no control in it
   const ringless = () => page.evaluate(() => document.activeElement?.id === "workspace-drawer" && document.querySelector(":focus-visible:not(#workspace-drawer)") === null);
   assert.equal(await ringless(), true, "the opened drawer holds the focus itself, with no control's ring");
@@ -56,6 +77,29 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Open workspace list", exact: true }).waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a closed drawer is not modal");
+  // with no X, every other way out closes it: a tap outside, Back and the named close
+  const openByTap = async (): Promise<void> => {
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    await page.locator("#workspace-drawer.is-open").waitFor();
+    // its history entry, which Back steps off (lib/sheetHistory.ts)
+    await page.waitForFunction((key) => typeof (history.state as Record<string, unknown> | null)?.[key] === "string", SHEET_HISTORY_KEY, { timeout: 5_000 });
+  };
+  const closed = (): Promise<void> => page.locator("#workspace-drawer:not(.is-open)").waitFor();
+  await openByTap();
+  await page.touchscreen.tap(380, 420);
+  await closed();
+  const here = page.url();
+  await openByTap();
+  await page.goBack();
+  await closed();
+  assert.equal(page.url(), here, "Back closes the drawer and stays on the pane");
+  await openByTap();
+  // the keyboard's way: Tab from the drawer passes the mark, then the named close
+  for (let step = 0; step < 3 && !await namedClose.evaluate((node) => node === document.activeElement); step++) await page.keyboard.press("Tab");
+  assert.ok(((await namedClose.boundingBox())?.width ?? 0) > 1, "the named close is drawn while the keyboard is on it");
+  await page.keyboard.press("Enter");
+  await closed();
+  await page.waitForFunction(() => document.activeElement?.id === "drawer-toggle", undefined, { timeout: 5_000 });
   // modal or not, the drawer follows the finger: a swipe in from the left edge opens it, a swipe back closes it
   const cdp = await context.newCDPSession(page);
   const swipe = async (from: number, to: number): Promise<void> => {
@@ -76,7 +120,80 @@ try {
   await page.locator("#workspace-drawer:not([role])").waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "the desktop sidebar is not modal");
   await context.close();
-  console.log("PASS phone drawer is a modal focus-trapped surface");
+  console.log("PASS phone drawer is a modal focus-trapped surface, headed by the Ovis mark, closed by a tap outside, a swipe, Back, Escape and its named close");
+
+  // The mark takes the menu button's place: a double tap there opens the drawer and goes no further. The test reads
+  // the two taps' own times: the second must land within SECOND_TAP_MS (the guard's arithmetic at its edges is
+  // lib/useSidebarLayout.hook.test.ts's), and a tap past it opens the inbox
+  {
+    const guarded = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const page = await guarded.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await page.locator(".conn-live").first().waitFor();
+    await page.evaluate(() => {
+      window.toggleClicks = [];
+      document.addEventListener("click", (event) => { if ((event.target as Element | null)?.closest("#drawer-toggle")) window.toggleClicks.push(event.timeStamp); }, true);
+    });
+    const toggle = page.locator(".app-header #drawer-toggle");
+    await toggle.tap();
+    await page.locator("#workspace-drawer.is-open").waitFor();
+    await toggle.tap();
+    await page.waitForFunction(() => window.toggleClicks.length === 2);
+    const [opened, second] = await page.evaluate(() => window.toggleClicks) as [number, number];
+    // the click's own handlers ran in its dispatch; the render a way in would cause is drawn by the next frame
+    await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+    assert.ok(second - opened < SECOND_TAP_MS, `the two taps landed ${Math.round(second - opened)} ms apart, not a double tap: the guard was not exercised`);
+    assert.equal(await page.locator(".mode-inbox").count(), 0, `the second tap of a double tap (${Math.round(second - opened)} ms apart) on the mark's spot is not a way into the inbox`);
+    assert.equal(await page.locator("#workspace-drawer.is-open").count(), 1, "and the drawer stays open");
+    await page.waitForFunction(([at, window]) => performance.now() - at >= window, [opened, SECOND_TAP_MS] as const);
+    await toggle.tap();
+    await page.locator(".mode-inbox").waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("app"), "inbox", "a tap on the mark past the double tap opens the agent inbox");
+    await guarded.close();
+    console.log(`PASS a double tap on the menu button (${Math.round(second - opened)} ms apart) opens the drawer and not the inbox; the mark opens it after ${SECOND_TAP_MS} ms`);
+  }
+
+  // One PC of the phone app's list: the drawer's foot no longer says Change PC; the gear, then Settings' list, does.
+  // A wide window keeps its sidebar's Change PC row
+  {
+    const app = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await app.addInitScript(() => {
+      window.nativeCalls = [];
+      (window as unknown as { Capacitor: unknown }).Capacitor = {
+        isNativePlatform: () => true, getPlatform: () => "ios",
+        nativePromise: async (plugin: string, method: string) => { window.nativeCalls.push(`${plugin}.${method}`); return {}; },
+      };
+    });
+    const page = await app.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await page.locator(".conn-live").first().waitFor();
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    await page.locator("#workspace-drawer.is-open").waitFor();
+    assert.equal(await page.locator("#workspace-drawer .sidebar-footer-pc").count(), 0, "a phone's drawer has no Change PC row");
+    await page.locator("#workspace-drawer .sidebar-footer-settings").tap();
+    const change = page.locator(".settings-dialog .settings-change-pc");
+    await change.waitFor();
+    assert.equal((await change.textContent())?.trim(), "Change PC");
+    await change.tap();
+    await page.waitForFunction(() => window.nativeCalls.includes("HerdrShell.disconnect"), undefined, { timeout: 5_000 });
+    // a small tablet upright (641-768px) has the drawer too, and Settings' list beside its page: Change PC is in that list
+    const tablet = await app.newPage();
+    await tablet.setViewportSize({ width: 700, height: 1000 });
+    await tablet.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await tablet.locator(".conn-live").first().waitFor();
+    await tablet.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    await tablet.locator("#workspace-drawer.is-open").waitFor();
+    assert.equal(await tablet.locator("#workspace-drawer .sidebar-footer-pc").count(), 0, "at 700px the drawer has no Change PC row");
+    await tablet.locator("#workspace-drawer .sidebar-footer-settings").tap();
+    await tablet.locator(".settings-dialog .settings-change-pc").waitFor();
+    const wide = await app.newPage();
+    await wide.setViewportSize({ width: 1440, height: 900 });
+    await wide.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await wide.locator(".conn-live").first().waitFor();
+    await wide.locator("#workspace-drawer .sidebar-footer-pc").waitFor();
+    await app.close();
+    console.log("PASS in the phone app the drawer's foot is the gear alone, and the gear's Settings list ends in Change PC, which goes back to the app's list, at 390 and at 700; a wide window keeps its Change PC row");
+  }
 } finally {
   await browser.close();
   server.stop(true);

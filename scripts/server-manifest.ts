@@ -67,12 +67,26 @@ const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes)
  * The git trees of server/ and shared/ in this checkout, or why there are none to name: outside a git checkout, or
  * with changes there that are not committed, a manifest would name sources the binaries were not built from. The trees
  * are this folder's own (`./`), also where it sits inside another repository: a tree id names the content wherever it is,
- * while `HEAD:server` would name the server/ at that repository's top level.
+ * while `HEAD:server` would name the server/ at that repository's top level. Without git on PATH nothing can tie them
+ * either: that is said as a reason too, not thrown, so the launcher still runs every command that needs no release.
  */
 export function sourceTrees(cwd = root): { server: string; shared: string } | { error: string } {
-  const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore", timeout: 10_000, killSignal: "SIGKILL" });
-  const status = git("status", "--porcelain", "--untracked-files=all", "--", "server", "shared");
-  if (status.exitCode !== 0) return { error: "not a git checkout, so the binaries cannot be tied to their sources" };
+  // untranslated (LC_ALL=C): git's "not a git repository" and its distrust are told by its words
+  const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd, env: { ...process.env, LC_ALL: "C" }, stdout: "pipe", stderr: "pipe", timeout: 10_000, killSignal: "SIGKILL" });
+  let status: ReturnType<typeof git>;
+  try {
+    status = git("status", "--porcelain", "--untracked-files=all", "--", "server", "shared");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return { error: "git is not on PATH, so the binaries cannot be tied to their sources" };
+  }
+  if (status.exitCode !== 0) {
+    const err = status.stderr.toString().trim();
+    const first = err.split(/\r?\n/)[0] || `git exited with ${status.exitCode}`;
+    if (/not a git repository/.test(err)) return { error: "not a git checkout, so the binaries cannot be tied to their sources" };
+    if (/^fatal: detected dubious ownership in repository at /.test(first)) return { error: "git does not trust this folder (another account owns it), so the binaries cannot be tied to their sources" };
+    return { error: `git could not read this checkout (${first}), so the binaries cannot be tied to their sources` };
+  }
   if (status.stdout.toString().trim() !== "") return { error: "server/ or shared/ has changes that are not committed, so the binaries would not be built from HEAD's sources" };
   const [server, shared] = ["server", "shared"].map((dir) => git("rev-parse", `HEAD:./${dir}`).stdout.toString().trim());
   return { server: server!, shared: shared! };

@@ -20,6 +20,10 @@ import { SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
  * over the page would otherwise cover: the sentence still opens Settings and Turn off is still there; the
  * welcome itself goes, so it has no close of its own.
  */
+
+/** the counting generation the page heard, sent with its settings: the server keeps none told from before an off it did not hear */
+const heardGeneration = (status: TelemetryStatus | null | undefined): { generation?: number } =>
+  status?.counts_generation === undefined ? {} : { generation: status.counts_generation };
 export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: boolean; onOpen: () => void; inline?: boolean }) {
   const t = useT();
   const [shown, setShown] = useState(false);
@@ -43,6 +47,8 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
   // an event may go out, so an install that is off, blocked or has not seen the notice keeps its
   // settings to itself. The first snapshot rides with the acknowledgement below.
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
+  const statusRef = useRef(status);
+  statusRef.current = status;
   // Turn off in any copy on this page is every copy's: the others hide and tell the server nothing more
   const [, offHeard] = useState(0);
   useEffect(() => {
@@ -54,7 +60,7 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
   useEffect(() => {
     if (!enabled || !allowed || submittedSettingsSignature.current === settingsSignature) return;
     submittedSettingsSignature.current = settingsSignature;
-    changeTelemetry({ settings: settingsSnapshot }).then((next) => { if (!turnedOff.current) setStatus(next); }, (error: unknown) => {
+    changeTelemetry({ settings: settingsSnapshot, ...heardGeneration(status) }).then((next) => { if (!turnedOff.current) setStatus(next); }, (error: unknown) => {
       if (!(error instanceof ApiError && error.status === 404)) console.error("telemetry settings", error);
     });
   }, [enabled, allowed, settingsSignature, settingsSnapshot]);
@@ -95,6 +101,7 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
         notice_seen: true,
         notice_version: NOTICE_VERSION,
         settings: snapshot,
+        ...heardGeneration(statusRef.current),
       }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); if (!turnedOff.current) setStatus(next); },
         // a failed record is tried again on the next paint, return to the tab or focus (#3882)
         (error: unknown) => {
@@ -139,7 +146,7 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
       setClosed(false);
     });
   };
-  const text = offFailed ? t("Couldn't turn the counts off. Open Settings to use the switch.") : t("Ovis sends anonymous usage counts to improve it.");
+  const text = offFailed ? t("Couldn't turn the counts off. Open Settings to use the switch.") : t("Button use and other anonymous usage counts are sent to improve Ovis.");
   if (inline) return <p ref={setLine} className="setup-note setup-note-usage" role={offFailed ? "alert" : "status"}>
     <ChartColumn aria-hidden="true" />
     <button type="button" className="setup-link" aria-haspopup="dialog" onClick={onOpen}>{text}</button>
@@ -201,7 +208,7 @@ export function TelemetryControls() {
         setStatus(current);
         return;
       }
-      return changeTelemetry({ settings: snapshot }).then((next) => {
+      return changeTelemetry({ settings: snapshot, ...heardGeneration(current) }).then((next) => {
         if (!live || request !== statusRequest.current) return;
         setStatus(next);
       });
@@ -224,7 +231,7 @@ export function TelemetryControls() {
     setSaving(true);
     setError(null);
     // turned on, the switch brings the snapshot the browser kept to itself while it was off
-    changeTelemetry(enabled ? { enabled, settings: settingsSnapshotRef.current } : { enabled }).then(
+    changeTelemetry(enabled ? { enabled, settings: settingsSnapshotRef.current, ...heardGeneration(status) } : { enabled }).then(
       (next) => {
         if (request === statusRequest.current) setStatus(next);
         // counts turned on again in Settings: a line turned off from the page may show again (#3882)
@@ -240,7 +247,7 @@ export function TelemetryControls() {
         ? <SettingsRow label={t("Send anonymous usage counts")} icon={ChartColumn} description={t("Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.")}>
           <span className="settings-fact" role="status">{t("Off")}</span>
         </SettingsRow>
-        : <SettingsRow label={t("Send anonymous usage counts")} icon={ChartColumn} description={t("Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex), the kinds of screen the app was opened on, how they reached this PC, and how many prompt answers were sent and alerts delivered and tapped. Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.")}>
+        : <SettingsRow label={t("Send anonymous usage counts")} icon={ChartColumn} description={t("Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex), the kinds of screen the app was opened on, how they reached this PC, and how many prompt answers were sent and alerts delivered and tapped. After each day, how often the app's buttons were used that day (chat sends, the composer's buttons, the agent inbox, and switches between chat and terminal by kind of agent and how) and, for a few actions, whether a button, a menu, a shortcut or the command palette was used, each count only as a rough range, with the list of which of these controls were shown, on narrow and wide screens apart, never what was typed, which pane or what time of day. Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.")}>
           <Toggle label={t("Send anonymous usage counts")} checked={status.enabled} onChange={toggle} disabled={saving} />
         </SettingsRow>}
       {error && <p className="settings-item settings-hint" role="alert">{error}</p>}
@@ -251,6 +258,10 @@ export function TelemetryControls() {
           : <p className="settings-hint">{t("This version has already been counted. The next event is sent after an update.")}</p>}
         <p className="settings-hint">{t("Once a day you open the app:")}</p>
         <pre className="update-output">{JSON.stringify(status.active, null, 2)}</pre>
+        {status.counts && <>
+          <p className="settings-hint">{t("After a day has ended:")}</p>
+          <pre className="update-output">{JSON.stringify(status.counts, null, 2)}</pre>
+        </>}
         <p className="settings-hint">{t("The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.")}</p>
         <a className="settings-link" href={FIELDS_HELP} target="_blank" rel="noreferrer">{t("What each field means")}</a>
       </details>

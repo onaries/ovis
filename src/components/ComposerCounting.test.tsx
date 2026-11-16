@@ -20,6 +20,7 @@ let pasteSend = true;
 let readText: (() => Promise<string>) | undefined;
 let counted: string[];
 let countFails: boolean | string = false;
+let extraSettings: Partial<settingsModule.Settings> = {};
 
 beforeEach(() => {
   pasteSend = true;
@@ -39,7 +40,7 @@ beforeEach(() => {
   spyOn(paneLifetimes.paneStorage, "getItem").mockImplementation((key) => data.get(key) ?? null);
   spyOn(paneLifetimes.paneStorage, "setItem").mockImplementation((key, value) => { data.set(key, value); });
   spyOn(paneLifetimes.paneStorage, "removeItem").mockImplementation((key) => { data.delete(key); });
-  spyOn(settingsModule, "useSettings").mockImplementation(() => ({ settings: { ...settingsModule.DEFAULT_SETTINGS, showUsage: false, composerPasteSend: pasteSend }, resolvedLanguage: "en" }) as ReturnType<typeof settingsModule.useSettings>);
+  spyOn(settingsModule, "useSettings").mockImplementation(() => ({ settings: { ...settingsModule.DEFAULT_SETTINGS, showUsage: false, composerPasteSend: pasteSend, ...extraSettings }, resolvedLanguage: "en" }) as ReturnType<typeof settingsModule.useSettings>);
   spyOn(commandsModule, "usePaneCommands").mockReturnValue([]);
   spyOn(usageModule, "useUsage").mockReturnValue({ report: null } as ReturnType<typeof usageModule.useUsage>);
   spyOn(facesModule, "useFacesArrived").mockReturnValue(0);
@@ -48,6 +49,7 @@ beforeEach(() => {
   composerDrafts.set(otherKey, "");
   counted = [];
   countFails = false;
+  extraSettings = {};
   spyOn(usageCounters, "paneUse").mockImplementation((name) => {
     if (countFails === name || (countFails === true && name === "chat_send")) throw new Error("storage full");
     counted.push(name);
@@ -113,4 +115,43 @@ it("sends through Paste and send even when that button's count fails", async () 
   await press();
   expect(sent.map((call) => call[0])).toEqual(["from the clipboard"]);
   expect(logged).toHaveBeenCalled();
+});
+
+it("stops the agent even when Stop's count fails", async () => {
+  const stopped: string[] = [];
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  countFails = "composer_stop";
+  await act(async () => { renderer = create(<Composer {...props([])} agentStatus="working" onAbort={() => { stopped.push("stop"); }} />); });
+  const stop = renderer!.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Stop agent")[0];
+  expect(stop).toBeDefined();
+  await act(async () => { stop!.props.onClick(); });
+  expect(stopped).toEqual(["stop"]);
+  expect(logged).toHaveBeenCalled();
+});
+
+it.each([
+  ["a quick reply", "composer_quick_reply"],
+  ["the suggestion", "composer_suggestion"],
+])("acts on %s even when its count fails", async (_name, failing) => {
+  const sent: unknown[][] = [];
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  countFails = failing;
+  extraSettings = { showQuickReplies: true, quickReplies: ["yes"], suggestionChip: true };
+  await act(async () => { renderer = create(<Composer {...props(sent)} suggestion="run the tests" />); });
+  const target = failing === "composer_quick_reply" ? "Send “yes”" : "Use the suggestion";
+  const button = renderer!.root.findAll((node) => node.type === "button" && node.props.title === target)[0];
+  expect(button).toBeDefined();
+  await act(async () => { button!.props.onClick(); });
+  if (failing === "composer_quick_reply") expect(sent.map((call) => call[0])).toEqual(["yes"]);
+  else expect(composerDrafts.read(draftKey).text).toBe("run the tests");
+  expect(logged).toHaveBeenCalled();
+});
+
+it("still draws when telling a control as shown fails", async () => {
+  const drawing = spyOn(usageCounters, "draw").mockImplementation(() => { throw new Error("storage full"); });
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  await act(async () => { renderer = create(<Composer {...props([])} />); });
+  expect(renderer!.root.findAll((node) => node.type === "textarea").length).toBeGreaterThan(0);
+  expect(logged).toHaveBeenCalled();
+  drawing.mockRestore();
 });

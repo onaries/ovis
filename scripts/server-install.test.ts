@@ -224,12 +224,22 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
 
   it("takes the binary only for the sources it was built from: another checkout's trees, or uncommitted changes, are no binary release", async () => {
     const { releases, home, key } = fixture();
-    const install = (sources: { server: string; shared: string } | { error: string }) =>
-      installServer({ home, version: "1.2.3", platform: PLATFORM, releases: `file://${releases}`, publicKey: key.publicKey, sources });
+    const install = (sources: { server: string; shared: string } | { error: string }, at = `file://${releases}`, fetchFile?: typeof fetch) =>
+      installServer({ home, version: "1.2.3", platform: PLATFORM, releases: at, publicKey: key.publicKey, sources, fetchFile });
     await expect(install({ server: "c".repeat(40), shared: "b".repeat(40) })).rejects.toBeInstanceOf(NoBinaryRelease);
-    await expect(install({ error: "server/ or shared/ has changes that are not committed" })).rejects.toThrow("not the ones v1.2.3 was built from");
+    // sources nothing ties to a release take no binary whatever it holds: it is not asked, so one out of reach changes nothing
+    const asked: string[] = [];
+    const offline = (async (url: string | URL | Request) => { asked.push(String(url)); throw new TypeError("fetch failed"); }) as typeof fetch;
+    const untied = await install({ error: "git is not on PATH, so the binaries cannot be tied to their sources" }, "https://releases.invalid", offline).catch((error: unknown) => error);
+    expect(untied).toBeInstanceOf(NoBinaryRelease);
+    expect(String(untied)).toContain("git is not on PATH");
+    await expect(install({ error: "server/ or shared/ has changes that are not committed" })).rejects.toBeInstanceOf(NoBinaryRelease);
+    expect(asked).toEqual([]);
     expect(existsSync(join(home, "bin"))).toBe(false);
     expect((await install({ server: "a".repeat(40), shared: "b".repeat(40) })).installed).toBe(true);
+    // a binary installed and verified runs as before where git ties nothing: the release is not asked for it either
+    expect(await install({ error: "git is not on PATH, so the binaries cannot be tied to their sources" }, "https://releases.invalid", offline)).toMatchObject({ installed: false });
+    expect(asked).toEqual([]);
   });
 
   it("takes only the PTY host the signed manifest names: a tampered ovis-pty-sidecar.json is not read, a replaced host never runs", async () => {

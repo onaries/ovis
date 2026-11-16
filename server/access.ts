@@ -179,6 +179,17 @@ export function forwardingHeaders(headers: Headers): boolean {
   return PROXY_HEADERS.some((name) => headers.has(name)) || headers.has("tailscale-funnel-request");
 }
 
+/**
+ * forwardingHeaders for the machine profile's owner socket, which also takes the headers a common proxy, tunnel or
+ * CDN adds beyond PROXY_HEADERS for a forwarder in front of it. Only the profile asks, so an ordinary server's
+ * decisions stay as they were.
+ */
+export function machineForwardingHeaders(headers: Headers): boolean {
+  return forwardingHeaders(headers) || MACHINE_PROXY_HEADERS.some((name) => headers.has(name));
+}
+const MACHINE_PROXY_HEADERS = ["x-forwarded-port", "x-forwarded-server", "x-forwarded-scheme", "x-original-forwarded-for", "cf-connecting-ip",
+  "true-client-ip", "x-client-ip", "fly-client-ip", "x-envoy-external-address", "cdn-loop"];
+
 /** Headers a proxy adds and a browser or CLI on this PC has no reason to send; a Tailscale login is stated by a proxy too. */
 const PROXY_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "tailscale-user-login"];
 
@@ -273,6 +284,19 @@ export function portalLogin(input: Pick<AccessInput, "portal">): PortalLogin | n
  */
 export function ownerAccess(access: Access): boolean {
   return access.level === "full" && access.role === "drive" && access.via !== "open" && access.via !== "portal";
+}
+
+/**
+ * The machine profile's whole rule; decideAccess is never asked there. A device through the relay with its
+ * proof is that device. The caller on the owner's socket (`<state folder>/serve.sock`, which the kernel lets
+ * only this account and root connect to) is the local owner, while its Host is exactly `localhost` and no
+ * forwarding or identity header shows a proxy in front of the socket: a forwarder is not the owner. Anybody
+ * else is nobody: no token, device cookie, Tailscale login, Portal identity or open install counts there.
+ */
+export function decideMachineAccess(input: { relayPeer?: DeviceMatch; ownerSocket: boolean; host: string | null; forwarded: boolean }): Access {
+  if (input.relayPeer !== undefined) return { level: "full", via: "relay", role: input.relayPeer.role, device: input.relayPeer };
+  if (input.ownerSocket && input.host === "localhost" && !input.forwarded) return { level: "full", via: "local", role: "drive" };
+  return { level: "none", reason: "pairing_required" };
 }
 
 export function decideAccess(input: AccessInput): Access {

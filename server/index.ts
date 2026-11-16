@@ -1,6 +1,10 @@
 import type { TailnetPcsOptions } from "./tailnet-pcs.ts";
 import type { SshCandidatesOptions } from "./ssh-candidates.ts";
 import "./adopt-legacy-env.ts";
+import { claimServerState, machineEngine, machineHerdrBinary, machineSocket, machineSocketRefusal, machineUnauthorized, MACHINE_DIRECT_CARRIER_ENABLED, ownerSocketPath } from "./machine-profile.ts";
+import { ProfileFolderError, profileFolderRefusal } from "./profile-marker.ts";
+import { holdForLife, OwnerGuardBusy } from "./owner-guard.ts";
+import { fleetPreview } from "./preview.ts";
 import type { RelaySocket } from "../shared/relay-channel.ts";
 import { createCore, type SocketData } from "./core/index.ts";
 import { ClientConnectionLog } from "./client-connection-log.ts";
@@ -10,7 +14,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { MAX_IMAGE_BODY_BYTES } from "./paste.ts";
 import { OrderSequence } from "./order-sequence.ts";
 import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
-import { accessSync, constants, rmSync, statSync } from "node:fs";
+import { accessSync, chmodSync, constants, mkdirSync, rmSync, statSync } from "node:fs";
 import { version } from "../package.json";
 import { dirname, join } from "node:path";
 import type { PendingMessage, SessionSnapshot } from "../shared/protocol.ts";
@@ -144,7 +148,12 @@ export interface ServerInstance {
 }
 
 export function createServer(
-  options: {
+  provided: {
+    /** The ordinary device server beside an existing classic herdr, without engine or network controls. */
+    profile?: "machine";
+    /** The engine selection from serve, and why it is down at this moment (null: ready), asked at each health check. */
+    machineEngine?: string;
+    machineRefusal?: () => string | null | Promise<string | null>;
     port?: number;
     hostname?: string;
     /** Also listen on ::1 when the primary listener is bound to 127.0.0.1. */
@@ -274,6 +283,28 @@ export function createServer(
     agentDetector?: AgentDetector;
   } = {},
 ): ServerInstance {
+  // resolved once: a merge can give the old dir files of its own, after which resolving again could name the other dir
+  const stateDir = provided.stateDir ?? defaultStateDir();
+  // a second look for the profile's marker (serve() looked before anything else), before anything here reads the
+  // folder, the device list first: a profile that started at the same moment may have marked it since
+  if (provided.profile !== "machine") {
+    const refusal = profileFolderRefusal(stateDir);
+    if (refusal !== null) throw new ProfileFolderError(refusal);
+  }
+  const options = provided.profile === "machine" ? { ...provided,
+    machineEngine: machineEngine(stateDir, provided.port ?? Number(process.env["PORT"] ?? 0)),
+    // OVIS_TOKEN lets nobody in: the local owner is the caller on the owner's socket
+    token: "", hostname: "127.0.0.1", ipv6Loopback: false, lanHttps: undefined, portal: undefined,
+    // nothing updates this server from inside it: its updates answer `updates_unmanaged`, whatever updater it is given
+    updates: undefined, herdrUpdate: undefined, herdrCoreInstaller: undefined, herdrCoreFacts: undefined, runtimeService: undefined,
+    machines: false, bridgeOnly: false, localFiles: true, registerBridge: false, tailscaleServeOnly: false,
+  } : provided;
+  if (options.profile === "machine") {
+    // only a classic herdr's existing socket is served: nothing here discovers, starts or connects to a core
+    setRuntime("herdr");
+    // Only serve() opens a selected engine; any other one is refused here, before anything asks it.
+    if (options.machineEngine !== "herdr" && options.machineRefusal === undefined) process.env["HERDR_SOCKET"] = join(stateDir, "unavailable", "herdr.sock");
+  }
   /**
    * This server's lifetime: the supervisor's boot id when it manages the server, else one made now. It is
    * /api/health's `web_ui.boot_id` and the epoch of the workspace order's counter (server/order-sequence.ts).
@@ -285,8 +316,6 @@ export function createServer(
   /** Empty token = gate disabled; every route then behaves exactly as it did before auth existed. */
   const token = options.token ?? process.env["OVIS_TOKEN"] ?? "";
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
-  // resolved once: a merge can give the old dir files of its own, after which resolving again could name the other dir
-  const stateDir = options.stateDir ?? defaultStateDir();
   const ovisRelay = options.relay ?? new RelayService({ stateDir, accountService: passAccountService(options.accountService?.url), ...(options.accountService?.fetch ? { accountFetch: options.accountService.fetch } : {}) });
   const merge = options.siblingStateDir ? mergeSiblingState(stateDir, options.siblingStateDir) : null;
   let accountBlocked: string | null = null;
@@ -296,6 +325,8 @@ export function createServer(
     if (accountBlocked !== null) console.error(accountBlocked);
   }
   const devices = new DeviceStore(stateDir, merge?.devicesBlocked ?? null, accountBlocked);
+  // the machine profile has no open install: from its first answer only the caller on its owner's socket and a device through the relay with its proof get in
+  if (options.profile === "machine" && !devices.gated) devices.closeGate();
   const preferences = new PreferenceStore(stateDir);
   // Settings -> Experimental -> OMP on macOS herdr-core: chat from the session it holds open
   readOmpHeldFilesSetting(() => preferences.get().settings.ompHeldFiles === true);
@@ -356,6 +387,8 @@ export function createServer(
   const namedOwner = options.tailscaleOwner !== undefined ? options.tailscaleOwner : process.env["OVIS_TAILSCALE_OWNER"]?.trim() || undefined;
   const tailnet = options.tailnet ?? new TailnetIdentitySource();
   const identityOf = async (grantPath: boolean, host: string | null, loginPath = false) => {
+    // the machine profile believes no Tailscale identity: a header there lets nobody in
+    if (options.profile === "machine") return { owner: null, tagged: false, soleLogin: null, dnsName: null, tailnetIp: null };
     // a login is let in only at this PC's tailnet name or address (access.ts), so a named owner still reads them
     if (namedOwner !== undefined) return { ...(grantPath ? await tailnet.freshIdentity(host) : loginPath ? await tailnet.loginIdentity() : { soleLogin: null, dnsName: null, tailnetIp: null }), owner: namedOwner, tagged: false };
     return grantPath ? tailnet.freshIdentity(host) : loginPath ? tailnet.loginIdentity() : tailnet.identity();
@@ -469,6 +502,33 @@ export function createServer(
       core.stop(() => clearInterval(draftTimer));
       piReader.close();
       throw error;
+    }
+  }
+  // the machine profile's local owner: the caller on <state folder>/serve.sock, which only this account (and
+  // root) can connect to. Bun gives a socket the umask's mode: it is made under 077, the owner's umask comes
+  // back for everything made afterwards, and the file is 0600 before anything is served
+  let ownerListener: Bun.Server<SocketData> | null = null;
+  if (options.profile === "machine") {
+    const path = ownerSocketPath(stateDir);
+    const umask = process.umask(0o077);
+    try {
+      ownerListener = Bun.serve<SocketData>({
+        unix: path, maxRequestBodySize: BUN_BODY_CEILING,
+        // a request with no Host (HTTP/1.0) names no host at all: refused like any other that is not exactly localhost
+        fetch: (request, bunServer) => request.headers.has("host")
+          ? handleRequest(request, { ...socketContext(bunServer), get port() { return server.port; }, ownerSocket: true })
+          : machineUnauthorized(new URL(request.url, "http://localhost").pathname),
+        websocket: core.websocket,
+      });
+      chmodSync(path, 0o600);
+    } catch (error) {
+      ownerListener?.stop(true);
+      server.stop(true);
+      core.stop(() => clearInterval(draftTimer));
+      piReader.close();
+      throw new Error(`The machine profile cannot serve its owner on ${path} (${(error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.message : String(error))})`, { cause: error });
+    } finally {
+      process.umask(umask);
     }
   }
 
@@ -595,6 +655,7 @@ export function createServer(
       agentDetector.close();
       server.stop(true);
       ipv6?.stop(true);
+      ownerListener?.stop(true);
       for (const listener of lanListeners) listener.stop(true);
       releaseFilePool();
       releaseCommandHistory();
@@ -604,11 +665,55 @@ export function createServer(
 }
 
 export async function serve(): Promise<void> {
+  const profile = process.env["OVIS_PROFILE"] === "machine";
+  if (profile && !fleetPreview()) {
+    console.error("The machine profile is a preview and was not started; set OVIS_PREVIEW=fleet beside OVIS_PROFILE=machine to start it.");
+    process.exit(1);
+  }
+  // its owner's door is a unix socket in a folder only that account may enter
+  if (profile && process.platform === "win32") {
+    console.error("The machine profile does not run on Windows, so no server was started.");
+    process.exit(1);
+  }
+  let ownership: ReturnType<typeof claimServerState> | null = null;
+  if (profile) {
+    // before anything reads or moves a state folder: a refusal is one sentence and leaves nothing behind
+    try { ownership = claimServerState(process.env["OVIS_STATE_DIR"]); }
+    catch (err) {
+      console.error(`${err instanceof Error ? err.message : String(err)}.`);
+      process.exit(1);
+    }
+    process.once("exit", ownership.release);
+    console.log(machineHerdrBinary());
+    if (process.env["OVIS_TOKEN"]) console.log(`OVIS_TOKEN is not used by the machine profile: this account's programs reach it on ${ownership.socket}, and its port tells anyone only that it is alive.`);
+  } else {
+    // a folder a machine profile marked is its own, with or without the preview, before anything reads, moves or writes it
+    const refusal = profileFolderRefusal(defaultStateDir());
+    if (refusal !== null) {
+      console.error(refusal);
+      process.exit(1);
+    }
+  }
   moveLegacyStateDir();
   // SSH connection folders an earlier server left in /tmp; here, not in createServer, so tests never touch them
-  void sweepSshDirs();
+  if (!profile) void sweepSshDirs();
   // resolved once, for the same reason as in createServer
-  const stateDir = defaultStateDir();
+  const stateDir = ownership?.stateDir ?? defaultStateDir();
+  // a shared hold for the life of this process: a machine profile, which holds its folder alone, is never
+  // started beside it, and it never beside a profile. Only with the preview that lets a profile start at all:
+  // without it this server takes nothing a released one does not. Not on Windows, where no profile runs
+  if (!profile && fleetPreview() && process.platform !== "win32") {
+    try {
+      mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      holdForLife(join(stateDir, "serve.own"), "shared");
+    } catch (err) {
+      if (err instanceof OwnerGuardBusy) {
+        console.error(`A machine profile serves the Ovis state folder ${stateDir}, so no server was started; give this one another OVIS_STATE_DIR.`);
+        process.exit(1);
+      }
+      console.error(`The state folder's hold could not be taken, so a machine profile could start on it beside this server: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   // herdr-core's adapter is HERDR_SOCKET: it listens before anything below asks herdr
   // the launcher says when it took this bridge as its own, past its startup check: a page following a
   // runtime switch waits for that, never for a bridge the launcher may still roll back
@@ -621,24 +726,37 @@ export async function serve(): Promise<void> {
   let herdrCore: Awaited<ReturnType<typeof startRuntime>>;
   let choice: RuntimeChoice;
   let fallback: "no_herdr_core" | "no_alt_runtime" | undefined;
+  let machineRefusal: () => string | null | Promise<string | null> = () => null;
   try {
-    choice = await chooseRuntime({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), env: startEnv });
-    setRuntime(choice.runtime);
-    console.log(`Runtime: ${choice.runtime} (${choice.reason})`);
-    try {
-      herdrCore = await startRuntime(stateDir);
-    } catch (err) {
-      // a choice saved from Settings whose core is gone, or an alt-runtime this Ovis cannot start, falls back to
-      // herdr, where Settings can switch again; OVIS_RUNTIME says what to serve, and its failure stays an error
-      // only a missing runtime: any other failure (a state folder, another Ovis) is the launcher's to roll back
-      const missing = choice.runtime === "herdr-core" && err instanceof NoHerdrCoreError ? "no_herdr_core"
-        : choice.runtime === "alt-runtime" && err instanceof NoAltRuntimeError ? "no_alt_runtime" : null;
-      if (choice.source !== "saved" || missing === null) throw err;
-      console.error(`The ${choice.runtime} chosen in Settings cannot start (${err instanceof Error ? err.message : String(err)}); serving herdr.`);
-      choice = { ...choice, runtime: "herdr" };
-      fallback = missing;
+    if (profile) {
+      // the selection is read before chooseRuntime or startRuntime could discover or launch anything
+      const engine = machineEngine(stateDir, Number(startEnv["PORT"] ?? 0));
+      const refusal = await machineSocket(stateDir, engine);
+      // asked again at each health check: a session not selected is looked for until one runs
+      machineRefusal = machineSocketRefusal;
       setRuntime("herdr");
+      choice = { runtime: "herdr", source: "env", reason: "machine profile" };
       herdrCore = null;
+      console.log(`Machine engine: ${engine}${refusal ? ` (${refusal})` : ""}`);
+    } else {
+      choice = await chooseRuntime({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), env: startEnv });
+      setRuntime(choice.runtime);
+      console.log(`Runtime: ${choice.runtime} (${choice.reason})`);
+      try {
+        herdrCore = await startRuntime(stateDir);
+      } catch (err) {
+        // a choice saved from Settings whose core is gone, or an alt-runtime this Ovis cannot start, falls back to
+        // herdr, where Settings can switch again; OVIS_RUNTIME says what to serve, and its failure stays an error
+        // only a missing runtime: any other failure (a state folder, another Ovis) is the launcher's to roll back
+        const missing = choice.runtime === "herdr-core" && err instanceof NoHerdrCoreError ? "no_herdr_core"
+          : choice.runtime === "alt-runtime" && err instanceof NoAltRuntimeError ? "no_alt_runtime" : null;
+        if (choice.source !== "saved" || missing === null) throw err;
+        console.error(`The ${choice.runtime} chosen in Settings cannot start (${err instanceof Error ? err.message : String(err)}); serving herdr.`);
+        choice = { ...choice, runtime: "herdr" };
+        fallback = missing;
+        setRuntime("herdr");
+        herdrCore = null;
+      }
     }
   } catch (err) {
     console.error(`Ovis cannot start: ${err instanceof Error ? err.message : String(err)}.`);
@@ -646,25 +764,43 @@ export async function serve(): Promise<void> {
   }
   const updates = connectUpdater();
   const telemetry = new Telemetry({ stateDir, version, env: process.env, fetch, previousVersion: () => updates.installed().previous_version, runtime: herdrCore === null ? "herdr" : "herdr-core" });
-  const portal = new PortalService({ stateDir });
+  const portal = profile ? undefined : new PortalService({ stateDir });
   // the direct carrier on this PC's private and Tailscale addresses, which the phone apps' OvisDirect plugin opens (docs/relay.md)
   const tailnet = new TailnetIdentitySource();
-  const relay = new RelayService({ stateDir, direct: { tailnetIp: () => tailnet.identity().tailnetIp }, accountService: passAccountService() });
-  const lanConfig = lanHttpsConfig(process.env);
+  const relay = new RelayService({ stateDir, ...(profile && !MACHINE_DIRECT_CARRIER_ENABLED ? {} : { direct: { tailnetIp: () => tailnet.identity().tailnetIp } }), accountService: passAccountService() });
+  const lanConfig = profile ? null : lanHttpsConfig(process.env);
   if (lanConfig !== null && "error" in lanConfig) console.error(`LAN HTTPS is off: ${lanConfig.error}.`);
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), herdrCoreFacts, herdrCoreInstaller: herdrCoreInstaller(),
+    instance = createServer({ updates, ...(profile ? { profile: "machine", machineRefusal, port: Number(startEnv["PORT"] ?? 0) } : { herdrUpdate: new HerdrUpdater(), herdrCoreFacts, herdrCoreInstaller: herdrCoreInstaller(),
       launchAccepted: () => launchAccepted,
-      runtimeService: runtimeService({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), serving: choice.runtime, source: choice.source, ...(fallback ? { fallback } : {}), env: startEnv, core: herdrCoreFacts, accepted: () => launchAccepted, restart: (id) => process.send?.({ type: "runtime-restart", id }) }),
+      runtimeService: runtimeService({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), serving: choice.runtime, source: choice.source, ...(fallback ? { fallback } : {}), env: startEnv, core: herdrCoreFacts, accepted: () => launchAccepted, restart: (id) => process.send?.({ type: "runtime-restart", id }) }) }),
       portal, relay, tailnet, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
       desktopActivity: process.env["OVIS_DESKTOP_APP"] === "1",
       ...(lanConfig !== null && !("error" in lanConfig) ? { lanHttps: lanConfig } : {}) });
+    ownership?.listening(instance.port, instance.hostname);
+    if (profile) {
+      // a device paired at the machine's own address holds a cookie, which opens nothing here: said, not silent
+      const unreachable = instance.context.services.devices.list(null).filter((device) => !device.via_relay).map((device) => device.id);
+      if (unreachable.length > 0) console.log(`Devices paired at this machine's own address cannot reach it, only devices through the relay can: ${unreachable.join(", ")}`);
+    }
     instance.warmAgentCatalog();
   } catch (err) {
+    // the second look found a profile's marker: the same sentence and exit as the first
+    if (err instanceof ProfileFolderError) {
+      console.error(err.message);
+      process.exit(1);
+    }
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path
-    if (syscall !== "listen" || (code !== "EADDRINUSE" && code !== "EADDRNOTAVAIL" && code !== "EACCES")) throw err;
+    if (syscall !== "listen" || (code !== "EADDRINUSE" && code !== "EADDRNOTAVAIL" && code !== "EACCES")) {
+      // the profile's own socket listener says which path it could not serve on; the lease goes with the process
+      if (profile && err instanceof Error && err.message.startsWith("The machine profile cannot serve its owner")) {
+        console.error(`${err.message}.`);
+        process.exit(1);
+      }
+      throw err;
+    }
     const host = process.env["HOST"] ?? "127.0.0.1";
     const port = process.env["PORT"] || DEFAULT_PORT;
     const reason = code === "EADDRINUSE"
@@ -686,7 +822,7 @@ export async function serve(): Promise<void> {
     // Attach sidecars need ~1.2s to release herdr's exclusive client slot; Portal unregisters from
     // its relay, and the pipes it logs to must outlive it
     // herdr-core's adapter answers what the stopping server still asks meanwhile
-    void Promise.all([Bun.sleep(2000), portal.shutdown(), relay.shutdown()]).then(() => {
+    void Promise.all([Bun.sleep(2000), portal?.shutdown(), relay.shutdown()]).then(() => {
       herdrCore?.stop();
       process.exit(0);
     });
@@ -701,7 +837,7 @@ export async function serve(): Promise<void> {
     console.log(`LAN HTTPS on ${shown.map((address) => `https://${address}:${port}`).join(", ")} (token or paired device only; certificate SHA-256 ${sha256})`);
   }
   const socket = herdrSocketPath();
-  void ping(socket).catch(() => {
+  if (!profile) void ping(socket).catch(() => {
     console.error(herdrCore
       ? `herdr-core is not reachable through ${socket}: start it with \`${hcBin()} server start\`, or set OVIS_HC_BIN to hc's full path.`
       : `herdr is not reachable at ${socket}: start herdr, or set HERDR_SOCKET to its socket (named sessions: ~/.config/herdr/sessions/<name>/herdr.sock).`);

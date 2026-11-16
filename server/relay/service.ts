@@ -1,3 +1,4 @@
+import { MACHINE_DIRECT_CARRIER_ENABLED } from "../machine-profile.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -370,11 +371,11 @@ export class RelayService {
   }
 
   /** Whether this server takes direct connections at all (the `direct` option). */
-  get directAvailable(): boolean { return this.options.direct !== undefined; }
+  get directAvailable(): boolean { return this.options.direct !== undefined && (this.services?.options.profile !== "machine" || MACHINE_DIRECT_CARRIER_ENABLED); }
 
   /** Turns direct connections on this PC's networks on or off, kept across restarts; off ends every direct session. */
   async setDirect(on: boolean): Promise<RelayStatus> {
-    if (!this.options.direct) throw new Error("Direct connections are not available on this server.");
+    if (!this.directAvailable) throw new Error("Direct connections are not available on this server.");
     writePrivateState(this.directPath(), { on });
     this.directOn = on;
     if (!on) await this.stopDirect();
@@ -386,7 +387,7 @@ export class RelayService {
   }
 
   private startDirect(services: RequestServices, identity: RelayIdentity): void {
-    if (!this.options.direct || this.directCarrier || !this.directEnabled()) return;
+    if (!this.options.direct || !this.directAvailable || this.directCarrier || !this.directEnabled()) return;
     this.directCarrier = new DirectCarrier({ ...this.options.direct, identity, services, port: this.port, sessions: this.signedIn,
       ...(this.options.clock ? { clock: this.options.clock } : {}), ...(this.options.serverVersion ? { serverVersion: this.options.serverVersion } : {}) });
     this.directStarting = this.directCarrier.start();

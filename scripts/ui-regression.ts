@@ -591,7 +591,9 @@ try {
             await drawer.click();
             await waitingBadge.waitFor();
             await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `background-wait-${width}-${theme}-drawer.png`), animations: "disabled" });
-            await drawer.click();
+            // the open drawer's head is the Ovis mark: a click on the dimmed pane beside it closes it
+            await page.mouse.click(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
+            await page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
           }
         }
       }

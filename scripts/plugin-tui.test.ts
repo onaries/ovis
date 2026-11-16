@@ -98,7 +98,7 @@ describe("runTui", () => {
       where: { root: join(scratch, "root"), home: scratch },
       settings: { OVIS_TUI_BIN: join(scratch, "ovis-tui"), OVIS_TOKEN: "secret" },
       err: (text) => said.push(text),
-      on: () => undefined,
+      on: () => () => undefined,
       ...extra,
       caller: { PATH: process.env["PATH"], STANDIN_RECORD: join(scratch, "record"), ...extra.caller },
       said,
@@ -133,6 +133,46 @@ describe("runTui", () => {
     expect(await runTui([], run)).toBe(1);
     expect(run.said.join("")).toContain(join(scratch, "gone"));
     expect(record()).toBeNull();
+  });
+
+  /** the signals runTui listens for and stops listening for, in order, and Bun.spawn's calls among them */
+  function watched(): { readonly seen: string[]; readonly handlers: Map<string, () => void>; readonly on: TuiOptions["on"]; [Symbol.dispose]: () => void } {
+    const seen: string[] = [];
+    const handlers = new Map<string, () => void>();
+    const spawn = Bun.spawn;
+    Bun.spawn = ((...args: Parameters<typeof spawn>) => { seen.push("spawn"); return spawn(...args); }) as typeof spawn;
+    return {
+      seen, handlers,
+      on: (signal, handler) => { seen.push(signal); handlers.set(signal, handler); return () => { seen.push(`off ${signal}`); }; },
+      [Symbol.dispose]: () => { Bun.spawn = spawn; },
+    };
+  }
+
+  it.skipIf(process.platform === "win32")("listens for SIGTERM and SIGHUP before the program starts, passes them on, and stops listening once it ended", async () => {
+    const program = join(scratch, "ovis-tui");
+    writeFileSync(program, "#!/bin/sh\nwhile :; do sleep 0.05; done\n");
+    chmodSync(program, 0o755);
+    using signals = watched();
+    const ran = runTui([], options({ on: signals.on }));
+    // the program has started by now: runTui spawns it before its first await
+    expect(signals.seen).toEqual(["SIGINT", "SIGTERM", "SIGHUP", "spawn"]);
+    signals.handlers.get("SIGTERM")!();
+    expect(await ran).toBe(128 + 15);
+    expect(signals.seen.slice(4).sort()).toEqual(["off SIGHUP", "off SIGINT", "off SIGTERM"]);
+  });
+
+  it("stops listening when the program cannot be started, and a signal after it finds nothing to pass on", async () => {
+    // a file that is no program: spawning it throws
+    const program = join(scratch, "ovis-tui");
+    writeFileSync(program, "not a program\n");
+    chmodSync(program, 0o644);
+    using signals = watched();
+    const run = options({ on: signals.on });
+    expect(await runTui([], run)).toBe(1);
+    expect(run.said.join("")).toContain(`could not run ${program}`);
+    // regression (fails on main: the listeners stay, and the SIGTERM one throws on the program that never started)
+    expect(signals.seen.filter((event) => event.startsWith("off ")).sort()).toEqual(["off SIGHUP", "off SIGINT", "off SIGTERM"]);
+    for (const handler of signals.handlers.values()) expect(handler).not.toThrow();
   });
 
   it("runs nothing on Windows", async () => {

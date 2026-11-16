@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { join as winJoin } from "node:path/win32";
 import { guardPath } from "./owner-guard.ts";
 import { readProcessBirth } from "./process-owner.ts";
@@ -43,6 +43,12 @@ describe("remote entry socket selection", () => {
       .toBe("C:\\Users\\u\\AppData\\Roaming\\herdr\\sessions\\qa\\herdr.sock");
   });
 });
+
+/**
+ * A socket's path as the entry reports it: its folder resolved, its own name kept. macOS refuses realpath on a
+ * socket file itself (EOPNOTSUPP), and a last part that is a socket is no link.
+ */
+const realSocket = (socket: string) => join(realpathSync(dirname(socket)), basename(socket));
 
 /** A well-formed birth no running process has: this platform's form, at the epoch. */
 const earlierBirth = { platform: process.platform, value: process.platform === "linux" ? `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:1` : process.platform === "darwin" ? "Thu Jan 1 00:00:00 1970" : "1" };
@@ -112,7 +118,7 @@ describe("remote entry startup lock", () => {
         },
       },
     });
-    return { socket: realpathSync(socket), stop: () => listener.stop(true) };
+    return { socket: realSocket(socket), stop: () => listener.stop(true) };
   }
 
   it.skipIf(process.platform === "win32")("refuses a second daemon and accepts only an explicit new-start choice", async () => {
@@ -123,7 +129,7 @@ describe("remote entry startup lock", () => {
     try {
       const refused = await start(undefined, { HERDR_REMOTE_RESULT: result });
       expect(refused.code).toBe(2);
-      expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ code: "herdr_sessions_found", sessions: [{ socket_path: realpathSync(socket), session: "work", label: "work" }] });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ code: "herdr_sessions_found", sessions: [{ socket_path: realSocket(socket), session: "work", label: "work" }] });
       expect(refused.output).not.toContain(join(home, "missing-herdr"));
       // Explicit consent alone reaches the attempted daemon spawn (a nonexistent test binary).
       const allowed = await start(undefined, { HERDR_REMOTE_START_NEW: "1" });

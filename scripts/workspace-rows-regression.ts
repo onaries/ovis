@@ -261,7 +261,7 @@ try {
   for (const width of [1280, 768, 375]) {
     await page.setViewportSize({ width, height: 900 });
     if (await page.locator(".drawer-toggle").isVisible()
-      && await page.locator(".drawer-toggle").getAttribute("aria-expanded") !== "true") {
+      && await page.locator("#workspace-drawer.is-open").count() === 0) {
       await changeState(page, [{ selector: "#workspace-drawer.is-open" }],
         () => page.locator(".drawer-toggle").click(), `workspace drawer opens at ${width}`);
     }

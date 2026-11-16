@@ -141,7 +141,8 @@ import { SplitDropPreview } from "./components/SplitDropPreview.tsx";
 import { CrashProbe, RegionCrash } from "./components/AppCrash.tsx";
 import { RenderBoundary } from "./components/RenderBoundary.tsx";
 import { lensOwner, storedView, usePaneLens, usePaneLensState, usePaneViewPicks } from "./lib/usePaneLens.ts";
-import { actionsCan, actionUse, tally, usageCounters, useCountedInboxWays, useShownCount } from "./lib/usageCounters.ts";
+import { tally, usageCounters, useCountedInboxWays, useShownCount } from "./lib/usageCounters.ts";
+import { appCounted, closeFromPaneMenu, moreFilesRun, type AppCountingState } from "./lib/appCounting.ts";
 import { useSplitLayout, useSplitRecheck, useSplitState } from "./lib/useSplitView.ts";
 import { linkSelects, useLinkLanding, useMachineGone, useNotificationTargets, useSelectedLayout, useSelectedMachine, useSelectedPane, useSelectionMark, useSelectionState, useSelectPane, useSelectTarget } from "./lib/useSelection.ts";
 import { useAddressBar } from "./lib/useAddressBar.ts";
@@ -278,7 +279,7 @@ export function App() {
   // Settings → Start in the agent inbox on a phone: a fresh navigation starts this device in it at a phone's width (lib/inboxMode.ts
   // startsInInbox); a reload opens where its address says, so a phone that left the mode stays out of it
   const inboxMode = useInboxMode({ startsIn: () => pageStartsInInbox(phoneInboxOn(settings), window.matchMedia?.(SHEET_QUERY).matches === true, initialLink) });
-  const { drawerOpen, setDrawerOpen, drawerOpenRef, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter } = useSidebarLayout({ initialLink, drawerBlocked: inboxMode.drawerBlocked });
+  const { drawerOpen, setDrawerOpen, drawerOpenRef, toggleDrawerByButton, secondTapOfOpening, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter } = useSidebarLayout({ initialLink, drawerBlocked: inboxMode.drawerBlocked });
   // the mode's list: it stands in the pane's place until a pane is picked (lib/useInbox.ts)
   const inbox = useInbox({ on: inboxMode.on, initialLink, drawerOpenRef });
   // A link whose pane has closed opens the mode's list (onLinkMiss below), and the note says that much: the classic
@@ -414,6 +415,12 @@ export function App() {
     focusInput: () => paneControls.current?.focusInput() });
   // offered where the mode is, and not over the setup guide, which has the classic shell to itself
   const modeOffered = !guideShown;
+  // the Ovis mark at the sidebar's head (from 769px, the sidebar shown) is the classic shell's one way in where it is
+  // drawn; with no mark (a phone, a collapsed sidebar) More and the drawer's foot keep the way in
+  const markEnters = modeOffered && wideScreen && !sidebarCollapsed && !inMode;
+  // A phone's open drawer has the Ovis mark where its X was: the way into the inbox, so its foot holds none. It closes
+  // by a tap outside, a swipe, Back, Escape or the named close a screen reader finds at its start
+  const markInDrawer = modeOffered && !wideScreen && drawerOpen && !inMode;
   // going into the agent inbox and out of it, counted wherever a person asked
   const { enter: enterInbox, leave: leaveMode } = useCountedInboxWays(enterInboxShell, leaveModeShell);
   useShownCount("inbox", modeOffered, LOCAL_MACHINE);
@@ -666,15 +673,8 @@ export function App() {
         if (next) selectPane(next);
       },
       setView,
-      counted: (action, source) => {
-        // what would do nothing here is no use of it (a shortcut or palette row with no pane to split, close or add a tab
-        // beside); split, close pane and new tab act on the selected pane: counted for this PC's own alone
-        const name = actionUse(action, source, { machineId: selectedMachineId, can: actionsCan({
-          split: actions.splitPane !== null, closePane: actions.closePane !== null, files: actions.openFiles !== null,
-          inboxShown: inbox.shown, inMode, tabTarget: newTabTarget() !== null,
-        }) });
-        if (name) tally(() => usageCounters.count(name));
-      },
+      // what would do nothing here is no use of it; split, close pane, new tab and Files count for this PC's own panes alone
+      counted: appCounted((): AppCountingState => ({ actions, machineId: selectedMachineId, inbox, inMode, tabTarget: newTabTarget() !== null })),
       // a peek shows the terminal over the chat: the shortcut takes the chat back, the lens stays Chat
       toggleView: (source) => { if (terminalPeek !== null) endPeek(); else setView(view === "chat" ? "terminal" : "chat", source); setDrawerOpen(false); },
       focusInput: () => { if (!inbox.shown) paneControls.current?.focusInput(); },
@@ -829,7 +829,7 @@ export function App() {
       closePane: !closeOffered ? null : () => {
         const target = snapshotRef.current?.panes.find((pane) => pane.pane_id === selectionRef.current.paneId);
         // counted by its shortcut or palette row, not as the pane menu it runs
-        if (target) paneActionsRef.current?.(target, { counted: false }).find((item) => item.id === "close" && !item.disabled)?.run();
+        if (target) closeFromPaneMenu(paneActionsRef.current, target);
       },
       closeTab: !tabCloseOffered ? null : () => requestCloseTab(selectedMachineId, selectedPaneId!),
     }),
@@ -942,7 +942,7 @@ export function App() {
     ...(foldFind && more ? [{ id: "find-group", label: t("Find…"), icon: TextSearch, run: () => openMoreGroup("find", more.anchor) }] : findInTerminal),
     // from 769px Files has its own button beside the lens switch; a phone keeps it here
     // and so does an inbox mode thread at any width, whose shell has no Files button
-    ...(selectedPane && (!wideScreen || inMode) ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => { actions.counted?.("files", "menu"); setFilesOpen(true); } }] : []),
+    ...(selectedPane && (!wideScreen || inMode) ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: moreFilesRun(actions.counted, () => setFilesOpen(true)) }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from
     { id: "copy-link", label: t("Copy link"), icon: Link, run: () => void copyText(window.location.href).then((ok) => { if (ok) setHeaderNote("copied"); }) },
     { id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() },
@@ -950,8 +950,8 @@ export function App() {
     ...paneMoreItems.filter((item) => !(foldFind && item.id === "search-conversation") && (!foldPane || item.id.startsWith("pane:")))
       .map((item, index) => index === 0 ? { ...item, divider: true } : item),
     ...(foldPane && more ? [{ id: "pane-group", label: t("Pane and tab…"), icon: PanelsTopLeft, divider: true, run: () => openMoreGroup("pane", more.anchor) }] : []),
-    // the way into the agent inbox (lib/inboxMode.ts), More's last group at every width
-    ...(modeOffered ? [{ id: "enter-inbox", label: t("Open agent inbox"), icon: Inbox, divider: true, run: () => { actions.counted?.("inbox", "menu"); enterInbox(); } }] : []),
+    // the way into the agent inbox (lib/inboxMode.ts), More's last group wherever the Ovis mark is not drawn
+    ...(modeOffered && !markEnters ? [{ id: "enter-inbox", label: t("Open agent inbox"), icon: Inbox, divider: true, run: () => { actions.counted?.("inbox", "menu"); enterInbox(); } }] : []),
   ];
   // The inbox mode's More: what still means something in a shell with no drawer, tab row or status bar. On the list
   // only what is the app's own (the list already shows who waits first); in a thread also what is about the thread,
@@ -1125,18 +1125,25 @@ export function App() {
             .header-side is the sidebar's own top row from 769px (styles.css); below that its
             buttons sit in the bar */}
         <div className="header-side">
-          {wideScreen && !sidebarCollapsed && !inMode && <SidebarBrand dark={resolvedTheme === "dark"} onOpenInbox={modeOffered ? () => { actions.counted?.("inbox", "button"); enterInbox(); } : null} />}
+          {wideScreen && !sidebarCollapsed && !inMode && <SidebarBrand dark={resolvedTheme === "dark"} onOpenInbox={markEnters ? () => { actions.counted?.("inbox", "button"); enterInbox(); } : null} />}
           {inboxBack ? <button type="button" id="inbox-back" className="icon-button inbox-back" aria-label={t("Back")} title={t("Back")} onClick={inbox.back}><ChevronLeft /></button> : <button
             type="button"
             id="drawer-toggle"
-            className="icon-button drawer-toggle"
-            aria-label={t(drawerOpen ? "Close workspace list" : "Open workspace list")}
-            aria-haspopup="dialog"
-            aria-expanded={drawerOpen}
-            aria-controls="workspace-drawer"
-            onClick={() => setDrawerOpen((open) => !open)}
+            className={`icon-button drawer-toggle${markInDrawer ? " is-mark" : ""}`}
+            aria-label={t(markInDrawer ? "Open agent inbox" : drawerOpen ? "Close workspace list" : "Open workspace list")}
+            title={markInDrawer ? t("Open agent inbox") : undefined}
+            aria-haspopup={markInDrawer ? undefined : "dialog"}
+            aria-expanded={markInDrawer ? undefined : drawerOpen}
+            aria-controls={markInDrawer ? undefined : "workspace-drawer"}
+            onClick={(event) => {
+              if (!markInDrawer) { toggleDrawerByButton(event.timeStamp); return; }
+              // the mark stands where the menu button was: the second tap of a double tap there is no way in
+              if (secondTapOfOpening(event.timeStamp)) return;
+              actions.counted?.("inbox", "button");
+              enterInbox();
+            }}
           >
-            {drawerOpen ? <X /> : <Menu />}
+            {markInDrawer ? <OvisMark width="22" height="22" /> : drawerOpen ? <X /> : <Menu />}
           </button>}
           {/* New workspace's + beside the logo, from 769px in one-line rows: it starts one on the selected PC. A phone's
               drawer has none here: each PC's own row carries its +, which says which PC (MachineSidebar.tsx) */}
@@ -1333,12 +1340,15 @@ export function App() {
         </aside>) : <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}${sidebarPeeking ? " is-peek" : ""}`} role={drawerModal ? "dialog" : undefined} aria-modal={drawerModal ? true : undefined} tabIndex={drawerModal ? -1 : undefined} aria-label={drawerModal ? t("Workspace list") : undefined}
           // the header's toggle is drawn as the open drawer's top row: a screen reader that keeps to the modal finds it in it
           aria-owns={drawerModal ? "drawer-toggle" : undefined} ref={drawerRef} {...peekSidebarHandlers}>
+          {/* the X became the Ovis mark: the modal drawer still starts with a named way out, drawn while the keyboard is on it,
+              and the open drawer's disclosure state goes with it (expanded, and the list it closes) */}
+          {markInDrawer && <button type="button" className="visually-hidden drawer-close" aria-controls="workspace-drawer" aria-expanded="true" onClick={() => setDrawerOpen(false)}>{t("Close workspace list")}</button>}
           {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
           {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>
             <CrashProbe region="sidebar" />
             <ReorderContext.Provider value={reorderCoordinator}><MachineSidebar machines={sidebarMachines} allMachines={machines} watching={auth?.role === "watch"} appLayout={appLayoutOn} drawerOpen={drawerOpen} filterRequest={sidebarFilterRequest} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} activity={activity} actions={actions} onSelect={selectTarget} onUsageLogin={(paneId) => { selectTarget("local", paneId, "terminal"); void load(); }} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={openNewOn}
-              footerStart={<>{setupRow}{modeOffered && <InboxFootEntry onOpen={() => { actions.counted?.("inbox", "button"); enterInbox(); }} />}</>} /></ReorderContext.Provider>
+              footerStart={<>{setupRow}{modeOffered && wideScreen && !markEnters && <InboxFootEntry onOpen={() => { actions.counted?.("inbox", "button"); enterInbox(); }} />}</>} /></ReorderContext.Provider>
           </RenderBoundary>
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>}

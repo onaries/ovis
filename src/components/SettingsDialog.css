@@ -167,6 +167,11 @@
   white-space: nowrap;
 }
 
+/* a phone's way back to its list of PCs (SettingsDialog.tsx pcExit), after the pages and apart from them */
+.settings-change-pc {
+  margin-top: var(--space-2);
+}
+
 /* only a list that leads somewhere else points there: a phone's */
 .settings-tab-chevron {
   display: none;

@@ -19,8 +19,8 @@ A second table, `active`, holds one row per install and UTC day the app was open
 the app was installed, the terminal runtime, the country, and `harnesses`, a JSON array of the kinds of coding agents
 running that day, from the fixed list `TELEMETRY_HARNESSES` in `shared/telemetry.ts` (any other
 agent is `other`). A later message for the same day replaces the version and the harnesses.
-A third table, `counts`, is ready to hold one row per install and UTC day that has ended
-(`POST /v1/counts`); no app sends to it yet, and none will before a notice that says so: the day, the random install ID, the app's version that day, and
+A third table, `counts`, holds one row per install and UTC day that has ended, for apps since notice
+version 6, which says so (`POST /v1/counts`): the day, the random install ID, the app's version that day, and
 `narrow` and `wide`, the day's use of the app's controls in a window at most 640px wide and in a
 wider one: for each fixed counter name used that day (`TELEMETRY_COUNTERS` in `shared/telemetry.ts`,
 such as `chat_send` or `view_terminal_claude`), a bucket (1: 1-2 times, 2: 3-9, 3: 10-29, 4: 30 or
@@ -29,6 +29,11 @@ OS or agent kinds: join `active` on the day and install. The first message for a
 name the Worker does not know is dropped while the rest of the row is kept. No row for a day the
 install was active means its counts are unknown (an older app, the notice not seen, or not sent yet:
 the Worker takes a day up to `COUNTS_LATE_DAYS`, 14, back).
+A day's row is what the PC had when it sent the day: five minutes (`COUNTS_SETTLE_MS`) after the day's
+UTC midnight, or at the first start or visit after that, longer than a page holds its counts (a minute).
+A batch held past that, by a tab frozen across midnight, is kept on the PC but not sent while the same
+server runs; after a restart it goes in a second message for the day, which the Worker ignores, or it is
+dropped once the day is too old to send.
 The Worker itself never reads the sender's address or any header other than the content type, and
 Workers Logs are off (`wrangler.toml`), so no request log keeps the address either.
 
@@ -118,17 +123,16 @@ slip). It runs the weekly installs, DAU, WAU, MAU, agent-kind and country querie
 country for the last 28 days and the last 7 finished days' button counts, and writes them as one report;
 `--html <file.html>` also writes them as one page with the shares drawn as bars. For the button counts, per width:
 
-- the share of installs that used each counter, with `of`, the installs it is a share of: under about ten installs
-  a share is noise, and over one install it reads 100%;
-- the middle install's typical day: each install first gets one value, the lower middle of its own days' ranges,
-  then the middle install is taken, so a few heavy installs do not carry it; only ranges are sent and none is
+- the share of installs that used each counter, with `of`, the installs it is a share of, counted in the same
+  statement: under about ten installs a share is noise, and over one install it reads 100%;
+- the middle install's day on the days it used the counter: each install first gets one value, the lower middle of
+  its ranges on those days (a recorded day it did not use it is not one of them), then the middle install is taken, so a few heavy installs do not carry it; only ranges are sent and none is
   averaged, so when the two middle installs differ both ranges are named (`1-2 .. 30+`);
 - the controls shown, and chat/terminal switches by kind of agent: an install runs an agent there when that day's
   active message or its own switch counts name it, and switched when its counts hold a switch on that agent's panes;
-  `shell` (a pane with no agent) shows switches alone, since no visit names it.
+  `shell` (a pane with no agent) shows switches alone (`-` for running), since no visit names it.
 
-The queries of one run share one cut-off day, worked out once, so a run across UTC midnight still agrees with itself;
-a share is capped at 100% for a row that arrives between two queries. The script selects `telemetry/` as Wrangler's working directory.
+The queries of one run share one cut-off day, worked out once, so a run across UTC midnight still agrees with itself. The script selects `telemetry/` as Wrangler's working directory.
 For the individual queries below, stay in `telemetry/`:
 
 ```sh

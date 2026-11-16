@@ -318,7 +318,8 @@ export interface InstallServerOptions {
 /**
  * Installs the server of `version` into `home` unless that release already runs there, verified. Throws, with one line
  * that says why and nothing in `home` changed, on any check that fails; throws NoBinaryRelease, before anything is
- * written, when the release of `version` has no ovis-server.json at all.
+ * written, when the release of `version` has no ovis-server.json at all, and without asking it when `sources` says why
+ * none can be tied to it.
  */
 export async function installServer(options: InstallServerOptions): Promise<{ installed: boolean; message: string; binary: string }> {
   const platform = options.platform ?? hostPlatform();
@@ -343,6 +344,10 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
   const binary = join(current, binaryName(platform));
   // the install this one waited for may have put this very version in place
   if (verifiedInstall(home, version, platform, publicKey)) return { installed: false, message: `Ovis ${version} is installed already in ${current}; nothing to do`, binary };
+  // sources nothing ties to a release (no git, no checkout, changes not committed) take no binary whatever the release
+  // holds: it is not asked, so one out of reach does not stop them
+  const sources = options.sources;
+  if (sources && "error" in sources) throw new NoBinaryRelease(`the release's binary is not taken for this checkout (${sources.error})`);
 
   const at = `${base}/v${version}`;
   const manifestBytes = await download(`${at}/${MANIFEST}`, MANIFEST_LIMIT, MANIFEST, options.fetchFile);
@@ -357,9 +362,8 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
     throw new Error(`${manifest}; nothing was changed`);
   }
   // a checkout of another commit with the same version (a branch, main between releases) runs its own sources
-  const sources = options.sources;
-  if (sources && ("error" in sources || sources.server !== manifest.sources.server || sources.shared !== manifest.sources.shared)) {
-    throw new NoBinaryRelease(`this checkout's server/ and shared/ are not the ones v${version} was built from (${"error" in sources ? sources.error : "other git trees"})`);
+  if (sources && (sources.server !== manifest.sources.server || sources.shared !== manifest.sources.shared)) {
+    throw new NoBinaryRelease(`this checkout's server/ and shared/ are not the ones v${version} was built from (other git trees)`);
   }
 
   const stage = mkdtempSync(join(releases, ".stage-"));

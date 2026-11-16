@@ -3230,6 +3230,24 @@ button {
   display: none;
 }
 
+/* the open drawer's named way out where the X was (App.tsx markInDrawer): read by a screen reader, drawn as a button
+   only while the keyboard is on it */
+.drawer-close:focus-visible {
+  position: static;
+  display: flex;
+  align-items: center;
+  width: auto;
+  height: var(--control-h);
+  margin: var(--space-2) var(--space-3) 0;
+  padding: 0 var(--space-3);
+  overflow: visible;
+  clip: auto;
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+}
+
 /* text buttons: .btn (neutral), .btn-primary, .btn-danger, .btn-ghost */
 .btn {
   display: inline-flex;

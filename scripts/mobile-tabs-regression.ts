@@ -211,8 +211,6 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
     otherWorkspaceId = other.workspace.workspace_id;
     await herdrRpc("pane.report_agent", { pane_id: first, source: "manual", agent: "claude", state: "idle" });
 
-    await checkPhoneRow(browser, origin, first, panes);
-    await checkHeaderLongPress(browser, origin, first);
     await context.addInitScript(() => {
       if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
       if (localStorage.getItem("ovis:phone-tabs") === null) localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
@@ -252,9 +250,11 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
     await page.locator(".header-more-button").tap();
     const keyboardMenu = page.getByRole("dialog", { name: "More", exact: true });
     await keyboardMenu.waitFor();
-    assert.equal(await keyboardMenu.locator('[data-item="rename"]').count(), 1, "pane actions stay reachable from the header with a short keyboard");
-    await keyboardMenu.getByRole("button", { name: "Cancel", exact: true }).tap();
-    await keyboardMenu.waitFor({ state: "detached" });
+    await keyboardMenu.locator('[data-item="pane-group"]').tap();
+    const keyboardActions = page.getByRole("dialog", { name: "Pane and tab…", exact: true });
+    await keyboardActions.waitFor();
+    assert.equal(await keyboardActions.locator('[data-item="rename"]').count(), 1, "pane actions stay reachable from the header with a short keyboard");
+    await cancelSheet(page, keyboardActions);
     await screenshot("chat-short-keyboard");
     await page.setViewportSize({ width: 390, height: 844 });
     await assertShell(page, "restored phone height");
@@ -264,6 +264,8 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
 
     const panes: string[] = [];
     for (const label of TAB_LABELS) panes.push((await tabCreate({ workspaceId, cwd: root, label })).root_pane.pane_id);
+    await checkPhoneRow(browser, origin, first, panes);
+    await checkHeaderLongPress(browser, origin, first);
     const last = panes.at(-1)!;
     const addedTabs = await openTabs(page);
     await addedTabs.getByRole("button", { name: "docs", exact: true }).waitFor();

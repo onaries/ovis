@@ -750,7 +750,8 @@ function turnAfter(entry: Row, at: number | null, turnEndedAt: number | null): n
   return row(row(entry["message"]))?.["stop_reason"] === "end_turn" ? at : null;
 }
 
-function readBytes(path: string, exact: string, from: number, length: number): Buffer | null {
+/** At most `length` bytes of `path` from `from`, read from the plain file `plain` looked at (`exact`, openPlain), or null. */
+export function readBytes(path: string, exact: string, from: number, length: number): Buffer | null {
   const fd = openPlain(path, exact)?.fd;
   if (fd === undefined) return null;
   try {
@@ -1748,6 +1749,11 @@ export class ClaudeSubagentStatus {
   sessionOf(paneId: string): { path: string; live: boolean; startedAt: number | null; read?: number } | null {
     const tracked = this.panes.get(paneId);
     return tracked?.path ? { path: tracked.path, live: tracked.live, startedAt: tracked.startedAt, read: tracked.read } : null;
+  }
+
+  /** The id of the Claude session herdr names for the pane, as the last snapshot read it, or null: it names none. */
+  sessionIdOf(paneId: string): string | null {
+    return this.sessions.get(paneId) || null;
   }
 
   /** Finds the Claude panes of a snapshot and their transcripts; a lookup costs process calls, so a known one is not repeated. */

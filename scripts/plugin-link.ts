@@ -2,15 +2,17 @@
  * `link`: a PC with no screen of its own joins the relay from its terminal (docs/relay.md, "A PC
  * with no screen"). Both ways are the ones its own Settings page offers, through the same routes:
  *
- * - `link` (also `add` and `login`, COMMAND_ALIASES): sign in to the account with a device code (as a PC's own page does,
+ * - `link` (also `add` and `login`, scripts/plugin-runtime.ts COMMAND_ALIASES): sign in to the account with a device code (as a PC's own page does,
  *   src/lib/account/deviceSignIn.ts): the Ovis link page's where the service has it, else, or with
  *   `--github` / `--google`, the provider's own device flow. Then list this PC in the account (src/lib/account/addThisPc.ts),
  *   then show one QR code: a device signed in to that account that scans it puts this PC in the account, with nothing
  *   to type and nothing to approve here (docs/account.md, "Who may admit a device": a code admits whoever holds it).
  *   So the code is shown only on a terminal (or with `--print`), on a screen of its own that goes when it ends, for
- *   30 minutes at most, and the command says which account this PC joined and by which of its devices. Any other
- *   device the code let in is asked about, and removed unless the person types keep; with this PC in another account
- *   than the one that signed in, every device that came since the code was shown is removed.
+ *   30 minutes at most (under the fleet preview, server/preview.ts: only on a terminal, `--print` too, and only once
+ *   Enter was pressed there under the name of the account that signed in), and the command says which account this PC
+ *   joined and by which of its devices. Any other device the code let in is asked about, and removed unless the person
+ *   types keep; with this PC in another account than the one that signed in, every device that came since the code was
+ *   shown is removed.
  * - `link --approve`: the same sign-in, then approve here, after comparing six digits, the device of the account that
  *   adds it.
  * - `link --code`: the code to type and the relay QR code that Connect a device shows, renewed
@@ -25,13 +27,14 @@ import { hostname } from "node:os";
 import qrcode from "qrcode-generator";
 
 import { isLoopbackHost } from "../server/access.ts";
+import { fleetPreview } from "../server/preview.ts";
 import { accountOsOfPlatform } from "../shared/account-asker.ts";
 import { decodeOffer } from "../shared/relay-offer.ts";
 import { importPublicKey } from "../shared/relay-e2ee.ts";
 import { startDeviceSignIn, startLinkPageSignIn } from "../src/lib/account/deviceSignIn.ts";
 import { NEW_PC_MS } from "../src/lib/account/myPcs.ts";
 import { AccountService, DEVICE_PROVIDERS, offeredProviders, type DeviceProvider } from "../src/lib/account/service.ts";
-import { memoryAccountStore, memoryLock } from "../src/lib/account/store.ts";
+import { memoryAccountStore, memoryLock, type AccountProvider } from "../src/lib/account/store.ts";
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -42,6 +45,12 @@ export interface LinkOptions {
   readonly headers: Record<string, string>;
   /** the account service the server's pages sign in to; null when the account is off */
   readonly accountService: string | null;
+  /** the app the server pairs with (OVIS_RELAY_APP_URL); unset, https://app.ovis.sh. Named only under the fleet preview (appHost) */
+  readonly app?: string;
+  /** the fleet preview (server/preview.ts), as the plugin's settings set it (linkSettings); unset, off */
+  readonly preview?: boolean;
+  /** OVIS_CLI_NAME: the command a wrapper runs the plugin under; named only under the fleet preview (cli) */
+  readonly cliName?: string;
   readonly out: (text: string) => void;
   /** the person's answers, a line at a time */
   readonly lines: AsyncIterator<string>;
@@ -66,9 +75,6 @@ export interface LinkOptions {
   readonly now?: () => number;
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
-
-/** The names `link` also answers to: what a person looks for when a PC is to join their account. */
-export const COMMAND_ALIASES: Readonly<Record<string, "link">> = { add: "link", login: "link" };
 
 /** How often the waiting screen looks for a device that asks to add this PC. */
 const POLL_MS = 2_000;
@@ -637,6 +643,64 @@ export async function approveWaiting(pairings: readonly WaitingDevice[], options
 
 const groups = (id: string): string => id.match(/.{1,4}/g)?.join(" ") ?? id;
 
+/**
+ * What `link` reads from the plugin's settings (its environment, then its settings files: the values the server it
+ * starts gets, scripts/plugin.ts): the fleet preview (server/preview.ts), the command's name and the app the server
+ * pairs with.
+ */
+export function linkSettings(env: Readonly<Record<string, string | undefined>>): Pick<LinkOptions, "preview" | "cliName" | "app"> {
+  const cliName = env["OVIS_CLI_NAME"];
+  const app = env["OVIS_RELAY_APP_URL"];
+  return { preview: fleetPreview(env), ...cliName ? { cliName } : {}, ...app ? { app } : {} };
+}
+
+/**
+ * The command a person types to run this script again, as printed in its instructions: under the fleet preview,
+ * OVIS_CLI_NAME where a wrapper runs the plugin under another name or path; otherwise, and with it unset, `ovis`.
+ */
+function cli(options: LinkOptions): string {
+  return (options.preview === true && options.cliName) || "ovis";
+}
+
+/**
+ * One line typed at the terminal in answer to `prompt`; null when none can come (the input ended). What was typed
+ * before the prompt is discarded as it shows, and a line that comes too soon after it to have been read (DWELL_MS: one
+ * typed ahead where the input cannot be discarded, or a key pressed twice) answers nothing, and the prompt is shown
+ * again. For a run that reads nothing else meanwhile: it reads one line at a time, and leaves no read open.
+ */
+async function askLine(options: LinkOptions, prompt: string): Promise<string | null> {
+  const now = options.now ?? Date.now;
+  // Where the terminal's input cannot be emptied (Windows, no C library found), a line begun before the prompt comes
+  // with the first Enter pressed at it, however late: that first line answers nothing, as `asking` does for a request
+  let held = (() => { try { return options.discard?.() !== true; } catch { return true; } })();
+  let shownAt = now();
+  options.out(prompt);
+  for (;;) {
+    const reply = await answer(options.lines, options.signal);
+    if (reply.done) { options.out("\n"); return null; }
+    if (held) {
+      held = false;
+      shownAt = now();
+      options.out(`That line answered nothing: this terminal's input could not be emptied as the question showed, so it may have been typed before it. Answer again.\n${prompt}`);
+      continue;
+    }
+    if (now() - shownAt >= DWELL_MS) return reply.value;
+    shownAt = now();
+    options.out(`That line answered nothing: it came before the question could be read. Answer again.\n${prompt}`);
+  }
+}
+
+const PROVIDER_NAMES: Readonly<Record<AccountProvider, string>> = { github: "GitHub", google: "Google", apple: "Apple" };
+
+/**
+ * The app's address as a person types it: under the fleet preview, the host of `url` (the app the server pairs with),
+ * with the port when it has one; otherwise app.ovis.sh, whatever the server pairs with.
+ */
+function appHost(options: LinkOptions, url: string): string {
+  if (options.preview !== true) return "app.ovis.sh";
+  try { return new URL(url.includes("://") ? url : `https://${url}`).host; } catch { return url; }
+}
+
 const remaining = (ms: number): string => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
 
 /** `--code`: the code and the QR code, as Connect a device shows them, until Ctrl+C. */
@@ -670,7 +734,7 @@ async function linkWithCode(options: LinkOptions, api: Api): Promise<number> {
       out([
         "",
         ...code !== null
-          ? [`Code to type: ${code.code}   (works once, expires in ${left})`, "On the other device, open app.ovis.sh, choose Pair with a code and type it,", "or scan this QR code with the phone's camera:"]
+          ? [`Code to type: ${code.code}   (works once, expires in ${left})`, `On the other device, open ${appHost(options, offer.url)}, choose Pair with a code and type it,`, "or scan this QR code with the phone's camera:"]
           : [`No code to type this time (${refused}).`, `Scan this QR code with the phone's camera (expires in ${left}):`],
         "",
         qr(offer.url),
@@ -883,7 +947,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
     const head = ["Scan this QR code with a device that is signed in to this Ovis account. It adds this PC to the account; there is no number to type.", ""];
     const tail = [
       ...card.typed !== null
-        ? [`Code to type: ${card.typed}   (works once, expires in ${left})`, "Or, on that device, open app.ovis.sh, choose Pair with a code and type it."]
+        ? [`Code to type: ${card.typed}   (works once, expires in ${left})`, `Or, on that device, open ${appHost(options, card.url)}, choose Pair with a code and type it.`]
         : [`No code to type this time (${card.refused}). The QR code expires in ${left}.`],
       `That device then shows an ID: pair only if it matches this PC's ID, every group: ${groups(card.serverId)}`,
       "Anyone who can read this screen can pair with this PC while the code is shown.",
@@ -1157,8 +1221,8 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
             // more kept pairing than was looked again for: the last of them is paired still, and the next run would
             // take it for one this PC had before
             say(open === "more"
-              ? `${said} This PC is in no account again, but more devices paired with it while these were removed, and one may still be paired. Open Settings → Devices and PCs on this PC and revoke any device there that is not yours, then run ovis add again.\n`
-              : `${said} This PC is in no account again. Run ovis add again, and scan the code with a device signed in to the account you signed in to here.\n`);
+              ? `${said} This PC is in no account again, but more devices paired with it while these were removed, and one may still be paired. Open Settings → Devices and PCs on this PC and revoke any device there that is not yours, then run ${cli(options)} add again.\n`
+              : `${said} This PC is in no account again. Run ${cli(options)} add again, and scan the code with a device signed in to the account you signed in to here.\n`);
             return 1;
           }
           // held there by a device paired before this run, or by one that could not be removed. Its relay pass is not
@@ -1249,7 +1313,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           }
           for (const device of asked.devices) if (!joined.has(device.id)) settled.add(device.id);
           strays = unvouched(list);
-          const parted = asked.alone ? `Sign in on ${asked.devices.length === 1 ? "that device" : "one of those devices"}, then run ovis add again.\n` : "This PC is in no account yet. Run ovis add again.\n";
+          const parted = asked.alone ? `Sign in on ${asked.devices.length === 1 ? "that device" : "one of those devices"}, then run ${cli(options)} add again.\n` : `This PC is in no account yet. Run ${cli(options)} add again.\n`;
           if (!keep) {
             // Nothing ends on the look taken before a removal. A device that paired, or an account this PC joined,
             // between that look and the DELETE shows only in the next one, which comes at once: the removed device
@@ -1275,13 +1339,13 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
       }
       if (now() >= stopAt) {
         return await stop(added
-          ? "Stopped waiting after 30 minutes: this PC is in your account, but its other devices are not in yet. Open the Ovis app on the device that added it, then run ovis add again."
-          : "Stopped after 30 minutes. Run ovis add again.");
+          ? `Stopped waiting after 30 minutes: this PC is in your account, but its other devices are not in yet. Open the Ovis app on the device that added it, then run ${cli(options)} add again.`
+          : `Stopped after 30 minutes. Run ${cli(options)} add again.`);
       }
       // A code only after a look that was answered and found no device and no account: none is made once a device got in,
       // nor while that cannot be told
       if (!over && !away && (card === null || now() >= card.until)) {
-        if (minted >= MAX_CODES) return await stop(`Stopped after ${Math.max(1, Math.round((now() - startedAt) / 60_000))} minutes. Run ovis add again.`);
+        if (minted >= MAX_CODES) return await stop(`Stopped after ${Math.max(1, Math.round((now() - startedAt) / 60_000))} minutes. Run ${cli(options)} add again.`);
         try {
           await mint();
           codeless = false;
@@ -1326,7 +1390,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   } catch (error) {
     // Ctrl+C, a SIGTERM, the terminal closing (SIGHUP), or an error: the code is taken back first, then every device
     // it let in that was not answered for goes. Nobody typed keep, and the terminal that could say so may be gone
-    if (signal.aborted) return await stop("Stopped. Run ovis add again to add this PC.");
+    if (signal.aborted) return await stop(`Stopped. Run ${cli(options)} add again to add this PC.`);
     const ended = await retract();
     const swept = await sweep();
     leave(ended, false);
@@ -1389,7 +1453,13 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     return 1;
   }
   // said before the sign-in, not after it: the QR code admits whoever reads it, so it goes to a terminal only
-  if (!mode.approve && !mode.print && options.isTty !== true) {
+  // (under the fleet preview with --print too, and only once Enter was pressed there under the account's name)
+  const preview = options.preview === true;
+  if (preview && !mode.approve && (options.isTty !== true || options.terminal !== true)) {
+    out(`Adding this PC needs a terminal: the QR code and the code to type are a key to this PC, so they are never written to a pipe, a file or a log. Run ${cli(options)} add in a terminal (over ssh, run ssh -t).\n`);
+    return 1;
+  }
+  if (!preview && !mode.approve && !mode.print && options.isTty !== true) {
     out("The QR code is a key to this PC. Run this in a terminal, or pass --print to write it anyway.\n");
     return 1;
   }
@@ -1424,12 +1494,23 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
   await signIn.finish(signal);
   const service = new AccountService({ store, lock, fetch: serviceFetch, now });
   // the account that signed in: the one this PC must end up in
-  const signedIn = (await service.session())?.account ?? null;
+  const session = await service.session();
+  const signedIn = session?.account ?? null;
   // a listing a renewal took away and has not put back yet
   const pending: { listing: Listing | null } = { listing: null };
   const unlisted = "This PC could not be listed in your account again just now; it is tried again until it is.\n";
   try {
-    if (signedIn === null) throw new LocalError("The sign-in did not last. Run this again.");
+    if (session === undefined || signedIn === null) throw new LocalError("The sign-in did not last. Run this again.");
+    if (preview && !mode.approve) {
+      // The account as the service's token answer names it: its id and the provider it signed in with (the service
+      // keeps no login or email to name it by). It is named before this PC is listed in it or any QR code is shown,
+      // and the QR code waits for Enter under that name
+      const line = await askLine(options, `Signed in as Ovis account ${signedIn} (signed in with ${PROVIDER_NAMES[session.provider]}). Press Enter to show the QR code for this account's phone, or press Ctrl+C if that is not your account: `);
+      if (line === null || line.normalize("NFKC").trim() !== "") {
+        out(`The QR code was not shown, and this PC was not listed in that account. Run ${cli(options)} add again and sign in with your own account.\n`);
+        return 1;
+      }
+    }
     const first = await listThisPc(api, service, now, pending);
     if (pending.listing !== null) out(unlisted);
     // a renewal's listing not put back yet goes back first: an account that does not list the PC gives it no pass
@@ -1440,7 +1521,7 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     }
     const name = first.entry.label;
     if (!mode.approve) {
-      out(`Signed in. This PC is listed in your account as ${name}.\n`);
+      out(preview ? `This PC is listed in that account as ${name}.\n` : `Signed in. This PC is listed in your account as ${name}.\n`);
       return await addByQr(options, api, {
         signedIn, status, plain: mode.print || options.isTty !== true,
         unlist: () => { pending.listing = null; return service.deletePc(first.serverId).then(() => true, () => false); },
@@ -1460,7 +1541,7 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     let away = false;
     out([
       `Signed in. This PC is listed in your account as ${name}.`,
-      `On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on ${name}.`,
+      `On a device already signed in to this account (the Ovis app or ${appHost(options, options.app ?? "https://app.ovis.sh")}), choose Add on ${name}.`,
       "Its request shows here to approve. Press Ctrl+C to stop.",
       "",
     ].join("\n"));

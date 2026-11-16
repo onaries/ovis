@@ -87,9 +87,13 @@ async function open(browser: Browser, width: number, theme: "dark" | "light" = "
 
 /** The sidebar in view or out of it: a phone's drawer, a desktop's Show/Hide workspace list. */
 async function showSidebar(page: Page, phone: boolean, shown: boolean): Promise<void> {
-  const name = phone ? (shown ? "Open workspace list" : "Close workspace list") : (shown ? "Show workspace list" : "Hide workspace list");
-  const toggle = page.getByRole("button", { name, exact: true });
-  if (await toggle.count() > 0) await toggle.click();
+  // a phone's open drawer has the Ovis mark where its X was: a tap on the dimmed pane beside it closes it
+  if (phone && !shown) {
+    if (await page.locator("#workspace-drawer.is-open").count() > 0) await page.mouse.click(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
+  } else {
+    const toggle = page.getByRole("button", { name: phone ? "Open workspace list" : shown ? "Show workspace list" : "Hide workspace list", exact: true });
+    if (await toggle.count() > 0) await toggle.click();
+  }
   if (shown) await group(page, "Laptop").waitFor();
   await still(page);
 }

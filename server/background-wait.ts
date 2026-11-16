@@ -94,6 +94,11 @@ export class BackgroundWait {
     return this.panes.get(paneId)?.waiting ?? false;
   }
 
+  /** The time of the pane's latest prompt this wait knows (running), or null. */
+  promptAt(paneId: string): number | null {
+    return this.panes.get(paneId)?.promptAt ?? null;
+  }
+
   /** Drop lifetime-specific waits, not the latest observed pane status or its freshness guard. */
   reset(paneId: string): void {
     const pane = this.panes.get(paneId);

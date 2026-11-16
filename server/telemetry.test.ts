@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
 import { ACTIVE_LATE_DAYS, COUNTS_LATE_DAYS, emptyUsage, harnessOf, TELEMETRY_COUNT_MAX, TELEMETRY_HARNESSES, type TelemetryActive, type TelemetryChange, type TelemetryCounts, type TelemetryEvent, type TelemetryRuntime, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
 import { NOTICE_VERSION } from "../shared/telemetry-notice.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot, type Settings } from "../src/lib/settings.ts";
-import { handleTelemetryRequest, installMethod, Telemetry, telemetryBlocked, USAGE_RESEND_MS, visitSurface } from "./telemetry.ts";
+import { COUNTS_SETTLE_MS, handleTelemetryRequest, installMethod, Telemetry, telemetryBlocked, USAGE_RESEND_MS, visitSurface } from "./telemetry.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -252,7 +252,7 @@ describe("telemetry events", () => {
     await telemetry.report();
     expect(sent).toEqual([]);
 
-    telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION, settings });
+    telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION, settings, generation: 0 });
     await telemetry.report();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.settings).toEqual(settings);
@@ -269,7 +269,7 @@ describe("telemetry events", () => {
 
     const latestSettings = settingsSnapshot({ theme: "system", terminalFontSize: 16 });
     const latestBrowser = setup({ stateDir });
-    latestBrowser.telemetry.change({ settings: latestSettings });
+    latestBrowser.telemetry.change({ settings: latestSettings, generation: 0 });
     await latestBrowser.telemetry.report();
     expect(latestBrowser.sent).toEqual([]);
 
@@ -283,7 +283,7 @@ describe("telemetry events", () => {
     const { telemetry, sent, stateDir, clock } = setup({ grace: 600_000 });
     const safe = settingsSnapshot();
     const submitted = { ...safe };
-    telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION, settings: submitted });
+    telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION, settings: submitted, generation: 0 });
     submitted.theme = "light";
     const preview = telemetry.status().next?.settings;
     expect(preview).toEqual(safe);
@@ -301,7 +301,7 @@ describe("telemetry events", () => {
     clock.now += 600_001;
     await telemetry.report();
     expect(sent).toHaveLength(1);
-    telemetry.change({ settings: settingsSnapshot({ theme: "light" }) });
+    telemetry.change({ settings: settingsSnapshot({ theme: "light" }), generation: 0 });
     await telemetry.report();
     expect(sent).toHaveLength(1);
     expect(telemetry.status().next).toBeNull();
@@ -519,7 +519,7 @@ describe("daily active message", () => {
     // 0.4.0 was reported; this server runs 0.4.1, so an update is owed
     writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: true, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.0", settings: null, active: [], usage_after_notice: true, counts: [] }));
     const { telemetry, sent } = setup({ stateDir, status: 503 });
-    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot({ theme: "light" }) }), telemetry)).status).toBe(200);
+    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot({ theme: "light" }), generation: 0 }), telemetry)).status).toBe(200);
     expect(telemetry.status().next).toMatchObject({ event: "update", previous_version: "0.4.0", settings: settingsSnapshot({ theme: "light" }) });
     expect((await handleTelemetryRequest(telemetryPost({ enabled: false }), telemetry)).status).toBe(200);
     expect((await handleTelemetryRequest(telemetryPost({ enabled: true }), telemetry)).status).toBe(200);
@@ -628,7 +628,7 @@ describe("daily active message", () => {
     writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: true, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.0", settings: settingsSnapshot({ theme: "dark" }), active: [], usage_after_notice: true, counts: [] }));
     const { telemetry, sent } = setup({ stateDir });
     expect(telemetry.status().next).toMatchObject({ event: "update", previous_version: "0.4.0", settings: null });
-    telemetry.change({ settings: settingsSnapshot({ theme: "light" }) });
+    telemetry.change({ settings: settingsSnapshot({ theme: "light" }), generation: 0 });
     await telemetry.report();
     expect(sent.at(-1)).toMatchObject({ event: "update", settings: settingsSnapshot({ theme: "light" }) });
   });
@@ -706,6 +706,208 @@ describe("daily active message", () => {
     const errors = spyOn(console, "error").mockImplementation(() => {});
     try { setup({ stateDir, env: { DO_NOT_TRACK: "1" } }); } finally { errors.mockRestore(); }
     expect(existsSync(join(stateDir, "telemetry.json"))).toBe(false);
+  });
+
+  test("settings told with a generation from before an off the page did not hear are not kept, nor any that name none", async () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    expect(telemetry.status().counts_generation).toBe(0);
+    // another page turns the counts off and on while this page's request is on its way
+    telemetry.change({ enabled: false });
+    telemetry.change({ enabled: true });
+    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot({ theme: "light" }), generation: 0 }), telemetry)).status).toBe(200);
+    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot({ theme: "light" }) }), telemetry)).status).toBe(200);
+    expect(savedFile(stateDir).settings).toBeNull();
+    // told with the generation as it is now: kept
+    const now = telemetry.status().counts_generation;
+    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot({ theme: "light" }), generation: now }), telemetry)).status).toBe(200);
+    expect(savedFile(stateDir).settings).toEqual(settingsSnapshot({ theme: "light" }));
+    expect((await handleTelemetryRequest(telemetryPost({ settings: settingsSnapshot(), generation: -1 }), telemetry)).status).toBe(400);
+  });
+
+  test("a 0.5.4 file that is off with days and a snapshot holds none of them after one start", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    const day = { day: "2026-10-08", harnesses: ["claude"], sent: null, visited: true, usage: emptyUsage(), sent_usage: null, wire_usage: null, sent_at: null };
+    writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: false, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.1", settings: settingsSnapshot(), usage_after_notice: true, active: [day], counts: [{ day: "2026-10-08", version: "0.4.1", narrow: null, wide: { counts: { chat_send: 2 }, shown: [] } }] }));
+    setup({ stateDir });
+    expect(savedFile(stateDir)).toMatchObject({ enabled: false, active: [], counts: [], settings: null });
+  });
+
+  test("a marked file left off with a snapshot (a stop between the mark and the cleaned write) holds none after one start", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: true, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.1", replaced_forgotten: false, forgotten: 0, visits_after_notice: true, settings: settingsSnapshot(), usage_after_notice: true, active: [], counts: [] }));
+    writeFileSync(join(stateDir, "telemetry-off"), "");
+    setup({ stateDir });
+    expect(savedFile(stateDir)).toMatchObject({ settings: null, active: [], counts: [] });
+  });
+
+  test("an off another server makes while this server applies an on wins: the on writes nothing and leaves the mark", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: true, notice_seen_at: null, notice_version: NOTICE_VERSION, reported_version: "0.4.1", replaced_forgotten: false, forgotten: 0, visits_after_notice: true, settings: null, usage_after_notice: true, active: [], counts: [] }));
+    let offAtClock = false;
+    const telemetry = new Telemetry({
+      stateDir, version: "0.4.1", env: {}, fetch: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch, platform: "linux", arch: "x64", noticeGraceMs: 600_000,
+      // the clock is read inside the section (the notice's time): another server's unlocked off lands right then
+      now: () => {
+        if (offAtClock) { offAtClock = false; setup({ stateDir }).telemetry.change({ enabled: false }); }
+        return Date.parse("2026-10-08T12:00:00Z");
+      },
+    });
+    // the other server's off cannot get this server's lock: it goes without it, as an off does
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      offAtClock = true;
+      telemetry.change({ enabled: true, notice_seen: true, notice_version: NOTICE_VERSION });
+    } finally { errors.mockRestore(); }
+    expect(existsSync(join(stateDir, "telemetry-off"))).toBe(true);
+    expect(savedFile(stateDir).enabled).toBe(false);
+  });
+
+  test("a lock another live server holds keeps a count out, but an off still goes and nothing is sent after it", async () => {
+    const { telemetry, actives, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    await telemetry.active(["claude"]);
+    // another server (a live process) holds the state folder's lock, freshly
+    writeFileSync(join(stateDir, "telemetry.lock"), `${process.ppid} ${Date.now()}`);
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      telemetry.tally("prompt_answers");
+      expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(0);
+      expect(errors.mock.calls.some(([line]) => String(line).includes("telemetry.lock"))).toBe(true);
+      // the off does not wait for it: marked, and what was not sent deleted
+      telemetry.change({ enabled: false });
+      expect(existsSync(join(stateDir, "telemetry-off"))).toBe(true);
+      expect(savedFile(stateDir)).toMatchObject({ enabled: false, active: [] });
+    } finally { errors.mockRestore(); }
+    rmSync(join(stateDir, "telemetry.lock"));
+    await settled();
+    expect(actives).toEqual([]);
+  });
+
+  test("a lock whose server is gone, this process's own from an earlier run, one never given a pid, or one held for minutes is taken over; a live holder's is not", () => {
+    // a live holder (this test's parent process), stamped a minute ago: still held, so the count waits and is kept out
+    {
+      const { telemetry, stateDir } = setup({ grace: 600_000 });
+      seen(telemetry);
+      void telemetry.active(["claude"]);
+      writeFileSync(join(stateDir, "telemetry.lock"), `${process.ppid} ${Date.now() - 60_000}`);
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try { telemetry.tally("prompt_answers"); } finally { errors.mockRestore(); }
+      expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(0);
+      expect(existsSync(join(stateDir, "telemetry.lock"))).toBe(true);
+    }
+    // a lock just made, its pid not written yet: held for a moment
+    {
+      const { telemetry, stateDir } = setup({ grace: 600_000 });
+      seen(telemetry);
+      void telemetry.active(["claude"]);
+      writeFileSync(join(stateDir, "telemetry.lock"), "");
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try { telemetry.tally("prompt_answers"); } finally { errors.mockRestore(); }
+      expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(0);
+    }
+    // this process's own pid on a lock it does not hold (an earlier run with the same pid stopped inside a section), and any
+    // lock held for minutes (its pid may be another process's now): taken over at once
+    for (const lock of [`${process.pid} ${Date.now()} earlier-run`, `${process.ppid} ${Date.now() - 10 * 60_000}`]) {
+      const { telemetry, stateDir } = setup({ grace: 600_000 });
+      seen(telemetry);
+      void telemetry.active(["claude"]);
+      const file = join(stateDir, "telemetry.lock");
+      writeFileSync(file, lock);
+      if (lock.startsWith(`${process.ppid} `)) utimesSync(file, new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
+      telemetry.tally("prompt_answers");
+      expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(1);
+      expect(existsSync(file)).toBe(false);
+    }
+    for (const lock of [`999999999 ${Date.now()}`, "garbage"]) {
+      const { telemetry, stateDir } = setup({ grace: 600_000 });
+      seen(telemetry);
+      void telemetry.active(["claude"]);
+      const file = join(stateDir, "telemetry.lock");
+      writeFileSync(file, lock);
+      if (lock === "garbage") utimesSync(file, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+      telemetry.tally("prompt_answers");
+      expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(1);
+      expect(existsSync(file)).toBe(false);
+    }
+  });
+
+  test("a lock another server holds for a moment is waited for", async () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    await telemetry.active(["claude"]);
+    const file = join(stateDir, "telemetry.lock");
+    // another process takes the lock, says so, and lets it go 40 ms later
+    const child = Bun.spawn(["bun", "-e", `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(file)}, process.pid + " " + Date.now(), { flag: "wx" }); console.log("HELD"); setTimeout(() => fs.rmSync(${JSON.stringify(file)}), 40);`], { stdout: "pipe" });
+    const reader = child.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("HELD");
+    telemetry.tally("prompt_answers");
+    expect(savedFile(stateDir).active[0].usage.prompt_answers).toBe(1);
+    expect(await child.exited).toBe(0);
+  });
+
+  test("a server removes only the lock it took, not one another server holds since", () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    const file = join(stateDir, "telemetry.lock");
+    // inside this server's section, another server takes the lock over (as after a take-over of a stale one)
+    (telemetry as unknown as { locked<T>(section: () => T, busy: () => T): T }).locked(() => { writeFileSync(file, `${process.ppid} ${Date.now()} other`); }, () => undefined);
+    expect(readFileSync(file, "utf8")).toContain("other");
+    rmSync(file);
+  });
+
+  test("a section whose lock was taken over while it held it writes nothing back", async () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    await telemetry.active(["claude"]);
+    const file = join(stateDir, "telemetry.lock");
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // stalled past the take-over: another server took the lock and turned the counts off and on meanwhile
+      (telemetry as unknown as { locked<T>(section: () => T, busy: () => T): T }).locked(() => {
+        writeFileSync(file, `${process.ppid} ${Date.now()} other`);
+        setup({ stateDir }).telemetry.change({ enabled: false });
+        rmSync(join(stateDir, "telemetry-off"), { force: true });
+        writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ ...savedFile(stateDir), enabled: true }));
+        telemetry.tally("prompt_answers");
+      }, () => undefined);
+    } finally { errors.mockRestore(); }
+    expect(savedFile(stateDir)).toMatchObject({ active: [], forgotten: 1 });
+    rmSync(file);
+  });
+
+  test("an off is marked before it waits for another server's lock, so that server's next send already finds it", async () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    seen(telemetry);
+    const lock = join(stateDir, "telemetry.lock");
+    const off = join(stateDir, "telemetry-off");
+    // another server holds the lock for 150 ms and looks for the off mark meanwhile, as its send would right before it goes
+    const child = Bun.spawn(["bun", "-e", `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(lock)}, process.pid + " " + Date.now(), { flag: "wx" }); console.log("HELD"); const start = Date.now(); let seen = false; while (Date.now() - start < 150) { if (fs.existsSync(${JSON.stringify(off)})) { seen = true; break; } Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } console.log(seen ? "SEEN" : "NOT"); fs.rmSync(${JSON.stringify(lock)});`], { stdout: "pipe" });
+    const reader = child.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("HELD");
+    telemetry.change({ enabled: false });
+    expect(await child.exited).toBe(0);
+    let rest = "";
+    for (;;) { const { value, done } = await reader.read(); if (done) break; rest += new TextDecoder().decode(value); }
+    expect(rest).toContain("SEEN");
+    expect(savedFile(stateDir).enabled).toBe(false);
+  });
+
+  test("a server never waits on its own lock and leaves none behind", async () => {
+    const { telemetry, stateDir } = setup({ grace: 600_000 });
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      seen(telemetry);
+      await telemetry.active(["claude"]);
+      telemetry.tally("prompt_answers");
+      telemetry.change({ enabled: false });
+      telemetry.change({ enabled: true });
+      expect(errors.mock.calls.some(([line]) => String(line).includes("telemetry.lock"))).toBe(false);
+    } finally { errors.mockRestore(); }
+    expect(existsSync(join(stateDir, "telemetry.lock"))).toBe(false);
   });
 
   test("(k) an install that was never visited sends no active message", async () => {
@@ -1131,7 +1333,11 @@ describe("another server on the same state directory", () => {
     const writer = await pausedWriter(stateDir, `telemetry.change({ enabled: false, notice_seen: true, notice_version: ${NOTICE_VERSION} });`);
     try {
       expect(await writer.next()).toBe("PAUSED");
-      expect(telemetry.change({ enabled: true }).enabled).toBe(true);
+      // the other server holds the state folder's lock through its off: this on cannot interleave with it, and is not taken
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      // refused, once more after a wait, so the page does not take it as done
+      try { expect(() => telemetry.change({ enabled: true })).toThrow("try again"); } finally { errors.mockRestore(); }
+      expect(telemetry.status().enabled).toBe(false);
       writer.resume();
       expect(await writer.next()).toBe("DONE");
       expect(await writer.child.exited).toBe(0);
@@ -1306,7 +1512,7 @@ describe("/api/telemetry", () => {
     expect(sent).toEqual([]);
 
     // on again, with the page's settings told in the same body: kept, and the install event carries them
-    const enabled = await handleTelemetryRequest(post({ enabled: true, settings }), telemetry);
+    const enabled = await handleTelemetryRequest(post({ enabled: true, settings, generation: 1 }), telemetry);
     expect(await enabled.json()).toMatchObject({ enabled: true, next: { settings } });
     expect(JSON.stringify(telemetry.status())).not.toContain("private font name");
     expect(JSON.stringify(telemetry.status())).not.toContain("private reply");
@@ -1325,6 +1531,97 @@ describe("/api/telemetry", () => {
 });
 
 describe("telemetry counts", () => {
+  test("a day still waiting is not sent once another server on the same state turned the counts off and on again", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    const taken: TelemetryCounts[] = [];
+    let other: Telemetry | null = null;
+    // the first day goes; while its POST is answered, the other server is turned off and on again
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === TEST_COUNTS_URL) {
+        taken.push(JSON.parse(String(init?.body)));
+        if (taken.length === 1) { other!.change({ enabled: false }); other!.change({ enabled: true }); }
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof globalThis.fetch;
+    const first = setup({ countsOn: true, stateDir, fetch });
+    other = setup({ countsOn: true, stateDir }).telemetry;
+    seen(first.telemetry);
+    first.clock.now = Date.parse("2026-10-06T12:00:00Z");
+    first.telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0 } });
+    first.clock.now = Date.parse("2026-10-07T12:00:00Z");
+    first.telemetry.change({ counts: { width: "wide", add: { chat_send: 2 }, shown: [], generation: 0 } });
+    first.clock.now = Date.parse("2026-10-08T12:00:00Z");
+    await first.telemetry.active([]);
+    await settled();
+    expect(taken.map((counts) => counts.day)).toEqual(["2026-10-06"]);
+  });
+  test("a day's counts wait COUNTS_SETTLE_MS after its midnight, so a batch from its last minute still goes with it", async () => {
+    const { telemetry, counts, clock } = setup({ countsOn: true });
+    seen(telemetry);
+    clock.now = Date.parse("2026-11-15T23:59:30Z");
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 2 }, shown: [], generation: 0 } });
+    // another device's visit just after midnight: the day is not sent yet
+    clock.now = Date.parse("2026-11-16T00:00:20Z");
+    await telemetry.active([]);
+    await settled();
+    expect(counts).toEqual([]);
+    // the tab's batch from before midnight arrives within its minute
+    clock.now = Date.parse("2026-11-16T00:00:50Z");
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0, day: "2026-11-15" } });
+    clock.now = Date.parse("2026-11-16T00:00:00Z") + COUNTS_SETTLE_MS;
+    await telemetry.active([]);
+    await settled();
+    // 3 in all: the 3-9 bucket (2), where the day sent at the first visit would have said 1-2 (1)
+    expect(counts.map((sent) => [sent.day, sent.wide?.counts])).toEqual([["2026-11-15", { chat_send: 2 }]]);
+  });
+  test("a day still settling at the only visit goes when the settle time ends, with no other visit", async () => {
+    const { telemetry, counts, clock, timers, fireTimer } = setup({ countsOn: true });
+    seen(telemetry);
+    clock.now = Date.parse("2026-11-15T20:00:00Z");
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0 } });
+    clock.now = Date.parse("2026-11-16T00:01:00Z");
+    await telemetry.active([]);
+    await settled();
+    expect(counts).toEqual([]);
+    // one flush armed for the end of the settle time, and nothing else comes
+    expect(timers.filter((timer) => !timer.cleared).map((timer) => timer.ms)).toEqual([COUNTS_SETTLE_MS - 60_000]);
+    clock.now = Date.parse("2026-11-16T00:00:00Z") + COUNTS_SETTLE_MS;
+    fireTimer();
+    await settled();
+    expect(counts.map((sent) => sent.day)).toEqual(["2026-11-15"]);
+  });
+  test("a batch for the ended day that arrives after the only visit arms the settle flush too", async () => {
+    const { telemetry, counts, clock, timers, fireTimer } = setup({ countsOn: true });
+    seen(telemetry);
+    // another device visits just after midnight: nothing of the 15th is on the PC yet, so nothing is armed
+    clock.now = Date.parse("2026-11-16T00:00:20Z");
+    await telemetry.active([]);
+    await settled();
+    expect(timers.filter((timer) => !timer.cleared)).toEqual([]);
+    // the tab's batch from 23:59 arrives from its one-minute buffer
+    clock.now = Date.parse("2026-11-16T00:00:50Z");
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0, day: "2026-11-15" } });
+    expect(timers.filter((timer) => !timer.cleared).map((timer) => timer.ms)).toEqual([COUNTS_SETTLE_MS - 50_000]);
+    clock.now = Date.parse("2026-11-16T00:00:00Z") + COUNTS_SETTLE_MS;
+    fireTimer();
+    await settled();
+    expect(counts.map((sent) => sent.day)).toEqual(["2026-11-15"]);
+  });
+  test("a batch is counted under the day it names, yesterday or today; any other day is dropped", () => {
+    const { telemetry, clock, stateDir } = setup({ countsOn: true });
+    seen(telemetry);
+    clock.now = Date.parse("2026-11-16T00:00:20Z");
+    const change = (day: string) => telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0, day } });
+    change("2026-11-15");
+    change("2026-11-14");
+    change("2026-11-17");
+    expect(telemetry.status().counts?.wide).toBeNull();
+    clock.now = Date.parse("2026-11-15T12:00:00Z");
+    expect(telemetry.status().counts?.wide).toEqual({ counts: { chat_send: 1 }, shown: [] });
+    // only that day was kept: the one before yesterday and the one not yet begun left no day behind
+    expect(savedFile(stateDir).counts.map((entry: { day: string }) => entry.day)).toEqual(["2026-11-15"]);
+  });
   test("a day the receiver took is not sent again when its removal could not be written", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
     dirs.push(stateDir);
@@ -1336,7 +1633,7 @@ describe("telemetry counts", () => {
     }) as typeof globalThis.fetch;
     const { telemetry, clock } = setup({ countsOn: true, stateDir, fetch });
     seen(telemetry);
-    telemetry.change({ counts: { width: "wide", add: { chat_send: 2 }, shown: [] } });
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 2 }, shown: [], generation: 0 } });
     clock.now += 86_400_000;
     try {
       await telemetry.active([]);
@@ -1347,10 +1644,24 @@ describe("telemetry counts", () => {
     await settled();
     expect(taken).toHaveLength(1);
   });
+  test("a batch counted before an off (another tab's) is dropped; the current generation's is kept", () => {
+    const { telemetry } = setup({ countsOn: true });
+    seen(telemetry);
+    expect(telemetry.status().counts_generation).toBe(0);
+    telemetry.change({ enabled: false });
+    telemetry.change({ enabled: true });
+    // one counter for the visits and the counts: the off and the on after it each raise it
+    expect(telemetry.status().counts_generation).toBe(2);
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 5 }, shown: [], generation: 0 } });
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [] } });
+    expect(telemetry.status().counts?.wide).toBeNull();
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 2 } });
+    expect(telemetry.status().counts?.wide).toEqual({ counts: { chat_send: 1 }, shown: [] });
+  });
   test("POST counts is refused with 400 while this build counts nothing, as before counts existed", async () => {
     const off = setup({ countsOn: false });
     seen(off.telemetry);
-    const post = (telemetry: Telemetry) => handleTelemetryRequest(new Request("http://localhost/api/telemetry", { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ counts: { width: "wide", add: { chat_send: 1 }, shown: [] } }) }), telemetry);
+    const post = (telemetry: Telemetry) => handleTelemetryRequest(new Request("http://localhost/api/telemetry", { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ counts: { width: "wide", add: { chat_send: 1 }, shown: [], generation: 0 } }) }), telemetry);
     const refused = await post(off.telemetry);
     expect(refused.status).toBe(400);
     expect((await refused.json()).error.code).toBe("invalid_body");
@@ -1361,7 +1672,7 @@ describe("telemetry counts", () => {
   test("the shipped default counts and sends nothing before the notice that says so (version 6)", async () => {
     const { telemetry, counts, clock, stateDir } = setup();
     seen(telemetry);
-    telemetry.change({ counts: { width: "wide", add: { chat_send: 3 }, shown: ["composer"] } });
+    telemetry.change({ counts: { width: "wide", add: { chat_send: 3 }, shown: ["composer"], generation: 0 } });
     clock.now += 86_400_000;
     await telemetry.active([]);
     await settled();
@@ -1372,7 +1683,7 @@ describe("telemetry counts", () => {
   test("off in this build (its notice is below COUNTS_NOTICE_VERSION): nothing is counted, sent or previewed", async () => {
     const { telemetry, counts, clock, stateDir } = setup({ countsOn: false });
     seen(telemetry);
-    telemetry.change({ counts: { width: "narrow", add: { chat_send: 3 }, shown: ["composer"] } });
+    telemetry.change({ counts: { width: "narrow", add: { chat_send: 3 }, shown: ["composer"], generation: 0 } });
     expect(savedFile(stateDir).counts).toEqual([]);
     expect(telemetry.status().counts).toBeUndefined();
     clock.now += 86_400_000;
@@ -1383,7 +1694,7 @@ describe("telemetry counts", () => {
 
   const DAY_MS = 86_400_000;
   const narrow = (add: TelemetryChange["counts"] extends infer C ? C extends { add: infer A } ? A : never : never, shown: ("composer" | "composer_voice" | "view_switch_header")[] = []) =>
-    ({ counts: { width: "narrow", add, shown } }) satisfies TelemetryChange;
+    ({ counts: { width: "narrow", add, shown, generation: 0 } }) satisfies TelemetryChange;
 
   test("nothing used before the current notice is kept, and a browser's counts alone send nothing", async () => {
     const { telemetry, counts, urls, clock } = setup({ countsOn: true });
@@ -1407,7 +1718,7 @@ describe("telemetry counts", () => {
     seen(telemetry);
     telemetry.change(narrow({ chat_send: 2, view_terminal_claude: 3, view_terminal_by_header: 3 }, ["view_switch_header", "composer"]));
     telemetry.change(narrow({ chat_send: 8 }, ["composer"]));
-    telemetry.change({ counts: { width: "wide", add: { composer_voice: 30, inbox_enter: 9 }, shown: ["composer_voice"] } });
+    telemetry.change({ counts: { width: "wide", add: { composer_voice: 30, inbox_enter: 9 }, shown: ["composer_voice"], generation: 0 } });
     // today's counts are exact here and stay here
     expect(savedFile(stateDir).counts[0].narrow.counts).toEqual({ chat_send: 10, view_terminal_by_header: 3, view_terminal_claude: 3 });
     await telemetry.active([]);
@@ -1499,15 +1810,15 @@ describe("telemetry counts", () => {
     const { telemetry } = setup({ countsOn: true });
     seen(telemetry);
     const post = (body: unknown) => handleTelemetryRequest(new Request("http://localhost/api/telemetry", { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(body) }), telemetry);
-    const ok = await post({ counts: { width: "wide", add: { chat_send: 2, composer_rewind: 1 }, shown: ["composer", "future_panel"] } });
+    const ok = await post({ counts: { width: "wide", add: { chat_send: 2, composer_rewind: 1 }, shown: ["composer", "future_panel"], generation: 0 } });
     expect(ok.status).toBe(200);
     expect((await ok.json()).counts.wide).toEqual({ counts: { chat_send: 1 }, shown: ["composer"] });
     for (const bad of [
       { counts: { width: "tablet", add: {}, shown: [] } },
-      { counts: { width: "wide", add: { chat_send: 0 }, shown: [] } },
-      { counts: { width: "wide", add: { chat_send: 1.5 }, shown: [] } },
-      { counts: { width: "wide", add: { chat_send: TELEMETRY_COUNT_MAX + 1 }, shown: [] } },
-      { counts: { width: "wide", add: { chat_send: "fix the bug" }, shown: [] } },
+      { counts: { width: "wide", add: { chat_send: 0 }, shown: [], generation: 0 } },
+      { counts: { width: "wide", add: { chat_send: 1.5 }, shown: [], generation: 0 } },
+      { counts: { width: "wide", add: { chat_send: TELEMETRY_COUNT_MAX + 1 }, shown: [], generation: 0 } },
+      { counts: { width: "wide", add: { chat_send: "fix the bug" }, shown: [], generation: 0 } },
       { counts: { width: "wide", add: {}, shown: "composer" } },
       { counts: { width: "wide", add: {}, shown: [], pane: "w1:p1" } },
     ]) expect((await post(bad)).status).toBe(400);

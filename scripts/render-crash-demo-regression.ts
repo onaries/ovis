@@ -266,7 +266,8 @@ try {
         assert.equal(await page.locator(".app-crash").count(), 0, "the page is not blanked");
         await page.getByRole("button", { name: "Open workspace list", exact: true }).tap();
         await page.locator("#workspace-drawer.is-open .sidebar-shell").waitFor();
-        await page.getByRole("button", { name: "Close workspace list", exact: true }).tap();
+        await page.touchscreen.tap(page.viewportSize()!.width - 8, page.viewportSize()!.height / 2);
+        await page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
         await stopCrashing(page);
         await notice.getByRole("button", { name: "Try again", exact: true }).tap();
         await page.locator(".pane-frame.is-current").waitFor();

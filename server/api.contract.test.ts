@@ -1052,7 +1052,10 @@ describe("telemetry API", () => {
       expect(await (await fetch(url)).json() as TelemetryStatus).toMatchObject({ notice_seen: false, next: { settings: null } });
       expect(sent).toEqual([]);
 
-      const seen = await post({ notice_seen: true, notice_version: NOTICE_VERSION, settings });
+      // as the page acknowledges: its settings with the counting generation it heard from the server
+      const heard = (await (await fetch(url)).json() as TelemetryStatus).counts_generation;
+      expect(heard).toBe(0);
+      const seen = await post({ notice_seen: true, notice_version: NOTICE_VERSION, settings, generation: heard });
       const preview = await seen.json() as TelemetryStatus;
       expect(seen.status).toBe(200);
       expect(preview).toMatchObject({ notice_seen: true, next: { event: "install", settings } });
@@ -1065,6 +1068,13 @@ describe("telemetry API", () => {
       expect(JSON.stringify(sent[0]!.settings)).not.toContain("private reply");
       expect(JSON.stringify(sent[0]!.settings)).not.toContain("private-account-key");
       expect(await (await fetch(url)).json() as TelemetryStatus).toMatchObject({ next: null });
+      // a page that names no generation (one from before it, until it updates) is answered and its settings are not kept
+      const later = { ...settings, theme: "dark" as const };
+      const unnamed = await post({ settings: later });
+      expect(unnamed.status).toBe(200);
+      expect(JSON.parse(readFileSync(join(state, "telemetry.json"), "utf8")).settings).toEqual(settings);
+      expect((await post({ settings: later, generation: heard })).status).toBe(200);
+      expect(JSON.parse(readFileSync(join(state, "telemetry.json"), "utf8")).settings).toEqual(later);
       const off = await post({ enabled: false });
       expect(await off.json() as TelemetryStatus).toMatchObject({ enabled: false });
     } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
@@ -2426,6 +2436,10 @@ describe("GET /api/pane/omo-tasks", () => {
     const session = spyOn(ClaudeSubagentStatus.prototype, "sessionOf").mockImplementation(function(this: ClaudeSubagentStatus, paneId) {
       return paneId === "busy-claude-pane" ? { path, live: true, startedAt: null, read: 1 } : original.call(this, paneId);
     });
+    const originalPaneGet = herdrClient.paneGet;
+    const pane = spyOn(herdrClient, "paneGet").mockImplementation((paneId) => paneId === "busy-claude-pane"
+      ? Promise.resolve({ pane_id: paneId, agent: "claude" } as Awaited<ReturnType<typeof herdrClient.paneGet>>)
+      : originalPaneGet(paneId));
     setFilePoolOptions({ workers: 0, waiting: 0 });
     try {
       const response = await fetch(`${base()}/api/pane/omo-tasks?pane_id=busy-claude-pane`);
@@ -2434,6 +2448,7 @@ describe("GET /api/pane/omo-tasks", () => {
       expect(await response.json()).toMatchObject({ error: { code: "file_busy" } });
       expect((await fetch(`${base()}/api/health?scope=bridge`)).status).toBe(200);
     } finally {
+      pane.mockRestore();
       session.mockRestore();
       setFilePoolOptions();
       rmSync(root, { recursive: true, force: true });

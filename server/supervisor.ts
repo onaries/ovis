@@ -16,6 +16,7 @@ import { legacyLauncherStateDir, withLegacyNames } from "./legacy-env.ts";
 import { COMPILED, ENTRIES, entryCommand, ROOT } from "./entries.ts";
 import { installedBinaryAt, pluginBinaryOf } from "./updater.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
+import { profileFolderRefusal } from "./profile-marker.ts";
 import { runCommand, updateChannel, Updater, type Release } from "./updater.ts";
 
 /** After a try at the Rust PTY host, the next supervisor start waits this long before another (as the unshallow fetch does, #1252). */
@@ -82,6 +83,13 @@ export async function runSupervisor(root = ROOT) {
   // waits for a launcher of this version
   const legacyStateDir = legacyLauncherStateDir(process.env);
   const supervisor = { root, port, directory: ROOT };
+  // a folder a machine profile marked is its own: nothing of this launch happens there, the legacy move included
+  // (server/profile-marker.ts)
+  const marked = profileFolderRefusal(resolve(legacyStateDir ?? defaultStateDir(process.env, supervisor)));
+  if (marked !== null) {
+    console.error(marked);
+    process.exit(1);
+  }
   if (legacyStateDir === null) moveLegacyStateDir(process.env, supervisor);
   const appStateDir = resolve(legacyStateDir ?? defaultStateDir(process.env, supervisor));
   const socketPath = resolve(herdrSocketPath());

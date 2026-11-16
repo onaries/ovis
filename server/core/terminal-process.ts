@@ -5,7 +5,7 @@
  */
 import type { HerdrPane, ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
 import { AttachOutputTail, AttachStartupProbes, isTakeoverExit } from "../attach-output.ts";
-import { HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
+import { checkedHerdrSocket, HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
 import { CoreAttachSession } from "../herdr-core/attach-session.ts";
 import { coreConnection, HC_MOVED, hcBin } from "../herdr-core/runtime.ts";
 import { capabilities } from "../runtime/capabilities.ts";
@@ -700,7 +700,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         // herdr's CLI reads HERDR_SOCKET_PATH, not HERDR_SOCKET: the stream must reach
         // the same session the RPCs talk to, or a named session's terminals are
         // looked up on the default socket and the attach dies.
-        env: { HERDR_SOCKET_PATH: herdrSocketPath() },
+        env: { HERDR_SOCKET_PATH: checkedHerdrSocket(herdrSocketPath()) },
         cols: attachment.cols,
         rows: attachment.rows,
         onData: (data) => {

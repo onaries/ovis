@@ -7,7 +7,7 @@ import { subscribeMachineEvents, type MachineEventDocument } from "../machine-ev
 import type { ClientRole, ServerMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import type { DeviceStore } from "../devices.ts";
-import { HerdrError, herdrSocketPath, LARGE_REPLY_BYTES } from "../herdr/client.ts";
+import { checkedHerdrSocket, HerdrError, herdrSocketPath, LARGE_REPLY_BYTES } from "../herdr/client.ts";
 import type { MachineRelay } from "../machine-relay.ts";
 import { crossingMs, OUTPUT_HARD_BYTES, OUTPUT_LOW_BYTES, OUTPUT_STALL_MS, type OutputWindow } from "../output-window.ts";
 import type { PendingInputs } from "../pending-input.ts";
@@ -388,7 +388,7 @@ export function createConnections({ clients, present, pending, devices, detachCl
       const started: PaneView = view = { over: false, stopped: false, process: startWatch({
         paneId,
         ...geometry,
-        socketPath: herdrSocketPath(),
+        socketPath: checkedHerdrSocket(herdrSocketPath()),
         onFrame: (data) => send(client, { type: "watch-data", pane_id: paneId, data }),
         onEnd: ended,
       }) };

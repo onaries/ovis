@@ -23,11 +23,14 @@ import { RelayService } from "./service.ts";
 import type { RelayServiceOptions } from "./service.ts";
 import { bounded, deferred, TestClock } from "./test-helpers.ts";
 import { relayClock } from "./session.ts";
+import { unitHerdrOnly } from "../../scripts/test-herdr.ts";
+import { FakeAccountService } from "../../shared/account-service-fake.ts";
+import { herdrRpc, workspaceClose, workspaceCreate } from "../herdr/client.ts";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-async function fixture(serveOnly?: boolean, options: Partial<RelayServiceOptions> = {}) {
+async function fixture(serveOnly?: boolean, options: Partial<RelayServiceOptions> = {}, appOptions: NonNullable<Parameters<typeof createServer>[0]> = {}) {
   let attempts = 0;
   const hostOptions = { port: 0, pairGuestGapMs: 0, limiters: {
     perAddress: { async limit() { attempts++; return { success: true }; } },
@@ -77,7 +80,7 @@ async function fixture(serveOnly?: boolean, options: Partial<RelayServiceOptions
   };
   let service = new RelayService(relayOptions);
   let app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", tailscaleOwner: null,
-    sidecar: false, tailscaleServeOnly: serveOnly, relay: service });
+    sidecar: false, tailscaleServeOnly: serveOnly, ...appOptions, relay: service });
   cleanup.push(async () => { await service.shutdown(); app.stop(); });
   return {
     stateDir,
@@ -90,8 +93,10 @@ async function fixture(serveOnly?: boolean, options: Partial<RelayServiceOptions
     opened, heard, warmOpened: warmOpened.map((entry) => entry.promise),
     get base() { return `http://127.0.0.1:${app.port}`; },
     async request(path = "", method = "GET", guarded = true) {
-      return fetch(this.base + "/api/relay" + path, { method,
-        headers: { origin: this.base, ...(guarded ? { "x-herdr-update": "1" } : {}) } });
+      const guard: Record<string, string> = guarded ? { "x-herdr-update": "1" } : {};
+      // the machine profile's local owner is the caller on its socket in the state folder
+      if (appOptions.profile === "machine") return fetch("http://localhost/api/relay" + path, { method, unix: join(stateDir, "serve.sock"), headers: { origin: "http://localhost", ...guard } });
+      return fetch(this.base + "/api/relay" + path, { method, headers: { origin: this.base, ...guard } });
     },
     async start() {
       const response = await this.request("/start", "POST");
@@ -113,7 +118,7 @@ async function fixture(serveOnly?: boolean, options: Partial<RelayServiceOptions
       app.stop();
       synced = deferred<void>();
       service = new RelayService(relayOptions);
-      app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", tailscaleOwner: null, sidecar: false, relay: service });
+      app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", tailscaleOwner: null, sidecar: false, ...appOptions, relay: service });
     },
     async interruptRelay(clock: TestClock) {
       synced = deferred<void>();
@@ -245,9 +250,17 @@ async function squatter(f: Awaited<ReturnType<typeof fixture>>, offer: RelayOffe
   cleanup.push(() => socket.close());
   await bounded(assigned.promise);
   const welcome = deferred<void>();
+  const error = deferred<SessionError>();
+  const frames: number[] = [];
   let mux: MuxEngine | undefined;
   const channel = await bounded(openClientSecureChannel(transport, { daemonPublicKeyB64: offer.server_public_key,
-    events: { onmessage: (data) => { if (typeof data !== "string") mux?.receive(new Uint8Array(data)); }, onclose: () => mux?.carrierLost() } }));
+    events: { onmessage: (data) => {
+      if (typeof data === "string") return;
+      const frame = decodeFrame(new Uint8Array(data));
+      frames.push(frame.type);
+      if (frame.type === FrameType.SESSION_ERROR) error.resolve(frame.payload.code);
+      mux?.receive(new Uint8Array(data));
+    }, onclose: () => mux?.carrierLost() } }));
   mux = new MuxEngine({
     role: "client", clock: relayClock, send: (bytes) => channel.send(bytes.slice().buffer),
     close: (code) => channel.close(code), outboundWireByteLength: (bytes) => channel.outboundWireByteLength(bytes.slice().buffer),
@@ -257,7 +270,7 @@ async function squatter(f: Awaited<ReturnType<typeof fixture>>, offer: RelayOffe
   mux.sendSession({ type: FrameType.HELLO, flags: 0, stream_id: 0,
     payload: { protocol: "ovis-mux", versions: [1], features: [], required_features: [] } });
   await bounded(welcome.promise);
-  return { socket, closed: closed.promise };
+  return { socket, mux, error: error.promise, frames, closed: closed.promise };
 }
 
 it("relay off makes no connection", async () => {
@@ -1070,4 +1083,117 @@ it("end to end: the hosted app's code screen finds the PC through the relay and 
   const paired = await client(f, offer);
   expect((await paired.http("/api/health")).status).toBe(200);
   expect(f.app.context.services.devices.list(null).some((device) => device.via_relay)).toBe(true);
+});
+
+/** The same device protocol, with the ordinary server constrained to one local engine. */
+function machineFixture(appOptions: NonNullable<Parameters<typeof createServer>[0]> = {}, relayOptions: Partial<RelayServiceOptions> = {}) {
+  const account = new FakeAccountService();
+  const options = { profile: "machine" as const, accountService: { url: "https://account.test", fetch: account.fetch }, ...appOptions };
+  return fixture(false, { accountService: "https://account.test", accountFetch: account.fetch, ...relayOptions }, options);
+}
+
+it.each(["missing HTTP", "missing WS", "wrong"])("machine profile refuses %s proof over the real relay", async (scenario) => {
+  const f = await machineFixture();
+  await f.start();
+  const offer = await f.offer();
+  const allowed = await client(f, offer);
+  const peer = await squatter(f, offer);
+  if (scenario === "wrong") peer.mux.sendSession({ type: FrameType.AUTH, flags: 0, stream_id: 0,
+    payload: { scheme: "device-key", device_id: allowed.device.id, signature: Buffer.alloc(64, 9).toString("base64url") } });
+  else {
+    // The malicious client claims local admission so it can send OPEN; the server has granted none.
+    peer.mux.authenticate(allowed.device.id);
+    if (scenario.endsWith("HTTP")) peer.mux.openHttp({ target: "/api/session", method: "GET", headers: [], body: "none" });
+    else peer.mux.openWs({ target: "/ws", protocols: [], headers: [] });
+  }
+  expect(await bounded(peer.error)).toBe(scenario === "wrong" ? "auth_failed" : "protocol_error");
+  await bounded(peer.closed);
+  expect(peer.frames.filter((type) => [FrameType.AUTH_OK, FrameType.HTTP_HEADERS, FrameType.WS_ACCEPT, FrameType.WS_DATA].some((forbidden) => forbidden === type))).toEqual([]);
+  // The answer identifies the profile actually exercised; the existing device proof is reused unchanged.
+  expect(await (await allowed.http("/api/health")).json()).toMatchObject({ machine_profile: { engine: "herdr" } });
+});
+
+it.each(["HTTP", "WS"])("machine profile filters secret-bearing snapshots over %s even when bridge-only was requested", async (surface) => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-machine-secret-"));
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const config = join(dir, "config.toml");
+  writeFileSync(config, '[ui.sidebar.agents]\nrows = [["agent", { token = "$quota", rules = [{ starts_with = "off", hide = true }] }, "$eta"]]\n');
+  const workspace = await workspaceCreate({ cwd: dir, label: "machine-secret" });
+  cleanup.push(() => workspaceClose(workspace.workspace.workspace_id));
+  const paneId = workspace.root_pane.pane_id;
+  await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+  await herdrRpc("pane.report_metadata", { pane_id: paneId, source: "plugin:quota", tokens: { quota: "off machine-secret", eta: "soon" } });
+  const f = await machineFixture({ herdrConfigPath: config, bridgeOnly: true });
+  await f.start();
+  const peer = await client(f, await f.offer());
+  let snapshot: unknown;
+  if (surface === "HTTP") snapshot = await (await peer.http("/api/session")).json();
+  else {
+    const received = deferred<unknown>();
+    const stream = peer.mux.openWs({ target: "/ws", protocols: [], headers: [] });
+    stream.onMessage = (data) => {
+      const message: ServerMessage = JSON.parse(String(data));
+      if (message.type === "snapshot") received.resolve(message.snapshot);
+    };
+    snapshot = await bounded(received.promise);
+  }
+  expect(JSON.stringify(snapshot)).toContain(paneId);
+  expect(JSON.stringify(snapshot)).toContain('"eta":"soon"');
+  expect(JSON.stringify(snapshot)).not.toContain("off machine-secret");
+});
+
+it("machine profile reuses its key, saved state and paired device across a restart", async () => {
+  const f = await machineFixture();
+  await f.start();
+  const offer = await f.offer();
+  const peer = await client(f, offer);
+  const identity = readFileSync(relayIdentityPath(f.stateDir), "utf8");
+  const state = readFileSync(join(f.stateDir, "relay", "state.json"), "utf8");
+  await f.restart();
+  const returning = await client(f, offer, false, peer.device);
+  expect(readFileSync(relayIdentityPath(f.stateDir), "utf8")).toBe(identity);
+  expect(readFileSync(join(f.stateDir, "relay", "state.json"), "utf8")).toBe(state);
+  expect(await (await returning.http("/api/health")).json()).toMatchObject({ ok: true, machine_profile: { engine: "herdr" } });
+});
+
+it("machine profile opens no direct listener even when the relay service is given one", async () => {
+  let bound = 0;
+  const f = await machineFixture({ token: "owner-token" }, { direct: { addresses: () => { bound++; return ["127.0.0.1"]; }, peerAllowed: () => true, preferredPort: 0 } });
+  f.service.start();
+  expect(f.service.directAvailable).toBe(false);
+  expect(bound).toBe(0);
+});
+
+it("machine profile refuses its closed controls to a device through the relay with its proof", async () => {
+  const f = await machineFixture();
+  await f.start();
+  const peer = await client(f, await f.offer());
+  for (const target of ["/api/herdr/update", "/api/runtime/move", "/api/portal/start", "/api/machines", "/api/fleet/enable", "/api/bridge"]) {
+    const response = await peer.http(target, { method: "POST", headers: [["x-herdr-update", "1"]] });
+    expect([target, response.status, (await response.json() as { error: { code: string } }).error.code]).toEqual([target, 409, "machine_profile"]);
+  }
+});
+
+it.each(["an ordinary server", "the machine profile"])("%s refuses pane input to a watch device through the relay", async (kind) => {
+  const f = kind === "the machine profile" ? await machineFixture() : await fixture();
+  await f.start();
+  const offer = await f.offer();
+  const first = await client(f, offer);
+  f.app.context.services.devices.update(first.device.id, { role: "watch" });
+  await bounded(first.closed);
+  const watch = await client(f, offer, false, first.device);
+  const response = await watch.http("/api/pane/input", { method: "POST", headers: [["x-herdr-update", "1"]] });
+  expect([response.status, (await response.json() as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+});
+
+it("machine profile tells a paired relay device why its classic engine is absent", async () => {
+  const restore = unitHerdrOnly();
+  cleanup.push(restore);
+  const f = await machineFixture();
+  await f.start();
+  const peer = await client(f, await f.offer());
+  const response = await peer.http("/api/health");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ ok: true, auth: { authenticated: true, via: "relay" },
+    machine_profile: { engine: "herdr", runtime_down: true, reason: "herdr is not running for the selected session" } });
 });

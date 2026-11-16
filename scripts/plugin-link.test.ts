@@ -7,7 +7,9 @@ import { FakeAccountService } from "../shared/account-service-fake.ts";
 import { encodeOffer } from "../shared/relay-offer.ts";
 import { loadRelayIdentity } from "../server/relay/identity.ts";
 import { updateStateDir } from "../server/update-state.ts";
-import { approveWaiting, COMMAND_ALIASES, link, type WaitingDevice } from "./plugin-link.ts";
+import { mergeEnvLayers } from "../server/legacy-env.ts";
+import { approveWaiting, link, linkSettings, type WaitingDevice } from "./plugin-link.ts";
+import { COMMAND_ALIASES } from "./plugin-runtime.ts";
 
 const ORIGIN = "http://127.0.0.1:7317";
 const SERVICE = "https://account.test";
@@ -80,10 +82,12 @@ function keyboard() {
   const kept: string[] = [];
   let begun = "";
   let discards = 0;
+  let ended = false;
   const lines: AsyncIterator<string> = {
     next: () => {
       const line = kept.shift();
-      return line === undefined ? new Promise((resolve) => { reader = resolve; }) : Promise.resolve({ value: line, done: false });
+      if (line !== undefined) return Promise.resolve({ value: line, done: false });
+      return ended ? Promise.resolve({ value: undefined, done: true }) : new Promise((resolve) => { reader = resolve; });
     },
   };
   return {
@@ -91,6 +95,8 @@ function keyboard() {
     type: (rest: string) => { const line = begun + rest; begun = ""; const resolve = reader; reader = null; if (resolve === null) kept.push(line); else resolve({ value: line, done: false }); },
     begin: (text: string) => { begun += text; },
     discard: () => { discards++; begun = ""; kept.length = 0; return true; },
+    /** the input ends (Ctrl+D) once the lines sent so far are read */
+    end: () => { ended = true; const resolve = reader; reader = null; resolve?.({ value: undefined, done: true }); },
     /** how often the terminal's input was discarded */
     discards: () => discards,
   };
@@ -1634,6 +1640,14 @@ describe("ovis link, on the PC itself", () => {
     refuse?: (path: string, codes: number) => Response | undefined;
     /** the account service's answer to one call, instead of `pass()` */
     service?: (request: Request, pass: () => Promise<Response>, at: { pc: ReturnType<typeof identity>; stop: AbortController; now: () => number }) => Promise<Response>;
+    /** the plugin's settings (linkSettings): the fleet preview, the command's name, and the app the PC's pairing offers open */
+    settings?: Record<string, string | undefined>;
+    /** the line typed when the account that signed in is named (the fleet preview), after reading it; false types none */
+    confirm?: string | false;
+    /** the terminal's input ends (Ctrl+D) right after the account's name was answered: nothing more can be typed */
+    ends?: boolean;
+    /** a line comes at once as the account is first named, too soon to have read it, before the one typed after reading */
+    soon?: boolean;
   } = {}) {
     const pc = identity();
     const time = clock();
@@ -1644,6 +1658,8 @@ describe("ovis link, on the PC itself", () => {
     let looks = 0;
     let began: number | null = null;
     let approved = false;
+    // how many PCs the account listed each time the account that signed in was named, before the QR code
+    const listedAtName: number[] = [];
     // the six-digit codes the QR codes carried, what was taken back, and the devices revoked
     const offers: string[] = [];
     // how long after the first code each one came
@@ -1671,7 +1687,7 @@ describe("ovis link, on the PC itself", () => {
         began ??= time.now();
         offers.push(String(100001 + offers.length));
         renewedAt.push(time.now() - began);
-        return Response.json({ url: encodeOffer({ v: 1, server_id: pc.server_id, server_public_key: pc.public_key, relay: RELAY, code: offers.at(-1)! }, "https://app.ovis.sh"), expires_at: new Date(time.now() + 600_000).toISOString() });
+        return Response.json({ url: encodeOffer({ v: 1, server_id: pc.server_id, server_public_key: pc.public_key, relay: RELAY, code: offers.at(-1)! }, options.settings?.["OVIS_RELAY_APP_URL"] ?? "https://app.ovis.sh"), expires_at: new Date(time.now() + 600_000).toISOString() });
       }
       if (path === "/api/devices/pair/cancel") { cancels.push(await request.json()); return options.cancel?.() ?? Response.json({ ok: true, cancelled: true }); }
       if (path.startsWith("/api/devices/") && request.method === "DELETE") {
@@ -1704,17 +1720,27 @@ describe("ovis link, on the PC itself", () => {
       },
       terminal: options.terminal ?? true, isTty: options.isTty ?? true, ...options.size ? { size: options.size } : {},
       ...options.discard === true ? { discard: keys.discard } : {},
+      // as the plugin passes its settings on
+      ...linkSettings(options.settings ?? {}),
       out: (text) => {
         out.push(text);
         // the sign-in's code, not the pairing code shown later
         const shown = /code:? ([A-Z0-9-]{4,16})\b/.exec(text);
         if (shown && !approved) { approved = true; service.approveDevice(shown[1]!, "acct_1"); }
+        // the person reads the account's name, then answers
+        if (text.includes("Press Enter to show the QR code")) {
+          listedAtName.push(service.pcs("acct_1").length);
+          const early = options.soon === true && listedAtName.length === 1;
+          if (!early) time.pass(2_000);
+          if (options.confirm !== false) keys.type(early ? "" : options.confirm ?? "");
+          if (options.ends === true) keys.end();
+        }
         const later = (line: string, waits: number): void => time.after(() => { if (waits <= 1) keys.type(line); else later(line, waits - 1); });
         options.said?.(text, keys.type, (line, waits = 1) => later(line, waits), stop, keys.begin);
       },
     });
     const paths = local.calls.map((call) => `${call.method} ${call.path}`);
-    return { code, out, text: out.join(""), offers, renewedAt, cancels, revoked, named, service, pc, time, paths, looks: () => looks, discards: keys.discards };
+    return { code, out, text: out.join(""), offers, renewedAt, cancels, revoked, named, service, pc, time, paths, listedAtName, looks: () => looks, discards: keys.discards };
   }
 
   const ON = "\x1b[?1049h";
@@ -1761,6 +1787,144 @@ describe("ovis link, on the PC itself", () => {
     // --print on a terminal too: lines that stay, for a window that cannot hold the screen
     const onTty = await scanning({ args: ["--print"], step: (state, looks) => { if (looks === 1) { state.account = "acct_1"; state.devices = [OLD, MEMBER]; } } });
     expect(onTty.text).not.toContain("\x1b");
+  });
+
+  // under the fleet preview (server/preview.ts)
+  const NEEDS_TERMINAL = "Adding this PC needs a terminal: the QR code and the code to type are a key to this PC, so they are never written to a pipe, a file or a log. Run ovis add in a terminal (over ssh, run ssh -t).\n";
+  const NAMED = "Signed in as Ovis account acct_1 (signed in with GitHub). Press Enter to show the QR code for this account's phone, or press Ctrl+C if that is not your account: ";
+  const NOT_SHOWN = "The QR code was not shown, and this PC was not listed in that account. Run ovis add again and sign in with your own account.\n";
+  const joins = (state: { account: string | null; devices: Row[] }, looks: number): void => { if (looks === 1) { state.account = "acct_1"; state.devices = [OLD, MEMBER]; } };
+  const FLEET = { OVIS_PREVIEW: "fleet" };
+
+  it("under the fleet preview, writes no QR code where its output or its input is not a terminal, --print or not, and asks for no sign-in first", async () => {
+    for (const [args, isTty, terminal] of [[[], false, true], [["--print"], false, true], [[], true, false], [["--print"], true, false], [["--print"], false, false]] as const) {
+      const refused = await scanning({ settings: FLEET, args: [...args], isTty, terminal, discard: true, step: joins });
+      expect([args, isTty, terminal, refused.code]).toEqual([args, isTty, terminal, 1]);
+      expect(refused.text).toBe(NEEDS_TERMINAL);
+      // asked nothing past the account's status: no sign-in, no listing, no code
+      expect(refused.paths).toEqual(["GET /api/account/status"]);
+      expect(refused.offers).toEqual([]);
+      expect(refused.service.pcs("acct_1")).toEqual([]);
+    }
+    // another word beside it in the list still turns it on
+    const listed = await scanning({ settings: { OVIS_PREVIEW: "other, fleet" }, args: ["--print"], isTty: false, discard: true, step: joins });
+    expect([listed.code, listed.text]).toEqual([1, NEEDS_TERMINAL]);
+  });
+
+  it("under the fleet preview, names the account that signed in, and lists this PC and shows its QR code only after Enter typed at that name", async () => {
+    const shown = await scanning({ settings: FLEET, discard: true, step: joins });
+    expect(shown.code).toBe(0);
+    const at = shown.out.indexOf(NAMED);
+    expect(at).toBeGreaterThan(-1);
+    // named before this PC is listed in that account, and before any code
+    expect(shown.listedAtName).toEqual([0]);
+    expect(shown.out.slice(0, at).some((text) => text.includes("Scan this QR code"))).toBe(false);
+    expect(shown.out.slice(at + 1)).toContain(`This PC is listed in that account as ${shown.service.pcs("acct_1")[0]?.label}.\n`);
+    expectQrCode(shown.out.find((text) => text.includes("Scan this QR code"))!);
+    expect(shown.offers).toEqual(["100001"]);
+    expect(shown.service.pcs("acct_1").map((entry) => entry.server_id)).toEqual([shown.pc.server_id]);
+    // --print at a terminal: the same Enter first, then lines that stay
+    const printed = await scanning({ settings: FLEET, args: ["--print"], discard: true, step: joins });
+    expect(printed.code).toBe(0);
+    expect(printed.out).toContain(NAMED);
+    expectQrCode(printed.text);
+    expect(printed.text).not.toContain("\x1b");
+    // anything else typed there shows no code, and lists this PC in that account nowhere
+    for (const line of ["no", "y", " x "]) {
+      const declined = await scanning({ settings: FLEET, discard: true, confirm: line, step: joins });
+      expect([line, declined.code]).toEqual([line, 1]);
+      expect(declined.out.at(-1)).toBe(NOT_SHOWN);
+      expect(declined.offers).toEqual([]);
+      expect(declined.paths.filter((path) => path.includes("/api/relay/"))).toEqual([]);
+      expect(declined.service.pcs("acct_1")).toEqual([]);
+    }
+    // an input that ends there (Ctrl+D) shows none either
+    const ended = await scanning({ settings: FLEET, discard: true, confirm: false, ends: true, step: joins });
+    expect(ended.code).toBe(1);
+    expect(ended.out.slice(-2)).toEqual(["\n", NOT_SHOWN]);
+    expect(ended.offers).toEqual([]);
+    expect(ended.service.pcs("acct_1")).toEqual([]);
+  });
+
+  it("under the fleet preview, takes no first line as that Enter where the terminal's input cannot be emptied, nor one typed before the name could be read", async () => {
+    const again = (why: string): string => `That line answered nothing: ${why} Answer again.\n${NAMED}`;
+    // no discard (Windows, no C library): the first line may have been begun before the name showed
+    const held = await scanning({ settings: FLEET, step: joins });
+    expect(held.out.filter((text) => text.includes("answered nothing"))).toEqual([again("this terminal's input could not be emptied as the question showed, so it may have been typed before it.")]);
+    expect([held.code, held.offers]).toEqual([0, ["100001"]]);
+    // a line at once, before the name could be read: asked again, and the Enter typed after reading it shows the code
+    const soon = await scanning({ settings: FLEET, discard: true, soon: true, step: joins });
+    expect(soon.out.filter((text) => text.includes("answered nothing"))).toEqual([again("it came before the question could be read.")]);
+    expect([soon.code, soon.offers]).toEqual([0, ["100001"]]);
+  });
+
+  // what a wrapper that runs the plugin under another name may set beside the preview: another app the server pairs
+  // with, and its own command name
+  const APP = "https://app.example.test:17541";
+  const WRAPPER_NAMES = { OVIS_RELAY_APP_URL: APP, OVIS_CLI_NAME: "/opt/wrapper/bin/ovis-wrapper" };
+  /** `--approve` as far as the line naming where to choose Add, then Ctrl+C */
+  const approving = (settings: Record<string, string | undefined>) => scanning({ args: ["--approve"], settings, said: (text, _type, _answer, stop) => { if (text.includes("choose Add on")) stop.abort(); } });
+
+  it("with the fleet preview off, writes the QR code with --print where its output is not a terminal, asks for no Enter, and names app.ovis.sh and ovis whatever OVIS_RELAY_APP_URL and OVIS_CLI_NAME say, as before it", async () => {
+    for (const names of [{}, WRAPPER_NAMES]) {
+      // `confirm: "no"` would decline the question about the account, were it asked
+      for (const value of [undefined, "", "fleets", "no-fleet"]) {
+        const printed = await scanning({ settings: { ...names, OVIS_PREVIEW: value }, isTty: false, args: ["--print"], discard: true, confirm: "no", step: joins });
+        expect([value, printed.code]).toEqual([value, 0]);
+        expectQrCode(printed.text);
+        expect(printed.text).not.toContain("\x1b");
+        expect(printed.text).not.toContain("Press Enter");
+        expect(printed.text).toContain("Or, on that device, open app.ovis.sh, choose Pair with a code and type it.\n");
+        expect(printed.out).toContain(`Signed in. This PC is listed in your account as ${printed.service.pcs("acct_1")[0]?.label}.\n`);
+        expect(printed.offers).toEqual(["100001"]);
+      }
+      // nor where its input is no terminal either
+      const piped = await scanning({ settings: names, isTty: false, terminal: false, args: ["--print"], step: joins });
+      expect(piped.code).toBe(0);
+      expectQrCode(piped.text);
+      // at a terminal: the QR code on its screen, with no question first
+      const plain = await scanning({ settings: names, discard: true, confirm: "no", step: joins });
+      expect(plain.code).toBe(0);
+      expect(plain.text).not.toContain("Press Enter");
+      expect(plain.listedAtName).toEqual([]);
+      expect(plain.out.some((text) => text.startsWith(`${ON}\x1b[2J\x1b[H`) && text.includes("Scan this QR code"))).toBe(true);
+      // no terminal and no --print: the refusal it always gave
+      const refused = await scanning({ settings: names, isTty: false, step: joins });
+      expect([refused.code, refused.text]).toEqual([1, "The QR code is a key to this PC. Run this in a terminal, or pass --print to write it anyway.\n"]);
+      // nobody scans: the command it names is ovis
+      const late = await scanning({ settings: names });
+      expect(late.out.slice(-2)).toEqual(["The code and the QR code no longer work.\n", "Stopped after 30 minutes. Run ovis add again.\n"]);
+      // --approve: the app it names is app.ovis.sh
+      const approve = await approving(names);
+      expect(approve.text).toContain("(the Ovis app or app.ovis.sh), choose Add on");
+    }
+  });
+
+  it("under the fleet preview, names the app the server pairs with and the command OVIS_CLI_NAME gives, not app.ovis.sh and a bare ovis", async () => {
+    const settings = { ...WRAPPER_NAMES, ...FLEET };
+    const { text } = await scanning({ settings });
+    expect(/open (\S+), choose Pair with a code/.exec(text)?.[1]).toBe("app.example.test:17541");
+    expect(text).toContain("/opt/wrapper/bin/ovis-wrapper add again");
+    expect(text).not.toMatch(/(^|[\s(`])ovis (add|link|pair|status|login)\b/m);
+    expect(text).not.toContain("app.ovis.sh");
+    const refused = await scanning({ settings, isTty: false });
+    expect(refused.text).toContain("Run /opt/wrapper/bin/ovis-wrapper add in a terminal");
+    const approve = await approving(settings);
+    expect(approve.text).toContain("(the Ovis app or app.example.test:17541), choose Add on");
+  });
+
+  it("takes the fleet preview from the plugin's settings as the plugin merges them: its settings file after its environment", async () => {
+    // scripts/plugin.ts: mergeEnvLayers([process.env, ...the settings files]), the values the server it starts gets
+    for (const environment of [{}, { OVIS_PREVIEW: "other" }]) {
+      const named = await scanning({ settings: mergeEnvLayers([environment, FLEET]), discard: true, confirm: "no", step: joins });
+      expect(named.out).toContain(NAMED);
+      expect([named.code, named.out.at(-1), named.offers]).toEqual([1, NOT_SHOWN, []]);
+      const refused = await scanning({ settings: mergeEnvLayers([environment, FLEET]), args: ["--print"], isTty: false, step: joins });
+      expect([refused.code, refused.text]).toEqual([1, NEEDS_TERMINAL]);
+    }
+    // off in the file, over fleet in the environment: as with the preview unset
+    const off = await scanning({ settings: mergeEnvLayers([FLEET, { OVIS_PREVIEW: "" }]), discard: true, confirm: "no", step: joins });
+    expect([off.code, off.listedAtName, off.offers]).toEqual([0, [], ["100001"]]);
   });
 
   it("shows three codes at most, one as the last runs out, then stops after 30 minutes with the last taken back", async () => {
@@ -2722,6 +2886,57 @@ describe("ovis link, on the PC itself", () => {
       const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect(exit, stderr).toBe(0);
       expect(stdout).toContain("active release link --code");
+    } finally { server.stop(true); }
+  });
+
+  it("add refuses an output that is not a terminal, --print too, only under the fleet preview, set in its environment or in the plugin's settings file", async () => {
+    const scratchDir = mkdtempSync(join(tmpdir(), "ovis-link-preview-"));
+    scratch.push(scratchDir);
+    const root = join(import.meta.dir, "..");
+    const paths: string[] = [];
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      paths.push(`${request.method} ${path}`);
+      if (path === "/api/health") return Response.json({ ok: true, herdr: { version: "0.9.5", protocol: 1 }, auth: { required: false, authenticated: true } });
+      if (path === "/api/account/status") return Response.json({ account: null, enrolling: false, unlinked: [], removals: [], adds: [], blocked: [] });
+      return new Response(null, { status: 404 });
+    } });
+    try {
+      mkdirSync(join(scratchDir, "config"));
+      /** `preview` in the environment (undefined: not there), `settings` as more lines of the plugin's settings file */
+      const run = async (preview: string | undefined, args: string[], settings = ""): Promise<[string, number]> => {
+        paths.length = 0;
+        writeFileSync(join(scratchDir, "config", ".env"), `PORT=${server.port}\n${settings}`);
+        const environment: Record<string, string | undefined> = {
+          ...process.env, HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: root, HERDR_PLUGIN_CONFIG_DIR: join(scratchDir, "config"),
+          HERDR_PLUGIN_STATE_DIR: join(scratchDir, "plugin-state"), OVIS_STATE_DIR: join(scratchDir, "app-state"), OVIS_TOKEN: "",
+          // never the real account service: under the preview nothing reaches it, and without it the refusal comes first
+          OVIS_ACCOUNT_SERVICE_URL: "https://account.test", OVIS_PREVIEW: preview, OVIS_CLI_NAME: "",
+        };
+        if (preview === undefined) delete environment["OVIS_PREVIEW"];
+        // stdout a pipe, stdin none: no terminal at all
+        const child = Bun.spawn([process.execPath, "scripts/plugin.ts", ...args], { cwd: root, windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: environment });
+        const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(stderr).toBe("");
+        return [stdout, exit];
+      };
+      const refusal = "Adding this PC needs a terminal: the QR code and the code to type are a key to this PC, so they are never written to a pipe, a file or a log. Run ovis add in a terminal (over ssh, run ssh -t).\n";
+      for (const args of [["add", "--print"], ["add"], ["login", "--print"]]) {
+        expect([args, ...await run("fleet", args)]).toEqual([args, refusal, 1]);
+        expect(paths).toEqual(["GET /api/health", "GET /api/account/status"]);
+      }
+      // the preview off: what it always said without --print
+      const before = "The QR code is a key to this PC. Run this in a terminal, or pass --print to write it anyway.\n";
+      expect(await run("", ["add"])).toEqual([before, 1]);
+      expect(await run(undefined, ["add"])).toEqual([before, 1]);
+      // the plugin's settings file, which the server it starts reads too: on there, and over another value in the
+      // environment, as the file's settings come after it
+      expect(await run(undefined, ["add", "--print"], "OVIS_PREVIEW=fleet\n")).toEqual([refusal, 1]);
+      expect(paths).toEqual(["GET /api/health", "GET /api/account/status"]);
+      expect(await run("other", ["add", "--print"], "OVIS_PREVIEW=fleet\n")).toEqual([refusal, 1]);
+      expect(await run(undefined, ["add"], "OVIS_PREVIEW=fleet\nOVIS_CLI_NAME=/opt/wrapper/bin/ovis-wrapper\n")).toEqual([refusal.replace("Run ovis add", "Run /opt/wrapper/bin/ovis-wrapper add"), 1]);
+      // and off there over fleet in the environment
+      expect(await run("fleet", ["add"], "OVIS_PREVIEW=\n")).toEqual([before, 1]);
     } finally { server.stop(true); }
   });
 

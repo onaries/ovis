@@ -23,7 +23,7 @@ import { SHEET_QUERY } from "./sheets.ts";
 /** how long a batch waits before it is told, unless the page is hidden first */
 export const FLUSH_MS = 60_000;
 
-interface Pending { add: Partial<Record<TelemetryCounter, number>>; shown: Set<TelemetryShown>; keys: string[] }
+interface Pending { add: Partial<Record<TelemetryCounter, number>>; shown: Set<TelemetryShown>; keys: string[]; day: string | null }
 
 export interface UsageCountersOptions {
   /** whether this build counts at all (COUNTS_ON): off, nothing is kept, asked or told */
@@ -36,9 +36,13 @@ export interface UsageCountersOptions {
   setTimer: (fn: () => void, ms: number) => () => void;
 }
 
-/** the server's word: counting is on only while all of these hold */
+/**
+ * the server's word: counting is on only while all of these hold. A server that takes counts says its counting
+ * generation; an older one (whose notice said nothing of counts, though its notice_seen is true) never does, so a
+ * newer page reaching it (the hosted app on an older PC) counts nothing there
+ */
 export function countingAllowed(status: TelemetryStatus | null): boolean {
-  return status !== null && status.enabled && !status.blocked_by_env && status.notice_seen;
+  return status !== null && status.enabled && !status.blocked_by_env && status.notice_seen && status.counts_generation !== undefined;
 }
 
 export function createUsageCounters(options: UsageCountersOptions) {
@@ -46,8 +50,19 @@ export function createUsageCounters(options: UsageCountersOptions) {
   let allowed: boolean | null = null;
   /** the server refused a batch (a device that can only watch): no later answer turns counting on for this page */
   let refused = false;
+  /** the server's counting generation as last heard: every batch names it, and a new one drops what was kept */
+  let generation: number | undefined;
   let asking = false;
-  const empty = (): Pending => ({ add: {}, shown: new Set(), keys: [] });
+  const empty = (): Pending => ({ add: {}, shown: new Set(), keys: [], day: null });
+  const today = (): string => new Date(options.now()).toISOString().slice(0, 10);
+  /** the width's batch for today: one kept from a day that has ended goes first, under its own day */
+  const batchFor = (width: TelemetryWidth): Pending => {
+    const day = today();
+    const batch = pending[width];
+    if (batch.day !== null && batch.day !== day) flush(false);
+    if (pending[width].day === null) pending[width].day = day;
+    return pending[width];
+  };
   const pending: Record<TelemetryWidth, Pending> = { narrow: empty(), wide: empty() };
   /** controls told (or on their way) as shown, by UTC day and width; a batch that is lost takes its own back out */
   const toldShownByDayAndWidth = new Set<string>();
@@ -57,11 +72,20 @@ export function createUsageCounters(options: UsageCountersOptions) {
   let cancelTimer: (() => void) | null = null;
 
   const heard = (status: TelemetryStatus | null): void => {
+    // a late answer from before an off (an older generation) says nothing about now: it neither turns counting on nor back
+    if (status?.counts_generation !== undefined && generation !== undefined && status.counts_generation < generation) return;
     const was = allowed;
+    let renewed = false;
+    // another tab turned the counts off (and maybe on again): what this page kept from before is not sent, and the
+    // off cleared the PC's day, so a control still drawn is told as shown again
+    if (status?.counts_generation !== undefined && status.counts_generation !== generation) {
+      if (generation !== undefined) { drop(); toldShownByDayAndWidth.clear(); renewed = true; }
+      generation = status.counts_generation;
+    }
     allowed = countingAllowed(status);
     if (!allowed) drop();
-    // drawn before the server's word came: told now
-    else if (was !== true) reshow();
+    // drawn before the server's word came, or before a new generation: told now
+    else if (was !== true || renewed) reshow();
   };
   const ask = (): void => {
     if (asking || allowed !== null) return;
@@ -88,8 +112,9 @@ export function createUsageCounters(options: UsageCountersOptions) {
     const key = `${new Date(options.now()).toISOString().slice(0, 10)}:${width}:${name}`;
     if (toldShownByDayAndWidth.has(key)) return;
     toldShownByDayAndWidth.add(key);
-    pending[width].shown.add(name);
-    pending[width].keys.push(key);
+    const batch = batchFor(width);
+    batch.shown.add(name);
+    batch.keys.push(key);
     schedule();
   };
   /** every control still drawn, for a day or a width that has not had it yet */
@@ -102,12 +127,12 @@ export function createUsageCounters(options: UsageCountersOptions) {
     cancelTimer?.();
     cancelTimer = null;
     for (const width of ["narrow", "wide"] as const) {
-      const { add, shown, keys } = pending[width];
+      const { add, shown, keys, day } = pending[width];
       if (Object.keys(add).length === 0 && shown.size === 0) continue;
       pending[width] = empty();
       // a batch that is not taken is not tried again: a count told twice would be worse than one lost. Its shown
       // controls are forgotten, so the next batch tells them again; a refusal (a watching device) stops counting here
-      options.send({ width, add, shown: [...shown].sort() }, keepalive).then((status) => { if (status) heard(status); }, (error: unknown) => {
+      options.send({ width, add, shown: [...shown].sort(), ...(generation === undefined ? {} : { generation }), ...(day === null ? {} : { day }) }, keepalive).then((status) => { if (status) heard(status); }, (error: unknown) => {
         forget(keys);
         // refused: what was counted while this batch was on its way goes nowhere either
         if ((error as { status?: unknown } | null)?.status === 403) { refused = true; allowed = false; drop(); } else allowed = null;
@@ -120,7 +145,7 @@ export function createUsageCounters(options: UsageCountersOptions) {
     heard,
     count(name: TelemetryCounter): void {
       if (!ready()) return;
-      const batch = pending[options.narrow() ? "narrow" : "wide"];
+      const batch = batchFor(options.narrow() ? "narrow" : "wide");
       batch.add[name] = (batch.add[name] ?? 0) + 1;
       schedule();
     },
@@ -134,11 +159,13 @@ export function createUsageCounters(options: UsageCountersOptions) {
      */
     draw(name: TelemetryShown): () => void {
       drawn.set(name, (drawn.get(name) ?? 0) + 1);
-      if (ready()) markShown(name);
-      return () => {
+      // the undo exists before anything that could fail: a control gone is never told as still drawn
+      const undo = () => {
         const left = (drawn.get(name) ?? 1) - 1;
         if (left > 0) drawn.set(name, left); else drawn.delete(name);
       };
+      if (ready()) tally(() => markShown(name));
+      return undo;
     },
     /** the page came back, or its width crossed SHEET_QUERY: the controls drawn now, for a day or width not told yet */
     reshow,

@@ -29,6 +29,8 @@ process.env["OVIS_BUNDLE_MANIFEST"] = resolve(`remote-bundles/manifest-${process
 const sockets: WebSocket[] = [];
 let port = 0;
 let originalKey = "";
+/** when a setup job was last seen saying connected (performance.now()): a failed PC request says how long ago */
+let lastConnectedAt: number | undefined;
 
 function command(args: string[], input?: string): void {
   const result = Bun.spawnSync(args, { stdin: input ? new TextEncoder().encode(input) : undefined });
@@ -42,8 +44,27 @@ async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, lab
 }
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const r = await fetch(`http://127.0.0.1:${server!.port}${path}`, { method, headers: { "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  assert.ok(r.ok, `${path}: ${r.status} ${r.ok ? "" : await r.text()}`);
+  // a failure's own status and text are read first: the diagnostic after them is bounded and cannot hold them back
+  const failure = r.ok ? "" : `${path}: ${r.status} ${await r.text()}`;
+  assert.ok(r.ok, r.ok ? "" : failure + await pcWhenFailed(path));
   return r.json() as Promise<T>;
+}
+/**
+ * Diagnostic only, read once a request to one PC's route has already failed: how /api/machines shows that PC right
+ * then. A PC that dropped its connection says so in its state, and `error` names the way it was lost.
+ */
+async function pcWhenFailed(path: string): Promise<string> {
+  const id = /^\/api\/machines\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?]|$)/.exec(path)?.[1];
+  if (!id) return "";
+  const since = lastConnectedAt === undefined ? "no setup job has said connected yet" : `${Math.round(performance.now() - lastConnectedAt)} ms after a setup job last said connected`;
+  try {
+    // one deadline for the answer and its body: a server in a bad way right then must not stall the failure
+    const r = await fetch(`http://127.0.0.1:${server!.port}/api/machines`, { headers: { "x-herdr-machine": "1" }, signal: AbortSignal.timeout(2000) });
+    const machine = (await r.json() as { machines: Machine[] }).machines.find((m) => m.id === id);
+    return `\n  this PC in /api/machines now: ${machine ? JSON.stringify({ state: machine.state, error: machine.error }) : "not listed"}, ${since}`;
+  } catch (error) {
+    return `\n  /api/machines could not be read (${error instanceof Error ? error.message : String(error)}), ${since}`;
+  }
 }
 async function setup(target: SetupRequest, approve = true): Promise<SetupJob> {
   let job = await api<SetupJob>("/api/machines/setup", "POST", target);
@@ -51,6 +72,7 @@ async function setup(target: SetupRequest, approve = true): Promise<SetupJob> {
   let previous = "";
   for (;;) {
     if (job.phase !== previous) { console.log("setup", job.phase, job.step); previous = job.phase; }
+    if (job.phase === "connected") lastConnectedAt = performance.now();
     if (job.phase === "connected" || job.phase === "failed" || job.phase === "cancelled") return job;
     if (Date.now() > deadline) throw new Error("Setup timed out");
     if (job.challenge) job = await api<SetupJob>(`/api/machines/setup/${job.id}`, "POST", { action: "answer", challenge_id: job.challenge.id, answer: job.challenge.kind === "host_key" ? "yes" : password });

@@ -207,8 +207,9 @@ process.on("SIGTERM", () => { app.stop(); process.exit(0); });
       evidence.native_wrap_pty = { attached_columns: nativeLayout.columns, attached_rows: nativeRows, browser_viewport: [390, 1400] };
       await browser(cli, browserEnv, ["click", ".app-header .lens-toggle"]);
       await browser(cli, browserEnv, ["set", "viewport", String(cases[1]!.viewport[0]), String(cases[1]!.viewport[1])]);
-      const drawerOpen = JSON.parse(await browser(cli, browserEnv, ["eval", "document.querySelector('.drawer-toggle')?.getAttribute('aria-expanded') === 'true'"])) as boolean;
-      if (drawerOpen) await browser(cli, browserEnv, ["click", "button[aria-label='Close workspace list']"]);
+      const drawerOpen = JSON.parse(await browser(cli, browserEnv, ["eval", "document.querySelector('#workspace-drawer.is-open') !== null"])) as boolean;
+      // the open drawer's head is the Ovis mark; its named close is drawn only for the keyboard, so it is pressed from the page
+      if (drawerOpen) await browser(cli, browserEnv, ["eval", "document.querySelector('.drawer-close')?.click()"]);
       question = await waitForPrompt(origin, paneId, fixture.question, 30_000);
       assert.equal(question.question, fixture.question, "narrow terminal resize preserves the exact wrapped question");
       await assertVisiblePrompt(cli, browserEnv, fixture.question, fixture.options);
