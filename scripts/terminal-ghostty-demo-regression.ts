@@ -119,8 +119,8 @@ const picture = (page: Page) => page.evaluate(() => {
 });
 
 /** `storedOff`: the old Draw with libghostty switch was turned off on this device; `noModule`: libghostty's module cannot load */
-async function open(browser: Browser, server: number, prefix: string, kind: "core" | "herdr", { storedOff = false, noModule = false, images = false } = {}): Promise<{ page: Page; wasm: string[]; errors: string[] }> {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
+async function open(browser: Browser, server: number, prefix: string, kind: "core" | "herdr", { storedOff = false, noModule = false, images = false, width = 1280, deviceScaleFactor = 1 } = {}): Promise<{ page: Page; wasm: string[]; errors: string[] }> {
+  const context = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor, locale: "en-US" });
   await context.addInitScript(([storedOff, images]) => {
     localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", terminalInputMode: "direct", alertsOn: false }));
     if (storedOff) localStorage.setItem("ovis:terminal-ghostty", "false");
@@ -388,6 +388,31 @@ try {
         await page.waitForFunction(() => window.ghosttyFixture.inputs.some((frame) => frame.type === "input" && frame.text === "x"));
         assert.deepEqual(errors, [], "core: no page errors");
         await page.context().close();
+      }
+      // Pixel dimensions in CSI 16 t are integers; a browser frame spans the grid even when its CSS cells are fractional.
+      for (const deviceScaleFactor of [1, 1.25, 2]) {
+        for (const width of [1280, 650, 390]) {
+          const { page, errors } = await open(browser, server.port, prefix, "core", { images: true, width, deviceScaleFactor });
+          await page.locator(".pane-frame.is-current .pane-terminal[data-renderer=ghostty]").waitFor();
+          await page.waitForFunction(() => typeof (document.querySelector(".pane-frame.is-current .xterm") as { imageAt?: unknown } | null)?.imageAt === "function");
+          const before = await page.evaluate(() => window.ghosttyFixture.inputs.length);
+          await print(page, "\x1b[16t\x1b[18t", "SIZE-QUERIED");
+          await page.waitForFunction((before) => window.ghosttyFixture.inputs.slice(before).some((f) => /\x1b\[8;\d+;\d+t/.test(f.data ?? f.text ?? "")), before);
+          const replies = await page.evaluate((before) => window.ghosttyFixture.inputs.slice(before).map((f) => f.data ?? f.text ?? "").join(""), before);
+          const cellSize = /\x1b\[6;(\d+);(\d+)t/.exec(replies);
+          const gridSize = /\x1b\[8;(\d+);(\d+)t/.exec(replies);
+          assert.ok(cellSize && gridSize, `core: pixel and cell size reports arrive (${JSON.stringify(replies)})`);
+          const imageWidth = Number(cellSize[2]) * Number(gridSize[2]);
+          const pixels = Buffer.alloc(imageWidth * 4, 255);
+          await print(page, `\x1b[H\x1b_Ga=T,f=32,s=${imageWidth},v=1,i=8,C=1,q=2;${pixels.toString("base64")}\x1b\\`, "BROWSER-PLACED");
+          const bounds = await page.evaluate(() => ({
+            image: document.querySelector(".pane-frame.is-current .ghostty-image")!.getBoundingClientRect().toJSON(),
+            grid: document.querySelector(".pane-frame.is-current .ghostty-layer")!.getBoundingClientRect().toJSON(),
+          }));
+          assert.ok(Math.abs(bounds.image.right - bounds.grid.right) < 1, `core: the browser's right edge meets the grid at ${width}px, DPR ${deviceScaleFactor} (${JSON.stringify(bounds)})`);
+          assert.deepEqual(errors, [], "core: no page errors with a browser frame");
+          await page.context().close();
+        }
       }
       {
         // an iTerm2 picture (Pictures in the terminal): libghostty cannot draw it, xterm's image addon does and moves its

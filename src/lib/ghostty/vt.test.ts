@@ -62,6 +62,22 @@ const ascii = ({ cells, cursor }: Layout): Layout => ({
 });
 
 describe("GhosttyVt frame", () => {
+  it("returns existing image placements after a fractional cell resize", async () => {
+    const vt = await GhosttyVt.create(119, 48);
+    try {
+      vt.resize(119, 48, 7.8, 17);
+      vt.write("\x1b_Ga=T,f=32,s=1,v=1,c=4,r=2,i=1;/////w==\x1b\\");
+      vt.frame(() => {});
+      expect(vt.placedImages()?.map(({ width, height }) => [width, height])).toEqual([[32, 34]]);
+      expect(vt.placedImages()).toBeNull();
+      vt.resize(119, 48, 7.9, 17);
+      vt.frame(() => {});
+      expect(vt.placedImages()?.map(({ width, height }) => [width, height])).toEqual([[32, 34]]);
+    } finally {
+      vt.dispose();
+    }
+  });
+
   // the layer redraws its cursor only on a frame that changed: an arrow key or a space typed onto a blank cell
   // moves the cursor and changes no row (#3266, #3268)
   it("tells a frame that only moved, hid or showed the cursor", async () => {

@@ -329,6 +329,8 @@ export class GhosttyVt {
     this.check(this.x.ghostty_terminal_resize(this.terminal, cols, rows, Math.max(1, Math.round(cellW)), Math.max(1, Math.round(cellH))), "resize");
     this.cols = cols;
     this.rows = rows;
+    // A CSS cell can resize without changing libghostty's integer placement generation.
+    this.placementsGeneration = -1;
   }
 
   /** lines of history above the screen; 0 keeps none */

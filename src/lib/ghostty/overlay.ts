@@ -437,15 +437,18 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
     for (const image of [...images].sort((a, b) => a.z - b.z)) {
       const source = picture(image);
       if (!source || image.width === 0 || image.height === 0) continue;
+      // libghostty and CSI 16 t use integer pixels; map them back to xterm's fractional CSS cells.
+      const sx = cellW / Math.max(1, Math.round(cellW));
+      const sy = cellH / Math.max(1, Math.round(cellH));
       const scale = window.devicePixelRatio || 1;
       const canvas = document.createElement("canvas");
       canvas.className = "ghostty-image";
-      canvas.width = Math.max(1, Math.round(image.width * scale));
-      canvas.height = Math.max(1, Math.round(image.height * scale));
+      canvas.width = Math.max(1, Math.round(image.width * sx * scale));
+      canvas.height = Math.max(1, Math.round(image.height * sy * scale));
       // the grid is xterm's, in CSS pixels; libghostty placed the picture in the cell size it was given
       Object.assign(canvas.style, {
-        left: `${image.col * cellW + image.offsetX}px`, top: `${image.row * cellH + image.offsetY}px`,
-        width: `${image.width}px`, height: `${image.height}px`,
+        left: `${image.col * cellW + image.offsetX * sx}px`, top: `${image.row * cellH + image.offsetY * sy}px`,
+        width: `${image.width * sx}px`, height: `${image.height * sy}px`,
       });
       const { x, y, width, height } = image.source;
       canvas.getContext("2d")?.drawImage(source, x, y, width || source.width, height || source.height, 0, 0, canvas.width, canvas.height);
