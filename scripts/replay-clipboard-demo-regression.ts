@@ -320,6 +320,10 @@ try {
       report["reconnect-replay"]!.push({ name: "permission off, then on", off, on }, { name: "browser denies the write", copies: denied, banner: "clipboard write blocked by the browser" });
       assert.deepEqual(pageErrors(page), []);
       await fixture(page, (state) => state.restore());
+      const browserCopy = "https://example.com/한글";
+      await frames(page, [L(`${ESC}]52;c;${Buffer.from(browserCopy).toString("base64")}${ESC}\\`)]);
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), browserCopy, "terminal-browser's UTF-8 copy reaches the viewing device clipboard");
+      console.log("PASS terminal-browser OSC52 reaches the real browser clipboard");
       console.log("PASS permission off/on, denied write, older-bridge limit");
     } finally { await context.close(); }
   }

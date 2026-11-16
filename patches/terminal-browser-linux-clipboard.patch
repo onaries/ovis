@@ -1,0 +1,18 @@
+--- a/cli/dist/main.js
++++ b/cli/dist/main.js
+@@ -24771,6 +24771,9 @@
+         break;
+       case "clipboard":
+         if (DEBUG) log("clipboard from browser", { chars: message.text.length });
++        if (process.platform === "linux") {
++          process.stdout.write(`\x1b]52;c;${Buffer.from(message.text, "utf8").toString("base64")}\x1b\\`);
++        }
+         if (process.platform === "darwin") {
+           try {
+             (0, import_node_child_process4.spawn)("pbcopy", { stdio: ["pipe", "ignore", "ignore"] }).stdin.end(message.text);
+--- a/browser/dist/main.js
++++ b/browser/dist/main.js
+@@ -126814,2 +126814,2 @@
+     if (screenshot) await screenshot.copyWithText().catch(() => this.root?.setClipboard(content3));
+-    else this.root?.setClipboard(content3);
++    if (!screenshot || process.platform === "linux") this.root?.setClipboard(content3);

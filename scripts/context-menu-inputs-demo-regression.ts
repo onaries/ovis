@@ -90,6 +90,10 @@ try {
       await page.locator(".conn-live").waitFor({ state: "attached" });
       const composer = frame.locator(".composer-text");
       await composer.waitFor();
+      const link = frame.locator('.markdown a[href^="https://"]').first();
+      await link.waitFor();
+      seen.link = await rightClick(page, link);
+      await dismissPaneMenu(page);
       await composer.click();
       await page.keyboard.type("their own text");
       await composer.evaluate((node: HTMLTextAreaElement) => { node.setSelectionRange(6, 9); node.blur(); });
@@ -136,6 +140,7 @@ try {
       console.log(JSON.stringify(seen, null, 2));
       const failures: string[] = [];
       const expect = (ok: boolean, message: string): void => { if (!ok) failures.push(message); };
+      expect(!seen.link!.defaultPrevented && !seen.link!.paneMenu && seen.link!.reachedWindow, `a right-click on a chat link keeps the browser's Copy link address menu: ${JSON.stringify(seen.link)}`);
       expect(!seen.composer!.defaultPrevented && !seen.composer!.paneMenu, `a right-click in the chat composer is the browser's menu, not the pane menu: ${JSON.stringify(seen.composer)}`);
       expect(seen.composer!.active === "textarea.composer-text", `the right-click focuses the composer as the browser does: active ${seen.composer!.active}`);
       expect(!seen.terminalLine!.defaultPrevented && !seen.terminalLine!.paneMenu, `a right-click in the terminal's input line is the browser's menu, not the pane menu: ${JSON.stringify(seen.terminalLine)}`);
