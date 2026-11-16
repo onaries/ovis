@@ -382,4 +382,10 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
       expect(told).toEqual(["close_pane_by_menu"]);
     } finally { counting.mockRestore(); }
   });
+
+  it("shows each split pane's terminal_id beside its title without changing the title text", async () => {
+    await draw(OVIS_CORE, { ...snapshot, panes: [{ ...snapshot.panes[0]!, terminal_id: "t10" }, { ...snapshot.panes[1]!, terminal_id: "term_65c5f082012c52d" }] });
+    expect(renderer!.root.findAllByProps({ className: "pane-frame-title-text" }).map((node) => node.children.join(""))).toEqual(["named", "p2"]);
+    expect(renderer!.root.findAllByProps({ className: "pane-terminal-id" }).map((node) => node.children.join(""))).toEqual(["t10"]);
+  });
 });

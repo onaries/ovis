@@ -17,7 +17,7 @@ const OVIS_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr
 const workspace = (id: string, tabs: number): WorkspaceInfo =>
   ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, tab_count: tabs, pane_count: tabs, focused: false, agent_status: "idle", worktree: null });
 const pane = (workspaceId: string, tabId: string): PaneInfo =>
-  ({ pane_id: `${tabId}:p`, workspace_id: workspaceId, tab_id: tabId, terminal_id: `${tabId}:term`, revision: 1, focused: false, agent_status: "idle" });
+  ({ pane_id: `${tabId}:p`, workspace_id: workspaceId, tab_id: tabId, terminal_id: tabId.split(":")[1]!, revision: 1, focused: false, agent_status: "idle" });
 // w1 has two one-pane tabs, so t1 can move right and to w2; w2 has one
 const snapshot: SessionSnapshot = {
   protocol: 22, version: "test", workspaces: [workspace("w1", 2), workspace("w2", 1)], layouts: [], agents: [],
@@ -272,5 +272,17 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
 
     await act(async () => tab().props.onDoubleClick());
     expect(input().props.value).toBe(saved);
+  });
+
+  it("shows each tab's terminal_id beside [role=tab], and only the active tab's on phoneRow", async () => {
+    await draw(OVIS_CORE);
+    expect(renderer!.root.findAllByProps({ role: "tab" }).map((node) => node.findByProps({ className: "tab-strip-label" }).children.join(""))).toEqual(["Tab 1", "Tab 2"]);
+    expect(renderer!.root.findAllByProps({ className: "pane-terminal-id tab-strip-terminal" }).map((node) => node.children.join(""))).toEqual(["t1", "t2"]);
+
+    await act(async () => {
+      renderer!.update(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: OVIS_CORE },
+        createElement(TabStrip, { snapshot, workspace: snapshot.workspaces[0]!, selectedPane: snapshot.panes[0]!, phoneRow: true, onSelectPane: () => {}, onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {} }))));
+    });
+    expect(renderer!.root.findAllByProps({ className: "pane-terminal-id tab-strip-terminal" }).map((node) => node.children.join(""))).toEqual(["t1"]);
   });
 });

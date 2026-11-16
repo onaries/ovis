@@ -3656,6 +3656,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   its workspace's strip (`.context-position`, "1/2", said "Tab 1 of 2"), only with two tabs or more;
   below `420px` it leaves the header, and the tab row marks the open tab (with Tabs on a phone at In
   the header, the header's row and its tab sheet).
+  Split pane titles (`.pane-frame-title`), the header context title (`.context-title`), desktop
+  tabs, and the active `phoneRow` tab show the pane's short hc `terminal_id` (`t1`, `t10`, `t1b`; `.pane-terminal-id`, `--font-mono`,
+  `--fs-xs`, `--text-dim`, kept whole without shrinking or ellipsis) beside the title while preserving
+  all titles, call names, and status badges.
 
 ### Chat turn (`.chat-turn`)
 - A complete Codex `visualize` reference on its own line of a chat answer is drawn as a small

@@ -659,6 +659,8 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
           if (inRow !== null && !inRow.has(index)) return null;
           const active = tab.tab_id === selectedPane.tab_id;
           const own = panesOf(tab);
+          const terminalPane = active && own.some((pane) => pane.pane_id === selectedPane.pane_id) ? selectedPane : own.length === 1 ? own[0] : undefined;
+          const terminalId = (!phoneRow || active) && terminalPane && /^(?:[^/]+\/)?t[0-9a-z]+$/.test(terminalPane.terminal_id) ? terminalPane.terminal_id : null;
           // Settle each pane's wait before rolling up, so a sibling's RUN or DONE stays visible.
           const status = statusOf(tab);
           const agent = agentOf(tab);
@@ -698,6 +700,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
                   }}
                 />
               ) : (
+                <>
                 <button
                   type="button"
                   role="tab"
@@ -770,6 +773,8 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
                     return <span className="tab-strip-position"><span aria-hidden="true">{index}/{own.length}</span><span className="visually-hidden">{", "}{t("Pane {index} of {count}", { index, count: own.length })}</span></span>;
                   })()}
                 </button>
+                {terminalId && <span className="pane-terminal-id tab-strip-terminal" aria-hidden="true">{terminalId}</span>}
+                </>
               )}
               {/* beside the tab, not in it: inside, its words would join the tab's name ("Tab 1Shell") */}
               {tabDescription && <span id={tabStatusId} className="visually-hidden">{tabDescription}</span>}

@@ -59,6 +59,7 @@
 }
 .pane-frame-title { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
 .pane-frame-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-frame-title .pane-terminal-id { color: var(--text-dim); }
 .pane-frame-menu { flex: none; width: var(--control-h); height: var(--control-h); pointer-events: auto; }
 /* a split pane's zoom stays in sight on every pointer, in the title's own color (#2037) */
 .pane-frame-zoom { color: inherit; pointer-events: auto; }

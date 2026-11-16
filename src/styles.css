@@ -2819,6 +2819,28 @@ button {
   color: var(--text-dim);
 }
 
+/* actual terminal address (`terminal_id`, e.g. `t1`), beside titles and tabs: never shrunk or ellipsized */
+.pane-terminal-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: var(--font-numeric);
+  line-height: 1;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.tab-strip-terminal {
+  position: relative;
+  align-self: center;
+  padding-right: var(--space-1-5);
+}
+
+.app-header .header-tabs.is-phone .tab-strip-item.is-active {
+  max-width: min(9.5rem, 100%);
+}
+
 /* a phone's title lists its workspace's tabs (App.tsx, TabStrip's sheet): the caret after it is the
    button, and its press area is stretched over the whole title and crumb, so the title is the target.
    The box grows to a finger's height into the header around it, its line where it was. */

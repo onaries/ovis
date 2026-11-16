@@ -1200,6 +1200,7 @@ export function App() {
             <div className="context-title">
               {selectedAgent && <AgentMark agent={selectedAgent} size={18} />}
               <span className="context-title-text" role="group" aria-label={[selectedAgent ? agentName(selectedAgent) : null, crumb.fullContext].filter((part) => part !== null).join(" · ")}>{selectedTitle}</span>
+              {/^(?:[^/]+\/)?t[0-9a-z]+$/.test(selectedPane.terminal_id) && <span className="pane-terminal-id">{selectedPane.terminal_id}</span>}
               {selectedAgent && <StatusBadge compact status={paneStatus(selectedPane)} />}
               {position && <span className="context-position" title={position.words}>
                 <span aria-hidden="true">{position.index}/{position.count}</span>
