@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
@@ -135,5 +135,23 @@ describe("the Close pane shortcut", () => {
     await mount(undefined, null);
     expect(() => press({ key: "t" })).not.toThrow();
     expect(tabCloses).toBe(1);
+  });
+
+  it("is counted as the shortcut way to close a pane, once a press, and not when the key is passed on", async () => {
+    const counted: string[] = [];
+    await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Shortcuts, { actions: { closePane: () => { closes += 1; }, closeTab: () => { tabCloses += 1; }, counted: (action, source) => { counted.push(`${action}:${source}`); } } as AppActions }))); });
+    press();
+    press({ target: element("[role='dialog']") });
+    expect(closes).toBe(1);
+    expect(counted).toEqual(["close_pane:shortcut"]);
+  });
+
+  it("still closes the pane when its count fails", async () => {
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Shortcuts, { actions: { closePane: () => { closes += 1; }, closeTab: () => { tabCloses += 1; }, counted: () => { throw new Error("storage full"); } } as Partial<AppActions> as AppActions }))); });
+      press();
+    } finally { logged.mockRestore(); }
+    expect(closes).toBe(1);
   });
 });

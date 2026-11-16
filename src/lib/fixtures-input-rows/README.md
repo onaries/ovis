@@ -53,6 +53,14 @@ off): Letta Code 0.34.23, maki 0.7.1, Kimi Code 2.5.3 (herdr names it `kimi`), K
 `kilo/draft-session-*` are Kilo's box under its first answer, the others its home screen. Letta's agent id reads
 all zeros.
 
+## `omp/draft-*`: omp 18.14's editor for the draft check
+
+Recorded 2026-11-14 in an isolated herdr session (herdr 0.9.5, 119 columns by 40 rows): omp 18.14.0 in a scratch
+folder with a scratch HOME (its setup skipped, no model signed in, default theme) and `PI_OFFLINE=1
+PI_SKIP_VERSION_CHECK=1`. Same states as above, plus `draft-lines` with `second line` typed on a second row
+(Shift+Enter). omp 18.14 draws its status line without the frame 18.8.7 drew, so the peek's omp recognizer
+reads these as `gone`; only the draft check reads them. Nothing to redact: the folder is the scratch one.
+
 ## `codex-0.167.0/`: Codex's own screens, as the bridge reads them
 
 Recorded 2026-11-11 in an isolated herdr session (herdr 0.9.5) for the bridge's rule that no chat

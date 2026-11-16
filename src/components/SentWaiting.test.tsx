@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, jest, setSystemTime, test } from "bun:test";
-import { createElement } from "react";
+import { createElement, useLayoutEffect, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { Machine } from "../../shared/machines.ts";
+import type { ConversationTurn } from "../../shared/protocol.ts";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_HINT_MS, waitingBaseline, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
+import { currentWaitingSends, forgetWaitingSends, observeWaitingClock, rememberWaitingSend, settleWaitingSends, WAITING_HINT_MS, WAITING_SEND_MS, waitingBaseline, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
 import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 
 const at = Date.parse("2026-10-29T03:00:00Z");
@@ -51,10 +52,27 @@ describe("SentWaitingList", () => {
     expect(markup.match(/class="chat-bubble(?: [^"]*)?"/gu)).toEqual(['class="chat-bubble is-capped"', 'class="chat-bubble"']);
   });
 
+  test("says an unanswered send is not in the conversation, where the agent's error would be, and offers the terminal", () => {
+    setSystemTime(new Date(at + WAITING_SEND_MS));
+    const markup = withEnglish(() => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(SentWaitingList, {
+      sends: [{ ...send, unanswered: true }], paneKey: "local:p1", agent: "hermes", onOpenTerminal: () => {},
+    }) })));
+    expect(textWithoutTags(markup)).toBe(`${send.text}Not in the conversation. If Hermes showed an error, it is in the terminal.Open Terminal`);
+    expect(markup).toContain('aria-label="Dismiss"');
+    expect(markup).not.toContain("chat-sent-late");
+  });
+
   test("is no live region of its own: the chat footer's one status region stays the only one", () => {
     expect(render(at + WAITING_HINT_MS)).not.toMatch(/role="(?:status|alert|log)"|aria-live/u);
   });
 });
+
+/** `signal`, or a failure once `ms` have passed without it */
+async function within(signal: Promise<void>, ms: number, what: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not come within ${ms} ms`)), ms); });
+  try { await Promise.race([signal, late]); } finally { clearTimeout(timer); }
+}
 
 describe("mounted", () => {
   let renderers: ReactTestRenderer[];
@@ -100,6 +118,87 @@ describe("mounted", () => {
     act(() => { jest.advanceTimersByTime(1); });
     expect(clocks(renderer)).toBe(1);
     expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test("says a send unanswered a minute on, once read at rest, never while it works, and lets it go on Dismiss", async () => {
+    const key = waitingKey("local", "unanswered-mounted");
+    function Chat({ resting }: { resting: boolean }) {
+      return createElement(SentWaitingList, { sends: useWaitingSends("local", "unanswered-mounted", true), paneKey: key, resting, agent: "letta" });
+    }
+    try {
+      settleWaitingSends(key, [], at - 1, true);
+      rememberWaitingSend(key, "the turn letta failed", at);
+      const renderer = mount(createElement(Chat, { resting: false }));
+      act(() => { jest.advanceTimersByTime(WAITING_SEND_MS); });
+      observeWaitingClock(key, new Date().toISOString(), 0, Date.now());
+      settleWaitingSends(key, [], Date.now(), true);
+      expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
+      act(() => { renderer.update(createElement(SettingsProvider, { children: createElement(Chat, { resting: true }) })); });
+      // at rest, but nothing read since: still on its way
+      expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
+      // the chat's next read, at rest: the turn never came
+      act(() => { jest.advanceTimersByTime(1); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [], Date.now(), true); });
+      await act(async () => { await Promise.resolve(); });
+      expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([true]);
+      expect(renderer.root.findAll((node) => node.props.className === "chat-unanswered-note")).toHaveLength(1);
+      act(() => { renderer.root.findByProps({ "aria-label": "Dismiss" }).props.onClick(); });
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  test("judges a send in a chat opened again by a read since then, not by the one its last visit settled", async () => {
+    const key = waitingKey("local", "reopened-mounted");
+    const chat = () => createElement(SentWaitingList, { sends: currentWaitingSends(key), paneKey: key, resting: true, agent: "kiro" });
+    try {
+      settleWaitingSends(key, [], at - 1, true);
+      rememberWaitingSend(key, "do the thing", at);
+      const visit = mount(chat());
+      // a read two seconds on, at rest, before the agent wrote the turn; then the user leaves the chat
+      act(() => { jest.advanceTimersByTime(2_000); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [], Date.now(), true); });
+      act(() => { visit.unmount(); });
+      renderers.splice(renderers.indexOf(visit), 1);
+      // back five minutes later: the agent wrote the turn meanwhile, with no time (as Kiro does)
+      jest.advanceTimersByTime(5 * 60_000);
+      mount(chat());
+      expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
+      // the chat's first read since: the agent wrote it, in a turn the chat does not match, and the send goes
+      act(() => { jest.advanceTimersByTime(1); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [{ role: "user", ts: null, parts: [{ kind: "text", text: "do the thing" }] }], Date.now(), true); });
+      await act(async () => { await Promise.resolve(); });
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  test("clears the rest in the commit that shows the agent at work, before the read that commit settles is judged", async () => {
+    // React's own scheduling, as in a browser: real timers and no act
+    jest.useRealTimers();
+    setSystemTime();
+    const key = waitingKey("local", "rest-order");
+    let show!: (next: readonly ConversationTurn[]) => void;
+    let settled!: () => void;
+    const read = new Promise<void>((resolve) => { settled = resolve; });
+    // wired as ChatView wires it: the list's rest from the chat's state, the chat's read settled in its own layout
+    function Chat() {
+      const [turns, setTurns] = useState<readonly ConversationTurn[]>([]);
+      show = setTurns;
+      useLayoutEffect(() => {
+        settleWaitingSends(key, turns, Date.now(), true);
+        if (turns.length > 0) settled();
+      }, [turns]);
+      return createElement(SentWaitingList, { sends: useWaitingSends("local", "rest-order", true), paneKey: key, resting: turns.length === 0 });
+    }
+    try {
+      const sent = Date.now() - 2 * WAITING_SEND_MS;
+      settleWaitingSends(key, [], sent - 1, true);
+      rememberWaitingSend(key, "next, run the tests", sent);
+      mount(createElement(Chat));
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: false });
+      // a read's answer arrives after the rest began, and the chat shows the agent at work in the same commit
+      observeWaitingClock(key, new Date().toISOString(), 0, Date.now() + 1);
+      show([{ role: "assistant", ts: new Date(sent - 10_000).toISOString(), parts: [{ kind: "text", text: "earlier" }] }]);
+      // that commit's layout settled the read, after it queued its judgement: this resumes once the judgement ran
+      await within(read, 5_000, "the chat's render of the read");
+      expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
+    } finally { forgetWaitingSends(key); }
   });
 
   test("leaves no timer behind when the bubble goes before its clock", () => {

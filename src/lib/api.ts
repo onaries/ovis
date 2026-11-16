@@ -409,16 +409,30 @@ export async function shareSeen(finish: SeenFinish, presented?: SeenPresentation
   throw await errorFrom(url, response);
 }
 
-export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
-  try { return await getJson<TelemetryStatus>("/api/telemetry"); }
-  catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
+const telemetryStatusListeners = new Set<(status: TelemetryStatus | null) => void>();
+
+/** Hears every answer about the counts (null: this server sends none), whoever asked: lib/usageCounters.ts counts only by it. */
+export function onTelemetryStatus(listener: (status: TelemetryStatus | null) => void): () => void {
+  telemetryStatusListeners.add(listener);
+  return () => { telemetryStatusListeners.delete(listener); };
 }
 
-export async function changeTelemetry(change: TelemetryChange): Promise<TelemetryStatus> {
+function toldTelemetryStatus<T extends TelemetryStatus | null>(status: T): T {
+  for (const listener of telemetryStatusListeners) listener(status);
+  return status;
+}
+
+export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
+  try { return toldTelemetryStatus(await getJson<TelemetryStatus>("/api/telemetry")); }
+  catch (error) { if (error instanceof ApiError && error.status === 404) return toldTelemetryStatus(null); throw error; }
+}
+
+/** `keepalive`: the page is going away, and the request is to outlive it */
+export async function changeTelemetry(change: TelemetryChange, { keepalive = false }: { keepalive?: boolean } = {}): Promise<TelemetryStatus> {
   const url = "/api/telemetry";
-  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change) });
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change), ...(keepalive ? { keepalive } : {}) });
   if (!response.ok) throw await errorFrom(url, response);
-  return (await response.json()) as TelemetryStatus;
+  return toldTelemetryStatus((await response.json()) as TelemetryStatus);
 }
 
 /**
@@ -855,7 +869,7 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
     // as it arrived, whatever becomes of its body: its time bounds this browser's clock against the PC's
     const received = performance.now(), receivedWall = Date.now();
     if (response.status === 304 && known) {
-      observeWaitingClock(waitingKey(machineId, paneId), response.headers.get("x-server-time"), received, receivedWall);
+      observeWaitingClock(waitingKey(machineId, paneId), response.headers.get("x-server-time"), received, receivedWall, true);
       return { response, body: known.body };
     }
     if (!response.ok) throw await errorFrom(url, response);

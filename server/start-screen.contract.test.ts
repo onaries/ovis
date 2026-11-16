@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createServer } from "./index.ts";
-import { herdrRpc, paneRead, paneScroll, paneScrollInfo, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { herdrRpc, paneRead, paneScroll, paneScrollInfo, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import type { ConversationResponse } from "../shared/protocol.ts";
 
 // A terminal-started Codex with no reported session names its model through its live footer.
@@ -50,15 +50,27 @@ beforeAll(async () => {
   const pi = await workspaceCreate({ cwd: root, label: "ovis-test-start-screen-pi" });
   workspaces.push(pi.workspace.workspace_id);
   piPane = pi.root_pane.pane_id;
-  const piReady = herdrRpc("pane.wait_for_output", {
-    pane_id: piPane, source: "visible", match: { type: "substring", value: "pi_ready_contract" }, timeout_ms: 10000,
-  }, undefined, 12000);
-  await herdrRpc("pane.send_text", { pane_id: piPane, text: `clear; printf '%s\\n' '~/project' '0.0%/262k (auto)          pi-contract-model \u2022 high' 'pi_ready_contract'; HOME=${root} PI_CODING_AGENT_DIR=${piAgentDir} exec -a pi cat\n` });
-  await piReady;
-  for (const deadline = Date.now() + 10_000;;) {
-    if ((await sessionSnapshot()).panes.find((pane) => pane.pane_id === piPane)?.agent === "pi") break;
-    if (Date.now() > deadline) throw new Error("test pi was not detected");
-    await Bun.sleep(50);
+  // herdr names the pane's agent from its foreground process (`exec -a pi`): heard as it happens, not polled
+  const watching = Promise.withResolvers<void>();
+  const detected = Promise.withResolvers<void>();
+  const subscription = subscribeEvents([{ type: "pane.agent_status_changed", pane_id: piPane }], {
+    onStarted: () => watching.resolve(),
+    onEvent: (frame) => { if (frame.data?.agent === "pi") detected.resolve(); },
+    onError: (error) => { watching.reject(error); detected.reject(error); },
+  });
+  let undetected: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await watching.promise;
+    const piReady = herdrRpc("pane.wait_for_output", {
+      pane_id: piPane, source: "visible", match: { type: "substring", value: "pi_ready_contract" }, timeout_ms: 10000,
+    }, undefined, 12000);
+    await herdrRpc("pane.send_text", { pane_id: piPane, text: `clear; printf '%s\\n' '~/project' '0.0%/262k (auto)          pi-contract-model \u2022 high' 'pi_ready_contract'; HOME=${root} PI_CODING_AGENT_DIR=${piAgentDir} exec -a pi cat\n` });
+    await piReady;
+    undetected = setTimeout(() => detected.reject(new Error("test pi was not detected")), 10_000);
+    await detected.promise;
+  } finally {
+    clearTimeout(undetected);
+    subscription.close();
   }
   let seq = Date.now() * 1000;
   await herdrRpc("pane.report_agent", { pane_id: piPane, source: "herdr:pi", agent: "pi", state: "idle", seq: ++seq });

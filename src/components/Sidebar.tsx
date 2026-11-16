@@ -1,3 +1,4 @@
+import { tally, usageCounters } from "../lib/usageCounters.ts";
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Bot, ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 
@@ -51,6 +52,16 @@ export function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): 
     for (const key of repoKeys) if (localStorage.getItem(worktreeCollapsedKey(machineId, key)) === "1") collapsed.add(key);
   } catch { /* storage denied: nothing is folded */ }
   return collapsed;
+}
+
+/** the workspaces whose agents are folded away under their row while Agents under workspaces is on (#3771): one
+ *  list per PC on this device, pruned to the roster at each change; a repository's row folds with its worktrees instead */
+const agentsFoldKey = (machineId: string) => `ovis:workspace-agents-folded:${machineId}`;
+export function storedAgentsFolded(machineId: string): Set<string> {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(agentsFoldKey(machineId)) ?? "[]");
+    return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : []);
+  } catch { return new Set(); }
 }
 
 /** the fold of a PC's background workspaces, kept on this device; it starts folded */
@@ -403,6 +414,32 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     } catch {}
   };
 
+  const [foldedAgents, setFoldedAgents] = useState<ReadonlySet<string>>(() => storedAgentsFolded(machineId));
+  /** a row's own agents folded, as drawn: the saved fold, or under a filter the one it holds, opened by a match among them */
+  const agentsFolded = (workspaceId: string, workers: readonly SidebarAgent[]): boolean => {
+    if (filtered === null) return foldedAgents.has(workspaceId);
+    return filterFolds.get(`agents:${workspaceId}`) ?? (foldedAgents.has(workspaceId) && !workers.some((entry) => filtered.matchedPanes.has(entry.pane.pane_id)));
+  };
+  const saveAgentsFold = (workspaceId: string, collapsed: boolean): void => {
+    const live = new Set(snapshot?.workspaces.map((workspace) => workspace.workspace_id) ?? []);
+    const next = new Set([...foldedAgents].filter((id) => live.has(id) && id !== workspaceId));
+    if (collapsed) next.add(workspaceId);
+    setFoldedAgents(next);
+    try { localStorage.setItem(agentsFoldKey(machineId), JSON.stringify([...next])); } catch { /* storage denied: this page keeps it */ }
+  };
+  const toggleAgents = (workspaceId: string, folded: boolean): void => {
+    if (filtered !== null) { setFilterFolds((current) => new Map(current).set(`agents:${workspaceId}`, !folded)); return; }
+    saveAgentsFold(workspaceId, !folded);
+  };
+  /** a new agent is made in this row: open it as drawn and drop its saved fold, also under a filter, so the agent stays in
+   *  sight once the filter is cleared */
+  const unfoldForNewAgent = (workspaceId: string, repoKey: string | undefined): void => {
+    const key = repoKey ?? `agents:${workspaceId}`;
+    if (filtered !== null) setFilterFolds((current) => new Map(current).set(key, false));
+    if (repoKey !== undefined) setWorktreeCollapsed(repoKey, false);
+    else if (foldedAgents.has(workspaceId)) saveAgentsFold(workspaceId, false);
+  };
+
   useEffect(() => {
     if (inlineError === null) return;
     const timer = window.setTimeout(() => setInlineError(null), ERROR_NOTE_MS);
@@ -585,6 +622,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     }) };
     // One native workspace menu for both the pointer and the explicit ⋯ button.
     const folded = repoKey !== undefined && worktreesFolded(repoKey, worktrees);
+    const ownAgents = agentTree ? agentRows.filter((entry) => entry.pane.workspace_id === workspace.workspace_id && (filtered === null || filtered.panes.has(entry.pane.pane_id))) : [];
+    const agentsAway = ownAgents.length > 0 && agentsFolded(workspace.workspace_id, ownAgents);
     const pinned = pinnedIds.includes(workspace.workspace_id);
     return [
       pinned
@@ -592,13 +631,25 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
         : { id: "pin-workspace", label: t("Pin workspace"), icon: Pin, run: () => togglePin(state) },
       // the tab row's own New tab with agent…, aimed at this workspace without opening it first (#3772); a tab is a drive
       // action, so a watching device is not offered it, and a PC that is not connected has no roster to make it in
-      ...(online && !watching ? [{ id: "new-tab", label: t("New tab with agent…"), icon: Bot, run: () => actions.openNewTab({ machineId, workspaceId: workspace.workspace_id }) }] : []),
+      // with Agents under workspaces on, a folded row unfolds first, as opening a worktree from the menu unfolds its group, so
+      // the new agent is in sight (#3771), also when the fold was saved while an agent that has since gone was there; with it
+      // off no agent is drawn under the row, so every saved fold stays as it is
+      ...(online && !watching ? [{ id: "new-tab", label: t("New tab with agent…"), icon: Bot, run: () => {
+        if (agentTree) {
+          if (worktrees.length > 0 && repoKey) { if (folded || collapsedWorktrees.has(repoKey)) unfoldForNewAgent(workspace.workspace_id, repoKey); }
+          else if (agentsAway || foldedAgents.has(workspace.workspace_id)) unfoldForNewAgent(workspace.workspace_id, undefined);
+        }
+        tally(() => usageCounters.paneUse("new_tab_by_menu", machineId));
+        actions.openNewTab({ machineId, workspaceId: workspace.workspace_id });
+      } }] : []),
       ...(!renameOffered || !renamesWorkspace(workspace.workspace_id) ? [] : [{ id: "rename-workspace", label: t("Rename workspace"), icon: Pencil, run: () => beginWorkspaceRename(workspace) }]),
       // the folder's earlier sessions, listed for the agent of the pane the row opens
       ...(historyOffered && !watching ? [{ id: "session-history", label: t("Earlier sessions…"), icon: History, run: () => actions.openSessionHistory({ machineId, workspaceId: workspace.workspace_id, agent: (panes.length > 0 ? currentPane(workspace, panes) : null)?.agent ?? null }) }] : []),
       ...(holdsLock(closes) ? [] : [{ ...closeItem, label: t(sameRepo.length > 0 ? "Close group" : "Close workspace"), divider: false }]),
       ...worktreeItems, ...deleteItems,
       ...(worktrees.length > 0 && repoKey ? [{ id: "fold", label: t(folded ? "Expand" : "Collapse"), icon: folded ? ChevronRight : ChevronDown, run: () => toggleWorktrees(repoKey, folded) }] : []),
+      // a row whose fold is only its agents' (#3771): the same item, never a second one beside the worktrees'
+      ...(!(worktrees.length > 0 && repoKey) && ownAgents.length > 0 ? [{ id: "fold", label: t(agentsAway ? "Expand" : "Collapse"), icon: agentsAway ? ChevronRight : ChevronDown, run: () => toggleAgents(workspace.workspace_id, agentsAway) }] : []),
     ];
   };
 
@@ -832,9 +883,9 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     if (panes.length === 0) return null;
     const pane = currentPane(workspace, panes);
     // the tree's agents of this workspace, the Agents list's rows in its order; under the filter the ones it keeps, as that list does
-    const workers = agentTree ? agentRows.filter((entry) => entry.pane.workspace_id === workspace.workspace_id && (filtered === null || filtered.panes.has(entry.pane.pane_id))) : [];
-    // the selected agent's own row carries the selection's fill, its workspace's row the place
-    const workerSelected = workers.some((entry) => entry.pane.pane_id === selectedPaneId);
+    const allWorkers = agentTree ? agentRows.filter((entry) => entry.pane.workspace_id === workspace.workspace_id && (filtered === null || filtered.panes.has(entry.pane.pane_id))) : [];
+    // the selected agent's own row carries the selection's fill, its workspace's row the place, also while they are folded away
+    const workerSelected = allWorkers.some((entry) => entry.pane.pane_id === selectedPaneId);
     const selected = panes.some((candidate) => candidate.pane_id === selectedPaneId);
     const repoKey = workspace.worktree?.repo_key;
     const linked = workspace.worktree?.is_linked_worktree === true;
@@ -858,13 +909,24 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     // and the selected one says so in words; a fold with a match in it stands open while the filter lasts
     const context = filtered !== null && !filtered.matchedWorkspaces.has(workspace.workspace_id);
     const collapsed = children.length > 0 && repoKey !== undefined && worktreesFolded(repoKey, children);
+    // with agents under it the row is a fold, and a click opens nothing (#3771): one fold per row, so a repository's
+    // row folds its agents with its worktrees, and under a filter a match among its agents holds them open
+    const repoFold = children.length > 0 && repoKey !== undefined;
+    const foldable = allWorkers.length > 0;
+    const agentsAway = foldable && (repoFold
+      ? collapsed && (filtered === null || filterFolds.has(repoKey) || !allWorkers.some((entry) => filtered.matchedPanes.has(entry.pane.pane_id)))
+      : agentsFolded(workspace.workspace_id, allWorkers));
+    const workers = agentsAway ? [] : allWorkers;
+    const rowFolded = repoFold ? collapsed : agentsAway;
+    const toggleFold = (): void => { if (repoFold) toggleWorktrees(repoKey, collapsed); else toggleAgents(workspace.workspace_id, agentsAway); };
     // a folded group's parent stands for its worktrees too, as herdr's collapsed parent does:
     // a checkout that waits or has finished must not hide behind the fold
     const statusPanes = collapsed ? [...panes, ...children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id))] : panes;
     // on two lines the row says what its pane is doing, and the workspace it has named until now sits under that
     const lines = twoLine ? taskRowLines({ paneTitle: displayPaneTitle(pane), labelled: Boolean(pane.label?.trim()), folder: cwdBasename(pane.cwd), workspace: rowTitle, alias: secondaryBranch }) : null;
     // a folded group still shows the checkout that is open; the count is of the ones put away
-    const foldedCount = collapsed ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0;
+    const foldedCount = (collapsed ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0)
+      + (agentsAway ? allWorkers.length : 0);
     const editingWorkspace = editingWorkspaceId === workspace.workspace_id;
     // a row that cannot move still drags its pane into half of the pane area; on herdr-core only the move is off
     const placed = fixedIds.has(workspace.workspace_id) || stillIds.has(workspace.workspace_id) || filtered !== null;
@@ -910,15 +972,22 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           aria-description={fixed ? undefined : `${t("Reorder workspace {name}", { name: workspace.label })} · ${t("Drag to reorder · Alt+↑/↓")}`}
           data-pane={pane.pane_id}
           aria-current={selected ? "true" : undefined}
+          aria-expanded={foldable ? !rowFolded : undefined}
           title={[`${pane.pane_id} — ${rowTitle}`, branchNote, ...paths, paneTitle(pane), agentsTitle(workspace)].filter(Boolean).join(" — ")}
           onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey && !selected && pane.agent != null) pressPane?.(machineId, pane.pane_id); }}
-          onClick={() => actions.selectPane(pane.pane_id)}
+          onClick={() => { if (foldable) toggleFold(); else actions.selectPane(pane.pane_id); }}
           onKeyDown={(event) => {
             onRowKeyDown(event, workspace.workspace_id);
             if (event.defaultPrevented) return;
+            // ← folds and → unfolds, as in any tree
+            if (foldable && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+              event.preventDefault();
+              if ((event.key === "ArrowLeft") !== rowFolded) toggleFold();
+              return;
+            }
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            actions.selectPane(pane.pane_id);
+            if (foldable) toggleFold(); else actions.selectPane(pane.pane_id);
           }}
         >
           {/* a compact top-level row keeps its face alone; a worktree, which has none, keeps its mark */}
@@ -998,7 +1067,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           {snapshot && snapshot.workspaces.length === 0 && (
             <div className="tree-state-empty">
               <p className="tree-state" role="status">{t("No workspaces yet")}</p>
-              <button type="button" className="btn" onClick={actions.openNewSession}><Plus aria-hidden="true" />{t("New workspace")}</button>
+              <button type="button" className="btn" onClick={() => { tally(() => actions.counted?.("new_workspace", "button")); actions.openNewSession(); }}><Plus aria-hidden="true" />{t("New workspace")}</button>
             </div>
           )}
           {visibleGroups.pinned.some(({ workspace }) => roster.some((pane) => pane.workspace_id === workspace.workspace_id)) && <>

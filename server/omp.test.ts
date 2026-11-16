@@ -252,8 +252,9 @@ it("reads a process's store from its own argv and environment, and nothing it ca
     mkdirSync(join(root, "data", "omp"), { recursive: true });
     const xdg = env(`XDG_DATA_HOME=${join(root, "data")}`, `XDG_STATE_HOME=${join(root, "state")}`);
     expect(ompStoreLayout(["omp"], xdg, "linux")).toEqual({ ...managed("/home/u/.omp/agent"), sessions: join(root, "data/omp/sessions") });
-    // omp reads XDG roots on macOS only from 18.12: which one runs is not known
-    expect(ompStoreLayout(["omp"], xdg, "darwin")).toBeNull();
+    // omp reads XDG roots on macOS too from 18.12, and only an omp that reads them migrates into them (#3746)
+    expect(ompStoreLayout(["omp"], xdg, "darwin")).toEqual({ ...managed("/home/u/.omp/agent"), sessions: join(root, "data/omp/sessions") });
+    expect(ompStoreLayout(["omp"], xdg, "win32")).toBeNull();
     expect(ompStoreLayout(["omp"], env(), "darwin")).toEqual(managed("/home/u/.omp/agent"));
     expect(ompStoreLayout(["omp"], env("XDG_DATA_HOME=rel"), "linux")).toBeNull();
   } finally { rmSync(root, { recursive: true, force: true }); }

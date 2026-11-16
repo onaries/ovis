@@ -161,6 +161,68 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     expect(context("web:pi")).toContain("is-filter-context");
   });
 
+  const rowOf = (id: string): ReactTestInstance => renderer!.root.find((node) => node.type === "li" && node.props["data-workspace"] === id);
+  const selectOf = (id: string): ReactTestInstance => rowOf(id).find((node) => node.props.className === "pane-select workspace-select");
+  const key = (target: ReactTestInstance, name: string) => act(async () => target.props.onKeyDown({ key: name, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }));
+
+  it("folds a workspace's agents from its row, opening nothing, and keeps the fold on this device per PC (#3771)", async () => {
+    stored.set("ovis:sidebar-agent-tree", "true");
+    await draw({ selectedPaneId: "api:codex" });
+    expect(selectOf("api").props["aria-expanded"]).toBe(true);
+    await act(async () => selectOf("api").props.onClick());
+    expect(selected).toEqual([]);
+    expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
+    expect(selectOf("api").props["aria-expanded"]).toBe(false);
+    // folded, the row keeps the selected agent's place, the waiting agent's state and a count of what is put away
+    expect(rowOf("api").props.className).toContain("has-selected-agent");
+    expect(selectOf("api").findAll((node) => node.props["data-status"] !== undefined).map((node) => node.props["data-status"])).toEqual(["blocked"]);
+    expect(rowOf("api").findAll((node) => node.props.className === "workspace-fold-count").map(text)).toEqual(["+2"]);
+    expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!)).toEqual(["api"]);
+    // drawn again (a reload), it stays folded; Enter, Space and the arrows fold and unfold, and open nothing
+    await act(async () => renderer!.unmount());
+    await draw({ selectedPaneId: "api:codex" });
+    expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
+    await key(selectOf("api"), "ArrowLeft");
+    expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
+    await key(selectOf("api"), "ArrowRight");
+    expect(tree()).toEqual([["api", "api:claude", "api:codex"], ["web", "web:pi"]]);
+    await key(selectOf("web"), "Enter");
+    expect(tree()).toEqual([["api", "api:claude", "api:codex"], ["web"]]);
+    await key(selectOf("web"), " ");
+    expect(tree()).toEqual([["api", "api:claude", "api:codex"], ["web", "web:pi"]]);
+    expect(selected).toEqual([]);
+    expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!)).toEqual([]);
+  });
+
+  it("opens a workspace with no agent under it as today, and every row with the setting off", async () => {
+    const shells: SessionSnapshot = { ...snapshot, workspaces: [...snapshot.workspaces, workspace("ops", 1)], tabs: [...snapshot.tabs, { tab_id: "ops:t1", workspace_id: "ops", label: "1", number: 1, pane_count: 1, focused: false, agent_status: "idle" }], panes: [...snapshot.panes, pane("ops:shell", "ops", "t1")] };
+    stored.set("ovis:sidebar-agent-tree", "true");
+    await draw({ shown: shells });
+    expect(selectOf("ops").props["aria-expanded"]).toBeUndefined();
+    await act(async () => selectOf("ops").props.onClick());
+    expect(selected).toEqual(["ops:shell"]);
+    await act(async () => renderer!.unmount());
+    stored.set("ovis:sidebar-agent-tree", "false");
+    stored.set("ovis:workspace-agents-folded:local", JSON.stringify(["api"]));
+    await draw({ shown: shells });
+    expect(selectOf("api").props["aria-expanded"]).toBeUndefined();
+    await act(async () => selectOf("api").props.onClick());
+    expect(selected).toEqual(["ops:shell", "api:claude"]);
+  });
+
+  it("opens a folded workspace for the filter's time when it matches one of its agents", async () => {
+    stored.set("ovis:sidebar-agent-tree", "true");
+    stored.set("ovis:workspace-agents-folded:local", JSON.stringify(["api", "gone"]));
+    await draw({ online: false, selectedPaneId: "web:pi", filter: sidebarFilter("review", machines, { machineId: "local", paneId: "web:pi" }, (words) => words) });
+    expect(tree()).toEqual([["api", "api:codex"], ["web", "web:pi"]]);
+    await act(async () => renderer!.unmount());
+    await draw();
+    expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
+    await act(async () => selectOf("web").props.onClick());
+    // a change of the user's prunes the list to the roster
+    expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!).sort()).toEqual(["api", "web"]);
+  });
+
   it("draws an offline PC's agents without a state and does not open them", async () => {
     stored.set("ovis:sidebar-agent-tree", "true");
     await draw({ online: false });

@@ -8,7 +8,6 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const FILES_KO: Record<string, string> = {
-  "Preview": "미리보기",
   "No Git repositories found in this folder.": "이 폴더에서 Git 저장소를 찾지 못했습니다.",
   "Repository search was incomplete. Try a smaller folder or depth.": "일부 폴더의 저장소를 찾지 못했습니다. 더 작은 폴더나 얕은 깊이로 다시 시도하세요.",
   "Refresh repositories": "저장소 다시 찾기",

@@ -10,9 +10,9 @@ The terminal client: herdr-core's terminals as herdr shows them. Users read
   terminal's connection recovers is refused, a phone-width screen shows the focused terminal
   alone, and hc-tui never runs `hc server start`. The Ovis token and address are removed from its
   environment first, so nothing it starts can see them.
-- `UPSTREAM` and `prepare.sh`: the pinned hc-tui revision. `prepare.sh` fetches it into
+- `hc-tui.pin` and `prepare.sh`: the pinned hc-tui revision. `prepare.sh` fetches it into
   `upstream/` (ignored by git) and applies `patches/`; run it after a checkout and whenever
-  `UPSTREAM` or `patches/` change. The patches are `git format-patch` output of commits made
+  `hc-tui.pin` or `patches/` change. The patches are `git format-patch` output of commits made
   in `upstream/`, each with its tests; hc-tui's own conventions apply to them.
 
 ## Checks

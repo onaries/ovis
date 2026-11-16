@@ -49,6 +49,73 @@
   border-radius: var(--radius-sm);
 }
 
+/* the head's list of steps: a number in a ring, the current one filled, a done one checked */
+.setup-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.setup-steps li[aria-current="step"] {
+  color: var(--text-strong);
+  font-weight: var(--fw-selected);
+}
+
+.setup-steps-mark {
+  display: grid;
+  place-items: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-steps li[aria-current="step"] .setup-steps-mark {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.setup-steps li.is-done .setup-steps-mark {
+  border-color: var(--status-done);
+  color: var(--status-done);
+}
+
+.setup-steps-mark svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+/* a narrow head keeps the numbers and drops the words */
+@media (max-width: 640px) {
+  .setup-steps {
+    gap: var(--space-2);
+  }
+
+  .setup-steps-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 /* the close glyph, not its hover box, ends on the body's gutter */
 .setup-head > .icon-button {
   justify-self: end;
@@ -197,6 +264,206 @@
 .setup-summary-name {
   min-width: 6em;
   color: var(--text-dim);
+}
+
+/* one labelled control in the step: its label, the control, a line under it */
+.setup-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* the phone and alerts step's left column: this computer's alerts, its chips a line that wraps */
+.setup-alerts > .settings-chips {
+  align-self: stretch;
+  /* under its label at the left, where Settings' rows set it at the right edge */
+  justify-content: flex-start;
+}
+
+.setup-alerts > .setup-muted:empty {
+  display: none;
+}
+
+/* alerts the system refuses: the warning glyph in the blocked colour, the sentence plain */
+.setup-note-blocked svg {
+  color: var(--status-blocked);
+}
+
+.setup-note-blocked strong {
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+}
+
+/* the theme step's cards: a grid of three, wrapping, never a sideways row (Settings has that one) */
+.setup-theme-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  align-self: stretch;
+}
+
+.setup-theme-cards .theme-card {
+  font-size: var(--fs-sm);
+}
+
+/* the preview: a miniature of the app in the page's own colours, which the step's picks set (ThemePreview) */
+.setup-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 5fr);
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+}
+
+.setup-preview-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-half);
+  min-width: 0;
+  padding: var(--space-2);
+  border-right: var(--hairline) solid var(--divider);
+  background: var(--bg-nav);
+}
+
+.setup-preview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--bar-control-h);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+}
+
+.setup-preview-row.is-selected {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-weight: var(--fw-selected);
+}
+
+.setup-preview-name {
+  flex: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-preview-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.setup-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: var(--hairline) solid var(--divider);
+  background: var(--bg-panel);
+}
+
+.setup-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+/* the Chat | Terminal switch, drawn: the chosen half on the raised surface */
+.setup-preview-lens {
+  display: inline-flex;
+  flex: none;
+  padding: var(--space-half);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-dim);
+}
+
+.setup-preview-lens > span {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.setup-preview-lens > .is-on {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
+.setup-preview-chat {
+  display: flex;
+  flex: auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.setup-preview-chat p {
+  margin: 0;
+}
+
+.setup-preview-user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: var(--space-1-5) var(--space-2-5);
+  border: var(--hairline) solid var(--bubble-border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.setup-preview-code,
+.setup-preview-term {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-code);
+  white-space: pre;
+}
+
+.setup-preview-code {
+  padding: var(--space-2) var(--space-2-5);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.setup-preview-code .is-keyword {
+  color: var(--syntax-keyword);
+}
+
+.setup-preview-code .is-function {
+  color: var(--syntax-function);
+}
+
+.setup-preview-code .is-string {
+  color: var(--syntax-string);
+}
+
+.setup-preview-term {
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--hairline) solid var(--divider);
+  background: var(--term-bg);
+  color: var(--term-fg);
+}
+
+.setup-preview-term .is-dim {
+  color: var(--text-dim);
+}
+
+.setup-preview-term .is-pass {
+  color: var(--status-done);
 }
 
 /* the footer: the ghost fast path at the left edge (its label on the body's gutter), Back and Continue at the right */

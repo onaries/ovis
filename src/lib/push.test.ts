@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensurePushSubscription, pushSupported, registerPendingPush, removePushSubscription, testDevicePush } from "./push.ts";
 import { ApiError } from "./api.ts";
+import { confirmation } from "./pushConfirm.ts";
 import { notificationState, refreshNotificationState, requestNotificationPermission } from "./notifications.ts";
 import { useNotificationSwitch } from "./useNotifications.ts";
 import { fakeIndexedDB } from "./indexedDB.fake.ts";
@@ -167,6 +168,28 @@ describe("testDevicePush", () => {
     expect(JSON.parse(String(calls[0]![1]?.body))).toEqual({ endpoint: live.endpoint });
     expect(issued).toBe(0);
     expect(registered).toEqual([]);
+  });
+
+  it("records what the test came to as the subscription's confirmation, where the PC keeps no delivery record", async () => {
+    const before = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => void values.set(key, value) } } });
+    try {
+      live = standIn("https://push.example/existing", OTHER_KEY);
+      globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "push_failed", message: "push service 502" } }, { status: 502 })) as typeof fetch;
+      await expect(testDevicePush()).rejects.toBeInstanceOf(ApiError);
+      expect(confirmation("https://push.example/existing")).toBe(false);
+      // a Send test that gets through clears it
+      globalThis.fetch = (async (_url: string) => new Response(null, { status: 204 })) as typeof fetch;
+      expect(await testDevicePush()).toBe("sent");
+      expect(confirmation("https://push.example/existing")).toBe(true);
+      // a watching device's refusal says nothing of delivery
+      globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "read_only", message: "watch" } }, { status: 403 })) as typeof fetch;
+      await expect(testDevicePush()).rejects.toBeInstanceOf(ApiError);
+      expect(confirmation("https://push.example/existing")).toBe(true);
+    } finally {
+      if (before) Object.defineProperty(globalThis, "window", before); else Reflect.deleteProperty(globalThis, "window");
+    }
   });
 
   it("reports a missing browser subscription without creating a replacement", async () => {

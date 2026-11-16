@@ -1,9 +1,45 @@
 import assert from "node:assert/strict";
-import type { Browser } from "playwright-core";
+import type { Browser, Page, WebSocket } from "playwright-core";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+
+/**
+ * Watches the page's sockets, from before it loads, for the frame that says the pane takes input: a key pressed
+ * before that is not sent. The returned wait settles once that frame has come (at once if it already has), or fails
+ * after 15 s; only the wait makes a promise and a timer, so nothing is left to reject when the page fails to load
+ * first. Settling stops the timer and the watching.
+ */
+function watchInputReady(page: Page, paneId: string): () => Promise<void> {
+  let ready = false;
+  let settle: (() => void) | null = null;
+  const watched: Array<{ socket: WebSocket; onFrame: (frame: { payload: string | Buffer }) => void }> = [];
+  const onSocket = (socket: WebSocket): void => {
+    const onFrame = ({ payload }: { payload: string | Buffer }): void => {
+      const message = JSON.parse(String(payload));
+      if (message.type !== "input-ready" || message.pane_id !== paneId || message.ready === false) return;
+      ready = true;
+      settle?.();
+    };
+    socket.on("framereceived", onFrame);
+    watched.push({ socket, onFrame });
+  };
+  page.on("websocket", onSocket);
+  return () => new Promise<void>((resolve, reject) => {
+    const done = (error?: Error): void => {
+      clearTimeout(timer);
+      settle = null;
+      page.off("websocket", onSocket);
+      for (const { socket, onFrame } of watched) socket.off("framereceived", onFrame);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => done(new Error(`${paneId} never became ready for input`)), 15_000);
+    settle = () => done();
+    if (ready) done();
+  });
+}
 
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
@@ -20,8 +56,10 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       const message = JSON.parse(String(payload));
       if (message.type === "input") inputs.push(message);
     }));
+    const ready = watchInputReady(page, paneId);
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
+    await ready();
     const input = page.locator(".xterm-helper-textarea");
     await input.waitFor();
     for (const [shortcut, expected] of [
@@ -125,8 +163,10 @@ process.stdin.on("data", (data) => {
       const message = JSON.parse(String(payload));
       if (message.type === "input") inputs.push(message.text);
     }));
+    const ready = watchInputReady(page, paneId);
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
+    await ready();
     await page.locator(".xterm-helper-textarea").press("Meta+Backspace");
     await page.waitForTimeout(300);
     assert.deepEqual(inputs, ["\x7f"], "non-macOS Meta+Backspace keeps its native sequence");

@@ -11,7 +11,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Send to agent queue (Tab)": "エージェントのキューに送信 (Tab)",
   "Send to agent queue (Ctrl+Q)": "エージェントのキューに送信 (Ctrl+Q)",
   "Send to agent queue": "エージェントのキューに送信",
-  "Next": "次へ",
   "Next question": "次の質問",
   "Edit queued message": "キュー内のメッセージを編集",
   "Sent to Pi · waiting for transcript": "Pi に送信済み · 会話への記録を待っています",

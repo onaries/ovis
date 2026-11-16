@@ -27,6 +27,8 @@ export const CHAT_JA: Record<string, string> = {
   "Retry stopped. Check the terminal.": "再試行を停止しました。ターミナルを確認してください。",
   "Compacting conversation…": "会話を圧縮中…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravityのチャットを利用できません。ターミナルを開いて動作状況とツール呼び出しを確認してください。",
+  "Not in the conversation. If the agent showed an error, it is in the terminal.": "会話に記録されていません。エージェントがエラーを出した場合はターミナルにあります。",
+  "Not in the conversation. If {agent} showed an error, it is in the terminal.": "会話に記録されていません。{agent} がエラーを出した場合はターミナルにあります。",
   "{agent} has not recorded a conversation Ovis can find for this pane yet. Before the first message this is normal; if it stays, use the terminal.": "{agent} はこのペインで Ovis が見つけられる会話をまだ記録していません。最初のメッセージの前なら正常です。続く場合はターミナルを使ってください。",
   "Ovis can't read {agent} conversations yet. Use the terminal to work with it.": "Ovis はまだ {agent} の会話を読み取れません。ターミナルで操作してください。",
   "Ovis couldn't find or read the file {agent} keeps this conversation in. Use the terminal.": "{agent} がこの会話を保存しているファイルを Ovis が見つけられないか、読み取れませんでした。ターミナルを使ってください。",

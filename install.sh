@@ -979,9 +979,8 @@ binary_pty_host() {
 # One install at a time in OVIS_HOME: $OVIS_HOME/.install.lock, made by mkdir (atomic) and holding this
 # shell's pid. Another run waits for it, at most INSTALL_LOCK_WAIT seconds, and then fails, saying who holds
 # it. A lock whose holder is gone (its pid does not run, or it never wrote one more than a minute ago) is
-# broken under .install.lock.break, one breaker at a time. With three or more installs started at the same
-# instant a narrow race remains (a follow-up). Released on every exit, a signal's included; only kill -9
-# leaves it, stale.
+# broken under .install.lock.break, one breaker at a time. Released on every exit, a signal's included; only
+# kill -9 leaves it, stale.
 install_lock() {
   lock="$OVIS_HOME/.install.lock"
   mkdir -p "$OVIS_HOME"
@@ -999,7 +998,7 @@ install_lock() {
         lock_stale=1
       fi
       # removed only while it still holds the record judged stale: a fresh holder's lock is never taken
-      if [ "$lock_stale" = 1 ] && [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$lock_holder" ]; then rm -rf "$lock" || true; fi
+      if [ "$lock_stale" = 1 ] && [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$lock_holder" ]; then install_lock_drop || true; fi
       rm -rf "$lock.break" 2>/dev/null || true
       [ -e "$lock" ] || continue
     elif [ -n "$(find "$lock.break" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
@@ -1016,10 +1015,21 @@ install_lock() {
   trap 'install_unlock; exit 129' HUP
   trap 'install_unlock; exit 130' INT
   trap 'install_unlock; exit 143' TERM
+  # a run cut off between its lock's rename and its removal left that folder: the holder removes it, before its own
+  # rename may need the same name. A run releasing its lock may be removing the same folder at that moment, and
+  # busybox rm then fails on what the other removed (No such file or directory): neither removal has to succeed, as
+  # whatever is left is the next holder's to remove
+  rm -rf "$lock".gone-* 2>/dev/null || true
 }
 install_unlock() {
-  if [ -n "${lock:-}" ] && [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$$" ]; then rm -rf "$lock"; fi
+  if [ -n "${lock:-}" ] && [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$$" ]; then install_lock_drop; fi
   trap - EXIT HUP INT TERM
+}
+# The lock folder leaves in one rename, to a name of this run's own, and is removed there. rm -rf in place unlinks
+# the pid a moment before the folder: a waiter could claim the lock in that moment (its pid file is created wherever
+# none is), and the folder it holds would then not be removed (Directory not empty), failing the run that let it go
+install_lock_drop() {
+  mv "$lock" "$lock.gone-$$" && { rm -rf "$lock.gone-$$" 2>/dev/null || true; }
 }
 
 # Whether the release of $version runs in OVIS_HOME already: its manifest there names it, and the binary
@@ -1298,12 +1308,28 @@ EOF
   fi
 }
 
+# OVIS_REF names what a fresh install takes: an Ovis already installed in the checkout $1 is not moved by it, which is
+# said with its commit, without asking GitHub
+ref_not_moved() {
+  [ -n "${OVIS_REF:-${HERDR_WEB_UI_REF:-}}" ] || return 0
+  # with no checkout to read (herdr did not name the plugin's root), git -C "" would read the current directory's; and
+  # in a folder that is not a checkout's top level, git reads the repository around it, whose commit is not the plugin's
+  ref_not_moved_at=""
+  if [ -n "$1" ] && ref_not_moved_at=$(git -C "$1" rev-parse --show-prefix 2>/dev/null </dev/null) && [ -z "$ref_not_moved_at" ]; then
+    ref_not_moved_at=$(git -C "$1" rev-parse --short=12 HEAD 2>/dev/null </dev/null) || ref_not_moved_at=""
+  else
+    ref_not_moved_at=""
+  fi
+  say "${ref_not_moved_at:+the installed checkout is at commit $ref_not_moved_at; }OVIS_REF does not move an installed Ovis (INSTALL.md, Update)"
+}
+
 # Ovis on herdr-core, without herdr or its plugin: its own checkout in APP_DIR, built with herdr-plugin.toml's
 # [[build]] steps as herdr builds the plugin (the Rust PTY host aside: herdr-core's terminals need none),
 # its settings, its service, and a start now.
 install_core() {
   if [ -d "$APP_DIR/.git" ]; then
     say "already installed in $APP_DIR, on herdr-core; Settings → Updates keeps it current"
+    ref_not_moved "$APP_DIR"
   elif [ -e "$APP_DIR" ]; then
     fail "$APP_DIR is there but is not an Ovis checkout; move it away and run this again"
   else
@@ -1378,6 +1404,7 @@ install_plugin() {
 
   if herdr plugin list 2>/dev/null | grep -q "$PLUGIN "; then
     say "already installed as a herdr plugin; Settings → Updates keeps it current"
+    ref_not_moved "$(plugin_root "$PLUGIN")"
   else
     say "installing the herdr plugin at $ref (herdr clones and builds it: about a minute)"
     # a branch builds its own sources: the plugin's launcher (scripts/plugin-launch.ts) would otherwise run the

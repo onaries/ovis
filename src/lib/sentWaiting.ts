@@ -34,13 +34,24 @@ export interface WaitingSend {
   at: number;
   /** what the chat held at send time; null when it had shown no turns, and `at` is the only guard */
   after: WaitingBaseline | null;
+  /**
+   * Its turn had not come WAITING_SEND_MS after it was sent, with the agent at rest (markUnanswered): no
+   * longer on its way, and not in the conversation. It stays, said so, until its turn comes after all, the
+   * user dismisses it or the pane closes, and a reload or a lost connection keeps it (this tab's storage).
+   */
+  unanswered?: true;
+  /** the user turns the chat had read when it was sent: one read after it that is not among them is a turn the agent wrote */
+  seen?: ReadonlySet<string>;
+  /** the herdr (its lifetime) an unanswered send was kept under: a herdr that replaced it gives the pane id to another pane */
+  herdr?: string;
 }
 
 type Turn = Pick<ConversationTurn, "role" | "parts" | "ts">;
 
 /**
- * A send whose turn has not come by then is no longer said to be on its way: Esc in the terminal,
- * an agent that rewrote it, or a turn with no time. The chat then shows what it shows without one.
+ * A send whose turn has not come by then, the agent at rest, is no longer said to be on its way
+ * (markUnanswered): one the agent did write, in words or a time the chat does not match (Esc in the
+ * terminal, a rewrite, a turn with no time), goes; one it wrote nothing for is said to be unanswered.
  */
 export const WAITING_SEND_MS = 60_000;
 
@@ -121,10 +132,16 @@ function newerThanSend(send: WaitingSend, at: number, key: string, answeredAt: n
   return after.latest === null || at + coarse + (after.takenAt - after.latest) > send.at;
 }
 
+/** A user turn's words, as the terminal's copy of a send reads them. */
+const turnSaid = (parts: Turn["parts"]): string => said(parts.filter((part) => part.kind === "text").map((part) => part.text).join(" "));
+
+/** The words of the user turn a userTurns key names: only a turn with a send's words can be that send's. */
+const keySaid = (key: string): string => turnSaid((JSON.parse(key.slice(0, key.lastIndexOf(":"))) as [Turn["ts"], Turn["parts"]])[1]);
+
 function turnMatches(send: WaitingSend, turn: Turn, key: string, answeredAt: number, last: boolean): boolean {
   const at = turnTime(turn);
   if (turn.role !== "user" || !Number.isFinite(at) || !newerThanSend(send, at, key, answeredAt, last)) return false;
-  return said(turn.parts.filter((part) => part.kind === "text").map((part) => part.text).join(" ")) === said(send.text);
+  return turnSaid(turn.parts) === said(send.text);
 }
 
 interface WaitingPane {
@@ -190,7 +207,13 @@ export function waitingBaseline(key: string, now = performance.now(), wall = Dat
  * read whose body was parsed late does not bring its time back. Without a time (an older bridge) the
  * last one stays.
  */
-export function observeWaitingClock(key: string, serverTime: string | null | undefined, received = performance.now(), receivedWall = Date.now()): void {
+export function observeWaitingClock(key: string, serverTime: string | null | undefined, received = performance.now(), receivedWall = Date.now(), unchanged = false): void {
+  // an answered read is a read since the agent came to rest (markUnanswered) once the chat holds what it read: an
+  // unchanged one (a 304) at once, a new body when the chat settles it (settleWaitingSends)
+  if (unchanged) {
+    reads.set(key, receivedWall);
+    if (waiting.get(key)?.sends.length) queueMicrotask(() => markUnanswered(key));
+  } else answered.set(key, receivedWall);
   const pcTime = serverTime == null ? Number.NaN : Date.parse(serverTime);
   if (Number.isFinite(pcTime) && !((clocks.get(key)?.received ?? Number.NEGATIVE_INFINITY) > received)) clocks.set(key, { pcTime, received, receivedWall });
 }
@@ -210,29 +233,167 @@ export function stampedBaseline(after: WaitingBaseline | null, sendingAt: string
 }
 
 export function rememberWaitingSend(key: string, text: string, at = Date.now(), after: WaitingBaseline | null = null): void {
+  restore();
   // the text the composer types: paste markers it strips are no part of the turn
   const typed = composerMessage(text);
   if (typed.trim() === "" || !becomesTurn(typed)) return;
   const pane = waiting.get(key) ?? { sends: empty, claimed: new Set<string>() };
   const id = ++nextId;
-  pane.sends = [...pane.sends, { id, pane: key, text: typed, at, after }];
+  pane.sends = [...pane.sends, { id, pane: key, text: typed, at, after, seen: new Set(shown.get(key)?.keys ?? []) }];
   waiting.set(key, pane);
-  setTimeout(() => expireWaitingSends(key), Math.max(0, at + WAITING_SEND_MS - Date.now()));
   announce();
 }
 
-/** Drop the sends whose turn has not come within WAITING_SEND_MS (the browser's clock on both sides). */
+/**
+ * A send still on its way this long after it was sent, its chat open and the agent never at rest meanwhile (a
+ * status stuck at working, a pane that reports none), is let go, as every send was after WAITING_SEND_MS before.
+ * A chat not open keeps its sends: what became of them is told when it is open again.
+ */
+export const WAITING_STUCK_MS = 10 * 60_000;
+
+/**
+ * Drop the sends still on its way after WAITING_STUCK_MS (the browser's clock on both sides). Not while the agent
+ * rests: the chat's next read says what became of them (markUnanswered), however long the chat was closed.
+ */
 export function expireWaitingSends(key: string, now = Date.now()): void {
   const pane = waiting.get(key);
-  if (!pane) return;
-  const remaining = pane.sends.filter((send) => now - send.at < WAITING_SEND_MS);
+  if (!pane || rests.has(key)) return;
+  const remaining = pane.sends.filter((send) => send.unanswered === true || now - send.at < WAITING_STUCK_MS);
   if (remaining.length === pane.sends.length) return;
   pane.sends = remaining;
   announce();
 }
 
+/** when each pane's agent came to rest, as its chat last said (restingSince), and when its transcript was last read */
+const rests = new Map<string, number>();
+const reads = new Map<string, number>();
+/** a read whose body the chat has not settled yet (observeWaitingClock) */
+const answered = new Map<string, number>();
+
+/** The pane's agent is at rest since `at`, or works (null): what markUnanswered goes by. */
+export function restingSince(key: string, at: number | null): void {
+  if (at === null) rests.delete(key); else if (!rests.has(key)) rests.set(key, at);
+}
+
+/**
+ * A send whose turn has not come within WAITING_SEND_MS (the browser's clock on both sides), the agent at rest and
+ * the transcript read since it came to rest, is said to be unanswered from then on, and kept: an agent that fails a
+ * turn before it writes it (a sign-in lapsed, a model gone) shows why only in its terminal. Not when that read holds a
+ * user turn the chat had not read when it was sent: the agent wrote the send, in words or a time this chat does not
+ * match (Esc in the terminal, a rewrite, a turn with no time), and it is let go as before. While the agent works it
+ * is still on its way.
+ */
+export function markUnanswered(key: string, now = Date.now()): void {
+  const pane = waiting.get(key);
+  const rest = rests.get(key);
+  const read = shown.get(key);
+  if (!pane || rest === undefined || read === undefined || (reads.get(key) ?? -Infinity) <= rest) return;
+  const due = (send: WaitingSend) => send.unanswered !== true && now - send.at >= WAITING_SEND_MS;
+  if (!pane.sends.some(due)) return;
+  // each user turn the chat read since a send, and no send's own turn, accounts for one send, the oldest first
+  const used = new Set<string>();
+  const written = (send: WaitingSend): boolean => {
+    const turn = [...read.keys].find((turn) => !used.has(turn) && !pane.claimed.has(turn) && !(send.seen ?? new Set()).has(turn));
+    if (turn === undefined) return false;
+    used.add(turn);
+    return true;
+  };
+  const machine = key.slice(0, key.indexOf(":"));
+  const lifetime = paneLifetimes.generation(machine);
+  pane.sends = pane.sends.flatMap((send) => !due(send) ? [send] : written(send) ? []
+    : [{ ...send, unanswered: true as const, ...(typeof lifetime === "string" ? { herdr: lifetime } : {}) }]);
+  stored();
+  announce();
+}
+
+/** The user has seen that a send went unanswered and let it go. */
+export function dismissWaitingSend(key: string, id: number): void {
+  const pane = waiting.get(key);
+  if (!pane || !pane.sends.some((send) => send.id === id)) return;
+  pane.sends = pane.sends.filter((send) => send.id !== id);
+  stored();
+  announce();
+}
+
+/** Where this tab keeps its unanswered sends across a reload: the user's own words, never sent again from it. */
+const STORE_KEY = "ovis:unanswered-sends";
+/** an unanswered send older than this is let go when the tab is read again */
+const UNANSWERED_KEEP_MS = 24 * 60 * 60 * 1000;
+let restored = false;
+function storage(): Storage | null {
+  try { return typeof sessionStorage === "undefined" ? null : sessionStorage; } catch { return null; }
+}
+/**
+ * An unanswered send as the tab keeps it: with the turns the chat held when it was sent (its baseline) and the turns
+ * another send took, so a reload matches it to no turn it would not have taken before. Of both, only the turns with
+ * its words, the only ones that could be its own.
+ */
+function keptSend(key: string, send: WaitingSend, claimed: Iterable<string>) {
+  const words = said(send.text);
+  const own = (turn: string) => keySaid(turn) === words;
+  const after = send.after === null ? null : { ...send.after, keys: [...send.after.keys].filter(own) };
+  return { key, text: send.text, at: send.at, herdr: send.herdr, after, claimed: [...claimed].filter(own) };
+}
+/** A kept send's baseline read back: null for none, or for one this page cannot read (the send's time alone guards it then). */
+function keptBaseline(value: unknown): WaitingBaseline | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { keys, latest, takenAt, pcFloor, unread } = value as Record<string, unknown>;
+  const time = (item: unknown): item is number | null => item === null || typeof item === "number";
+  if (!Array.isArray(keys) || !keys.every((item) => typeof item === "string") || !time(latest) || typeof takenAt !== "number" || !time(pcFloor)) return null;
+  return { keys: new Set(keys), latest, takenAt, pcFloor, ...(unread === true ? { unread } : {}) };
+}
+/** The unanswered sends of every pane, written whole on each change. */
+function stored(): void {
+  const store = storage();
+  if (store === null) return;
+  // only what names its herdr: after a reload, it is shown under that herdr alone (adoptRestored)
+  const kept = [...waiting.entries()].flatMap(([key, pane]) => pane.sends.filter((send) => send.unanswered === true && send.herdr !== undefined).map((send) => keptSend(key, send, pane.claimed)))
+    .concat([...restoredSends.entries()].flatMap(([key, sends]) => sends.map(({ send, claimed }) => keptSend(key, send, claimed))));
+  try {
+    if (kept.length === 0) store.removeItem(STORE_KEY); else store.setItem(STORE_KEY, JSON.stringify(kept));
+  } catch { /* full or refused: kept in memory only */ }
+}
+/** The tab's unanswered sends read back once, before anything is asked of the store. */
+function restore(now = Date.now()): void {
+  if (restored) return;
+  restored = true;
+  let kept: unknown;
+  try { kept = JSON.parse(storage()?.getItem(STORE_KEY) ?? "[]"); } catch { return; }
+  if (!Array.isArray(kept)) return;
+  for (const item of kept) {
+    const { key, text, at, herdr, after, claimed } = (item ?? {}) as { key?: unknown; text?: unknown; at?: unknown; herdr?: unknown; after?: unknown; claimed?: unknown };
+    if (typeof key !== "string" || typeof text !== "string" || typeof at !== "number" || typeof herdr !== "string" || !(now - at < UNANSWERED_KEEP_MS)) continue;
+    const send: WaitingSend = { id: ++nextId, pane: key, text, at, after: keptBaseline(after), unanswered: true, herdr };
+    const taken = Array.isArray(claimed) ? claimed.filter((turn): turn is string => typeof turn === "string") : [];
+    restoredSends.set(key, [...(restoredSends.get(key) ?? []), { send, claimed: taken }]);
+  }
+}
+/**
+ * sends read back from the tab's storage, each with the turns of its words another send had taken, held until the
+ * page knows which herdr their PC runs now
+ */
+const restoredSends = new Map<string, { send: WaitingSend; claimed: readonly string[] }[]>();
+/** A pane's sends read back after a reload, shown once their PC's herdr is the one they were kept under; another's are dropped. */
+function adoptRestored(key: string): void {
+  const sends = restoredSends.get(key);
+  if (sends === undefined) return;
+  const lifetime = paneLifetimes.generation(key.slice(0, key.indexOf(":")));
+  if (typeof lifetime !== "string") return;
+  restoredSends.delete(key);
+  const same = sends.filter(({ send }) => send.herdr === lifetime);
+  if (same.length > 0) {
+    const pane = waiting.get(key) ?? { sends: empty, claimed: new Set<string>() };
+    pane.sends = [...pane.sends, ...same.map(({ send }) => send)];
+    for (const { claimed } of same) for (const turn of claimed) pane.claimed.add(turn);
+    waiting.set(key, pane);
+  }
+  if (same.length !== sends.length) stored();
+}
+
 /** Stable snapshots for useSyncExternalStore, retained while another pane is active. */
 export function currentWaitingSends(key: string): readonly WaitingSend[] {
+  restore();
+  adoptRestored(key);
   return waiting.get(key)?.sends ?? empty;
 }
 
@@ -251,25 +412,47 @@ export function settleWaitingSends(key: string, turns: readonly Turn[], now = Da
     // the same turns settled again (the waiting list changed) are no new read: the first read's time stays
     const same = before !== undefined && before.latest === latest && before.keys.size === keys.size && [...keys].every((item) => before.keys.has(item));
     if (!same) shown.set(key, { keys, latest, takenAt: now });
+    // the read that brought these turns, now that the chat holds them; a settle again with nothing read is none
+    const read = answered.get(key);
+    if (read !== undefined) { answered.delete(key); reads.set(key, read); }
   }
+  restore();
   const pane = waiting.get(key);
   if (!pane || pane.sends.length === 0) return;
-  const remaining = pane.sends.filter((send) => {
+  // a send this read did not settle may be unanswered now, the agent having come to rest before it
+  if (loaded) queueMicrotask(() => markUnanswered(key));
+  // the sends still on their way take their turns first: the same words sent again after one went unanswered are
+  // the new send's turn, and the one the agent never wrote stays said so
+  const settled = new Set<WaitingSend>();
+  const order = [...pane.sends.filter((send) => send.unanswered !== true), ...pane.sends.filter((send) => send.unanswered === true)];
+  for (const send of order) {
     const match = candidates.find((candidate) => !pane.claimed.has(candidate.key) && turnMatches(send, candidate.turn, candidate.key, candidate.answeredAt, candidate.last));
-    if (!match) return true;
+    if (!match) continue;
     pane.claimed.add(match.key);
-    return false;
-  });
-  if (remaining.length === pane.sends.length) return;
-  pane.sends = remaining;
+    settled.add(send);
+  }
+  if (settled.size === 0) return;
+  pane.sends = pane.sends.filter((send) => !settled.has(send));
+  // a turn taken is kept with the unanswered sends of its words, and one of them may have been settled
+  stored();
   announce();
 }
 
 /** Release a pane's waiting sends, consumed-turn identities and shown turns (a replaced herdr, tests). */
 export function forgetWaitingSends(key: string): void {
+  const held = restoredSends.delete(key);
+  if (!releasePane(key) && !held) return;
+  stored();
+  announce();
+}
+
+/** What this page read of a pane, and its sends: whether it held any. Not the sends read back after a reload. */
+function releasePane(key: string): boolean {
   shown.delete(key);
   clocks.delete(key);
-  if (waiting.delete(key)) announce();
+  rests.delete(key);
+  reads.delete(key);
+  return waiting.delete(key);
 }
 
 /** The chat dropped its transcript for another history: the turns it showed are no baseline for its next send. */
@@ -284,9 +467,14 @@ export function forgetWaitingBaseline(key: string): void {
  */
 export function clearMachineWaitingSends(machineId: string): void {
   if (typeof paneLifetimes.generation(machineId) !== "string") { forgetMachineWaitingSends(machineId); return; }
+  // a send already said unanswered stays: the transcript had its chance, and the user has not let it go
   let changed = false;
-  for (const key of waiting.keys()) {
-    if (key.startsWith(`${machineId}:`)) { waiting.delete(key); changed = true; }
+  for (const [key, pane] of waiting) {
+    if (!key.startsWith(`${machineId}:`)) continue;
+    const kept = pane.sends.filter((send) => send.unanswered === true);
+    if (kept.length === pane.sends.length) continue;
+    changed = true;
+    if (kept.length === 0) waiting.delete(key); else pane.sends = kept;
   }
   if (changed) announce();
 }
@@ -295,7 +483,13 @@ export function clearMachineWaitingSends(machineId: string): void {
 // sends never reach the new panes, so a PC's waiting lines go with its herdr
 export function forgetMachineWaitingSends(machineId: string): void {
   listedPanes.delete(machineId);
-  for (const key of [...waiting.keys(), ...shown.keys(), ...clocks.keys()]) if (key.startsWith(`${machineId}:`)) forgetWaitingSends(key);
+  // the sends read back after a reload stay: they are shown under the herdr they were kept under alone, once the
+  // page knows it (adoptRestored), whatever the connection did before
+  let held = false;
+  for (const key of [...waiting.keys(), ...shown.keys(), ...clocks.keys()]) if (key.startsWith(`${machineId}:`) && releasePane(key)) held = true;
+  if (!held) return;
+  stored();
+  announce();
 }
 
 export function pruneWaitingSends(machines: readonly Machine[]): void {

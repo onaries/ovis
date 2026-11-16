@@ -8,7 +8,6 @@
  */
 export const DEVICES_JA: Record<string, string> = {
   "Anyone who can reach {host} on your network can type into every pane: no access token is set and no device is paired yet.": "同じネットワークで {host} に届く人なら誰でも、すべてのペインに入力できます。アクセストークンは設定されておらず、ペアリング済みのデバイスもまだありません。",
-  "Alerts off": "通知オフ",
   "Tap the Share button, then Add to Home Screen.": "共有ボタンをタップし、「ホーム画面に追加」を選択してください。",
   "Open this page over HTTPS (or on localhost) to install it.": "インストールするには、このページを HTTPS (または localhost) で開いてください。",
   "Firefox on desktop can't install web apps. Open this page in Chrome or Edge.": "デスクトップ版 Firefox では Web アプリをインストールできません。このページを Chrome または Edge で開いてください。",
@@ -122,13 +121,8 @@ export const DEVICES_JA: Record<string, string> = {
   "With no names, every unexpired link you issue opens it. Add names to accept only links issued to them.": "名前がなければ、発行した有効期限内のリンクはすべて開けます。名前を追加すると、その宛先に発行したリンクだけを受け付けます。",
   "Test notification": "テスト通知",
   "Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.": "このデバイスに今すぐ通知を 1 件送り、プッシュ通知がここに届くか確認できます。送れないときは、名前の下の行でお知らせします。",
-  "Send test": "テスト送信",
-  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "プッシュ通知には HTTPS または localhost が必要です。iPhone ではホーム画面に追加したアプリを使ってください。",
-  "Allow notifications in your browser settings, then try again.": "ブラウザーの設定で通知を許可してから、もう一度お試しください。",
-  "Allow notifications for Ovis in the phone's Settings, then try again.": "スマートフォンの設定で Ovis の通知を許可してから、もう一度お試しください。",
   "Test notification sent. Check this device for the alert.": "テスト通知を送信しました。このデバイスに通知が届いたか確認してください。",
   "Allow notifications to test alerts on this device.": "このデバイスで通知をテストするには、通知を許可してください。",
-  "Could not send the test notification. Try again.": "テスト通知を送信できませんでした。もう一度お試しください。",
   "The last alert did not reach this device; the next one is tried as usual. Send a test to check.": "最後の通知はこのデバイスに届きませんでした。次の通知は通常どおり送られます。テストを送って確認してください。",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "リレーを操作できるのは、PC に直接接続した所有者だけです。PC 上で Ovis を開くか、PC の直接のアドレスにアクセスしてください。",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "ブロック中: OVIS_TAILSCALE_SERVE_ONLY により tailscale serve が唯一の入口になっています。この PC で解除し、アプリを再起動してください。",

@@ -10,12 +10,12 @@
  * skill the same way, and stops at the sender's own refusal.
  */
 import { afterAll, beforeAll, expect, it, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
 import * as herdr from "./herdr/client.ts";
-import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { herdrRpc, sessionSnapshot, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import { closeOpenCodeNative } from "./opencode-native.ts";
 import { forgetOpenCodeService, openCodeServiceOptions } from "./opencode-service.ts";
 import type { PanePromptResponse } from "../shared/protocol.ts";
@@ -103,12 +103,31 @@ async function openCodePane(label: string, session: string | null, cwd: string, 
   const created = await workspaceCreate({ cwd, label: `ovis-test-opencode-first-${label}` });
   workspaces.push(created.workspace.workspace_id);
   const pane = created.root_pane.pane_id;
-  await herdrRpc("pane.send_text", { pane_id: pane, text: `exec ${standIn} ${label}\n` });
-  let seen: unknown;
-  for (const deadline = Date.now() + 10_000; (seen = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane))?.agent !== "opencode";) {
-    // what herdr last said of the pane, so a CI failure tells a slow start from a stand-in that never ran
-    if (Date.now() > deadline) throw new Error(`the OpenCode stand-in did not start: ${JSON.stringify(seen)} ${await paneProcesses(pane, cwd)}`);
-    await Bun.sleep(50);
+  // herdr names the pane's agent from its foreground process: heard as it happens, not polled
+  const watching = Promise.withResolvers<void>();
+  // true once herdr names the stand-in; false when the subscription ends first, leaving the snapshot to say
+  const detected = Promise.withResolvers<boolean>();
+  const subscription = subscribeEvents([{ type: "pane.agent_status_changed", pane_id: pane }], {
+    onStarted: () => watching.resolve(),
+    onEvent: (frame) => { if (frame.data?.agent === "opencode") detected.resolve(true); },
+    onError: (error) => { watching.reject(error); detected.reject(error); },
+    // a close before the acknowledgement calls this, not onError
+    onClose: () => { watching.reject(new Error("herdr closed the agent-status subscription before acknowledging it")); detected.resolve(false); },
+  });
+  // one deadline for the acknowledgement and the stand-in's start, running before either is awaited
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"expired">((done) => { timer = setTimeout(() => done("expired"), 10_000); });
+  try {
+    if (await Promise.race([watching.promise, expired]) === "expired") throw new Error("herdr did not acknowledge the agent-status subscription");
+    await herdrRpc("pane.send_text", { pane_id: pane, text: `exec ${standIn} ${label}\n` });
+    if (await Promise.race([detected.promise, expired]) !== true) {
+      // what herdr last said of the pane, so a CI failure tells a slow start from a stand-in that never ran
+      const seen = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane);
+      if (seen?.agent !== "opencode") throw new Error(`the OpenCode stand-in did not start: ${JSON.stringify(seen)} ${await paneProcesses(pane, cwd)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+    subscription.close();
   }
   if (session) await herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:opencode", agent: "opencode", agent_session_id: session, session_start_source: "select" });
   await herdrRpc("pane.report_agent", { pane_id: pane, source: "herdr:opencode", agent: "opencode", ...(session ? { agent_session_id: session } : {}), state });
@@ -151,12 +170,11 @@ async function firstMessage(label: string, session: string | null, cwd = root) {
   const sent = frame((item) => item.type === "pending-messages" && item.removed?.some((entry: any) => entry.id === message.id && entry.outcome === "sent"), "the first message was not sent");
   await herdrRpc("pane.report_agent", { pane_id: pane, source: "herdr:opencode", agent: "opencode", ...reported, state: "idle" });
   await sent;
-  // the Enter after the message, as the stand-in records it
-  await new Promise<void>((resolve, reject) => {
-    const watcher = watch(root, () => { if (typed(label).endsWith("\r")) { clearTimeout(timer); watcher.close(); resolve(); } });
-    const timer = setTimeout(() => { watcher.close(); reject(new Error(`no Enter after the message: ${JSON.stringify(typed(label))}`)); }, 5_000);
-    if (typed(label).endsWith("\r")) { clearTimeout(timer); watcher.close(); resolve(); }
-  });
+  // the Enter after the message, as the stand-in records it: read its log, as fs.watch can miss the last append
+  for (const deadline = Date.now() + 5_000; !typed(label).endsWith("\r");) {
+    if (Date.now() > deadline) throw new Error(`no Enter after the message: ${JSON.stringify(typed(label))}`);
+    await Bun.sleep(25);
+  }
   const shown = await (await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(pane)}`)).json() as PanePromptResponse;
   socket.close();
   return { typed: typed(label), outcomes: shown.outcomes ?? [] };

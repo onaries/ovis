@@ -137,6 +137,25 @@ try {
           assert.equal(fills.current, "true");
           assert.notEqual(fills.row, "rgba(0, 0, 0, 0)", "the agent's row is filled");
           assert.equal(fills.header, "rgba(0, 0, 0, 0)", "its workspace's row is not filled twice");
+
+          // the row with agents under it is a fold (#3771): a tap or a click puts them away and opens nothing, and a
+          // phone's drawer stays open; the row keeps a count of what it put away, and the fold survives a reload
+          const checkout = group(page, "workstation").locator('.workspace-group[data-workspace="w1C"] > .workspace-header .workspace-select');
+          const where = await page.evaluate(() => sessionStorage.getItem("ovis:selection"));
+          if (phone) await checkout.tap(); else await checkout.click();
+          await page.waitForFunction(() => document.querySelector('.workspace-group[data-workspace="w1C"] > .workspace-agents') === null);
+          assert.deepEqual((await tree(page, "workstation"))[0], ["w1C"], "the agents are put away");
+          assert.equal(await checkout.getAttribute("aria-expanded"), "false");
+          assert.equal((await group(page, "workstation").locator('.workspace-group[data-workspace="w1C"] .workspace-fold-count').textContent())?.trim(), "+3", "the row counts what it put away: its two agents and the worktree not selected, one fold for both");
+          assert.equal(await page.evaluate(() => sessionStorage.getItem("ovis:selection")), where, "folding opened nothing");
+          if (phone) assert.equal(await page.locator('button[aria-controls="workspace-drawer"]').getAttribute("aria-expanded"), "true", "the drawer stays open");
+          if (evidence) await page.locator(".sidebar-shell").screenshot({ path: join(evidence, `agent-tree-folded-${phone ? "390" : "1280"}-${theme}.png`) });
+          await open();
+          assert.deepEqual((await tree(page, "workstation"))[0], ["w1C"], "the fold is kept on this device");
+          await checkout.focus();
+          await page.keyboard.press("ArrowRight");
+          await agent(page, "workstation", panes.api).waitFor();
+          assert.equal(await checkout.getAttribute("aria-expanded"), "true", "Right unfolds");
           if (evidence) {
             mkdirSync(evidence, { recursive: true });
             await page.locator(".sidebar-shell").screenshot({ path: join(evidence, `agent-tree-${phone ? "390" : "1280"}-${theme}.png`) });
@@ -165,7 +184,7 @@ try {
             await page.evaluate(() => { localStorage.removeItem("ovis:sidebar-width"); localStorage.removeItem("ovis:sidebar-context"); });
           }
           assert.deepEqual(errors, []);
-          console.log(`PASS ${label}: off by default; on, each PC lists its workspaces and their agents, opens one in place and keeps the Agents list`);
+          console.log(`PASS ${label}: off by default; on, each PC lists its workspaces and their agents, opens one in place, folds a row's agents from the row and keeps the Agents list`);
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }

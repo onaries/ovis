@@ -66,6 +66,8 @@ beforeEach(() => {
           : request.method === "agent.prompt" || request.method === "pane.send_keys" || request.method === "pane.send_text" ? {}
           // a chat send to a Codex pane reads its screen last (composer.ts freeCodexInput): nothing of Codex's own is up here
           : request.method === "pane.read" && agent === "codex" ? { read: { text: "" } }
+          // and omp's box before the send (composer.ts freeAgentInput): empty
+          : request.method === "pane.read" && agent === "omp" ? { read: { text: "" } }
           : null;
         if (result === null) throw new Error(`unexpected RPC ${request.method}`);
         socket.end(`${JSON.stringify({ id: request.id, result })}\n`);

@@ -55,6 +55,7 @@ export const WORKSPACE_JA: Record<string, string> = {
   "model, effort": "モデル、推論レベル",
   "Empty: the agent's own model.": "空のままならエージェント自身のモデルを使います。",
   "Levels depend on the model.": "選べるレベルはモデルによって異なります。",
+  "Saved as dsh-tui's default for every later session, outside Ovis too. A default set in dsh-tui's /settings wins over it.": "以降のすべての dsh-tui セッションの既定値として保存され、Ovis の外でも使われます。dsh-tui の /settings で既定値を設定している場合はそちらが優先されます。",
   "Ultracode": "Ultracode",
   "Claude Code 2.1.284 or later": "Claude Code 2.1.284 以降",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "どの推論レベルでも動的ワークフローを実行します。Claude Code 2.1.284 以降が必要です。",

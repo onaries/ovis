@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
@@ -60,6 +60,29 @@ it("says a connected PC's roster is loading until it comes, for a lone Host and 
       })), { createNodeMock: node });
     });
     expect(loadingWords()).toBe(machines.length);
+    await act(async () => renderer?.unmount());
+    renderer = undefined;
+  }
+});
+
+it("counts its Settings gear as a button, and opens Settings even when the count fails", async () => {
+  for (const failing of [false, true]) {
+    const told: string[] = [];
+    const opened: string[] = [];
+    const counting = new Proxy({}, { get: (_, name) => name === "counted" ? (action: string, source: string) => { if (failing) throw new Error("storage full"); told.push(`${action}:${source}`); }
+      : name === "openSettings" ? () => opened.push("settings") : () => {} }) as AppActions;
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        renderer = create(createElement(SettingsProvider, null, createElement(MachineSidebar, {
+          machines: [connectedNoRoster("local", "local", "Laptop")], selectedMachineId: "local", selectedPaneId: null, activity, actions: counting,
+          onSelect: () => {}, onNew: () => {}, onSetup: () => {}, onUsageLogin: () => {},
+        })), { createNodeMock: node });
+      });
+      const gear = renderer!.root.findAll((found) => found.type === "button" && String(found.props.className).includes("sidebar-footer-settings"))[0]!;
+      await act(async () => { gear.props.onClick(); });
+    } finally { logged.mockRestore(); }
+    expect([told, opened]).toEqual([failing ? [] : ["settings:button"], ["settings"]]);
     await act(async () => renderer?.unmount());
     renderer = undefined;
   }

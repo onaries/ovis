@@ -8,7 +8,6 @@
  */
 export const DEVICES_KO: Record<string, string> = {
   "Anyone who can reach {host} on your network can type into every pane: no access token is set and no device is paired yet.": "같은 네트워크에서 {host}에 닿을 수 있는 사람은 누구나 모든 패널에 입력할 수 있습니다. 접속 토큰이 설정되지 않았고, 아직 페어링된 기기도 없습니다.",
-  "Alerts off": "알림 꺼짐",
   "Tap the Share button, then Add to Home Screen.": "공유 버튼을 누른 뒤 홈 화면에 추가를 선택하세요.",
   "Open this page over HTTPS (or on localhost) to install it.": "설치하려면 이 페이지를 HTTPS(또는 localhost)로 여세요.",
   "Firefox on desktop can't install web apps. Open this page in Chrome or Edge.": "데스크톱 Firefox는 웹 앱을 설치할 수 없습니다. Chrome이나 Edge로 여세요.",
@@ -122,13 +121,8 @@ export const DEVICES_KO: Record<string, string> = {
   "With no names, every unexpired link you issue opens it. Add names to accept only links issued to them.": "이름이 없으면 발급한 링크 중 만료되지 않은 것은 모두 열 수 있습니다. 이름을 추가하면 그 이름 앞으로 발급한 링크만 받습니다.",
   "Test notification": "테스트 알림",
   "Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.": "지금 이 기기로 알림을 하나 보내 푸시 알림이 여기에 도착하는지 확인합니다. 보낼 수 없으면 이름 아래 줄에서 알려 줍니다.",
-  "Send test": "테스트 보내기",
-  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "푸시 알림은 HTTPS 또는 localhost가 필요하고, iPhone에서는 홈 화면 앱이어야 합니다.",
-  "Allow notifications in your browser settings, then try again.": "브라우저 설정에서 알림을 허용한 뒤 다시 시도하세요.",
-  "Allow notifications for Ovis in the phone's Settings, then try again.": "휴대폰 설정에서 Ovis 알림을 허용한 뒤 다시 시도하세요.",
   "Test notification sent. Check this device for the alert.": "테스트 알림을 보냈습니다. 이 기기에 알림이 도착했는지 확인하세요.",
   "Allow notifications to test alerts on this device.": "이 기기에서 알림을 테스트하려면 알림을 허용하세요.",
-  "Could not send the test notification. Try again.": "테스트 알림을 보내지 못했습니다. 다시 시도하세요.",
   "The last alert did not reach this device; the next one is tried as usual. Send a test to check.": "마지막 알림이 이 기기에 닿지 않았습니다. 다음 알림은 평소처럼 다시 보냅니다. 테스트를 보내 확인하세요.",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "릴레이는 PC 소유자만 직접 연결해서 제어할 수 있습니다. PC에서 Ovis를 열거나 PC의 직접 주소로 접속하세요.",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "차단됨: OVIS_TAILSCALE_SERVE_ONLY가 tailscale serve를 유일한 접속 경로로 정하고 있습니다. 이 PC에서 해제하고 앱을 다시 시작하세요.",

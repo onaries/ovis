@@ -4,7 +4,7 @@ import { AGENT_CATALOG, catalogRow, type AgentCatalogRow, type AgentInstallState
 import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { onSetupGuideRequest, openSetupGuide } from "./setupGuide.ts";
-import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, phoneBoxOpensFirst, phoneBoxStays, phoneWay, preferredAgent, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
+import { agentRows, alertsFailed, alertsHere, alertsSurfaces, type AlertsFacts, type AlertsHere, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, otherDevice, phoneBoxMode, phoneBoxOpensFirst, phoneBoxStays, phoneWay, preferredAgent, GUIDE_STORAGE_KEY, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupLeft, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
 
 const FRESH: FreshFacts = { workspaces: 0, savedSettings: false, sharedRevision: 0, pairingGate: "open", watching: false };
 
@@ -56,6 +56,11 @@ describe("readGuide and saveGuide", () => {
     expect(readGuide(storage)).toBeNull();
     saveGuide(storage, REOPENED);
     expect(readGuide(storage)).toEqual({ status: "open", state: REOPENED });
+    // reopened at a later step, from the sidebar's Setup: N left: a reload resumes there
+    saveGuide(storage, { ...REOPENED, at: "phone" });
+    expect(readGuide(storage)).toEqual({ status: "open", state: { ...REOPENED, at: "phone" } });
+    storage.setItem(GUIDE_STORAGE_KEY, JSON.stringify({ status: "open", state: { ...REOPENED, at: "elsewhere" } }));
+    expect(readGuide(storage)).toEqual({ status: "closed" });
     saveGuide(storage, null);
     expect(readGuide(storage)).toEqual({ status: "closed" });
   });
@@ -162,13 +167,14 @@ describe("openSetupGuide", () => {
     const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
     Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
     try {
-      let calls = 0;
-      const stop = onSetupGuideRequest(() => { calls += 1; });
+      const asked: unknown[] = [];
+      const stop = onSetupGuideRequest((at) => { asked.push(at); });
       openSetupGuide();
-      expect(calls).toBe(1);
+      openSetupGuide("phone");
+      expect(asked).toEqual([undefined, "phone"]);
       stop();
       openSetupGuide();
-      expect(calls).toBe(1);
+      expect(asked).toHaveLength(2);
     } finally {
       if (saved) Object.defineProperty(globalThis, "window", saved);
       else Reflect.deleteProperty(globalThis, "window");
@@ -365,3 +371,92 @@ describe("a reopened guide", () => {
     expect(readGuide({ getItem: (key) => saved.get(key) ?? null })).toEqual({ status: "open", state: REOPENED });
   });
 });
+
+describe("otherDevice", () => {
+  it("names a device paired here other than this browser, and none for this browser alone", () => {
+    const device = (id: string, current: boolean) => ({ id, label: `device ${id}`, role: "drive" as const, created_at: "2026-11-15T00:00:00Z", last_seen_at: null, current });
+    expect(otherDevice([])).toBeNull();
+    // this browser paired itself (the relay's start, Pair this device): no phone yet
+    expect(otherDevice([device("self", true)])).toBeNull();
+    expect(otherDevice([device("self", true), device("phone", false)])).toBe("device phone");
+  });
+
+  it("counts the user's own phone linked through the account", () => {
+    const self = { id: "self", label: "this browser", role: "drive" as const, created_at: "2026-11-15T00:00:00Z", last_seen_at: null, current: true };
+    const linked = { ...self, id: "phone", label: "Pixel 9", current: false, via_relay: true, account: "me@example.com" };
+    expect(otherDevice([self, linked])).toBe("Pixel 9");
+  });
+});
+
+describe("setupLeft", () => {
+  it("counts the agent, the theme, the phone and the alerts, and opens the guide at the first one left", () => {
+    expect(setupLeft({ workspace: true, phone: true, alerts: true })).toEqual({ done: 4, total: 4, at: null });
+    expect(setupLeft({ workspace: true, phone: false, alerts: true })).toEqual({ done: 3, total: 4, at: "phone" });
+    expect(setupLeft({ workspace: true, phone: true, alerts: false })).toEqual({ done: 3, total: 4, at: "phone" });
+    // a theme is always drawn: it is never left
+    expect(setupLeft({ workspace: false, phone: false, alerts: false })).toEqual({ done: 1, total: 4, at: "agent" });
+  });
+});
+
+describe("alertsFailed", () => {
+  it("counts every outcome but a confirmed push as no alerts, except in the desktop app, where only a refusal does", () => {
+    for (const result of ["unsupported", "no-worker", "failed", "gone", "refused", "unregistered", "permission"]) expect(alertsFailed(result, false)).toBe(true);
+    expect(alertsFailed("sent", false)).toBe(false);
+    for (const result of ["unsupported", "no-worker", "failed", "gone", "refused", "sent"]) expect(alertsFailed(result, true)).toBe(false);
+    expect(alertsFailed("permission", true)).toBe(true);
+  });
+});
+
+describe("alertsHere: what the step, Done and Setup: N left say of this device's alerts", () => {
+  // Every case the #3907 reviews found, by what the page knows and what the PC recorded. The rule reads nothing the
+  // page remembers of its own presses, so a reload or a reopen gives the same answer from the same record (rows marked
+  // "reload" are what that record is by then).
+  const record = (fields: Partial<AlertsFacts["push"]> = {}): AlertsFacts["push"] => ({ checked: true, problem: null, delivered: true, ...fields });
+  const base: AlertsFacts = { alertsOn: true, notifications: "granted", desktop: false, pushSupported: true, pushOn: true, push: record(), confirmed: null };
+  const rows: [string, Partial<AlertsFacts>, AlertsHere][] = [
+    ["the Alerts switch off", { alertsOn: false }, "off"],
+    ["never subscribed: permission not asked yet", { notifications: "default", pushOn: false, push: record({ delivered: null }) }, "off"],
+    ["subscribed, and a push to it delivered", {}, "on"],
+    ["the confirmation push refused for good (rejected)", { push: record({ problem: "rejected", delivered: false }) }, "off"],
+    ["the confirmation push refused for good (key mismatch)", { push: record({ problem: "key-mismatch", delivered: false }) }, "off"],
+    ["the confirmation push failed for a while, never delivered (and after a reload)", { push: record({ delivered: false }) }, "off"],
+    ["delivered once, then a push failed for a while", { push: record({ delivered: true }) }, "on"],
+    ["the push service retired it (410), once a look read it (visibility, reload)", { push: record({ problem: "gone" }) }, "off"],
+    ["the permission taken back, tab in view or hidden", { notifications: "denied", push: record({ problem: "permission" }) }, "off"],
+    ["push health not answered yet since the load", { push: record({ checked: false, delivered: null }) }, "checking"],
+    ["push health's request failed (500, the network): not checked", { push: record({ checked: false, delivered: null }) }, "checking"],
+    ["the subscription missing on the PC", { push: record({ problem: "missing", delivered: null }) }, "off"],
+    ["the desktop app, notifications allowed", { desktop: true, pushSupported: false, pushOn: false, push: record({ checked: false, delivered: null }) }, "on"],
+    ["the desktop app, notifications refused", { desktop: true, notifications: "denied", pushSupported: false, pushOn: false }, "off"],
+    ["no Notification API (plain http)", { notifications: "unsupported", pushSupported: false, pushOn: false }, "unavailable"],
+    ["no Notification API (plain http), the switch off", { alertsOn: false, notifications: "unsupported", pushSupported: false, pushOn: false }, "unavailable"],
+    ["a working subscription with no delivery recorded yet (an automatic re-subscription): off until one press or one alert", { push: record({ delivered: false }) }, "off"],
+    ["notifications but no push (not the desktop app)", { pushSupported: false, pushOn: false, push: record({ delivered: null }) }, "off"],
+    ["an older server or the open LAN: no record, the confirmation push got through", { push: record({ delivered: null }), confirmed: true }, "on"],
+    ["an older server or the open LAN: no record, the confirmation push failed (and after a reload)", { push: record({ delivered: null }), confirmed: false }, "off"],
+    ["an older server or the open LAN: no record, subscribed before the outcome was kept: as before", { push: record({ delivered: null }), confirmed: null }, "on"],
+    ["an older server or the open LAN: no record, no subscription", { pushOn: false, push: record({ delivered: null }) }, "off"],
+  ];
+  for (const [name, facts, expected] of rows) {
+    it(name, () => {
+      expect(alertsHere({ ...base, ...facts })).toBe(expected);
+    });
+  }
+
+  it("shows each answer the same way on the step, Done and the row", () => {
+    expect(alertsSurfaces("on")).toEqual({ step: "send-test", done: "done", row: "done" });
+    expect(alertsSurfaces("off")).toEqual({ step: "turn-on", done: "not-yet", row: "left" });
+    // nothing said either way, and the row waits, as it waits for the device list
+    expect(alertsSurfaces("checking")).toEqual({ step: "checking", done: "checking", row: "wait" });
+    // nothing to set up here: the row does not count it as left
+    expect(alertsSurfaces("unavailable")).toEqual({ step: "note", done: "not-yet", row: "done" });
+  });
+});
+
+describe("a guide opened at a later step", () => {
+  it("forgets that step once the user leaves it, so a reload resumes where they are", () => {
+    expect(guideStep({ ...REOPENED, at: "phone" }, { type: "moved" })).toEqual(REOPENED);
+    expect(guideStep(REOPENED, { type: "moved" })).toBe(REOPENED);
+  });
+});
+

@@ -1307,6 +1307,37 @@ ol.markdown-list {
   opacity: 1;
 }
 
+/* a send whose turn never came while the agent rested (SentWaiting.tsx): the user's words as sent, and
+   under them what became of it, with the terminal and a way to let it go */
+.chat-turn-unanswered .chat-bubble {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.chat-unanswered-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--chat-fs-xs);
+}
+
+/* the icon wraps with the words, on a phone too */
+.chat-unanswered-words {
+  text-align: end;
+}
+
+.chat-unanswered-words > svg {
+  width: 1em;
+  height: 1em;
+  margin-inline-end: var(--space-1);
+  vertical-align: -0.125em;
+  color: var(--status-blocked);
+}
+
 .chat-sent-late {
   display: inline-flex;
   color: var(--text-dim);

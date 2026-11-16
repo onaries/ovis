@@ -9,7 +9,7 @@
  * nothing is guessed for the rest. The bridge checks them again by the same rules
  * (shared/launch-rules.ts).
  */
-import { argumentText, CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, CODEX_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
+import { argumentText, CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, CODEX_EFFORTS, DSH_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
 
 export { CLAUDE_EFFORTS, CODEX_EFFORTS };
 
@@ -72,6 +72,10 @@ const CAPABILITIES: Readonly<Record<string, LaunchCapabilities>> = {
   // 2026-10-20: `codex -- logout`, `-- update`, `-- --help` and `-- '-p x'` all started the TUI, and
   // `codex -- logout extra` failed with the root `[PROMPT]` usage, `codex logout extra` with the subcommand's
   codex: { model: true, efforts: CODEX_EFFORTS, ultracode: false, positionalPrompt: true },
+  // dsh-tui 0.20.0 takes no effort flag: the bridge saves `--effort <level>` to ~/.dsh-tui/effort.json, which its
+  // `/effort <id>` writes and its boot reads, and types the command without it (server/agent-launch.ts). No model:
+  // its `/model` pick (~/.dsh-tui/model.json) names a provider route as well, and no flag sets either.
+  "dsh-tui": { model: false, efforts: DSH_EFFORTS, ultracode: false, positionalPrompt: false },
 };
 
 /**

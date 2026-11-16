@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { recordConfirmation } from "./pushConfirm.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import type { Settings } from "./settings.ts";
 import { ApiError, sendTestPush } from "./api.ts";
@@ -28,18 +29,39 @@ export function useNotificationState() {
   const [notifications, setNotifications] = useState<NotificationState>(() => notificationState());
   // in the phone app the permission is the app's (lib/notifications.ts): read from the app at load,
   // and again whenever the page comes back, as it may have been changed in the phone's Settings
-  // meanwhile. A browser page keeps the permission it read at load, as before.
+  // meanwhile. A browser page hears a permission taken back (in the site's settings: alerts are then not on,
+  // #3907 review), when it comes back and while it stays in view. A grant there is not taken as alerts on: it
+  // reads as not asked yet, so the Alerts item's tap still turns alerts on (Turn on alerts subscribes this device),
+  // rather than becoming Turn off just before the user's finger lands (ui-regression's More menu Alerts step).
   useEffect(() => {
-    if (!hasNativePlugin(PUSH_PLUGIN)) return;
+    const native = hasNativePlugin(PUSH_PLUGIN);
     let current = true;
+    const taken = (): void => {
+      const next = notificationState();
+      setNotifications((known) => next !== "granted" ? next : known === "denied" ? "default" : known);
+    };
     const read = () => {
+      if (!native) { taken(); return; }
       refreshNotificationState().then(() => { if (current) setNotifications(notificationState()); }, (err) => console.warn("could not read the notification permission", err));
     };
     const onVisible = () => { if (document.visibilityState === "visible") read(); };
-    read();
+    if (native) read();
     document.addEventListener("visibilitychange", onVisible);
+    // while it stays in view: the permission's change event (the address bar's site settings), a read, never a request
+    let permissionStatus: PermissionStatus | null = null;
+    if (!native && typeof navigator !== "undefined" && navigator.permissions?.query) {
+      // a webview that throws rather than rejects is the same as one that cannot answer
+      try {
+        navigator.permissions.query({ name: "notifications" }).then((status) => {
+          if (!current) return;
+          permissionStatus = status;
+          status.addEventListener("change", taken);
+        }, () => { /* not answerable here: visibilitychange still reads it */ });
+      } catch { /* as above */ }
+    }
     return () => {
       current = false;
+      permissionStatus?.removeEventListener("change", taken);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
@@ -88,7 +110,11 @@ export function useNotificationSwitch({ updateSettings, locked, notifications, s
       // the confirmation push proves the whole path (server -> push service -> this device)
       try {
         await sendTestPush(endpoint);
+        recordConfirmation(endpoint, true);
       } catch (err) {
+        recordConfirmation(endpoint, false);
+        // the subscription stays on the PC, and the next alert is tried through it as usual: the tab stays silent, so
+        // one alert (with its answer buttons) arrives once delivery recovers, never two (#3907 review)
         console.warn("the confirmation push failed", err);
         return "failed";
       }

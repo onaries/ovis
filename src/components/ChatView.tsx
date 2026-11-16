@@ -3014,7 +3014,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         <ol>{visibleCodexQueue.map((preview, index) => <li key={index}>{preview}</li>)}</ol>
       </section>}
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
-      {visibleWaitingSends.length > 0 && state.source === "conversation" && <SentWaitingList sends={visibleWaitingSends} />}
+      {visibleWaitingSends.length > 0 && state.source === "conversation" && <SentWaitingList sends={visibleWaitingSends} paneKey={waitKey} agent={agent}
+        resting={workStatus === "idle" || workStatus === "done"} onOpenTerminal={openTerminal} />}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}

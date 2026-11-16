@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
+import { FLING_STOPPED_MS } from "../src/lib/touchFling.ts";
 import { workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -109,6 +110,10 @@ export async function checkTerminalPinch(browser: Browser, origin: string, paneI
       for (let step = 1; step <= moves; step++) {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx, y: cy - distance / 2 + distance * step / moves, id: 1 }] });
       }
+      // the finger holds still before it lifts, so the swipe ends where it is: a lift while it moves fast
+      // would glide on (lib/touchFling.ts), which terminal-touch-burst-run.ts measures apart
+      const lastMove = await page.evaluate(() => performance.now());
+      await page.waitForFunction(([at, still]) => performance.now() - at > still, [lastMove, FLING_STOPPED_MS * 2] as const, { polling: 10 });
       await release();
       // an attached swipe's reports go out a few per animation frame (lib/touchWheelPacer.ts), and the
       // pacer sends in every frame while any wait: a frame that sends none means the swipe has drained
@@ -131,7 +136,7 @@ export async function checkTerminalPinch(browser: Browser, origin: string, paneI
     const baseline = await probe();
     assert.equal(baseline.fontPx, 13, "baseline font is 13 px");
     assert(!(await badge.isVisible()), "badge is hidden before pinching");
-    // a quick swipe scrolls as far as a slow drag over the same travel: one wheel report per three rows
+    // a quick swipe held still before the lift scrolls as far as a slow drag over the same travel: one wheel report per three rows
     const fast = await swipe(300, 2);
     const slow = await swipe(300, 30);
     const expected = 300 / (3 * baseline.cell);

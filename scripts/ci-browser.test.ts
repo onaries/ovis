@@ -141,6 +141,9 @@ describe("browser lane", () => {
     expect(rows(text)).toEqual([
       { script: "scripts/demo-build.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-regression.ts", seconds: expect.any(Number), code: 0 },
+      { script: "scripts/ui-terminal-regression.ts", seconds: expect.any(Number), code: 0 },
+      { script: "scripts/ui-ime-regression.ts", seconds: expect.any(Number), code: 0 },
+      { script: "scripts/ui-access-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-contexts-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-contexts-layout-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/machine-events-browser-regression.ts", seconds: expect.any(Number), code: 0 },
@@ -181,7 +184,7 @@ describe("browser lane", () => {
     for (const script of ["sticky-modifiers-regression.ts", "file-viewer-regression.ts"]) {
       expect(text).toMatch(new RegExp(`^\\[[^\\]]+\\] STEP=scripts/${script} EVIDENCE=.+/browser-evidence$`, "m"));
     }
-    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "key-bar-customization-demo-regression.ts"]) {
+    for (const script of ["ui-regression.ts", "ui-terminal-regression.ts", "ui-ime-regression.ts", "ui-access-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "key-bar-customization-demo-regression.ts"]) {
       expect(text).toMatch(new RegExp(`^\\[[^\\]]+\\] STEP=scripts/${script} EVIDENCE=$`, "m"));
     }
   }, LANE_TEST_MS);

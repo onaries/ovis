@@ -6,9 +6,15 @@ import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type SetupJob, type SshTarget }
 import { CompletionTracker } from "./completion.ts";
 import { MachineManager } from "./machines.ts";
 import { createPushService } from "./push.ts";
-import { posixHost } from "./remote-host.ts";
+import { posixHost, windowsHost } from "./remote-host.ts";
 import { SshConnection } from "./ssh.ts";
 import { tunnelRelays } from "./machine-tunnel.fixture.ts";
+
+// Each wait below (a setup settling, the switch asking B, the old PC's retries resuming) is bounded by this; every answer
+// the fixture gives is in-process or on loopback. The switch's two waits start together, so the test itself outlasts
+// three of them in a row and as long again for the rest: a stalled wait says what it waited for and `finally` restores
+// the spies. Cut short by the runner, they stay installed and break the next case.
+const SETTLE_MS = 5000;
 
 it.each([
   { loss: "before", result: "connected", session: "a" },
@@ -48,6 +54,9 @@ it.each([
       return { platform: "linux-x64", home: "/home/fixture", herdrPath: "/fixture/herdr", expectedSocket: selected, bundleReady: true, bundleOlder: false,
         descriptors: selected === a.herdr_socket && oldLost ? [] : [descriptor(selected)], runtimeDir: "/runtime", registryDir: "/registry" };
     }),
+    // B's refusal makes detectHost ask whether the PC is Windows instead: the fixture is not, and that question must not
+    // run a real ssh to the fixture's address, whose name lookup a hosted runner can hold past the test's deadline
+    spyOn(windowsHost, "inspect").mockRejectedValue(new Error("Not a Windows PC")),
     spyOn(posixHost, "herdrVersion").mockResolvedValue("herdr 0.9.3"),
     spyOn(posixHost, "alive").mockResolvedValue(true),
     // a chosen socket the PC verifies as this account's and answering
@@ -69,7 +78,7 @@ it.each([
   const manager = new MachineManager(dir, createPushService({ stateDir: dir }), new CompletionTracker(null), async () => { throw new Error("isolated"); }, { now: () => clock });
   const run = (target: SshTarget) => new Promise<SetupJob>((resolve, reject) => {
     let job: SetupJob | undefined;
-    const deadline = set(() => { off(); reject(new Error("setup did not settle")); }, 5000);
+    const deadline = set(() => { off(); reject(new Error("setup did not settle")); }, SETTLE_MS);
     const off = manager.subscribe(() => { if (job && ["failed", "connected"].includes(job.phase)) { off(); clear(deadline); resolve(job); } });
     job = manager.setup({ ...target, machine_id: id, update_remote: true }, { auto: true });
   });
@@ -86,7 +95,9 @@ it.each([
   try {
     expect((await run(a)).phase).toBe("connected");
     if (loss === "before") drop();
-    moving = run(b); await reached.promise;
+    moving = run(b);
+    const asked = set(() => reached.reject(new Error("The switch never asked B")), SETTLE_MS);
+    try { await reached.promise; } finally { clear(asked); }
     if (loss === "during") drop();
     advanceRetries();
     manager.retryNow(id);
@@ -97,7 +108,7 @@ it.each([
     expect(oldStarts).toBe(0);
     expect(manager.list().find((pc) => pc.id === id)?.target).toEqual(result === "connected" ? b : a);
     if (result === "failed") {
-      const deadline = set(() => resumed.reject(new Error("Old PC retries did not resume")), 5000);
+      const deadline = set(() => resumed.reject(new Error("Old PC retries did not resume")), SETTLE_MS);
       try { advanceRetries(); await resumed.promise; } finally { clear(deadline); }
       expect(oldStarts).toBe(1);
     }
@@ -108,4 +119,4 @@ it.each([
     for (const relay of relays) relay.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 4 * SETTLE_MS);

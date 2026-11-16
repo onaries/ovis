@@ -10,6 +10,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, paneScrollInfo, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { omoSessionFolder } from "../server/omo.ts";
+import { FLING_STOPPED_MS } from "../src/lib/touchFling.ts";
 import { chromePath } from "./chrome-path.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
@@ -185,13 +186,19 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       const rowHeight = mobile.height / mobileScroll.viewport_rows;
       const travel = rowHeight * 3 * 2;
       await page.screenshot({ path: join(evidence, "mobile-before-touch.png") });
-      // The same two-step swipe at speed two moves twelve history lines.
+      // touch follows the finger: two three-line steps multiplied by the configured scroll speed. The finger is held
+      // still before the lift, by the events' own timestamps however late they arrive, so the drag ends where it
+      // is: a lift while it moves would glide on (lib/touchFling.ts) and scroll under the wheels that follow
       const touched = scrollResponse(12);
       console.log("touch expects", 12, { mobile, rowHeight, travel });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + travel }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      const lift = Date.now() / 1000;
+      const moved = lift - FLING_STOPPED_MS * 2 / 1000;
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }], timestamp: moved - 0.016 });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + travel }], timestamp: moved });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [], timestamp: lift });
       await touched;
+      await page.waitForFunction(() => document.querySelector("[data-touch-fling]") === null, undefined, { polling: 50, timeout: 10_000 });
+      assert.equal((await paneScrollInfo(pane))?.offset_from_bottom, 12, "a touch held still before the lift ends where the finger stopped at the configured speed");
       assert.equal(readFileSync(log, "utf8"), "", "touch sends no mouse reports to the question");
       await page.screenshot({ path: join(evidence, "after-omo-mobile.png") });
       await cdp.detach();
@@ -212,7 +219,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       })]);
       // the frame is heard before the page has drawn it: the wheel decides by what the pane was last drawn with
       // (PaneTerminal's wheelStateRef), so it goes once the tab's own mark shows the question settled
-      await page.locator('.tab-strip-item.is-active .tab-strip-dot[data-status="working"]').waitFor();
+      await page.locator('.tab-strip-tab[aria-selected="true"] .badge[data-status="working"]').waitFor();
       const backToApp = waitOutput(pane, "WHEEL_RECEIVED");
       const desktop = await screen.boundingBox();
       assert.ok(desktop);

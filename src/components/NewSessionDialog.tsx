@@ -654,7 +654,8 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onPend
                 <option value="">{t("Agent default")}</option>
                 {can.efforts.map((level) => <option key={level} value={level}>{level}</option>)}
               </select>
-              <span id="new-session-effort-hint" className="field-hint">{t("Levels depend on the model.")}</span>
+              {/* dsh-tui keeps the level in its own file for every later session (server/agent-launch.ts) */}
+              <span id="new-session-effort-hint" className="field-hint">{agentKind === "dsh-tui" ? t("Saved as dsh-tui's default for every later session, outside Ovis too. A default set in dsh-tui's /settings wins over it.") : t("Levels depend on the model.")}</span>
             </div>}
           </div>}
           {/* Claude Code's own term, a setting beside the level rather than one of them, on one line under Model and

@@ -53,6 +53,9 @@ it("puts the model, the effort and then the prompt after the mode, each in the a
   for (const prompt of ["logout", "update", "--help", "-p x"]) expect(launchArgs("codex", plain, { prompt })).toEqual(["--", prompt]);
   // nothing chosen adds nothing
   expect(launchArgs("codex", plain, { model: "  ", effort: "", prompt: "" })).toBeUndefined();
+  // DeepSeek Harness: an effort only (the bridge saves it for dsh-tui, which has no such flag), never a model
+  expect(launchArgs("dsh-tui", plain, { model: "dsh-deepseek-flash", effort: "off", prompt: "hi" })).toEqual(["--effort", "off"]);
+  expect(launchChoiceFault("dsh-tui", { effort: "medium" })).toBe("effort");
 });
 
 it("offers Claude Code's five effort levels, with Ultracode a switch of its own rather than a level", () => {

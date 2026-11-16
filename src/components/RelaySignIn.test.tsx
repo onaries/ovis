@@ -248,10 +248,13 @@ describe("the relay tab's Sign in", () => {
     await mount();
     await signIn();
     await act(async () => { await firstPoll; });
-    expect(polls.map((signal) => signal.aborted)).toEqual([false]);
+    // the service's interval is 1 ms here, so a later poll may have begun by now: every poll carries the sign-in's
+    // one signal, which closing the sheet aborts
+    expect(polls.length).toBeGreaterThan(0);
+    expect(polls.every((signal) => !signal.aborted)).toBe(true);
     await act(async () => { renderer!.unmount(); });
     renderer = undefined;
-    expect(polls[0]!.aborted).toBe(true);
+    expect(polls.every((signal) => signal.aborted)).toBe(true);
     fake.approveOnLinkPage(userCode!, "acct_one", "github");
     expect(await indexedAccountStore.get("session")).toBeUndefined();
   });

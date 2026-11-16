@@ -9,6 +9,7 @@
  * It draws no magnifier: the list's search field is the screen's one, and the command palette is under its shortcut
  * and the thread's More (App.tsx). A button says what it is in its name and its tooltip; no label is drawn.
  */
+import { tally, usageCounters } from "../lib/usageCounters.ts";
 import { useState } from "react";
 import { Bell, BellOff, CircleHelp, Inbox, Monitor, MonitorOff, Settings } from "lucide-react";
 
@@ -97,7 +98,7 @@ export function InboxRail({ onExit, onInbox, waiting, alerts, onSettings, pcs, s
         <button type="button" className="icon-button inbox-rail-item inbox-rail-exit" aria-label={t("Back to Ovis")} title={t("Back to Ovis")} onClick={onExit}>
           <OvisMark width="22" height="22" className="inbox-rail-mark" />
         </button>
-        <button type="button" className="icon-button inbox-rail-item inbox-rail-place" aria-label={t("Agent inbox")} title={t("Agent inbox")} aria-current="page" onClick={onInbox}>
+        <button type="button" className="icon-button inbox-rail-item inbox-rail-place" aria-label={t("Agent inbox")} title={t("Agent inbox")} aria-current="page" onClick={() => { tally(() => usageCounters.count("inbox_rail_inbox")); onInbox(); }}>
           <Inbox aria-hidden="true" />
         </button>
       </div>
@@ -105,21 +106,21 @@ export function InboxRail({ onExit, onInbox, waiting, alerts, onSettings, pcs, s
         {/* the first of the lower group, so nothing under it moves when it comes or goes; the pill is the app's own
             waiting pill, which says nothing to a screen reader: the button's name says the number */}
         {waiting !== null && (
-          <button type="button" className="icon-button inbox-rail-item inbox-rail-waiting" aria-label={t("{count} waiting for you", { count: waiting.count })} title={t("Open the next session waiting for you")} onClick={waiting.open}>
+          <button type="button" className="icon-button inbox-rail-item inbox-rail-waiting" aria-label={t("{count} waiting for you", { count: waiting.count })} title={t("Open the next session waiting for you")} onClick={() => { tally(() => usageCounters.count("inbox_rail_waiting")); waiting.open(); }}>
             <CircleHelp aria-hidden="true" />
             <span className="header-more-dot is-waiting" data-count={waiting.count} aria-hidden="true" />
           </button>
         )}
         {/* off is another glyph, not a colour: the switch says its state by shape, and to a screen reader as pressed */}
-        <button type="button" className="icon-button inbox-rail-item inbox-rail-alerts" aria-label={t("Alerts")} title={alerts.title} aria-pressed={alerts.on} onClick={alerts.toggle}>
+        <button type="button" className="icon-button inbox-rail-item inbox-rail-alerts" aria-label={t("Alerts")} title={alerts.title} aria-pressed={alerts.on} onClick={() => { tally(() => usageCounters.count("inbox_rail_alerts")); alerts.toggle(); }}>
           <AlertsGlyph aria-hidden="true" />
         </button>
-        <button type="button" className="icon-button inbox-rail-item inbox-rail-settings" aria-label={t("Settings")} title={shortcutTitle(t("Settings"), "settings")} onClick={onSettings}>
+        <button type="button" className="icon-button inbox-rail-item inbox-rail-settings" aria-label={t("Settings")} title={shortcutTitle(t("Settings"), "settings")} onClick={() => { tally(() => usageCounters.count("inbox_rail_settings")); tally(() => usageCounters.count("settings_by_button")); onSettings(); }}>
           <Settings aria-hidden="true" />
         </button>
         {/* nothing to list before the first roster is in: the button keeps its place and takes no press */}
         <button type="button" className="icon-button inbox-rail-item inbox-rail-pcs" aria-label={pcLabel} title={pcLabel} aria-haspopup="menu" aria-expanded={pcMenu !== null}
-          disabled={machines.length === 0} onClick={(event) => setPcMenu(pcMenu === null ? event.currentTarget : null)}>
+          disabled={machines.length === 0} onClick={(event) => { if (pcMenu === null) tally(() => usageCounters.count("inbox_rail_pcs")); setPcMenu(pcMenu === null ? event.currentTarget : null); }}>
           <PcGlyph aria-hidden="true" />
           {dot !== null && <span className={`inbox-rail-dot is-${dot}`} aria-hidden="true" />}
         </button>

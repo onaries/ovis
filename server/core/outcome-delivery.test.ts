@@ -123,6 +123,8 @@ it("keeps repeated omp model outcomes under the original command rather than its
   let now = 50_000;
   spyOn(Date, "now").mockImplementation(() => now);
   spyOn(client, "paneGet").mockResolvedValue(target);
+  // omp's box, read before the send (composer.ts freeAgentInput): empty
+  spyOn(client, "paneRead").mockResolvedValue({ text: "" } as Awaited<ReturnType<typeof client.paneRead>>);
   const deliver = spyOn(client, "agentPrompt").mockResolvedValue();
   const prepare = spyOn(prompt, "prepareCommandSend");
   await submitter()(target.pane_id, "/model", "/model", now);

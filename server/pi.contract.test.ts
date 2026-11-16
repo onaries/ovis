@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createServer } from "./index.ts";
+import { FILE_POLICY } from "./file-view.ts";
 import { forgetPiModels } from "./pi-models.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import type { ConversationResponse } from "../shared/protocol.ts";
@@ -162,6 +163,7 @@ it("offers a tool's own picture over the image endpoint", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation/image?pane_id=${encodeURIComponent(paneId)}&ref=${encodeURIComponent("pi:call-1:0")}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-security-policy")).toBe(FILE_POLICY);
     expect(Buffer.from(await response.arrayBuffer()).equals(PNG)).toBe(true);
     // a ref naming no image, and one that is no pi ref at all
       const miss = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation/image?pane_id=${encodeURIComponent(paneId)}&ref=${encodeURIComponent("pi:call-9:0")}`);

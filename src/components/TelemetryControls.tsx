@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChartColumn, X } from "lucide-react";
 
-import { NOTICE_VERSION, type TelemetryStatus } from "../../shared/telemetry.ts";
+import { type TelemetryStatus } from "../../shared/telemetry.ts";
+import { NOTICE_VERSION } from "../../shared/telemetry-notice.ts";
 import { ApiError, changeTelemetry, fetchTelemetry } from "../lib/api.ts";
 import { telemetrySettingsSnapshot, useSettings } from "../lib/settings.ts";
 import { useT } from "../lib/i18n.ts";
+import { nativeModalOver } from "../lib/useFocusTrap.ts";
 import { SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
 
 /**
@@ -73,6 +75,7 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
   useEffect(() => {
     if (!shown || !enabled || line === null) return;
     let recorded = false;
+    let failures = 0;
     let frame = 0;
     // wholly inside the viewport and every scrolling box around it (a guide's body scrolled past it is not);
     // where the page cannot tell, as drawn
@@ -93,7 +96,17 @@ export function TelemetryNotice({ enabled, onOpen, inline = false }: { enabled: 
         notice_version: NOTICE_VERSION,
         settings: snapshot,
       }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); if (!turnedOff.current) setStatus(next); },
-        (error: unknown) => { noticeRecorded.current = false; console.error("telemetry notice", error); });
+        // a failed record is tried again on the next paint, return to the tab or focus (#3882)
+        (error: unknown) => {
+          // a refusal (4xx) stays recorded for the page, so no other copy of the line asks again
+          const retryable = !(error instanceof ApiError) || error.status >= 500;
+          noticeRecorded.current = !retryable;
+          console.error("telemetry notice", error);
+          // tried again only when it may yet succeed: a network error or a server error, a few times; a refusal
+          // (a watching device's 403) is final
+          failures += 1;
+          if (retryable && failures < 3) recorded = false;
+        });
     };
     const onVisibility = () => { if (document.visibilityState === "visible") afterPaint(); };
     const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
@@ -150,7 +163,8 @@ const noticeOff = { current: false, listeners: new Set<() => void>() };
 
 /** A modal surface open over `node` (one that does not hold it): what is under it can be neither read nor reached. */
 function coveredByModal(node: HTMLElement): boolean {
-  return [...document.querySelectorAll<HTMLElement>("[aria-modal='true']")].some((modal) => !modal.contains(node) && modal.getClientRects().length > 0);
+  // a native showModal() dialog (Add PC) covers it too, though it carries no aria-modal (#3882)
+  return nativeModalOver(node) || [...document.querySelectorAll<HTMLElement>("[aria-modal='true']")].some((modal) => !modal.contains(node) && modal.getClientRects().length > 0);
 }
 
 /** every field of the messages, explained */
@@ -211,7 +225,11 @@ export function TelemetryControls() {
     setError(null);
     // turned on, the switch brings the snapshot the browser kept to itself while it was off
     changeTelemetry(enabled ? { enabled, settings: settingsSnapshotRef.current } : { enabled }).then(
-      (next) => { if (request === statusRequest.current) setStatus(next); },
+      (next) => {
+        if (request === statusRequest.current) setStatus(next);
+        // counts turned on again in Settings: a line turned off from the page may show again (#3882)
+        if (enabled && noticeOff.current) { noticeOff.current = false; for (const heard of noticeOff.listeners) heard(); }
+      },
       (failure: unknown) => { if (request === statusRequest.current) setError(failure instanceof Error ? failure.message : String(failure)); },
     ).finally(() => setSaving(false));
   };

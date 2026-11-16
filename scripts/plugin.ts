@@ -936,9 +936,11 @@ async function linkCommand(): Promise<number> {
     // Ctrl+C reaches the release's link too, which takes its code back; this one waits for it.
     // Always "link", whichever name it was run by: a release from before `add` and `login` knows only that one
     process.on("SIGINT", () => undefined);
-    const child = Bun.spawn([process.execPath, active, "link", ...process.argv.slice(3)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    // a SIGTERM or SIGHUP sent to this process alone is passed on, so the release takes its code back too
+    // a SIGTERM or SIGHUP sent to this process alone is passed on, so the release takes its code back too.
+    // Listening starts before the release does, so a signal that comes while it starts no longer ends this
+    // process with the release left running: Bun runs the listener from the event loop, after `child` is set.
     for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
+    const child = Bun.spawn([process.execPath, active, "link", ...process.argv.slice(3)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     return await child.exited;
   }
   if (!(await health())) {
@@ -1121,6 +1123,15 @@ export async function runPlugin(): Promise<void> {
   else if (command === "phone-setup") process.exit(await phoneSetup());
   else if (command === "tui") process.exit(await runTui(process.argv.slice(3), { platform: platform(), where: { root: ROOT, home: homedir() }, caller: process.env, settings: env, err: (text) => process.stderr.write(text), on: (signal, handler) => process.on(signal, handler) }));
   else {
+    // a launcher runs the checkout's own script, which stays at the version first installed: a
+    // command it does not know may be one of the release Settings → Updates installed since
+    const active = activePluginScript(ROOT, port, APP_STATE_DIR);
+    if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
+      process.on("SIGINT", () => undefined);
+      const child = Bun.spawn([process.execPath, active, ...process.argv.slice(2)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+      for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
+      process.exit(await child.exited);
+    }
     process.stderr.write([
       "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup|tui>",
       "add (also login, link): sign this PC in, then scan its QR code with a device of your Ovis account to add it (--approve: approve that device here instead; --print: write the QR code where there is no terminal).",

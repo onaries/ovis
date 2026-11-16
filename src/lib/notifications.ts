@@ -105,6 +105,28 @@ async function show(paneId: string, title: string, body: string, onClick?: () =>
   }
 }
 
+/** The page can show its own notifications here: a browser's, not the phone app's web view (the app shows only the server's pushes). */
+export function pageNotifications(): boolean {
+  return !hasNativePlugin(PUSH_PLUGIN) && typeof globalThis.Notification !== "undefined";
+}
+
+/**
+ * One alert on this device now, through the page as its own alerts come (`show`), visible tab or not: the setup
+ * guide's Send test. False when the browser has no notifications, they are not allowed, or none could be shown.
+ */
+export async function showTestNotification(title: string, body: string): Promise<boolean> {
+  if (typeof globalThis.Notification === "undefined" || globalThis.Notification.permission !== "granted") return false;
+  const options: NotificationOptions = { body, tag: "ovis-test", icon: "/icons/icon-192.png?v=sheep1" };
+  try {
+    const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
+    if (registration?.active) await registration.showNotification(title, options);
+    else new globalThis.Notification(title, options);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** `workspaceId`: the pane's workspace, as the server's push names it (server/push.ts), so a tap after the pane ends opens it. */
 export function showPaneStatusNotification(paneId: string, title: string, status: AgentStatus, onClick?: () => void, machineId = "local", workspaceId?: string): Promise<void> {
   return show(paneId, title, statusNotificationBody(status), onClick, machineId, workspaceId);

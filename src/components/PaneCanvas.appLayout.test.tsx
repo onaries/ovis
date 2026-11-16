@@ -7,6 +7,7 @@ import type { HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { AppLayoutContext, appLayoutOf, type LayoutOffer } from "../lib/machineContext.tsx";
 import { SettingsProvider } from "../lib/settings.ts";
 import { setSidebarPins } from "../lib/sidebarPins.ts";
+import { usageCounters } from "../lib/usageCounters.ts";
 import type { RowMenuItem } from "./RowMenu.tsx";
 
 await mock.module("react-dom", () => ({ ...ReactDom, createPortal: (node: ReactNode) => node }));
@@ -66,7 +67,7 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
   });
 
   let actions: (target: HerdrPane) => RowMenuItem[] = () => [];
-  let actionsRef: { current: ((target: HerdrPane) => RowMenuItem[]) | null } = { current: null };
+  let actionsRef: { current: ((target: HerdrPane, options?: { counted?: boolean }) => RowMenuItem[]) | null } = { current: null };
   async function draw(offer: LayoutOffer, drawn: SessionSnapshot = snapshot, watching = false): Promise<(target: HerdrPane) => string[]> {
     actionsRef = { current: null };
     actions = (target) => actionsRef.current!(target);
@@ -362,5 +363,23 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
   it.each([TUI, APP_CORE])("does not offer the previous terminal's agent name on a replacement pane (%j)", async (offer) => {
     const itemsOf = await draw(offer);
     expect(itemsOf({ ...pane("p1"), terminal_id: "replacement" })).not.toContain("rename-agent");
+  });
+
+  it("counts its Close pane as the menu's only when the menu was pressed, and closes even when the count fails", async () => {
+    await draw(OVIS_CORE);
+    const told: string[] = [];
+    const counting = spyOn(usageCounters, "paneUse").mockImplementation((name) => { told.push(name); });
+    const close = (options?: { counted?: boolean }) => actionsRef.current!(snapshot.panes[1] as HerdrPane, options).find((item) => item.id === "close")!;
+    try {
+      // App's Close pane (by shortcut or palette) asks for the items uncounted: its own source is counted there
+      await act(async () => { close({ counted: false }).run(); });
+      expect(told).toEqual([]);
+      counting.mockImplementation(() => { throw new Error("storage full"); });
+      const logged = spyOn(console, "error").mockImplementation(() => {});
+      try { await act(async () => { expect(() => close().run()).not.toThrow(); }); } finally { logged.mockRestore(); }
+      counting.mockImplementation((name) => { told.push(name); });
+      await act(async () => { close().run(); });
+      expect(told).toEqual(["close_pane_by_menu"]);
+    } finally { counting.mockRestore(); }
   });
 });

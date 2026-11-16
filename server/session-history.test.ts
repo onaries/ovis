@@ -573,6 +573,25 @@ describe("listSessions", () => {
     } finally { writer?.close(); }
   });
 
+  /**
+   * Returns once the kernel's file clock has moved past `ctimeNs`. A kernel without fine-grained file timestamps (Linux
+   * before 6.13) stamps every change within one tick, a few milliseconds, with the same time: a change made in the tick of
+   * the one before looks like no change to a reader that compares times and sizes.
+   */
+  function afterFileClock(ctimeNs: bigint): void {
+    const dir = mkdtempSync(join(tmpdir(), "file-clock-"));
+    const probe = join(dir, "probe");
+    // a clock set back while it waits would keep it here: a tick is milliseconds, so seconds mean a stuck clock
+    const deadline = performance.now() + 2_000;
+    try {
+      for (let seen = -1n; seen <= ctimeNs;) {
+        if (performance.now() > deadline) throw new Error(`the file clock stayed at or before ${ctimeNs} ns: the probe's change time is ${seen} ns`);
+        writeFileSync(probe, "");
+        seen = statSync(probe, { bigint: true }).ctimeNs;
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
   it("reads a WAL store immutable once more, writing nothing into it, when its writer came and went during the read", () => {
     const home = newHome();
     install("hermes", home);
@@ -589,6 +608,7 @@ describe("listSessions", () => {
       opened: (_path, immutable) => {
         reads++;
         if (!immutable || afterWriter) return;
+        afterFileClock(statSync(db, { bigint: true }).ctimeNs);
         const writer = new Database(db);
         writer.exec("UPDATE messages SET content = 'rewritten prompt' WHERE role = 'user'");
         writer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -1123,6 +1143,24 @@ describe("listSessions", () => {
     const resolved: string[] = [];
     expect((await listSessions("pi", SHORT, { home, env: {}, platform: "win32", realpath: shortAlias(resolved) })).map((row) => row.id)).toEqual([ID(3)]);
     expect(resolved).toEqual([SHORT]);
+  });
+
+  it("lists omp's sessions from the store its environment moves them to (#3746)", () => {
+    const home = newHome();
+    const write = (store: string, id: string) => {
+      mkdirSync(join(store, FOLDERS.omp!), { recursive: true });
+      writeFileSync(join(store, FOLDERS.omp!, `${id}.jsonl`), piHeader(id) + piPrompt(id));
+    };
+    write(join(home, ".omp", "agent", "sessions"), ID(1));
+    write(join(home, "xdg-data", "omp", "sessions"), ID(2));
+    write(join(home, ".omp-work", "agent", "sessions"), ID(3));
+    const ids = (env: Record<string, string>, platform: NodeJS.Platform = "darwin") => listSessions("omp", CWD, { home, env, platform }).map((row) => row.id);
+    expect(ids({})).toEqual([ID(1)]);
+    expect(ids({ XDG_DATA_HOME: join(home, "xdg-data") })).toEqual([ID(2)]);
+    expect(ids({ XDG_DATA_HOME: join(home, "xdg-data") }, "linux")).toEqual([ID(2)]);
+    expect(ids({ PI_CONFIG_DIR: ".omp-work" })).toEqual([ID(3)]);
+    // an XDG root omp has not migrated to, or one it does not read, keeps the default store
+    expect(ids({ XDG_DATA_HOME: join(home, "nothing-here") })).toEqual([ID(1)]);
   });
 
   it("finds omp's temp-scoped folder when TEMP is a Windows short-name alias of the cwd's base", () => {

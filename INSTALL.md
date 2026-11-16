@@ -59,8 +59,7 @@ runs, and, when Tailscale runs on the PC, serves the app to the tailnet (`tailsc
 prints the address as a QR code. It changes the user's Tailscale configuration, so it needs the
 same **Ask** as step 5. Running it again keeps what is there (`nothing to do` for a version already installed); two runs at once
 take turns through an install lock in `~/.local/share/ovis`: a waiter breaks the lock once the holder's pid no
-longer runs, one breaker at a time. With three or more installs started at the same instant a narrow race remains
-(a follow-up). A release
+longer runs, one breaker at a time. A release
 from before the compiled server, a branch in `OVIS_REF`, an install from source already on the PC, or
 `OVIS_FROM_SOURCE=1` install from source as before ([one rule](#binary-or-source)) (Bun, herdr's plugin checkout, and Node 22 only where
 the Rust PTY host cannot run). `OVIS_RELEASES_URL` (an https:// address, or a `file://` folder) points
@@ -99,8 +98,8 @@ it into `.ovis/server` in the plugin's checkout in one rename; every plugin comm
 still verifies, so a first start needs no network. This takes about a minute.
 
 <a id="binary-or-source"></a>**Binary or source.** Ovis builds from source instead (`bun install`, `bun run build`,
-and `scripts/plugin.ts` run by Bun) when `OVIS_FROM_SOURCE=1` is set (a developer checkout; `install.sh` sets it for
-herdr when `OVIS_REF` names a branch), and it says so in one line. Otherwise:
+and `scripts/plugin.ts` run by Bun) when `OVIS_FROM_SOURCE=1` is set (a developer checkout; `install.sh` and
+`install.ps1` set it for herdr when `OVIS_REF` names a branch or a commit), and it says so in one line. Otherwise:
 - the plugin's launcher and `install.ps1` fall back to source only when this version's release has no
   `ovis-server.json` at all (GitHub answers 404, or a `file://` folder has none: every release up to v0.5.3). Anything
   else fails: a server error, a network failure, or a manifest that is there but fails its signature, version, size or

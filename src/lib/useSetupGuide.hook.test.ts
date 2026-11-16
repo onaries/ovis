@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { GUIDE_STORAGE_KEY, REOPENED, WELCOME, type GuideState } from "./setupGuideFlow.ts";
+import { SETUP_ROW_KEY } from "./firstHints.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
-import { useSetupGuide, type SetupGuideFacts } from "./useSetupGuide.ts";
+import { useOtherDevice, useSetupGuide, type SetupGuideFacts } from "./useSetupGuide.ts";
 
 // The real hook over a fake browser: one tab's storage, and the storage events another tab's writes send.
 describe("the setup guide closed in another tab", () => {
@@ -52,6 +53,17 @@ describe("the setup guide closed in another tab", () => {
     Object.defineProperties(event, { key: { value: GUIDE_STORAGE_KEY }, newValue: { value } });
     await act(async () => { events.dispatchEvent(event); });
   }
+
+  it("turns Setup: N left on when a begun guide closes, and not when it closes at the welcome", async () => {
+    await resumeAt(REOPENED);
+    await act(async () => { hook.close(); });
+    expect(records.get(SETUP_ROW_KEY)).toBe("on");
+    records.clear();
+    await act(async () => { renderer?.unmount(); });
+    await resumeAt(WELCOME);
+    await act(async () => { hook.close(); });
+    expect(records.has(SETUP_ROW_KEY)).toBe(false);
+  });
 
   it("is settled once another tab closes the guide, though this one never decided", async () => {
     function Fresh() { hook = useSetupGuide({ enabled: true, workspaces: null, pairingGate: undefined, watching: false }); return null; }
@@ -249,5 +261,56 @@ describe("the setup guide on a watching device", () => {
     await update({ enabled: true, workspaces: 0, pairingGate: "open", watching: false });
     await act(async () => { await Promise.resolve(); });
     expect(hook.settled).toBe(true);
+  });
+});
+
+// The device list the guide reads: again on each step that shows it (`again`), and when Settings closes (`enabled`).
+describe("useOtherDevice", () => {
+  const fetchBefore = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+  const actBefore = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+  let reads = 0;
+  let renderer: ReactTestRenderer | undefined;
+  let name: string | null = null;
+  beforeEach(() => {
+    reads = 0;
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/devices")) reads += 1;
+      return new Response(JSON.stringify({ devices: [{ id: "phone", label: "Pixel 9", role: "drive", created_at: "2026-11-15T00:00:00Z", last_seen_at: null, current: false }] }), { headers: { "content-type": "application/json" } });
+    } });
+  });
+  afterEach(async () => {
+    await act(async () => { renderer?.unmount(); });
+    renderer = undefined;
+    if (fetchBefore) Object.defineProperty(globalThis, "fetch", fetchBefore); else delete (globalThis as { fetch?: unknown }).fetch;
+    if (actBefore) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", actBefore); else delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown }).IS_REACT_ACT_ENVIRONMENT;
+  });
+
+  it("with pending, is undefined until the list answers, and null after a failed read", async () => {
+    let seen: (string | null | undefined)[] = [];
+    function Probe() { seen.push(useOtherDevice(true, "x", true)); return null; }
+    await act(async () => { renderer = create(createElement(Probe)); });
+    expect(seen[0]).toBeUndefined();
+    expect(seen.at(-1)).toBe("Pixel 9");
+    await act(async () => { renderer?.unmount(); });
+    Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async () => { throw new TypeError("Failed to fetch"); } });
+    seen = [];
+    await act(async () => { renderer = create(createElement(Probe)); });
+    expect(seen[0]).toBeUndefined();
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  it("reads the devices again when the step changes, and when it is enabled again", async () => {
+    function Probe({ enabled, again }: { enabled: boolean; again: string }) { name = useOtherDevice(enabled, again); return null; }
+    await act(async () => { renderer = create(createElement(Probe, { enabled: true, again: "phone" })); });
+    expect(reads).toBe(1);
+    expect(name).toBe("Pixel 9");
+    await act(async () => { renderer!.update(createElement(Probe, { enabled: true, again: "done" })); });
+    expect(reads).toBe(2);
+    // Settings open over the guide: no read; closed: read again
+    await act(async () => { renderer!.update(createElement(Probe, { enabled: false, again: "done" })); });
+    expect(reads).toBe(2);
+    await act(async () => { renderer!.update(createElement(Probe, { enabled: true, again: "done" })); });
+    expect(reads).toBe(3);
   });
 });

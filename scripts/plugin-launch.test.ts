@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { main } from "./plugin-launch.ts";
+import { headCommit, main } from "./plugin-launch.ts";
 import { generateKeyPair, MANIFEST, releaseFile, PTY_ASSETS, ptyFile, SERVER_PLATFORMS, signManifest, writeManifest } from "./server-manifest.ts";
 
 /**
@@ -116,6 +116,84 @@ describe("the herdr plugin's launcher", () => {
     writeFileSync(join(home, "from-source"), `${version}\n`);
     expect(await launch(["install"], broken)).toMatchObject({ code: 1, sourced: [] });
     expect(existsSync(join(home, "from-source"))).toBe(false);
+  });
+
+  // .ovis/server/source-build, which install.ps1 reads: what the stamp says while the build runs is what a build cut
+  // off there (a closed window, a restart) leaves
+  const head = Bun.spawnSync(["git", "-C", join(import.meta.dir, ".."), "rev-parse", "HEAD"]).stdout.toString().trim();
+  const finished = `${[version, head].filter(Boolean).join(" ")}\n`;
+  async function build(exitCode: number, fetchFile?: typeof fetch): Promise<{ code: number; during: string; after: string }> {
+    const home = join(scratch, "server");
+    let during = "";
+    const code = await main(["install"], { home, fetchFile, source: async () => { during = readFileSync(join(home, "source-build"), "utf8"); return exitCode; } });
+    return { code, during, after: readFileSync(join(home, "source-build"), "utf8") };
+  }
+
+  it("stamps the build finished, with the version and the commit, only after every step returned 0", async () => {
+    process.env["OVIS_FROM_SOURCE"] = "1";
+    expect(await build(0)).toEqual({ code: 0, during: "started\n", after: finished });
+    // a release without ovis-server.json builds and stamps the same
+    delete process.env["OVIS_FROM_SOURCE"];
+    const notFound = (async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
+    expect(await build(0, notFound)).toEqual({ code: 0, during: "started\n", after: finished });
+  });
+
+  it("stamps the version alone where git cannot tell the commit", async () => {
+    process.env["OVIS_FROM_SOURCE"] = "1";
+    // git pointed at no repository fails as it does in a folder that is no git checkout
+    process.env["GIT_DIR"] = join(scratch, "no-git");
+    try {
+      expect(await build(0)).toEqual({ code: 0, during: "started\n", after: `${version}\n` });
+    } finally {
+      delete process.env["GIT_DIR"];
+    }
+  });
+
+  it("leaves a build that fails or is cut off unfinished, over an earlier finished one too", async () => {
+    process.env["OVIS_FROM_SOURCE"] = "1";
+    expect(await build(0)).toMatchObject({ after: finished });
+    expect(await build(1)).toEqual({ code: 1, during: "started\n", after: "started\n" });
+    // a build step that takes the release's binary drops the stamp with the marker
+    delete process.env["OVIS_FROM_SOURCE"];
+    const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
+    expect(await launch(["install"], broken)).toMatchObject({ code: 1, sourced: [] });
+    expect(existsSync(join(scratch, "server", "source-build"))).toBe(false);
+  });
+
+  it("stamps the commit the build started from, and leaves the build unfinished when the checkout moved while it ran", async () => {
+    process.env["OVIS_FROM_SOURCE"] = "1";
+    const home = join(scratch, "server");
+    const stamped = async (commits: string[]) => {
+      const code = await main(["install"], { home, source: async () => 0, commit: async () => commits.shift() ?? "" });
+      return { code, after: readFileSync(join(home, "source-build"), "utf8") };
+    };
+    expect(await stamped(["a".repeat(40), "a".repeat(40)])).toEqual({ code: 0, after: `${version} ${"a".repeat(40)}\n` });
+    // a pull while bun install ran: the sources built are not the commit's that HEAD now names
+    expect(await stamped(["a".repeat(40), "b".repeat(40)])).toEqual({ code: 0, after: "started\n" });
+  });
+
+  it("stamps the version alone for a folder that is not a checkout's top level, not the commit of the repository around it", async () => {
+    process.env["OVIS_FROM_SOURCE"] = "1";
+    const around = join(scratch, "around");
+    const plugin = join(around, "plugin");
+    mkdirSync(plugin, { recursive: true });
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(Bun.spawnSync(["git", "-C", around, ...args]).exitCode).toBe(0);
+    }
+    const aroundCommit = Bun.spawnSync(["git", "-C", around, "rev-parse", "HEAD"]).stdout.toString().trim();
+    expect(await headCommit(around)).toBe(aroundCommit);
+    const home = join(scratch, "server");
+    expect(await main(["install"], { home, source: async () => 0, commit: () => headCommit(plugin) })).toBe(0);
+    expect(readFileSync(join(home, "source-build"), "utf8")).toBe(`${version}\n`);
+  });
+
+  it("keeps running from source a checkout an older launcher built: a marker and no stamp", async () => {
+    const home = join(scratch, "server");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "from-source"), `${version}\n`);
+    const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
+    expect(await launch(["start"], broken)).toMatchObject({ code: 7, sourced: [["start"]] });
+    expect(existsSync(join(home, "source-build"))).toBe(false);
   });
 
 });

@@ -2,6 +2,7 @@ import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import { ApiError, fetchPushKey, registerPushSubscription, sendTestPush, unregisterPushSubscription } from "./api.ts";
 import { callNative, hasNativePlugin, PUSH_PLUGIN } from "./nativeApp.ts";
 import { notificationState } from "./notifications.ts";
+import { recordConfirmation } from "./pushConfirm.ts";
 
 /**
  * This device's web push subscription: pane alerts that arrive with the app closed.
@@ -50,7 +51,15 @@ export async function testDevicePush(tested?: (endpoint: string) => void): Promi
   if (!subscription) return "missing";
   // the subscription the test is about, whatever replaces it while the push is out (lib/pushHealth.ts)
   tested?.(subscription.endpoint);
-  await sendTestPush(subscription.endpoint);
+  // what it came to is this subscription's confirmation too, where the PC keeps no delivery record (lib/pushConfirm.ts);
+  // a watching device's refusal says nothing of delivery
+  try {
+    await sendTestPush(subscription.endpoint);
+  } catch (error) {
+    if (!(error instanceof ApiError && error.code === "read_only")) recordConfirmation(subscription.endpoint, false);
+    throw error;
+  }
+  recordConfirmation(subscription.endpoint, true);
   return "sent";
 }
 

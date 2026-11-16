@@ -27,6 +27,8 @@ export const CHAT_KO: Record<string, string> = {
   "Retry stopped. Check the terminal.": "재시도를 중지했습니다. 터미널을 확인하세요.",
   "Compacting conversation…": "대화 압축 중…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
+  "Not in the conversation. If the agent showed an error, it is in the terminal.": "대화에 기록되지 않았습니다. 에이전트가 오류를 보였다면 터미널에 있습니다.",
+  "Not in the conversation. If {agent} showed an error, it is in the terminal.": "대화에 기록되지 않았습니다. {agent}이(가) 오류를 보였다면 터미널에 있습니다.",
   "{agent} has not recorded a conversation Ovis can find for this pane yet. Before the first message this is normal; if it stays, use the terminal.": "{agent}이(가) 이 창에서 Ovis가 찾을 수 있는 대화를 아직 기록하지 않았습니다. 첫 메시지 전에는 정상입니다. 계속 이렇다면 터미널을 쓰세요.",
   "Ovis can't read {agent} conversations yet. Use the terminal to work with it.": "Ovis는 아직 {agent} 대화를 읽지 못합니다. 터미널에서 작업하세요.",
   "Ovis couldn't find or read the file {agent} keeps this conversation in. Use the terminal.": "Ovis가 {agent}이(가) 이 대화를 담아 두는 파일을 찾거나 읽지 못했습니다. 터미널을 쓰세요.",

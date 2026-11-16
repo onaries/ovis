@@ -278,10 +278,15 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
       const free = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
       const port = free.port;
       free.stop(true);
-      cleanups.push(() => { try { process.kill(Number(readFileSync(join(root, "holder.pid"), "utf8"))); } catch {} });
+      // the second holder's pid: the fake's `echo $! > holder.pid` makes the file before the pid is in it, and
+      // process.kill(0) (an empty file's Number) would signal this test's own process group
+      const holderPid = (): number | null => {
+        try { const pid = Number(readFileSync(join(root, "holder.pid"), "utf8")); return Number.isInteger(pid) && pid > 0 ? pid : null; } catch { return null; }
+      };
+      cleanups.push(() => { const pid = holderPid(); if (pid !== null) try { process.kill(pid); } catch {} });
       // close once the tunnel's ssh runs and its stderr has a second holder, not while forward() still reads the config
       const holding = Promise.withResolvers<void>();
-      const watcher = watch(root, (_event, name) => { if (name === "holder.pid") holding.resolve(); });
+      const watcher = watch(root, (_event, name) => { if (name === "holder.pid" && holderPid() !== null) holding.resolve(); });
       cleanups.push(() => watcher.close());
       const forwarding = ssh.forward(port, 7317);
       forwarding.catch(() => {});

@@ -4,6 +4,8 @@ import { bindingChord, formatExactChord, isMacPlatform, parseExactChord, type Ex
 import { physicalKey } from "./keys.ts";
 
 import type { AppActions } from "./actions.ts";
+import type { TelemetryAction } from "../../shared/telemetry.ts";
+import { tally } from "./usageCounters.ts";
 
 export const SHORTCUTS = [
   { id: "palette", label: "Command palette", keys: ["Mod", "Shift", "K"] },
@@ -278,6 +280,11 @@ export function isRecordingShortcut(): boolean {
   return recordingShortcut;
 }
 
+/** the shortcuts whose action is also a button, a menu item or a palette row: counted by how it was taken */
+const SHORTCUT_ACTIONS: Partial<Record<ShortcutId, TelemetryAction>> = {
+  "toggle-sidebar": "sidebar", "new-session": "new_workspace", "new-tab": "new_tab", "split-right": "split", "split-down": "split", "close-pane": "close_pane", settings: "settings",
+};
+
 export function useShortcuts(actions: AppActions, enabled: boolean): void {
   const { settings } = useSettings();
   useEffect(() => {
@@ -295,6 +302,8 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       // a held chord repeats: a tab or a split is made once per press, not once per key repeat
       if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down" || shortcut === "zoom-pane")) return;
       if (closeStep === "ignore") return;
+      const counted = SHORTCUT_ACTIONS[shortcut];
+      if (counted) tally(() => actions.counted?.(counted, "shortcut"));
       switch (shortcut) {
         case "palette":
           actions.openPalette();
@@ -303,7 +312,7 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
           actions.openFind();
           break;
         case "toggle-view":
-          actions.toggleView();
+          actions.toggleView("shortcut");
           break;
         case "focus-input":
           actions.focusInput();

@@ -7,25 +7,31 @@
  * was left open.
  */
 import type { AgentCatalogEntry, AgentCatalogRow } from "../../shared/agent-catalog.ts";
-import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
+import type { HealthAuth, PairedDevice, RelayStatus } from "../../shared/protocol.ts";
 import type { SetupStep } from "./agentSetup.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { isSignIn } from "./usage.ts";
+import type { NotificationState } from "./notifications.ts";
+import type { PushHealth } from "./pushHealth.ts";
 
 export interface GuideState {
   step: "welcome" | "setup";
   /** opened again from Settings: it changes no setting by itself (turnsUsageOn) */
   reopened?: true;
+  /** opened again at a later step than the agent's (the sidebar's Setup: N left) */
+  at?: "theme" | "phone";
 }
 
-/** I'm new to Ovis; Back from the first step to the welcome */
-export type GuideEvent = { type: "begin" } | { type: "back" };
+/** I'm new to Ovis; Back from the first step to the welcome; the user left the step the guide was opened at */
+export type GuideEvent = { type: "begin" } | { type: "back" } | { type: "moved" };
 
 export const WELCOME: GuideState = { step: "welcome" };
 /** Settings → Agents' Open setup guide opens the setup screen itself */
 export const REOPENED: GuideState = { step: "setup", reopened: true };
 
 export function guideStep(state: GuideState, event: GuideEvent): GuideState {
+  // a reload resumes where the user is, not at the step Setup: N left named (`at` comes only with a reopened guide)
+  if (event.type === "moved") return state.at === undefined ? state : REOPENED;
   if (event.type === "begin") return state.step === "welcome" ? { step: "setup" } : state;
   // a guide opened again from Settings has no welcome to go back to
   return state.step === "setup" && state.reopened !== true ? WELCOME : state;
@@ -259,6 +265,7 @@ function readState(value: unknown): GuideState | null {
   // the old multi-step guide's record (its outcomes, plan and agent) is no guide to show, even at its welcome
   const keys = Object.keys(value);
   if (keys.length === 2 && value["step"] === "setup" && value["reopened"] === true) return REOPENED;
+  if (keys.length === 3 && value["step"] === "setup" && value["reopened"] === true && (value["at"] === "theme" || value["at"] === "phone")) return { ...REOPENED, at: value["at"] };
   if (keys.length !== 1) return null;
   return value["step"] === "welcome" || value["step"] === "setup" ? { step: value["step"] } : null;
 }
@@ -285,4 +292,95 @@ export function saveGuide(storage: Pick<Storage, "setItem">, state: GuideState |
     storage.setItem(GUIDE_STORAGE_KEY, record);
     return record;
   } catch { return null; /* private mode: the guide lasts for the page */ }
+}
+
+/**
+ * The name of a device paired here other than this browser, or null: what the guide counts as the phone. The list
+ * cannot tell a phone from another PC's browser (#3898), and a device of the PC's own account is often the user's
+ * own phone (linked through the relay), so any other device counts: leaving a paired phone "left" for good is the
+ * worse error. The guide names it neutrally ("{name} is paired").
+ */
+export function otherDevice(devices: readonly PairedDevice[]): string | null {
+  return devices.find((device) => !device.current)?.label ?? null;
+}
+
+/** What the guide sets up, as the sidebar's Setup: N left counts it, each done or not by what the app knows now. */
+export interface SetupFacts {
+  /** this PC has a workspace: an agent was started here */
+  workspace: boolean;
+  /** a device other than this browser is paired (otherDevice); the device gate says nothing of it, as a relay start or this browser pairing itself closes it too */
+  phone: boolean;
+  /** this browser's alerts are on and the browser allows them, or the page can have none (plain http): nothing to set */
+  alerts: boolean;
+}
+
+export interface SetupLeft {
+  done: number;
+  total: number;
+  /** where the guide opens to finish: the first step not done */
+  at: "agent" | "phone" | null;
+}
+
+/** The setup's four parts (agent, theme, phone, alerts) and how many are done; a theme always is, as one is always drawn. */
+export function setupLeft(facts: SetupFacts): SetupLeft {
+  const parts = [facts.workspace, true, facts.phone, facts.alerts];
+  return { done: parts.filter(Boolean).length, total: parts.length, at: !facts.workspace ? "agent" : !facts.phone || !facts.alerts ? "phone" : null };
+}
+
+/**
+ * Whether Turn on alerts left this device without alerts: anything but a confirmed push, except in the desktop app,
+ * where only a refused permission does (its own notifications need no push subscription).
+ */
+export function alertsFailed(result: string, desktop: boolean): boolean {
+  if (result === "sent") return false;
+  return desktop ? result === "permission" : true;
+}
+
+/** What the guide's step, its Done and Setup: N left say of this device's alerts (alertsHere). */
+export type AlertsHere = "on" | "off" | "checking" | "unavailable";
+
+export interface AlertsFacts {
+  /** the Alerts switch */
+  alertsOn: boolean;
+  notifications: NotificationState;
+  /** the desktop app: its own notifications need no push */
+  desktop: boolean;
+  /** this browser has web push (lib/push.ts pushSupported) */
+  pushSupported: boolean;
+  /** the registration (at load, or Turn on alerts) made a subscription (App's pushOn) */
+  pushOn: boolean;
+  /** what the PC recorded of this browser's subscription (lib/pushHealth.ts) */
+  push: { checked: boolean; problem: PushHealth["problem"]; delivered: boolean | null };
+  /** where the PC cannot say: whether this browser's last Turn on alerts got its confirmation push through, null for no record (lib/pushConfirm.ts) */
+  confirmed: boolean | null;
+}
+
+/**
+ * Whether alerts reach this device, by one rule for the step, Done and Setup: N left (#3907 review's truth table,
+ * setupGuideFlow.test.ts): from the switch, the permission, and what the PC recorded of this browser's subscription,
+ * never from what the page remembers of its own presses. A subscription counts only once the PC recorded a push that
+ * reached it: a confirmation push that never got through is not on, while a failure after a delivery leaves it on,
+ * as Settings → Alerts keeps it on with its warning. Nothing is said before a look reached the PC.
+ */
+export function alertsHere({ alertsOn, notifications, desktop, pushSupported, pushOn, push, confirmed }: AlertsFacts): AlertsHere {
+  // no Notification API (plain http): nothing to turn on here, whatever the switch says
+  if (!desktop && notifications === "unsupported") return "unavailable";
+  if (!alertsOn) return "off";
+  if (desktop) return notifications === "granted" ? "on" : "off";
+  if (notifications !== "granted" || !pushSupported) return "off";
+  if (!push.checked) return "checking";
+  if (push.problem !== null) return "off";
+  // an older server or the open LAN cannot say: the subscription made stands, unless this browser saw its confirmation
+  // push fail; one made before that was kept stands, as before the rule
+  if (push.delivered === null) return pushOn && confirmed !== false ? "on" : "off";
+  return push.delivered ? "on" : "off";
+}
+
+/** How the step, Done and Setup: N left show each answer of alertsHere. */
+export function alertsSurfaces(alerts: AlertsHere): { step: "send-test" | "turn-on" | "checking" | "note"; done: "done" | "not-yet" | "checking"; row: "done" | "left" | "wait" } {
+  if (alerts === "on") return { step: "send-test", done: "done", row: "done" };
+  if (alerts === "checking") return { step: "checking", done: "checking", row: "wait" };
+  // nothing can be set up here (plain http): the row does not count it as left
+  if (alerts === "unavailable") return { step: "note", done: "not-yet", row: "done" };
+  return { step: "turn-on", done: "not-yet", row: "left" };
 }

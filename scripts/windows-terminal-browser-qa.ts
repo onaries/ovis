@@ -126,6 +126,8 @@ try {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await until(async () => ((await paneScrollInfo(pane))?.offset_from_bottom ?? 0) > 0, "touch scrolls native history");
   console.log("PASS native Windows PowerShell touch scrolls history");
+  // a quick swipe glides on after the lift (lib/touchFling.ts): history goes back to the prompt once it has stopped
+  await page.waitForFunction(() => document.querySelector("[data-touch-fling]") === null, undefined, { polling: 50, timeout: 15_000 });
   await paneScroll(pane, 0);
   await until(async () => (await text()).includes("P".repeat(100)), "return to prompt");
   await page.locator(".xterm-helper-textarea").focus();

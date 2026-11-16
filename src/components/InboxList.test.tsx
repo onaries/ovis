@@ -11,6 +11,7 @@ import * as api from "../lib/api.ts";
 import type { HeaderConnection } from "../lib/headerConnection.ts";
 import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+import { usageCounters } from "../lib/usageCounters.ts";
 import type { SidebarActivity } from "../lib/sidebarActivity.tsx";
 
 // the prompt read is the only request the list makes: each test answers it itself
@@ -590,6 +591,35 @@ describe("InboxList", () => {
     expect(menus(root).length).toBe(0);
     await redraw({ machines: twoPcs() });
     expect(menus(root).length).toBe(0);
+  });
+
+  it("counts a search once as it begins, New workspace only when one starts, and a row under its own PC", async () => {
+    const told: string[] = [];
+    const counting = spyOn(usageCounters, "count").mockImplementation((name) => { told.push(name); });
+    const paneUses = spyOn(usageCounters, "paneUse").mockImplementation((name, machineId) => { told.push(`${name}@${machineId}`); });
+    try {
+      const root = await draw(twoPcs(), { wide: true });
+      await act(async () => { byClass(root, "inbox-search-toggle")[0]!.props.onClick(); });
+      const type = (value: string) => act(async () => { byClass(root, "inbox-search-input")[0]!.props.onChange({ currentTarget: { value } }); });
+      await type("a");
+      await redraw({ query: "a" });
+      await type("ab");
+      // opening the field is no search, and a later letter of the same search is none either
+      expect(told).toEqual(["inbox_search"]);
+      await redraw({ query: "" });
+      told.length = 0;
+      // with two PCs the + only asks which: nothing is counted until one is picked
+      await act(async () => { byClass(root, "inbox-add")[0]!.props.onClick({ currentTarget: anchor }); });
+      expect(told).toEqual([]);
+      await act(async () => { menus(root)[0]!.props.items[1].run(); });
+      expect(told).toEqual(["new_workspace_by_button"]);
+      told.length = 0;
+      // a row opened is told with its own PC, which counts it only when it is this one (usageCounters.paneUse)
+      const items = byClass(root, "inbox-item").filter((node) => !String(node.props.className).includes("is-offline"));
+      for (const item of items) await act(async () => { byClass(item, "inbox-row")[0]!.props.onClick(); });
+      expect(told).toEqual(items.map((item) => `inbox_open@${item.props["data-machine"]}`));
+      expect(new Set(told).size).toBeGreaterThan(1);
+    } finally { counting.mockRestore(); paneUses.mockRestore(); }
   });
 
   it("keeps the drawn order while the focus is in the list or just after a press, and draws the new order once the focus leaves", async () => {

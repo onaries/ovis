@@ -28,6 +28,26 @@ const remote = Bun.serve({
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".mixed")) {
       return new Response("<script>document.title = 'ran'</script>", { headers: { "content-type": "application/pdf, text/html" } });
     }
+    // a PDF's type with a parameter, then another type: a PDF, by its first type
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".pdfparams")) {
+      return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf;x=y, text/html" } });
+    }
+    // a picture that runs a script, asked for as a page
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".svg")) {
+      return new Response("<svg xmlns='http://www.w3.org/2000/svg'><script>parent.document.title = 'ran'</script></svg>", { headers: { "content-type": "image/svg+xml", "content-security-policy": "script-src *" } });
+    }
+    // a page whose policy allows any host and any frame
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".loose")) {
+      return new Response("<script>fetch('https://example.invalid/')</script>", { headers: { "content-type": "text/html", "content-security-policy": "default-src *; script-src 'unsafe-inline' *" } });
+    }
+    // a page's type with a parameter, then a picture's
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".htmlparams")) {
+      return new Response("<svg xmlns='http://www.w3.org/2000/svg'><script>parent.document.title = 'ran'</script></svg>", { headers: { "content-type": "text/html;x=y, image/svg+xml" } });
+    }
+    // a page that names no policy of its own
+    if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".bare")) {
+      return new Response("<script>fetch('https://example.invalid/')</script>", { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".html")) {
       return new Response("<script>parent.document.title = 'ran'</script>", { headers: { "content-type": "text/html", "content-security-policy": "script-src *", "x-content-type-options": "sniff" } });
     }
@@ -264,15 +284,40 @@ it("regression: a PC's answer never runs as this app's origin, whatever type and
     expect(response.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   }
-  // a page drawn with its scripts keeps that PC's policy, under a sandbox of this server's that no policy loosens
+  // a page drawn with its scripts keeps that PC's policy, with this server's page policy after it: no network, no other site's frame
+  const ours = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline' data:; img-src data: blob:; media-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
   const page = await handleMachineRequest(new Request(`${opened}&render=1`), manager);
-  expect(page.headers.get("content-security-policy")).toBe("script-src *, sandbox allow-scripts");
+  expect(page.headers.get("content-security-policy")).toBe(`script-src *, ${ours}`);
+  expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  // whatever that PC's policy allows: this server's is added all the same
+  const loose = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.loose&render=1"), manager);
+  expect(loose.headers.get("content-security-policy")).toBe(`default-src *; script-src 'unsafe-inline' *, ${ours}`);
+  // a page is passed on as HTML alone, whatever else its type names
+  const typed = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.htmlparams&render=1"), manager);
+  expect(typed.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(typed.headers.get("content-security-policy")).toBe(ours);
   expect(page.headers.get("x-content-type-options")).toBe("nosniff");
   // a real PDF is still drawn by the browser's viewer, which refuses a sandbox
   const pdf = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.pdf"), manager);
   expect(pdf.headers.get("content-type")).toBe("application/pdf");
   expect(pdf.headers.get("content-security-policy")).toBeNull();
   expect(pdf.headers.get("x-content-type-options")).toBe("nosniff");
+  // a PDF type with a parameter and another type after it is passed on as the PDF type alone
+  for (const method of ["GET", "HEAD"]) {
+    const named = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.pdfparams", { method }), manager);
+    expect(named.status).toBe(200);
+    expect(named.headers.get("content-type")).toBe("application/pdf");
+    expect(named.headers.get("content-security-policy")).toBeNull();
+    expect(named.headers.get("x-content-type-options")).toBe("nosniff");
+  }
+  // only an HTML answer is drawn as a page: a picture asked to render keeps the file policy
+  const svg = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Fchart.svg&render=1"), manager);
+  expect(svg.headers.get("content-type")).toBe("image/svg+xml");
+  expect(svg.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
+  expect(svg.headers.get("x-content-type-options")).toBe("nosniff");
+  // a page that names no policy gets this server's own page policy, which reaches no network
+  const bare = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.bare&render=1"), manager);
+  expect(bare.headers.get("content-security-policy")).toBe(ours);
   for (const method of ["GET", "HEAD"]) {
     const mixed = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/file?path=%2Ftmp%2Freport.mixed", { method }), manager);
     expect(mixed.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");

@@ -21,6 +21,10 @@ describe("an agent's launch arguments", () => {
     expect(launchArgsFault("claude", ["--effort", "ultra"])).toContain("--effort");
     expect(launchArgsFault("codex", ["-c", "model_reasoning_effort=ultra", "-m", "gpt-6.1"])).toBeNull();
     expect(launchArgsFault("codex", ["-c", "model_reasoning_effort=ultracode"])).toContain("model_reasoning_effort");
+    // DeepSeek Harness's levels, in both spellings
+    expect(launchArgsFault("dsh-tui", ["--effort", "off"])).toBeNull();
+    expect(launchArgsFault("dsh-tui", ["--effort=max"])).toBeNull();
+    expect(launchArgsFault("dsh-tui", ["--effort", "xhigh"])).toBe("agent.args --effort must be one of off, low, high, max");
     // other agents' arguments are theirs: only control characters are refused there
     expect(launchArgsFault("omp", ["--model", "two words"])).toBeNull();
   });

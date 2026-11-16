@@ -7,6 +7,8 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { DEVICE_COOKIE } from "../server/auth.ts";
+import { DeviceStore } from "../server/devices.ts";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -59,11 +61,20 @@ try {
     await Bun.sleep(50);
   }
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle" });
-  // tailscaleOwner null: the plain-HTTP page below reaches the server under a name that is not
-  // loopback, which a PC running Tailscale would otherwise send to pairing
-  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), codexHome, tailscaleOwner: null });
+  // The plain-HTTP page below reaches the server under a name that is not loopback, which is
+  // asked to pair while nothing is paired. Pair one device in the server's state dir first; the
+  // page carries its cookie.
+  const stateDir = join(root, "push");
+  const devices = new DeviceStore(stateDir);
+  const paired = devices.pair(devices.startPairing().code, "Chat QA", "drive");
+  assert.ok(paired, "the QA device pairs");
+  devices.match(paired.token);
+  // tailscaleOwner null: no Tailscale login stands in for the paired device
+  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir, codexHome, tailscaleOwner: null });
   browser = await chromium.launch({ executablePath: chromePath(), headless: process.env["HEADED"] !== "1", args: ["--no-sandbox", "--host-resolver-rules=MAP clipboard.test 127.0.0.1", "--no-proxy-server"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  // the cookie is for clipboard.test only; the page stays plain http under that name
+  await context.addCookies([{ name: DEVICE_COOKIE, value: paired.token, domain: "clipboard.test", path: "/", httpOnly: true, sameSite: "Strict" }]);
   const page = await context.newPage();
   // a pane opens its terminal the first time; this QA is about the chat lens
   await page.addInitScript((id) => {

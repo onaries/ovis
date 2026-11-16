@@ -2,29 +2,37 @@
  * Who a request is and whether it gets in. There is no user database: a request is trusted
  * for where it comes from (this PC, with no proxy in front), for who Tailscale says it is
  * (the PC's own login, which `tailscale serve` states in a header it strips from what it
- * receives), or for what it holds (a paired device's cookie, or the shared token). A token,
- * when one is configured, is required of everything but a paired device, this PC and its own
- * Tailscale login included: a plain local connection, since the remote-PC bridge runs on a
- * loopback port of a PC other people may use, and the login, since any other proxy on this PC
- * (nginx, Caddy, a tunnel) passes a visitor's copy of that header on unless told to drop it.
- * Without a token, and until the first device is paired, anything that reaches the server is
- * let in as it always was, except through a proxy
- * on a PC whose Tailscale login is known: there, a request with no login header is a tagged
- * node (tailscale serve states no person for it), and a tailnet can hold many of those. The
- * exception is an install whose operator declared `tailscale serve` the only way in
- * (OVIS_TAILSCALE_SERVE_ONLY) on a tailnet Tailscale says holds no tagged node and no second
- * login: no stranger exists there to be mistaken for, so a serve-proxied request with no login is
+ * receives, counted only under a name this PC knows as its own), or for what it holds
+ * (a paired device's cookie, or the shared token). A token, when one is configured, is required
+ * of everything but a paired device, this PC and its own Tailscale login included: a plain local
+ * connection, since the remote-PC bridge runs on a loopback port of a PC other people may use,
+ * and the login, since any other proxy on this PC (nginx, Caddy, a tunnel) passes a visitor's
+ * copy of that header on unless told to drop it.
+ * Without a token, and until the first device is paired, a client of a non-loopback bind is let
+ * in under whatever name it reached this PC by, as it always was. A request from loopback (a
+ * browser here, or a proxy on this PC) is let in only under a name this PC knows as its own
+ * (`knownAuthority`): a loopback name, or this PC's full tailnet name or IPv4 address. Under any
+ * other name it pairs, and so does a proxied request on a PC whose Tailscale login is known:
+ * there, a request with no login header is a tagged node (tailscale serve states no person for
+ * it), and a tailnet can hold many of those. The exception is an install whose operator
+ * declared `tailscale serve` the only way in (OVIS_TAILSCALE_SERVE_ONLY) on a tailnet Tailscale
+ * says holds no tagged node and no second login: no stranger exists there to be mistaken for, so
+ * a serve-proxied request with no login is
  * the owner, and the owner's own phone opens the address without a code. On that path, and only
  * there, the request's Host must name this PC's own Tailscale name or address: `tailscale serve`
  * passes the client's Host through, and under the declaration no other ingress exists to forge it
  * through, while a rebinding page can only ever present its own origin.
  * A PC whose own node is tagged has no login to compare with: its proxied requests pair, the
- * owner's included, unless OVIS_TAILSCALE_OWNER names the login to let in.
+ * owner's included, unless OVIS_TAILSCALE_OWNER names the login to let in. That login, too, counts
+ * only under a name `knownAuthority` accepts: a loopback name, or this PC's tailnet name or IPv4
+ * address, which are still read from `tailscale status`.
  *
  * A proxy on this PC connects from loopback like a local client does, so it is known only by
- * what it sends: a forwarding header, or a Host that is not a name for this machine. A proxy
- * that sends neither (nginx's bare `proxy_pass` rewrites Host to the upstream address and adds
- * nothing) cannot be told from a local client: only a token closes that setup.
+ * what it sends: a forwarding header, or a Host that is not a loopback name (`cameThroughProxy`).
+ * Until a device is paired it is let in only where its Host is one `knownAuthority` accepts, so a
+ * proxy that passes its own domain is asked to pair. A proxy that sends neither (nginx's bare
+ * `proxy_pass` rewrites Host to the upstream address and adds nothing) cannot be told from a
+ * local client: only a token closes that setup.
  *
  * Portal's own sign-in (a private link, an Ethereum wallet, an OIDC account) is one more way in,
  * and the one exception to "a token is required of everything but a paired device": a visitor it let

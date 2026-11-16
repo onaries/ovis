@@ -101,6 +101,9 @@ export async function runTui(args: readonly string[], options: TuiOptions): Prom
     options.err(lookupMessage(lookup));
     return 1;
   }
+  // the program holds the terminal in raw mode and owns Ctrl+C; a SIGINT sent to the whole group must not end this
+  // process under it, from the program's first instant: ignored before it starts, not once it already runs
+  options.on("SIGINT", () => undefined);
   let child: Bun.Subprocess<"inherit", "inherit", "inherit">;
   try {
     child = Bun.spawn([lookup.path, ...args], { env: tuiEnv(options.caller), stdin: "inherit", stdout: "inherit", stderr: "inherit" });
@@ -108,9 +111,7 @@ export async function runTui(args: readonly string[], options: TuiOptions): Prom
     options.err(`ovis tui: could not run ${lookup.path}: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
-  // the program holds the terminal in raw mode and owns Ctrl+C; a SIGINT sent to the whole group must not end this
-  // process under it. A SIGTERM or SIGHUP sent to this process alone is passed on, so both end.
-  options.on("SIGINT", () => undefined);
+  // a SIGTERM or SIGHUP sent to this process alone is passed on, so both end
   for (const signal of ["SIGTERM", "SIGHUP"] as const) options.on(signal, () => child.kill(signal));
   // Bun resolves a death by signal as 128 + its number
   return await child.exited;

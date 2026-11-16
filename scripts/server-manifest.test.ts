@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DIST_ARCHIVE, generateKeyPair, MANIFEST, RELEASE_PUBLIC_KEY, releaseFile, PTY_ASSETS, ptyFile, SERVER_PLATFORMS, SIGNATURE, signManifest, SUMS, verifyRelease, writeManifest } from "./server-manifest.ts";
+import { DIST_ARCHIVE, generateKeyPair, MANIFEST, RELEASE_PUBLIC_KEY, releaseFile, PTY_ASSETS, ptyFile, SERVER_PLATFORMS, SIGNATURE, signManifest, sourceTrees, SUMS, verifyRelease, writeManifest } from "./server-manifest.ts";
 
 /** a signed release folder and the key that signs it, for attacks that change something and sign again */
 function signedRelease(): { dir: string; privateKeyPem: string; publicKey: string } {
@@ -343,5 +343,22 @@ describe("the Rust PTY hosts in the signed manifest", () => {
     const extra = signedRelease();
     resigned(extra.dir, extra.privateKeyPem, (text) => { const parsed = JSON.parse(text); parsed.pty["windows-x64"] = parsed.pty["linux-x64"]; return `${JSON.stringify(parsed, null, 2)}\n`; });
     rejects(extra.dir, extra.publicKey, "must name exactly the Rust PTY hosts");
+  });
+});
+
+describe("the git trees a checkout's release binary is tied to", () => {
+  it("are the folder's own server/ and shared/, also inside another repository with its own", () => {
+    const repo = mkdtempSync(join(tmpdir(), "ovis-source-trees-"));
+    dirs.push(repo);
+    const plugin = join(repo, "plugin");
+    for (const [dir, text] of [["server", "outer"], ["shared", "outer"], ["plugin/server", "inner"], ["plugin/shared", "inner shared"]] as const) {
+      mkdirSync(join(repo, dir), { recursive: true });
+      writeFileSync(join(repo, dir, "index.ts"), `${text}\n`);
+    }
+    const git = (...args: string[]) => Bun.spawnSync(["git", "-C", repo, ...args], { stdout: "pipe", stderr: "pipe" });
+    for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "x"]]) expect(git(...args).exitCode).toBe(0);
+    const tree = (path: string) => git("rev-parse", `HEAD:${path}`).stdout.toString().trim();
+    expect(sourceTrees(plugin)).toEqual({ server: tree("plugin/server"), shared: tree("plugin/shared") });
+    expect(sourceTrees(repo)).toEqual({ server: tree("server"), shared: tree("shared") });
   });
 });

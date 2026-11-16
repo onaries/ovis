@@ -7,6 +7,7 @@
 import type { SplitPaneDirection } from "../../shared/protocol.ts";
 import type { ZoomMode } from "./layoutMap.ts";
 import type { Machine } from "../../shared/machines.ts";
+import type { TelemetryAction, TelemetryActionSource, TelemetryViewSource } from "../../shared/telemetry.ts";
 
 /** what Add a connection → SSH fills the Add PC dialog with: the address to connect to and, where known, a name */
 export interface AddPcPreset { destination: string; name?: string }
@@ -29,8 +30,11 @@ export interface AppActions {
   selectTabNumber: (number: number) => void;
   /** the previous/next workspace of the selected PC in sidebar order (pins, worktree groups); wraps around */
   selectAdjacentWorkspace: (direction: -1 | 1) => void;
-  setView: (view: PaneView) => void;
-  toggleView: () => void;
+  /** `source`: where a person asked for it (lib/usageCounters.ts counts it there); null for a switch the app makes itself */
+  setView: (view: PaneView, source: TelemetryViewSource | null) => void;
+  toggleView: (source: TelemetryViewSource) => void;
+  /** an action taken by a person, counted by how (lib/usageCounters.ts): one that acts on a pane only for this PC's own */
+  counted?: (action: TelemetryAction, source: TelemetryActionSource) => void;
   /** Focus the selected pane's mounted input without sending any text or keys. */
   focusInput: () => void;
   scrollPage: (direction: -1 | 1) => void;

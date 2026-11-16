@@ -203,15 +203,17 @@ export type OmpLayout = StoreRoots;
  *   profile handed it down);
  * - an agent directory that is the default one keeps its sessions under
  *   `$XDG_DATA_HOME/omp[/profiles/<name>]/sessions` and its breadcrumbs under
- *   `$XDG_STATE_HOME/omp[/profiles/<name>]/terminal-sessions`, each only when that directory exists;
+ *   `$XDG_STATE_HOME/omp[/profiles/<name>]/terminal-sessions`, each only when that directory exists,
+ *   on Linux and macOS (omp reads them on macOS from 18.12, and its `init-xdg` migration that makes
+ *   them runs there only from then, so an older omp never finds one there);
  * - the last `--session-dir`, else PI_CODING_AGENT_SESSION_DIR, is a session directory of its own.
  * Only the environment omp was started with counts: values omp loads later from its `.env` files
  * are not seen, so such a store is not found (the transcripts lie outside the store this names).
  * null when nothing proves the store: argv omp would refuse, an environment that could not be read
  * (Linux and macOS show a same-user process's own; Windows none), a variable given twice, a
  * profile name omp refuses, a relative directory (omp resolved it against a directory nothing
- * records), an empty or missing `--session-dir` value, or on macOS an XDG omp root (whether omp
- * reads those there depends on its version).
+ * records), an empty or missing `--session-dir` value, or on Windows an XDG omp root (omp reads
+ * none there).
  */
 export function ompStoreLayout(argv: readonly string[], environ: readonly string[] | null, platform: NodeJS.Platform = process.platform): OmpLayout | null {
   const launch = ompLaunch(argv);
@@ -242,7 +244,7 @@ export function ompStoreLayout(argv: readonly string[], environ: readonly string
       return existsSync(app) ? app : undefined;
     };
     const data = xdg("XDG_DATA_HOME"), state = xdg("XDG_STATE_HOME");
-    if (data === null || state === null || platform !== "linux" && (data || state)) return null;
+    if (data === null || state === null || platform !== "linux" && platform !== "darwin" && (data || state)) return null;
     if (data) sessions = join(data, "sessions");
     if (state) terminalSessions = join(state, "terminal-sessions");
   }

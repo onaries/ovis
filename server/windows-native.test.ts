@@ -294,7 +294,8 @@ for (const migrated of [false, true]) {
       }
       const inspection = await windowsHost.inspect(ssh, session);
       expect(inspection.registryDir).toBe(join(legacy, "bridges"));
-      const descriptor = { pid: 2147483647, port: 1, token: "fixture", socket_path: "C:\\herdr.sock", bridge_protocol: 1, bundle_version: REMOTE_BUNDLE_VERSION };
+      const descriptor = { pid: 2147483647, port: 1, token: "fixture", socket_path: "C:\\Users\\홍길동\\herdr.sock", bridge_protocol: 1, bundle_version: REMOTE_BUNDLE_VERSION };
+      // UTF-8 without a BOM, as the bridge writes it: a non-ASCII profile must read back unchanged (#3852)
       writeFileSync(join(registry, "fixture[1].json"), JSON.stringify(descriptor));
       expect(await windowsHost.descriptors(ssh)).toEqual([descriptor]);
       expect((await windowsHost.inspect(ssh, session)).descriptors).toEqual([descriptor]);

@@ -120,6 +120,8 @@ const EXPECTED: Record<string, Record<string, InputRowState>> = {
     "btw-open-119": "gone", "btw-open-40": "gone", "switch-open-119": "gone",
     // /plan prints and keeps the editor: never armed, it stays manual
     "plan-open-119": "ready",
+    // omp 18.14 drops the status bar's frame: the peek (18.8.7's shape) does not make it out; the draft check does
+    "draft-empty-119": "gone", "draft-typed-119": "gone", "draft-lines-119": "gone", "draft-slash-119": "gone",
   },
   pi: {
     // the chat send's draft check (shared/input-row.ts typedDraft): pi 1.4.0 recorded empty, typed into, with autocomplete open
@@ -550,6 +552,30 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     expect(typed(agent, `${agent}/draft-typed-119.ansi`)).toBeTrue();
     expect(typed(agent, `${agent}/draft-empty-119.ansi`)).toBeFalse();
     expect(typed(agent, `${agent}/draft-slash-119.ansi`)).toBe(slash);
+  });
+
+  test("omp 18.14's editor under its unframed status line: typed text, on one row or more, and `/mo` are a draft; its hint is not", () => {
+    expect(typed("omp", "omp/draft-typed-119.ansi")).toBeTrue();
+    expect(typed("omp", "omp/draft-lines-119.ansi")).toBeTrue();
+    expect(typed("omp", "omp/draft-slash-119.ansi")).toBeTrue();
+    expect(typed("omp", "omp/draft-empty-119.ansi")).toBeFalse();
+    // 18.8.7's framed editor reports no cells: never refused
+    expect(typed("omp", "omp/settings-idle-119.ansi")).toBeFalse();
+    // typed text in a colour the default theme does not give it (a theme not recorded) is no evidence
+    const themed = readFileSync(join(FIXTURES, "omp/draft-typed-119.ansi"), "utf8").replace("\u001b[38;5;254mleftover", "\u001b[38;5;250mleftover");
+    expect(typedDraft("omp", screenFromAnsi(themed))).toBeFalse();
+  });
+
+  test("omp 18.14's draft is read past an empty first row, an indented row and an empty row between, and as typed when it is the hint's words", () => {
+    const lines = readFileSync(join(FIXTURES, "omp/draft-lines-119.ansi"), "utf8");
+    // an empty first row, then a row indented past the editor's own three columns
+    expect(typedDraft("omp", screenFromAnsi(lines.replace("leftover draft", "").replace("second line", "    indented")))).toBeTrue();
+    // an empty row between two of the draft's rows
+    const rows = lines.replace("leftover draft", "").split("\n");
+    rows.splice(rows.findIndex((row) => row.includes("second line")), 0, "\r");
+    expect(typedDraft("omp", screenFromAnsi(rows.join("\n")))).toBeTrue();
+    // the hint's own words, typed in the typed colour
+    expect(typedDraft("omp", screenFromAnsi(readFileSync(join(FIXTURES, "omp/draft-typed-119.ansi"), "utf8").replace("leftover draft", "⇧⇥ to change thinking effort")))).toBeTrue();
   });
 
   test("Kilo's box in a session, under its first answer, reads as on its home screen", () => {

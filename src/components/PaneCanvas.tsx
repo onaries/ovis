@@ -1,3 +1,4 @@
+import { tally, usageCounters } from "../lib/usageCounters.ts";
 import { useCallback, useEffect, useLayoutEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
 import { ArchiveRestore, Bot, Columns2, Ellipsis, Eraser, Folder, FolderInput, Link2, LockOpen, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RotateCw, Rows2, ArrowLeftRight, Terminal, TextSearch, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -48,7 +49,8 @@ interface Props {
   onChanged: () => void;
   renderPane: (pane: HerdrPane | null, active: boolean, split: boolean) => ReactNode;
   /** filled with this canvas's pane actions on each render: a phone's tab menu offers them for the open pane (TabStrip) */
-  actionsRef?: MutableRefObject<((target: HerdrPane) => RowMenuItem[]) | null>;
+  /** the pane menu's items; `counted: false` for a caller that counts the action itself (App's Close pane, by shortcut or palette) */
+  actionsRef?: MutableRefObject<((target: HerdrPane, options?: { counted?: boolean }) => RowMenuItem[]) | null>;
   /** where the split view can be drawn: a pane opened in a half of it, from its menu or by dragging its title (lib/split.ts) */
   onOpenInHalf?: (paneId: string, side: SplitSide) => void;
   /** the PC's panes are mirrored (no terminal attach there): their grid can be wider than this screen */
@@ -255,7 +257,9 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
   });
   const target = menu ? snapshot?.panes.find((item) => item.pane_id === menu.paneId) : null;
-  const layoutItems = (target: HerdrPane): RowMenuItem[] => [
+  /** a pane-menu use, counted when the menu itself was pressed (not when App runs an item for a shortcut or palette row) */
+  type MenuUse = (name: "split_by_menu" | "close_pane_by_menu") => void;
+  const layoutItems = (target: HerdrPane, use: MenuUse): RowMenuItem[] => [
     ...(!(appLayout.rename || appLayout.paneRename) ? [] : [{ id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) }]),
     ...((appLayout.rename || appLayout.paneRename) && target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
     ...(!watching && snapshot?.agents.some((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id) ? [{ id: "rename-agent", label: t("Change agent call name"), icon: Pencil,
@@ -263,8 +267,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     ...(appLayout.arrange && pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,
       run: () => run(() => api.swapPaneWith(pane.pane_id, target.pane_id)) }] : []),
     ...(!appLayout.split || target.own_tab ? [] : [
-      { id: "split-right", label: t("Split right"), icon: Columns2, run: () => run(() => split(target, "right")) },
-      { id: "split-down", label: t("Split down"), icon: Rows2, run: () => run(() => split(target, "down")) },
+      { id: "split-right", label: t("Split right"), icon: Columns2, run: () => { use("split_by_menu"); run(() => split(target, "right")); } },
+      { id: "split-down", label: t("Split down"), icon: Rows2, run: () => { use("split_by_menu"); run(() => split(target, "down")); } },
     ]),
     ...(!appLayout.arrange ? [] : [{ id: "zoom", label: t(layout && zoomMode(layout, target.pane_id) === "off" ? "Unzoom pane" : "Zoom pane"), icon: Maximize2,
       run: () => zoom(target) }]),
@@ -309,20 +313,21 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
       ],
     };
   };
-  const itemsFor = (target: HerdrPane): RowMenuItem[] => {
+  const itemsFor = (target: HerdrPane, { counted = true }: { counted?: boolean } = {}): RowMenuItem[] => {
+    const use: MenuUse = (name) => { if (counted) tally(() => usageCounters.paneUse(name, machineId)); };
     const row = rowItems(target);
-    if (!row) return paneItemsFor(target);
+    if (!row) return paneItemsFor(target, use);
     // as the row's menu does, a canvas showing one pane at a time offers no split or zoom, only unzoom
-    const own = paneItemsFor(target).filter((item) => item.id === "zoom" ? layout?.zoomed : item.id !== "split-right" && item.id !== "split-down");
+    const own = paneItemsFor(target, use).filter((item) => item.id === "zoom" ? layout?.zoomed : item.id !== "split-right" && item.id !== "split-down");
     return [row.panes, own, row.tab].filter((group) => group.length > 0)
       .flatMap((group, at) => at === 0 ? group : group.map((item, index) => index === 0 ? { ...item, divider: true } : item));
   };
-  const paneItemsFor = (target: HerdrPane): RowMenuItem[] => {
+  const paneItemsFor = (target: HerdrPane, use: MenuUse): RowMenuItem[] => {
     const search = onSearchConversation?.(target) ?? null;
     return [
       // the chat's own search: a menu item, so a phone's screen gains no button for it (#2018)
       ...(search ? [{ id: "search-conversation", label: t("Search conversation"), icon: TextSearch, run: search }] : []),
-      ...layoutItems(target),
+      ...layoutItems(target, use),
       ...(!watching && !paneLocked(target.pane_id) && (target.agent ?? target.agent_session?.agent) === "codex" ? [
         { id: "connect-conversation", label: t("Connect conversation…"), icon: Link2, run: () => setMatching(target.pane_id) },
         { id: "restart-codex", label: t("Restart Codex"), icon: RotateCw, danger: true, run: () => setRestarting(target.pane_id) },
@@ -340,11 +345,11 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
           const key = sidebarPinKey(machineId, target.pane_id);
           updateSettings(({ lockedAgents }) => ({ lockedAgents: lockedAgents.filter((held) => held !== key) }));
         } }]
-        : [{ id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) }]),
+        : [{ id: "close", label: t("Close pane"), icon: X, danger: true, run: () => { use("close_pane_by_menu"); requestClose(target); } }]),
     ];
   };
   const items = target ? itemsFor(target) : [];
-  const published = useRef<{ ref: MutableRefObject<((target: HerdrPane) => RowMenuItem[]) | null>; items: typeof itemsFor } | null>(null);
+  const published = useRef<{ ref: MutableRefObject<((target: HerdrPane, options?: { counted?: boolean }) => RowMenuItem[]) | null>; items: typeof itemsFor } | null>(null);
   if (actionsRef) { actionsRef.current = itemsFor; published.current = { ref: actionsRef, items: itemsFor }; }
   // a canvas that goes (the setup guide in its place) leaves no actions behind for the header's menu
   // or the row's; another canvas that took the ref over keeps its own
@@ -500,7 +505,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
           {zoomable && !offTab && !paneLocked(item.pane_id) && <button type="button" className="icon-button pane-frame-close" aria-label={t("Close pane")} title={t("Close pane")} disabled={watching}
             // Safari focuses no button a click pressed: focused here, it is the confirmation's opener, which Cancel and Escape hand back to
             // a double click's second press may land on the neighbour that took this corner: only a first press closes
-            onClick={(event) => { if (event.detail > 1) return; event.currentTarget.focus({ preventScroll: true }); requestClose(item); }}><X aria-hidden="true" /></button>}
+            onClick={(event) => { if (event.detail > 1) return; event.currentTarget.focus({ preventScroll: true }); tally(() => usageCounters.paneUse("close_pane_by_button", machineId)); requestClose(item); }}><X aria-hidden="true" /></button>}
         </div>}
         <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PaneWatchedContext.Provider value={cell.cached && !cell.retained && watchedTabs.has(item.tab_id)}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneWatchedContext.Provider></PaneCachedContext.Provider></div>
       </section>;

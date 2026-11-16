@@ -114,6 +114,10 @@ export interface PushHealthState {
   result: PushActionResult | null;
   /** the fault whose notice this device closed: Settings still tells it, the notice does not until another fault or a working look */
   dismissed: PushProblem | null;
+  /** a look since the page loaded (or alerts were last turned off) got the PC's answer: until then nothing is known either way */
+  checked: boolean;
+  /** the PC recorded a push that reached this subscription (last_success_at); null where it cannot say (an older server, the open LAN, no worker) */
+  delivered: boolean | null;
 }
 
 const DISMISSED_KEY = "ovis:push-notice-dismissed";
@@ -133,7 +137,7 @@ function writeDismissed(problem: PushProblem | null): void {
   } catch { /* storage blocked: the dismissal lasts until the page reloads */ }
 }
 
-let state: PushHealthState = { health: QUIET, busy: null, result: null, dismissed: readDismissed() };
+let state: PushHealthState = { health: QUIET, busy: null, result: null, dismissed: readDismissed(), checked: false, delivered: null };
 const listeners = new Set<() => void>();
 /** every refresh takes a number; an answer to an older one is dropped (a later success, disable or new subscription has spoken since) */
 let generation = 0;
@@ -262,7 +266,8 @@ export async function refreshPushHealth(wanted: boolean): Promise<void> {
   const stored = readDismissed(state.dismissed);
   const dismissed = keptDismissal(stored, health, input);
   if (dismissed !== stored) writeDismissed(dismissed);
-  setState({ ...state, health, result, dismissed });
+  const delivered = typeof input.status === "object" && input.status !== null ? input.status.last_success_at !== null : null;
+  setState({ ...state, health, result, dismissed, checked: true, delivered });
 }
 
 /**
@@ -291,7 +296,7 @@ export function resetPushHealth(): void {
   actions += 1;
   resultFor = undefined;
   writeDismissed(null);
-  setState({ health: QUIET, busy: null, result: null, dismissed: null });
+  setState({ health: QUIET, busy: null, result: null, dismissed: null, checked: false, delivered: null });
 }
 
 /**

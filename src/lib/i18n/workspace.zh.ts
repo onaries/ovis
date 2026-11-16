@@ -55,6 +55,7 @@ export const WORKSPACE_ZH: Record<string, string> = {
   "model, effort": "模型、推理强度",
   "Empty: the agent's own model.": "留空则使用代理自身的模型。",
   "Levels depend on the model.": "可选的级别取决于模型。",
+  "Saved as dsh-tui's default for every later session, outside Ovis too. A default set in dsh-tui's /settings wins over it.": "会保存为之后所有 dsh-tui 会话的默认值，在 Ovis 之外也生效。若在 dsh-tui 的 /settings 中设置了默认值，则以该值为准。",
   "Ultracode": "Ultracode",
   "Claude Code 2.1.284 or later": "Claude Code 2.1.284 或更高版本",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "在任意推理强度下运行动态工作流。需要 Claude Code 2.1.284 或更高版本。",

@@ -33,6 +33,7 @@ import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } fro
 import { pinchFontSize } from "./pinchFontSize.ts";
 import { narrowPaneFontSize } from "./narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
+import { createTouchFling, createVelocityTracker } from "./touchFling.ts";
 import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
 import { createTerminalFold, dimmedColor, hyperlinkAt, wideGridKey, wideGrids } from "./terminalFold.ts";
@@ -1954,8 +1955,22 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       let tracking = false;
       // a fast swipe's reports go out a few per frame, never all in one (lib/touchWheelPacer.ts)
       const touchPacer = createTouchWheelPacer();
-      cancelTouchRef.current = () => {
+      // a quick swipe keeps gliding after the lift and slows to a stop (lib/touchFling.ts)
+      const touchVelocity = createVelocityTracker();
+      const touchFling = createTouchFling();
+      /** finger travel of this gesture's scrolling so far, the velocity tracker's position */
+      let touchTravel = 0;
+      /** the pane and attach this gesture began on: its glide reaches no other */
+      let touchPane: string | null = null;
+      let touchGeneration = -1;
+      /** a new touch, a pinch, a pan or a key: the swipe's queued reports and its glide both stop */
+      const stopTouchScroll = (): void => {
+        touchFling.cancel();
+        delete host.dataset.touchFling;
         touchPacer.cancel();
+      };
+      cancelTouchRef.current = () => {
+        stopTouchScroll();
         touchPixels = 0;
         tracking = false;
       };
@@ -2016,8 +2031,9 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       const onTouchStart = (event: TouchEvent): void => {
         if (chatViewRef.current) return;
-        // a new touch ends the swipe before it, a second finger's pinch too: what it had left is not sent
-        touchPacer.cancel();
+        // a new touch ends the swipe before it, a second finger's pinch too: what it had left is not sent,
+        // and a glide stops where it is, as a finger stops a fling on a phone's own pages
+        stopTouchScroll();
         if (event.touches.length === 1 && pinchStroke) {
           finishPinch(false);
           pinchStroke = false;
@@ -2048,15 +2064,20 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         }
         tracking = event.touches.length === 1;
         touchPixels = 0;
+        touchTravel = 0;
+        touchVelocity.reset();
         const first = event.touches[0];
         if (tracking && first) {
           touchX = first.clientX;
           touchY = first.clientY;
+          touchVelocity.add(event.timeStamp, 0);
+          touchPane = paneRef.current;
+          touchGeneration = outputGeneration;
         }
       };
       const onTouchMove = (event: TouchEvent): void => {
         if (!pinchStroke && event.touches.length > 1) {
-          touchPacer.cancel();
+          stopTouchScroll();
           tracking = false;
           pinchStroke = true;
         }
@@ -2097,7 +2118,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           // the pan owns the swipe now: history travel left from before it is not sent at the lift, nor are
           // the reports of it still queued
           touchPixels = 0;
-          touchPacer.cancel();
+          touchVelocity.reset();
+          stopTouchScroll();
           panned = true;
           // folded rows already fit the width: only the rows pan
           host.scrollBy(fold.active ? 0 : across, delta);
@@ -2109,6 +2131,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // swipe as far as a slow drag, scaled by the selected scroll speed
         const { steps, rest } = wheelSteps(touchPixels + delta * wheelStateRef.current.speed, cellHeight() * HERDR_MOUSE_SCROLL_LINES);
         touchPixels = rest;
+        touchTravel += delta;
+        touchVelocity.add(event.timeStamp, touchTravel);
         sendTouchWheels(steps);
       };
       /** `steps` line-mode wheel reports at the finger, each one herdr scroll step in the sign's direction */
@@ -2151,9 +2175,34 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       const onTouchEnd = (event: TouchEvent): void => {
         // a lifted one-finger drag sends what is left once it reaches half a step: a flick shorter
-        // than one step still scrolls, and a long drag loses at most half a step at its end
+        // than one step still scrolls, and a long drag loses at most half a step at its end. A finger
+        // still moving fast at the lift glides on first, slowing to a stop, and its last half step
+        // goes when the glide ends; a finger that had stopped, or a slow one, ends where it is.
         if (tracking && event.type === "touchend" && !pinchStroke && (!adopted() || scrollableMirror())) {
-          sendTouchWheels(finalStep(touchPixels, cellHeight() * HERDR_MOUSE_SCROLL_LINES));
+          const velocity = touchVelocity.release(event.timeStamp);
+          const pane = touchPane;
+          const generation = touchGeneration;
+          let left = touchPixels;
+          // the glide belongs to the pane and attach the touch began on: a switch, a lost attach or a
+          // role change, even one before the lift, stops it, as they drop the swipe's queued reports
+          // (sendTouchWheels' pacer checks them too)
+          const current = (): boolean => !disposed && pane !== null && paneRef.current === pane && generation === outputGeneration
+            && !observeRef.current && !heldRef.current && !releasedRef.current && (!adopted() || scrollableMirror()) && socket.canInput(pane);
+          // said on the terminal while it glides, for the browser regression to wait on
+          host.dataset.touchFling = "";
+          touchFling.start(velocity, (pixels) => {
+            if (!current()) {
+              delete host.dataset.touchFling;
+              return false;
+            }
+            const { steps, rest } = wheelSteps(left + pixels * wheelStateRef.current.speed, cellHeight() * HERDR_MOUSE_SCROLL_LINES);
+            left = rest;
+            sendTouchWheels(steps);
+            return true;
+          }, () => {
+            delete host.dataset.touchFling;
+            if (current()) sendTouchWheels(finalStep(left, cellHeight() * HERDR_MOUSE_SCROLL_LINES));
+          });
         }
         touchPixels = 0;
         tracking = false;
@@ -2579,6 +2628,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         host.removeEventListener("touchmove", onTouchMove, { capture: true });
         host.removeEventListener("touchend", onTouchEnd, { capture: true });
         host.removeEventListener("touchcancel", onTouchEnd, { capture: true });
+        touchFling.dispose();
+        delete host.dataset.touchFling;
         touchPacer.dispose();
         cancelTouchRef.current = () => undefined;
         host.removeEventListener("gesturestart", onGesture);

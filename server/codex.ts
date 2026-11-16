@@ -522,7 +522,7 @@ export async function processCodexHome(pid: number, argv: readonly string[] = []
   return home ?? openProcessCodexHome(pid);
 }
 
-/** A database alone may be incidental: require an interactive rollout held in the same store. */
+/** Require an interactive rollout and either its store database or its held writer lock. */
 function openProcessCodexHome(pid: number): string | null {
   if (process.platform !== "linux") return null;
   try {
@@ -534,6 +534,7 @@ function openProcessCodexHome(pid: number): string | null {
     // A partial scan cannot establish that the store is unique.
     if (descriptors.length > 512) return null;
     const paths: string[] = [];
+    const locks: { path: string; id: string }[] = [];
     for (const fd of descriptors) {
       const link = `${directory}/${fd}`;
       let path: string;
@@ -542,18 +543,38 @@ function openProcessCodexHome(pid: number): string | null {
         path = readlinkSync(link);
         held = statSync(link, { bigint: true });
       } catch { continue; } // A descriptor may close while enumerating it.
-      if (!isAbsolute(path) || (nodePath.basename(path) !== "state_5.sqlite" && !path.endsWith(".jsonl"))) continue;
+      const lockId = nodePath.basename(nodePath.dirname(path)) === "thread-writer-locks"
+        ? WRITER_LOCK.exec(nodePath.basename(path))?.[1] : undefined;
+      if (!isAbsolute(path) || (nodePath.basename(path) !== "state_5.sqlite" && !path.endsWith(".jsonl") && !lockId)) continue;
       // An uninspectable held candidate makes the scan incomplete: uniqueness is unknown.
       const current = statSync(path, { bigint: true });
+      // A resumed Codex may close its database. Its matching exclusive writer lock
+      // still proves ownership; merely having the lock file open does not.
+      const ownsLock = lockId !== undefined && readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8").split("\n")
+        .some((line) => new RegExp(`^lock:\\s+\\d+: FLOCK\\s+ADVISORY\\s+WRITE\\s+${pid}\\s+[0-9a-fA-F]+:[0-9a-fA-F]+:${held.ino}\\s+0\\s+EOF\\s*$`).test(line));
       let stillHeld: boolean;
       try { stillHeld = readlinkSync(link) === path; } catch { continue; } // Closed while inspecting it.
-      if (held.isFile() && held.dev === current.dev && held.ino === current.ino && stillHeld) paths.push(path);
+      if (held.isFile() && held.dev === current.dev && held.ino === current.ino && stillHeld) {
+        paths.push(path);
+        if (ownsLock) locks.push({ path, id: lockId! });
+      }
     }
     const homes = new Set<string>();
     for (const path of paths) {
       if (nodePath.basename(path) !== "state_5.sqlite") continue;
       const home = realpathSync(nodePath.dirname(path));
       if (paths.some((file) => file.endsWith(".jsonl") && codexRolloutPath(file, home) !== null)) homes.add(home);
+    }
+    for (const lock of locks) {
+      const canonical = realpathSync(lock.path);
+      const home = nodePath.dirname(nodePath.dirname(canonical));
+      if (nodePath.basename(nodePath.dirname(canonical)) !== "thread-writer-locks"
+        || nodePath.basename(canonical) !== `${lock.id}.lock`) continue;
+      if (paths.some((file) => {
+        if (!file.endsWith(".jsonl")) return false;
+        const rollout = codexRolloutPath(file, home);
+        return rollout !== null && string(record(rolloutMetaLine(rollout)?.payload).id).toLowerCase() === lock.id.toLowerCase();
+      })) homes.add(home);
     }
     return homes.size === 1 ? [...homes][0]! : null;
   } catch { return null; }

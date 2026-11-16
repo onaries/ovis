@@ -37,6 +37,8 @@ const STAND_INS: Record<string, string> = {
   --version) echo "herdr 0.9.3" ;;
   "plugin list") [ ! -e "$SCRATCH/installed" ] || echo "devswha.ovis 0.0.0"; [ ! -e "$SCRATCH/legacy" ] || echo "devswha.herdr-web-ui 0.0.0" ;;
   "plugin list --json")
+    # a herdr whose list cannot be read: install.sh learns no plugin root
+    [ ! -e "$SCRATCH/no-json" ] || exit 1
     printf '{"result":{"plugins":['
     [ ! -e "$SCRATCH/installed" ] || printf '{"plugin_id":"devswha.ovis","plugin_root":"%s"},' "$SCRATCH/plugin"
     [ ! -e "$SCRATCH/legacy" ] || printf '{"plugin_id":"devswha.herdr-web-ui","plugin_root":"%s"},' "$SCRATCH/legacy-plugin"
@@ -410,6 +412,45 @@ describe.skipIf(platform() === "win32")("install.sh without a terminal", () => {
     expect(out).toContain("already installed as a herdr plugin");
     expect(out).not.toContain(MENTION);
     expect(pc.ghCalls()).toEqual([]);
+  });
+
+  it.concurrent("says the installed commit on a rerun with OVIS_REF, and installs nothing", async () => {
+    const pc = new Pc().installed();
+    const plugin = join(pc.scratch, "plugin");
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", plugin, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const head = (await new Response(Bun.spawn(["git", "-C", plugin, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x" });
+    expect(exitCode, out).toBe(0);
+    expect(out).toContain(head.slice(0, 12));
+    expect(existsSync(join(pc.scratch, "plugin-source"))).toBe(false);
+  });
+
+  it.concurrent("says no commit when herdr names no plugin root, rather than the one of the directory it runs in", async () => {
+    const pc = new Pc().installed();
+    writeFileSync(join(pc.scratch, "no-json"), "");
+    // the installer runs in pc.scratch: a git checkout of its own here
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", pc.scratch, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const here = (await new Response(Bun.spawn(["git", "-C", pc.scratch, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    const { out } = await pc.unattended({ OVIS_REF: "feat/x" });
+    expect(out).toContain("already installed as a herdr plugin");
+    expect(out).not.toContain(here.slice(0, 12));
+  });
+
+  it.concurrent("says no commit for a plugin folder that is not a checkout itself but sits inside another repository", async () => {
+    const pc = new Pc().installed();
+    // the plugin's folder is pc.scratch/plugin: the repository is around it
+    for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"]]) {
+      expect(await Bun.spawn(["git", "-C", pc.scratch, ...args], { stdout: "ignore", stderr: "inherit" }).exited).toBe(0);
+    }
+    const around = (await new Response(Bun.spawn(["git", "-C", pc.scratch, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+    const { out, exitCode } = await pc.unattended({ OVIS_REF: "feat/x" });
+    expect(exitCode, out).toBe(0);
+    expect(out).toContain("OVIS_REF does not move an installed Ovis");
+    expect(out).not.toContain(around.slice(0, 12));
   });
 
   // gh sleeps 60 seconds: the installer ended within RUN_ENDS_WITHIN_MS, so it did not wait for gh, and gh is gone

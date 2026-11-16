@@ -264,11 +264,11 @@ describe("Browser lane script lists", () => {
   it("runs both isolated UI flows in browser-main and keeps the local UI command complete", () => {
     const main = ciJob("browser-main");
     expect(selectBrowserScripts(serial, env(main, "BROWSER_SCRIPTS"))).toEqual([
-      "scripts/ui-regression.ts", "scripts/ui-contexts-regression.ts", "scripts/ui-contexts-layout-regression.ts",
+      "scripts/ui-regression.ts", "scripts/ui-terminal-regression.ts", "scripts/ui-ime-regression.ts", "scripts/ui-access-regression.ts", "scripts/ui-contexts-regression.ts", "scripts/ui-contexts-layout-regression.ts",
     ]);
     expect(env(main, "BROWSER_WORKERS")).toBe("2");
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "sticky-modifiers-regression.ts"]) {
+    for (const script of ["ui-regression.ts", "ui-terminal-regression.ts", "ui-ime-regression.ts", "ui-access-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "sticky-modifiers-regression.ts"]) {
       expect(pkg.scripts["test:ui"]).toContain(`bun scripts/${script}`);
     }
   });
@@ -319,7 +319,7 @@ describe("Extracted UI checks", () => {
     }
   });
 
-  for (const [script, mode] of ["ui-contexts-regression.ts", "ui-contexts-layout-regression.ts"].flatMap((script) => (["unit", "live"] as const).map((mode) => [script, mode] as const))) {
+  for (const [script, mode] of ["ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "ui-terminal-regression.ts", "ui-ime-regression.ts", "ui-access-regression.ts"].flatMap((script) => (["unit", "live"] as const).map((mode) => [script, mode] as const))) {
     it(`${script} refuses ${mode} execution before touching a herdr daemon`, () => {
       const root = mkdtempSync(join(tmpdir(), "ui-context-guard-"));
       try {

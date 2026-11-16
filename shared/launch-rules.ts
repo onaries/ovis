@@ -31,6 +31,12 @@ export const CLAUDE_ULTRACODE_SETTINGS = '{"ultracode":true}';
  * levels depend on the model and client." (developers.openai.com/codex/config-reference, read 2026-10-20)
  */
 export const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+/**
+ * DeepSeek Harness's reasoning-effort levels, as its DeepSeek adapter offers them (`REASONING_EFFORTS` of
+ * @deepseek-ai/dsh-llm-deepseek 0.2.2-rc.1). dsh-tui 0.20.0 takes no effort flag: the bridge saves the level
+ * where dsh-tui's own `/effort <id>` does and leaves the flag off its command line (server/agent-launch.ts).
+ */
+export const DSH_EFFORTS = ["off", "low", "high", "max"] as const;
 
 /**
  * A model name as the CLIs take it after `--model`: one word that never reads as a flag, with an
@@ -72,10 +78,12 @@ export function firstMessageFault(value: unknown, agent: unknown): string | null
 
 type LaunchFlag = "model" | "effort" | "config";
 /** the flags whose values are checked, by agent: Codex's `-c`/`--config` sets `model` and `model_reasoning_effort` too */
-const LAUNCH_FLAGS: Record<"claude" | "codex", Record<string, LaunchFlag>> = {
+const LAUNCH_FLAGS: Record<"claude" | "codex" | "dsh-tui", Record<string, LaunchFlag>> = {
   claude: { "--model": "model", "--effort": "effort" },
   codex: { "--model": "model", "-m": "model", "--config": "config", "-c": "config" },
+  "dsh-tui": { "--effort": "effort" },
 };
+const LAUNCH_EFFORTS: Record<keyof typeof LAUNCH_FLAGS, readonly string[]> = { claude: CLAUDE_EFFORT_ARGS, codex: CODEX_EFFORTS, "dsh-tui": DSH_EFFORTS };
 
 /**
  * Which checked flag `arg` is, as the CLIs' parsers read it: `--flag value`, `--flag=value`, and for a
@@ -102,13 +110,13 @@ const configValue = (value: string): string => {
  * What is wrong with an agent's launch arguments, in the API's words; null when they can be passed. No
  * argument may hold a control character. Claude Code's and Codex's model and effort flags take only
  * the values the dialog offers (and Claude Code's `--effort ultracode`), in every spelling their CLIs
- * accept, and Codex's prompt after `--` follows a first message's rules. Any other flag is the agent's
- * own: Ultracode's `--settings {"ultracode":true}` passes as it is.
+ * accept, as does DeepSeek Harness's `--effort`, and Codex's prompt after `--` follows a first message's
+ * rules. Any other flag is the agent's own: Ultracode's `--settings {"ultracode":true}` passes as it is.
  */
 export function launchArgsFault(kind: string, args: readonly string[]): string | null {
   if (!args.every(argumentText)) return "agent.args must not contain control characters (a tab or a line break included)";
-  if (kind !== "claude" && kind !== "codex") return null;
-  const efforts: readonly string[] = kind === "claude" ? CLAUDE_EFFORT_ARGS : CODEX_EFFORTS;
+  if (kind !== "claude" && kind !== "codex" && kind !== "dsh-tui") return null;
+  const efforts = LAUNCH_EFFORTS[kind];
   for (let at = 0; at < args.length; at++) {
     const arg = args[at]!;
     if (arg === "--") {
@@ -133,7 +141,7 @@ export function launchArgsFault(kind: string, args: readonly string[]): string |
     }
     if (model !== null && !MODEL_NAME.test(model)) return "agent.args --model must name one model";
     if (effort !== null && !efforts.includes(effort)) {
-      return kind === "claude" ? `agent.args --effort must be one of ${efforts.join(", ")}` : `agent.args model_reasoning_effort must be one of ${efforts.join(", ")}`;
+      return kind === "codex" ? `agent.args model_reasoning_effort must be one of ${efforts.join(", ")}` : `agent.args --effort must be one of ${efforts.join(", ")}`;
     }
   }
   return null;

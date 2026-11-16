@@ -102,6 +102,41 @@ function nextId(): string {
   return `br-${Date.now().toString(36)}-${requestCounter}`;
 }
 
+/** Whether the environment asks for the herdr RPC tally: HERDR_RPC_COUNT set to exactly `1`. */
+export function herdrRpcCountRequested(env: Record<string, string | undefined> = process.env): boolean {
+  return env["HERDR_RPC_COUNT"] === "1";
+}
+
+// Opt-in per-method tally of the requests this module writes to herdr's socket (herdrRpc's and
+// subscribeEvents'), for measuring what a poll actually costs: null
+// (off) unless HERDR_RPC_COUNT=1 when this module loads. Only tests switch it after that
+// (herdrRpcCountingForTests), so a running server cannot flip it mid-run.
+let rpcCounts: Map<string, number> | null = null;
+
+/** Calls made per method so far, as a plain copy the caller cannot use to change the tally. */
+export function herdrRpcCounts(): Readonly<Record<string, number>> {
+  return Object.fromEntries(rpcCounts ?? []);
+}
+
+/** Turns the tally on, empty, or off for a test; module load alone sets it in the server. */
+export function herdrRpcCountingForTests(enabled: boolean): void {
+  rpcCounts = enabled ? new Map() : null;
+}
+
+/**
+ * The tally's one reader: as the process exits (the server's shutdown ends in process.exit), one
+ * JSON line on stderr, the sink herdr.rpc's ConnectionDiagnostics writes to, e.g.
+ * {"time":"…","event":"herdr.rpc.counts","counts":{"pane.read":42}}. Counts and method names
+ * only, which are code-owned literals; nothing else reads them or sends them anywhere. A process
+ * that made no request (the plugin's supervisor imports this module too) writes nothing.
+ */
+if (herdrRpcCountRequested()) {
+  rpcCounts = new Map();
+  process.once("exit", () => {
+    if (rpcCounts?.size) console.warn(JSON.stringify({ time: new Date().toISOString(), event: "herdr.rpc.counts", counts: herdrRpcCounts() }));
+  });
+}
+
 /**
  * The most bytes one herdr line may hold before its newline, checked before anything is decoded.
  * herdr's schema sets no finite maximum for a reply (`PaneReadResult.text` is an unbounded string,
@@ -263,6 +298,9 @@ export async function herdrRpc(
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
   guard?: () => boolean,
 ): Promise<unknown> {
+  // Counted on entry, not on success: a call that times out or is refused by `guard` still
+  // costs the bridge an attempt, and a report that omitted them would understate the load.
+  if (rpcCounts) rpcCounts.set(method, (rpcCounts.get(method) ?? 0) + 1);
   const id = nextId();
   const started = performance.now();
   const key = JSON.stringify([socketPath, method]); // private bookkeeping only; never logged
@@ -1160,6 +1198,8 @@ export function subscribeEvents(
   handlers: SubscribeHandlers,
   socketPath: string = herdrSocketPath(),
 ): Subscription {
+  // counted as herdrRpc counts: on entry, so a reconnect that fails is counted too
+  if (rpcCounts) rpcCounts.set("events.subscribe", (rpcCounts.get("events.subscribe") ?? 0) + 1);
   let closed = false;
   let socket: { end: () => void } | null = null;
   let started = false;

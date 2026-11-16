@@ -8,7 +8,6 @@
  */
 export const DEVICES_ZH: Record<string, string> = {
   "Anyone who can reach {host} on your network can type into every pane: no access token is set and no device is paired yet.": "同一网络上任何能访问 {host} 的人都可以在每个窗格中输入：尚未设置访问 Token，也还没有配对任何设备。",
-  "Alerts off": "提醒已关闭",
   "Tap the Share button, then Add to Home Screen.": "点按“共享”按钮，然后选择“添加到主屏幕”。",
   "Open this page over HTTPS (or on localhost) to install it.": "请通过 HTTPS（或 localhost）打开此页面以进行安装。",
   "Firefox on desktop can't install web apps. Open this page in Chrome or Edge.": "桌面版 Firefox 无法安装 Web 应用。请在 Chrome 或 Edge 中打开此页面。",
@@ -122,13 +121,8 @@ export const DEVICES_ZH: Record<string, string> = {
   "With no names, every unexpired link you issue opens it. Add names to accept only links issued to them.": "没有名称时，你签发的所有未过期链接都能打开。添加名称后，只接受签发给这些名称的链接。",
   "Test notification": "测试通知",
   "Sends one alert to this device now, so you can check that push alerts arrive here. If it cannot be sent, the line under the name says so.": "立即向此设备发送一条通知，以便确认推送通知能否送达这里。无法发送时，名称下方的一行会给出提示。",
-  "Send test": "发送测试",
-  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "推送通知需要 HTTPS 或 localhost。在 iPhone 上请使用添加到主屏幕的应用。",
-  "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
-  "Allow notifications for Ovis in the phone's Settings, then try again.": "请在手机的设置中允许 Ovis 的通知，然后重试。",
   "Test notification sent. Check this device for the alert.": "测试通知已发送。请检查此设备是否收到通知。",
   "Allow notifications to test alerts on this device.": "请允许通知，以便在此设备上测试提醒。",
-  "Could not send the test notification. Try again.": "无法发送测试通知。请重试。",
   "The last alert did not reach this device; the next one is tried as usual. Send a test to check.": "上一条提醒未能送达此设备；下一条会照常发送。请发送测试以确认。",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "只有 PC 所有者通过直接连接才能控制中继。请在 PC 上打开 Ovis，或访问 PC 的直接地址。",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "已阻止：OVIS_TAILSCALE_SERVE_ONLY 规定 tailscale serve 是唯一的访问途径。请在此 PC 上取消它并重启应用。",

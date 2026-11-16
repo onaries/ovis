@@ -924,7 +924,8 @@ and `scripts/plugin-launch.ts` takes it from that file. Each checks the manifest
 size and SHA-256, and only then moves the release into place, in one rename (two on Windows, where a run cut off
 between them is put back by the next), holding an install lock (`.install.lock`, made by an atomic mkdir with the
 holder's pid; a waiter breaks it once the holder's pid no longer runs, one breaker at a time, so two installs at once
-take turns; with three or more started at the same instant a narrow race remains, a follow-up). When to build
+take turns; `install.sh` releases it in one rename, while `install.ps1` and the plugin's installer still remove it in
+place, where three or more installs started at the same instant leave a narrow race, a follow-up). When to build
 from source instead is [one rule](../INSTALL.md#binary-or-source). Their tests run a copy whose key line names a key made for
 the test, or pass that key as `installServer`'s option, which the launcher never does: the shipped scripts read no
 key from anywhere else. `OVIS_RELEASES_URL` (https://, or a `file://` folder laid out as GitHub's
@@ -1208,13 +1209,20 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
     Integration tests have a 15-second default timeout so their bounded process-startup
     probes can finish; individual tests can still specify a longer timeout.
   - **Browser regression (ui-regression)** runs `scripts/ui-regression.ts`,
-    `scripts/ui-contexts-regression.ts` and `scripts/ui-contexts-layout-regression.ts`, two at a
-    time. The core's stateful flow stays serial; the extracted feature checks own a separate
+    `scripts/ui-terminal-regression.ts`, `scripts/ui-ime-regression.ts`,
+    `scripts/ui-access-regression.ts`, `scripts/ui-contexts-regression.ts` and
+    `scripts/ui-contexts-layout-regression.ts`, two at a time. The core's stateful flow stays serial
+    in `scripts/ui-regression.ts`; its terminal's keys, input line, held drafts and attach
+    (`terminal`), its Safari, iPad and Linux IME replays (`ime`) and its sign out and relay panel
+    (`access`) run as parts of it, each from its own server and browser, so no part nears the
+    per-script cap. `scripts/ui-regression.ts` run itself is always the main flow, on the lane's
+    herdr session; each other part's entry file runs it on a herdr session of its own
+    (`scripts/own-herdr.ts`), so two parts side by side share no session or workspace label; the extracted feature checks own a separate
     temporary herdr config/session, Chromium process, server and fixture panes. Those helpers stay
     sequential within their own fixture. The two slowest (split view, a background tab's terminal
     size) run in the layout script, on a fixture of their own, so neither context script nears
     the per-script cap. Each context script prints each helper's elapsed time and stops its owned
-    daemon on exit. `bun run test:ui` also runs all three.
+    daemon on exit. `bun run test:ui` also runs all six.
   - **Browser regression (other scripts)** runs every other browser script: six at a time in
     one job on self-hosted CI, and on hosted CI split over four jobs (`BROWSER_SHARD=k/4`,
     balanced by `scripts/ci-browser-timings.json`) that run three at a time each.

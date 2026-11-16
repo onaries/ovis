@@ -373,12 +373,21 @@ it.skipIf(!unix)("does not wait on what a candidate left holding its output, and
   expect(alive).toBe(false);
 });
 
+// discovery.ts's PROBE_TIMEOUT_MS: the deadline findHc gives each `--version` when no timeoutMs is set, how long the
+// product lets an hc take to answer before it counts as silent
+const PROBE_TIMEOUT_MS = 3_000;
+
 it.skipIf(!unix)("passes over a candidate that does not answer in time", async () => {
   const { root, log } = scratch();
   script(join(root, "slow"), "hc", "exec /bin/sleep 30", log);
   const real = fake(join(root, "real"), "hc", "hc 0.1.17", log);
-  expect(await findHc({ env: { PATH: [join(root, "slow"), join(root, "real")].join(":") }, home: root, loginShellPath: async () => null, usualDirs: [], timeoutMs: 200 })).toEqual({ bin: real, version: "0.1.17" });
-});
+  // the product's own deadline, not a shorter one: it also bounds the candidate that does answer, which a starved
+  // runner can take hundreds of ms just to start
+  expect(await findHc({ env: { PATH: [join(root, "slow"), join(root, "real")].join(":") }, home: root, loginShellPath: async () => null, usualDirs: [] })).toEqual({ bin: real, version: "0.1.17" });
+  // the silent one was asked, then the next
+  expect(runs(log)).toEqual(["--version", "--version"]);
+  // two probes in a row and as long again for the rest: a late answer fails on the assertion, not the runner's timeout
+}, 3 * PROBE_TIMEOUT_MS);
 
 it.skipIf(!unix)("waits for a candidate that closed its output to exit, within the time it is given", async () => {
   const { root, log } = scratch();

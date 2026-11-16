@@ -27,6 +27,8 @@ export const CHAT_ZH: Record<string, string> = {
   "Retry stopped. Check the terminal.": "已停止重试。请检查终端。",
   "Compacting conversation…": "正在压缩对话…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 聊天暂不可用。请打开终端查看运行状态和工具调用。",
+  "Not in the conversation. If the agent showed an error, it is in the terminal.": "未记录在对话中。如果智能体显示了错误，它在终端里。",
+  "Not in the conversation. If {agent} showed an error, it is in the terminal.": "未记录在对话中。如果 {agent} 显示了错误，它在终端里。",
   "{agent} has not recorded a conversation Ovis can find for this pane yet. Before the first message this is normal; if it stays, use the terminal.": "{agent} 尚未记录 Ovis 能为此窗格找到的对话。在第一条消息之前这是正常的；如果一直如此，请使用终端。",
   "Ovis can't read {agent} conversations yet. Use the terminal to work with it.": "Ovis 暂时无法读取 {agent} 的对话。请在终端中使用它。",
   "Ovis couldn't find or read the file {agent} keeps this conversation in. Use the terminal.": "Ovis 找不到或无法读取 {agent} 保存此对话的文件。请使用终端。",

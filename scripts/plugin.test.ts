@@ -799,6 +799,19 @@ describe("add and login", () => {
     } finally { server.stop(true); }
   });
 
+  it("hand a command this checkout does not know to the release the app updated to, as it is", async () => {
+    const { server, env } = linkedPc();
+    try {
+      const release = join(updateStateDir(ROOT, server.port!, join(scratch, "app-state")), "release-test");
+      mkdirSync(join(release, "scripts"), { recursive: true });
+      writeFileSync(join(release, "scripts", "plugin.ts"), 'console.log("active release", process.argv.slice(2).join(" ")); process.exit(3);');
+      const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: ROOT, windowsHide: true }).stdout.toString().trim();
+      writeFileSync(join(release, "..", "current.json"), JSON.stringify({ source_revision: revision, directory: release }));
+      const result = await run("a-later-command", env);
+      expect([result.out, result.exitCode], result.err).toEqual(["active release a-later-command\n", 3]);
+    } finally { server.stop(true); }
+  });
+
   it("take the code back when the output went away: a write that fails stops the run as its signal would", async () => {
     const key = generateKeyPair();
     const calls: string[] = [];

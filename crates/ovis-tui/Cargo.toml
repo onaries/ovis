@@ -14,7 +14,7 @@ description = "herdr-core's terminals as herdr shows them (hc-tui's sidebar, tab
 name = "ovis-tui"
 path = "src/main.rs"
 
-# hc-tui is not copied into this repository. prepare.sh fetches the commit UPSTREAM pins into
+# hc-tui is not copied into this repository. prepare.sh fetches the commit hc-tui.pin pins into
 # ./upstream and applies ./patches; these paths exist after it has run.
 [dependencies]
 hc-proto = { path = "upstream/crates/hc-proto" }

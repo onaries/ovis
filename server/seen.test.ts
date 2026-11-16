@@ -61,8 +61,12 @@ describe("read finishes shared by the browsers of a server", () => {
   });
 
   it("drops the oldest records past the limit", () => {
-    const store = new SeenStore(root());
-    for (let pane = 0; pane <= MAX_SEEN; pane++) store.record(finish(`p${pane}`, 1));
+    // a full store in one write: every record() is a durable write of the whole file, and 500 of them
+    // took a minute on a loaded runner's disk
+    const dir = root();
+    writeFileSync(join(dir, "seen.json"), `${JSON.stringify(Array.from({ length: MAX_SEEN }, (_, pane) => finish(`p${pane}`, 1)))}\n`);
+    const store = new SeenStore(dir);
+    store.record(finish(`p${MAX_SEEN}`, 1));
     store.record(finish("p1", 2));
     const panes = store.list().map((kept) => kept.pane);
     expect(panes).toHaveLength(MAX_SEEN);

@@ -1,3 +1,4 @@
+import { tally, usageCounters } from "../lib/usageCounters.ts";
 import { useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref, type RefObject } from "react";
 import { Ellipsis, ListFilter, Monitor, Plus, Search, Terminal, TriangleAlert, X } from "lucide-react";
 
@@ -302,7 +303,12 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
     <div className="inbox-search" role="search">
       {!wide && <Search className="inbox-search-glass" aria-hidden="true" />}
       <input ref={search} className="input inbox-search-input" type="search" value={query} placeholder={searchLabel} aria-label={searchLabel}
-        autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search" onChange={(event) => onQuery(event.currentTarget.value)} onKeyDown={closeSearch} />
+        autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search" onChange={(event) => {
+          const value = event.currentTarget.value;
+          // a search is told once, as it begins: the first letter typed into an empty field, in any layout
+          if (query === "" && value !== "") tally(() => usageCounters.count("inbox_search"));
+          onQuery(value);
+        }} onKeyDown={closeSearch} />
       {query !== "" && <button type="button" className="inbox-search-clear" aria-label={t("Clear search")} onClick={() => { onQuery(""); search.current?.focus(); }}><X aria-hidden="true" /></button>}
     </div>
   );
@@ -310,7 +316,7 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
     <button type="button" className="icon-button inbox-round inbox-add" aria-label={t("New workspace")} title={t("New workspace")}
       aria-haspopup={connected.length > 1 ? popup : undefined} aria-expanded={connected.length > 1 ? pcMenu !== null : undefined}
       onClick={(event) => {
-        if (connected.length === 1) onNew(connected[0]!.id);
+        if (connected.length === 1) { tally(() => usageCounters.count("new_workspace_by_button")); onNew(connected[0]!.id); }
         else setPcMenu(pcMenu === null ? event.currentTarget : null);
       }}>
       <Plus aria-hidden="true" />
@@ -320,7 +326,7 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
   const filterLabel = filter === "all" ? t("Filter by state") : t("Filter by state: {state}", { state: filterWord(filter) });
   const filterButton = (
     <button type="button" className={`icon-button inbox-round inbox-filter-toggle${filter === "all" ? "" : " is-on"}`} aria-label={filterLabel} title={filterLabel}
-      aria-haspopup={popup} aria-expanded={filterMenu !== null} onClick={(event) => setFilterMenu(filterMenu === null ? event.currentTarget : null)}>
+      aria-haspopup={popup} aria-expanded={filterMenu !== null} onClick={(event) => { if (filterMenu === null) tally(() => usageCounters.count("inbox_filter")); setFilterMenu(filterMenu === null ? event.currentTarget : null); }}>
       <ListFilter aria-hidden="true" />
     </button>
   );
@@ -400,7 +406,7 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
                     ref={(node) => { if (node) rowNodes.current.set(row.key, node); else rowNodes.current.delete(row.key); }}
                     title={wide ? [row.title, row.line, at === null ? null : `${age} · ${at.toLocaleString(resolvedLanguage)}`].filter((part) => part !== null).join("\n") : undefined}
                     onPointerDown={(event) => { if (event.button === 0 && row.online) pressPane?.(row.machine.id, row.pane.pane_id); }}
-                    onClick={() => onOpen(row.machine.id, row.pane.pane_id)}>
+                    onClick={() => { tally(() => usageCounters.paneUse("inbox_open", row.machine.id)); onOpen(row.machine.id, row.pane.pane_id); }}>
                     <InboxAvatar mark={row.mark} />
                     <span className="inbox-body">
                       <span className="inbox-line">
@@ -423,7 +429,7 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
         {searchField}
       </div>}
       {pcMenu !== null && !watching && connected.length > 1 && <RowMenu anchor={pcMenu} title={t("New workspace")} onClose={() => setPcMenu(null)}
-        items={connected.map((machine) => ({ id: machine.id, label: machine.name, icon: Monitor, run: () => onNew(machine.id) }))} />}
+        items={connected.map((machine) => ({ id: machine.id, label: machine.name, icon: Monitor, run: () => { tally(() => usageCounters.count("new_workspace_by_button")); onNew(machine.id); } }))} />}
       {filterMenu !== null && <RowMenu anchor={filterMenu} title={t("Filter by state")} choice onClose={() => setFilterMenu(null)}
         items={INBOX_FILTERS.map((value) => ({
           id: value, label: filterWord(value), icon: ListFilter, checked: filter === value, run: () => onFilter(value),

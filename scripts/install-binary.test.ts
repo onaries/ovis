@@ -285,6 +285,93 @@ exec "${Bun.which("tar")}" "$@"`);
     expect(readFileSync(join(ovis, "bin", "dist", "index.html"), "utf8")).toMatch(/1\.2\.[34]/);
   }, 60_000);
 
+  it("leaves the lock to a waiter that claims it while the holder removes it, and both succeed", async () => {
+    const { releases, key, start, standIn, ovis, home } = pc();
+    release(releases, "1.2.3", key.privateKeyPem);
+    release(releases, "1.2.4", key.privateKeyPem);
+    const sync = join(home, "sync");
+    mkdirSync(sync);
+    const lock = join(ovis, ".install.lock");
+    // the first run reads the archive only while it holds the lock: the mark stays, so the second run cannot miss it
+    standIn("tar", `[ "$RUN" != first ] || [ "$1" != -tzf ] || : > "${sync}/first-holds"
+exec "${Bun.which("tar")}" "$@"`);
+    // the first removal of a lock folder pauses where rm -rf does, between the pid it unlinks and the folder it
+    // removes, until another run holds the lock; then, as rm -f, it takes a folder already gone as removed
+    standIn("rm", `case "$*" in "-rf ${lock}"*) if [ -d "$2" ] && (set -C; : > "${sync}/paused") 2>/dev/null; then
+  "${Bun.which("rm")}" -f "$2/pid"
+  end=$(($(date +%s) + 20)); until [ -s "${lock}/pid" ] || [ "$(date +%s)" -ge "$end" ]; do sleep 0.01; done
+  [ ! -s "${lock}/pid" ] || : > "${sync}/claimed"
+  rmdir "$2" 2>/dev/null || [ ! -e "$2" ] || exec rmdir "$2"
+  exit 0
+fi ;; esac
+exec "${Bun.which("rm")}" "$@"`);
+    const first = start("install_binary 1.2.3", { RUN: "first" });
+    const second = start(`end=$(($(date +%s) + 20)); until [ -e "${sync}/first-holds" ]; do
+  [ "$(date +%s)" -lt "$end" ] || { echo "the first run never held the lock: no ${sync}/first-holds after 20 s" >&2; exit 3; }; sleep 0.01
+done; install_binary 1.2.4`);
+    const [one, two] = await Promise.all([first, second]);
+    expect(two.code, two.out).toBe(0);
+    expect(existsSync(join(sync, "claimed")), "the second run never claimed the lock during the first's release").toBe(true);
+    expect(one.code, one.out).toBe(0);
+    expect(readFileSync(join(ovis, "bin", "ovis-server.json"), "utf8")).toContain('"version": "1.2.4"');
+    expect(readdirSync(ovis).filter((name) => name.startsWith(".install.lock"))).toEqual([]);
+    // its two 20 s waits may follow one another, each install around them
+  }, 90_000);
+
+  for (const paused of ["release", "sweep"] as const) it(`fails no run when the holder's sweep and a release remove the same folder at once, with an rm that refuses a folder removed meanwhile (busybox), the ${paused} inside it first`, async () => {
+    const { releases, key, start, standIn, ovis, home } = pc();
+    release(releases, "1.2.3", key.privateKeyPem);
+    release(releases, "1.2.4", key.privateKeyPem);
+    const sync = join(home, "sync");
+    mkdirSync(sync);
+    const lock = join(ovis, ".install.lock");
+    const rm = Bun.which("rm");
+    standIn("tar", `[ "$RUN" != first ] || [ "$1" != -tzf ] || : > "${sync}/first-holds"
+exec "${Bun.which("tar")}" "$@"`);
+    // the first run's release, or the second's sweep, removes its folder as busybox rm -rf does: it unlinks what is
+    // inside, then fails on the folder if the other run removed it meanwhile. The other removes it only once that one
+    // is inside it, so the two meet
+    const inside = paused === "release" ? "first" : "second";
+    standIn("rm", `case "$*" in "-rf ${lock}.gone-"*) if [ -d "$2" ]; then
+  end=$(($(date +%s) + 20))
+  if [ "$RUN" = ${inside} ] && (set -C; : > "${sync}/inside") 2>/dev/null; then
+    "${rm}" -f "$2/pid"
+    until [ ! -e "$2" ] || [ "$(date +%s)" -ge "$end" ]; do sleep 0.01; done
+    [ ! -e "$2" ] || exec rmdir "$2"
+    : > "${sync}/refused"
+    echo "rm: can't remove '$2': No such file or directory" >&2
+    exit 1
+  elif [ "$RUN" != ${inside} ] && (set -C; : > "${sync}/other") 2>/dev/null; then
+    until { [ -e "${sync}/inside" ] && [ ! -e "$2/pid" ]; } || [ "$(date +%s)" -ge "$end" ]; do sleep 0.01; done
+  fi
+fi ;; esac
+exec "${rm}" "$@"`);
+    const first = start("install_binary 1.2.3", { RUN: "first" });
+    const second = start(`end=$(($(date +%s) + 20)); until [ -e "${sync}/first-holds" ]; do
+  [ "$(date +%s)" -lt "$end" ] || { echo "the first run never held the lock: no ${sync}/first-holds after 20 s" >&2; exit 3; }; sleep 0.01
+done; install_binary 1.2.4`, { RUN: "second" });
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.code, one.out).toBe(0);
+    expect(two.code, two.out).toBe(0);
+    expect(existsSync(join(sync, "refused")), "the two removals never met in the same folder").toBe(true);
+    expect(readFileSync(join(ovis, "bin", "ovis-server.json"), "utf8")).toContain('"version": "1.2.4"');
+    expect(readdirSync(ovis).filter((name) => name.startsWith(".install.lock"))).toEqual([]);
+    // the second's 20 s wait, then the first's, each install around them
+  }, 90_000);
+
+  it("removes the lock folder a run cut off while it released the lock left, and fails no run whose pid it names", () => {
+    const { releases, key, run, ovis } = pc();
+    release(releases, "1.2.3", key.privateKeyPem);
+    // a run killed between its lock's rename and its removal, long ago
+    mkdirSync(join(ovis, ".install.lock.gone-1"), { recursive: true });
+    writeFileSync(join(ovis, ".install.lock.gone-1", "pid"), "1\n");
+    // one that had this run's pid, with a lock inside it that the rename of this run's lock could not replace
+    const result = run(`mkdir -p "${ovis}/.install.lock.gone-$$/.install.lock" && echo 1 > "${ovis}/.install.lock.gone-$$/.install.lock/pid" && install_binary 1.2.3`);
+    expect(result.code, result.out).toBe(0);
+    expect(result.out).toContain("installed Ovis 1.2.3");
+    expect(readdirSync(ovis).filter((name) => name.startsWith(".install.lock"))).toEqual([]);
+  });
+
   it("lets one waiter at a time break a stale lock, with a mkdir that never refuses", async () => {
     const { releases, key, start, standIn, ovis, home } = pc();
     release(releases, "1.2.3", key.privateKeyPem);

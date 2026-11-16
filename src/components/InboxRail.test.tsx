@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
 import type { Machine } from "../../shared/machines.ts";
 import machinesFixture from "../../site/demo/fixtures/machines.json";
 import { SettingsProvider } from "../lib/settings.ts";
+import { usageCounters } from "../lib/usageCounters.ts";
 import type { InboxRailPcs, InboxRailProps } from "./InboxRail.tsx";
 
 // the list of PCs as the rail hands it over (RowMenu's own drawing is RowMenu's): its props are what is read
@@ -110,6 +111,16 @@ describe("InboxRail", () => {
     expect(named(place)).toEqual(["Agent inbox", "Agent inbox"]);
     expect(buttons(root).filter((node) => node.props["aria-current"] !== undefined).map((node) => [kind(node), node.props["aria-current"]])).toEqual([["inbox-rail-place", "page"]]);
     await press(place);
+    expect(pressed).toEqual(["inbox"]);
+  });
+
+  it("still takes a press when its count fails", async () => {
+    const counting = spyOn(usageCounters, "count").mockImplementation(() => { throw new Error("storage full"); });
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const root = await draw();
+      await press(button(root, "place"));
+    } finally { counting.mockRestore(); logged.mockRestore(); }
     expect(pressed).toEqual(["inbox"]);
   });
 

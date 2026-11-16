@@ -8,7 +8,6 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const FILES_ZH: Record<string, string> = {
-  "Preview": "预览",
   "No Git repositories found in this folder.": "此文件夹中未找到 Git 仓库。",
   "Repository search was incomplete. Try a smaller folder or depth.": "部分仓库搜索未完成。请尝试较小的文件夹或较浅的深度。",
   "Refresh repositories": "重新搜索仓库",

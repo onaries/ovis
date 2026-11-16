@@ -8,6 +8,7 @@ import type { AgentRenameRequest, PaneDirection, PaneMoved, PaneResized, PaneSpl
 import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneDocuments, paneFiles } from "./files.ts";
+import { FILE_POLICY } from "./file-view.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
 import { copilotRecoverable, unavailableReason } from "./conversation-shared.ts";
@@ -352,7 +353,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       // Claude and pi embed immutable bytes, and omp, Grok and Copilot name a picture by its digest; Codex files and
       // OpenCode tool-image ordinals can change, and a Codex tool's picture (`codex-tool:`) loads with its row.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
-      return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
+      return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff", "content-security-policy": FILE_POLICY } });
     } catch (error) {
       return errorResponse(error);
     }

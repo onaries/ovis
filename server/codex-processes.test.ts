@@ -177,12 +177,7 @@ it.skipIf(process.platform !== "linux")("shows no conversation of the store an e
   // Given Codex A writing to this fixture's store, gone by the lookup, and Codex B started since with a store of its own
   const other = join(root, "other-store");
   mkdirSync(other, { recursive: true });
-  const start = async (codexHome: string) => {
-    const child = Bun.spawn(["/bin/bash", "-c", "echo READY; exec -a codex sleep 600"], { env: { ...process.env, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "ignore" });
-    children.push(child);
-    expect(await firstLine(child.stdout)).toBe("READY\n");
-    return child.pid;
-  };
+  const start = async (codexHome: string) => (await runningCodex(false, { ...process.env, CODEX_HOME: codexHome })).pid;
   const before = await start(home);
   foreground = [{ pid: await start(other), argv: ["codex"] }];
   agentFolders = { cwd: root };
@@ -207,12 +202,7 @@ it.skipIf(process.platform !== "linux")("shows no conversation of the store the 
   // (this fixture's store), and the reads after them Codex B
   const other = join(root, "other-store");
   mkdirSync(other, { recursive: true });
-  const start = async (codexHome: string) => {
-    const child = Bun.spawn(["/bin/bash", "-c", "echo READY; exec -a codex sleep 600"], { env: { ...process.env, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "ignore" });
-    children.push(child);
-    expect(await firstLine(child.stdout)).toBe("READY\n");
-    return child.pid;
-  };
+  const start = async (codexHome: string) => (await runningCodex(false, { ...process.env, CODEX_HOME: codexHome })).pid;
   const before = await start(home);
   processReads = [[{ pid: before, argv: ["codex"] }], [{ pid: before, argv: ["codex"] }]];
   foreground = [{ pid: await start(other), argv: ["codex"] }];
@@ -561,10 +551,7 @@ it.skipIf(process.platform !== "linux")("reads no conversation from the default 
   // fixture's) holding a conversation the pane's screen shows
   const own = join(root, "own-store");
   mkdirSync(own, { recursive: true });
-  // READY once the shell runs with its own environment (/proc shows it from then on), then it becomes `codex`
-  const child = Bun.spawn(["/bin/bash", "-c", "echo READY; exec -a codex sleep 600"], { env: { ...process.env, CODEX_HOME: own }, stdout: "pipe", stderr: "ignore" });
-  children.push(child);
-  expect(await firstLine(child.stdout)).toBe("READY\n");
+  const child = await runningCodex(false, { ...process.env, CODEX_HOME: own });
   const defaultBefore = process.env["CODEX_HOME"];
   process.env["CODEX_HOME"] = home;
   agentFolders = { cwd: root };
@@ -693,7 +680,10 @@ async function firstLine(stdout: ReadableStream<Uint8Array>): Promise<string> {
   return text;
 }
 
-/** A ready, owned process with Codex's argv[0], no rollout descriptor and no timer. */
+/**
+ * A ready, owned process with Codex's argv[0], no rollout descriptor and no timer. READY comes from the process
+ * after its exec: while an exec runs, /proc/<pid>/environ reads empty, and a store read then is cached as none.
+ */
 async function runningCodex(resume = false, env = process.env): Promise<ReturnType<typeof Bun.spawn>> {
   const node = Bun.which("node");
   if (node === null) throw new Error("node is required for the Codex process fixture");

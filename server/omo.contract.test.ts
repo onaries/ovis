@@ -46,6 +46,19 @@ async function launch(command: string, marker: string): Promise<string> {
 }
 const pane = (id?: string) => launch(`${process.execPath} ${script}${id ? ` --session-id ${id}` : ""}`, script);
 const read = async (paneId: string) => omoTranscriptForPane(paneId, root, (await sessionSnapshot()).panes, root);
+/**
+ * What a pane reads once herdr's process info shows the omo just launched: launch() returns on one process-info
+ * read that has it, and a later snapshot can still omit it, so a read right after a launch may see one omo fewer.
+ */
+const readsAs = async (paneId: string, want: string | null): Promise<string | null> => {
+  const deadline = Date.now() + 5_000;
+  let got = await read(paneId);
+  while (got !== want && Date.now() < deadline) {
+    await Bun.sleep(50);
+    got = await read(paneId);
+  }
+  return got;
+};
 const session = (id: string, timestamp = new Date().toISOString()) => {
   const path = join(dir, `${id}.jsonl`);
   writeFileSync(path, JSON.stringify({ type: "session", id, cwd: root, timestamp }) + "\n");
@@ -100,10 +113,10 @@ it("uses live process evidence and stops cwd inference as soon as a second omo s
   expect(await read(first)).toBe(fresh);
   const resumed = session("resumed-session", "2020-01-01T00:00:00Z");
   const second = await pane("resumed-session");
-  expect(await read(first)).toBeNull();
+  expect(await readsAs(first, null)).toBeNull();
   expect(await read(second)).toBe(resumed);
   const duplicate = await pane("resumed-session");
-  expect(await read(second)).toBeNull();
+  expect(await readsAs(second, null)).toBeNull();
   expect(await read(duplicate)).toBeNull();
 });
 

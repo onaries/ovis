@@ -1,6 +1,6 @@
 name: Terminal client
 # The terminal client (crates/ovis-tui) on Linux: format, lint and tests. It builds against hc-tui at
-# the commit crates/ovis-tui/UPSTREAM pins, with crates/ovis-tui/patches applied by prepare.sh; hc-tui
+# the commit crates/ovis-tui/hc-tui.pin pins, with crates/ovis-tui/patches applied by prepare.sh; hc-tui
 # builds Ghostty's terminal library with Zig 0.16, which hc-tui's own script installs. Release
 # binaries are not built here yet (crates/ovis-tui/README.md lists what that needs).
 on:

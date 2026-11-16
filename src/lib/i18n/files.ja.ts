@@ -8,7 +8,6 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const FILES_JA: Record<string, string> = {
-  "Preview": "プレビュー",
   "No Git repositories found in this folder.": "このフォルダーに Git リポジトリが見つかりませんでした。",
   "Repository search was incomplete. Try a smaller folder or depth.": "リポジトリの検索が一部完了しませんでした。より小さいフォルダーか浅い階層でお試しください。",
   "Refresh repositories": "リポジトリを再検索",

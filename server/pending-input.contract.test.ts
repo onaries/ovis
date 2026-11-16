@@ -195,7 +195,8 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   entry.stop = server.stop;
   const socket = new Socket(server.port); entry.sockets.push(socket);
   await socket.attach(pane);
-  const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
+  // the program may still be appending: a line without its newline yet is left for the next read
+  const bytes = () => readFileSync(log, "utf8").split("\n").slice(0, -1).filter(Boolean).map((line) => JSON.parse(line) as string).join("");
   const waitBytes = async (ending: string) => {
     const deadline = Date.now() + 8_000;
     while (!bytes().endsWith(ending)) { if (Date.now() >= deadline) throw new Error(`input timeout: ${JSON.stringify(bytes())}`); await Bun.sleep(25); }
@@ -803,19 +804,13 @@ describe("connection-owned pending input", () => {
     const f = await setup("queued-model", agent, "");
     const message = await f.queue(1476, text);
     const delivered = f.socket.event((frame) => frame.removed?.some((entry) => entry.id === message.id && entry.outcome === "sent") === true);
-    const recorded = new Promise<void>((resolve, reject) => {
-      const watcher = watch(root, () => {
-        if (!f.bytes().endsWith("\r")) return;
-        clearTimeout(timeout); watcher.close(); resolve();
-      });
-      const timeout = setTimeout(() => { watcher.close(); reject(new Error("queued command was not recorded")); }, 8_000);
-    });
     // When the agent finishes its turn.
     await f.state("idle");
-    await Promise.all([delivered, recorded]);
+    // fs.watch can drop the recorder's last append (see record.cjs), so read the log until the Enter is in it
+    await Promise.all([delivered, f.waitBytes("\r")]);
     // Then the terminal receives the same command the immediate path would send.
     expect(f.bytes()).toBe(`${paste(expected)}\r`);
-  });
+  }, 20_000);
 
   it("sends a queued message to an omp still starting only once omp reports its session, and says meanwhile what it waits for", async () => {
     // omp draws its input box, and herdr shows it at rest, before it takes an Enter: typed then, the message stays in
@@ -2228,7 +2223,7 @@ describe("a create request's first message", () => {
     const screenFile = join(root, `${label}.screen`);
     writeFileSync(screenFile, "");
     if (!existsSync(join(root, comesUp))) { copyFileSync(process.execPath, join(root, comesUp)); chmodSync(join(root, comesUp), 0o755); }
-    const bytes = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("") : "";
+    const bytes = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").slice(0, -1).filter(Boolean).map((line) => JSON.parse(line) as string).join("") : "";
     const recorder = written(() => existsSync(log), "recorder did not start", 10_000);
     await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${join(root, comesUp)}' '${join(root, "record.cjs")}' '${log}' '\u203a Message' '${screenFile}'\n` });
     await recorder;
@@ -2496,7 +2491,7 @@ describe("a create request's first message", () => {
     const sent = page.wait((frame) => frame.type === "pending-messages" && frame.pane_id === pane && frame.removed?.some((item: any) => item.id === message.id && item.outcome === "sent"));
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "idle" });
     await sent;
-    const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
+    const bytes = () => readFileSync(log, "utf8").split("\n").slice(0, -1).filter(Boolean).map((line) => JSON.parse(line) as string).join("");
     await written(() => bytes().endsWith(`${paste("FIRST-WRAPPED")}\r`), "input timeout", 8_000);
     expect(bytes()).toBe(`${paste("FIRST-WRAPPED")}\r`);
   }, 30_000);

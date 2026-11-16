@@ -33,6 +33,7 @@ import { cmdSlug } from "./cmd.ts";
 import { grokSessionGroups } from "./grok-store.ts";
 import { directoryKey, interactiveCodexRollout, storedCwds, withoutVerbatimPrefix } from "./codex.ts";
 import { hermesHome } from "./hermes-home.ts";
+import { ompStoreLayout } from "./omp.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
 import { environmentHome } from "./user-home.ts";
 import { defaultPiSessionReader, PI_CACHE_ENTRIES, PI_HEADER_DEADLINE_MS, PiMetadataBusy, PiMetadataDeadline, type PiSessionReader } from "./pi-session-metadata.ts";
@@ -1143,7 +1144,14 @@ export function listSessions(agent: SessionHistoryAgent, cwd: string, options: S
         const dir = ["OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"].map((name) => env[name]).find(Boolean) || join(home, ".omo", "agent");
         return piFamily("omo", join(dir, "sessions"), keys((spelling) => piSessionFolder(spelling, budget.platform)), cwds, budget, read);
       }
-      case "omp": return piFamily("omp", join(home, ".omp", "agent", "sessions"), ompFolders(), cwds, budget, read);
+      case "omp": {
+        // the store omp started with this environment writes to (XDG roots, PI_CONFIG_DIR, a profile);
+        // a flat session directory of its own or a store it cannot prove keeps the default
+        const environ = Object.entries({ ...env, HOME: home }).flatMap(([key, value]) => value === undefined ? [] : [`${key}=${value}`]);
+        const layout = ompStoreLayout(["omp"], environ, budget.platform);
+        const sessions = layout?.depth === 2 ? layout.sessions : join(home, ".omp", "agent", "sessions");
+        return piFamily("omp", sessions, ompFolders(), cwds, budget, read);
+      }
       case "gjc": return piFamily("gjc", join(env["GJC_CODING_AGENT_DIR"] || join(home, ".gjc", "agent"), "sessions"), ompFolders(), cwds, budget, read);
       case "cmd": return piFamily("cmd", join(home, ".commandcode", "projects"), keys(cmdSlug), cwds, budget, read, true);
       case "opencode": {

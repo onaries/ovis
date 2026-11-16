@@ -261,7 +261,9 @@ const WINDOWS_REGISTRY = `$(
 )`;
 // a script's exit code follows its last statement: a listing of a registry not there yet must
 // not count as a failure, so the directory is checked first
-const WINDOWS_DESCRIPTORS = `if (Test-Path -LiteralPath "${WINDOWS_REGISTRY}") { Get-ChildItem -LiteralPath "${WINDOWS_REGISTRY}" -Filter *.json | ForEach-Object { Write-Output (Get-Content -LiteralPath $_.FullName -Raw) } }; Write-Output ''`;
+// -Encoding UTF8: the bridge writes these files as UTF-8 without a BOM, which Windows PowerShell 5.1
+// reads in the ANSI code page, so a profile such as C:\Users\홍길동 broke its socket_path (#3852)
+const WINDOWS_DESCRIPTORS = `if (Test-Path -LiteralPath "${WINDOWS_REGISTRY}") { Get-ChildItem -LiteralPath "${WINDOWS_REGISTRY}" -Filter *.json | ForEach-Object { Write-Output (Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8) } }; Write-Output ''`;
 
 export const windowsHost: RemoteHost = {
   kind: "windows",
@@ -388,7 +390,7 @@ export const windowsHost: RemoteHost = {
   stop: async (ssh, pid) => {
     await ssh.runPowerShell([
       `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`,
-      `if (Test-Path -LiteralPath "${WINDOWS_REGISTRY}") { Get-ChildItem -LiteralPath "${WINDOWS_REGISTRY}" -Filter *.json | ForEach-Object { try { if ((Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).pid -eq ${pid}) { Remove-Item -LiteralPath $_.FullName -Force } } catch {} } }`,
+      `if (Test-Path -LiteralPath "${WINDOWS_REGISTRY}") { Get-ChildItem -LiteralPath "${WINDOWS_REGISTRY}" -Filter *.json | ForEach-Object { try { if ((Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json).pid -eq ${pid}) { Remove-Item -LiteralPath $_.FullName -Force } } catch {} } }`,
       "Write-Output ''",
     ].join("\n"));
   },

@@ -13,7 +13,7 @@ import { foreignLayout, leaves, type LayoutNode, neighbour, OVIS_LAYOUT_DOC, OVI
 import { paneSession, titleStatus } from "../agent-identity.ts";
 import { agentOf, agentOfStatus, appPaneLayout, type CoreHost, coreHost, agentStatusOf, foregroundOf, type HcForeground, buildSnapshot, type FirstTurn, keptLayout, opencodeRecords, type SessionOf, reportedFacts, type HcStatus, type HcTerminal, hcKeyName, HERDR_PROTOCOL, isRecord, keyBytes, LAYOUT_DOC, onOtherMachine, OTHER_WORKSPACE_ID, PANE_NAME_LABEL, processInfoOf, SEEN_LABEL, shownStatusOf, SPACE_LABEL, SPLIT_DIRECTION_LABEL, SPLIT_PARENT_LABEL, TAB_LABEL, TAB_NAME_LABEL, WORKSPACE_NAME_LABEL } from "./snapshot.ts";
 import { checkoutHolding, defaultCheckoutPath, factsOf, git, gitDirIdentity, labeledWorktree, realPath, type Checkout, type Repository, repositoryOf, WORKTREE_LABEL, WorktreeError, worktreeFolder, worktreeLabel } from "./worktrees.ts";
-import type { AgentStatus, SessionSnapshot } from "../../shared/herdr-api.generated.ts";
+import type { AgentStatus, SessionSnapshot, WorkspaceWorktreeInfo } from "../../shared/herdr-api.generated.ts";
 import type { WorktreeInfo } from "../herdr/client.ts";
 
 /**
@@ -446,6 +446,11 @@ function herdrCode(error: HcError, missing: string): string {
   }
 }
 
+/** How long git's facts for a pane's folder are kept: a snapshot is read on every change in the core. */
+const CHECKOUT_FACTS_MS = 5_000;
+/** How long a snapshot waits on git for one folder's facts before drawing it without them. */
+const CHECKOUT_FACTS_WAIT_MS = 2_000;
+
 function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (live: ReadonlySet<string>) => void, options: AdapterOptions, sessionOf?: SessionOf): (request: Request) => Promise<Reply> {
   const platform = options.platform ?? process.platform;
   const processTable = options.processTable ?? windowsProcessTable;
@@ -463,6 +468,35 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
     return found;
   };
 
+  /**
+   * git's answer per folder: the checkout's facts and its git folder's identity (as a label keeps it),
+   * or null outside git. Kept a few seconds; past that the last answer still serves while git is asked
+   * again, so a snapshot waits on git only for a folder it never answered for, and at most a moment:
+   * a slow git (a network folder, a huge repository) leaves that row flat rather than hold the snapshot.
+   */
+  type GitAnswer = { facts: WorkspaceWorktreeInfo; gitId: string | null } | null;
+  const checkoutFacts = new Map<string, { until: number; answer: GitAnswer; asking: Promise<GitAnswer> | null }>();
+  const askGit = (folder: string, entry: { until: number; answer: GitAnswer; asking: Promise<GitAnswer> | null }): Promise<GitAnswer> => {
+    entry.asking = repositoryOf(folder).then((repository) => ({ facts: factsOf(repository, repository.checkout), gitId: gitDirIdentity(repository.git_dir) }), () => null).then((answer) => {
+      Object.assign(entry, { until: Date.now() + CHECKOUT_FACTS_MS, answer, asking: null });
+      return answer;
+    });
+    return entry.asking;
+  };
+  const answerFor = (folder: string): Promise<GitAnswer> => {
+    let entry = checkoutFacts.get(folder);
+    if (!entry) checkoutFacts.set(folder, entry = { until: 0, answer: null, asking: null });
+    // never answered: wait a moment for the first answer
+    if (entry.until === 0) return Promise.race([entry.asking ?? askGit(folder, entry), Bun.sleep(CHECKOUT_FACTS_WAIT_MS).then(() => null)]);
+    if (entry.until <= Date.now() && !entry.asking) void askGit(folder, entry);
+    return Promise.resolve(entry.answer);
+  };
+  /**
+   * A workspace's checkout, once git named one, stays its own as herdr's stays with a workspace: a shell
+   * there going elsewhere does not move the row, the checkout removed is the one drawn, and its git
+   * folder identity is the one it had when first seen, so a checkout added again at that path is not it.
+   */
+  const pinnedCheckouts = new Map<string, NonNullable<GitAnswer>>();
   /** herdr's snapshot of the core, and whether Ovis keeps its layout (ownsLayout), from one read of the app's document */
   const read = async (): Promise<{ shown: SessionSnapshot; own: boolean; names: ReadonlyMap<string, AgentCallName> }> => {
     const [list, doc, ovis, hello, sizes] = await Promise.all([
@@ -474,6 +508,28 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
     ]);
     forgetTurns(new Set(list.terminals.map((terminal) => terminal.address)));
     const shown = buildSnapshot(list.terminals, doc.value, hello.version, firstTurn, ovis.value, sessionOf, coreHost(options.otherMachine, platform), sizes.value);
+    // herdr reports every workspace's checkout from git; hc has none, so a workspace no label claims (one
+    // the app arranges, or a checkout Ovis did not open) gets git's facts for its first pane's folder.
+    // Clients draw and act on these as on herdr's: removing a checkout asks git again first. No label is
+    // written. Another machine's folders are not on this disk.
+    if (!options.otherMachine) {
+      const folders = new Set(shown.panes.map((pane) => pane.cwd));
+      for (const [folder, entry] of checkoutFacts) if (!folders.has(folder) && !entry.asking) checkoutFacts.delete(folder);
+      const ids = new Set(shown.workspaces.map((workspace) => workspace.workspace_id));
+      for (const id of pinnedCheckouts.keys()) if (!ids.has(id)) pinnedCheckouts.delete(id);
+      await Promise.all(shown.workspaces.map(async (workspace) => {
+        if (workspace.worktree || workspace.workspace_id === OTHER_WORKSPACE_ID) return;
+        let pinned = pinnedCheckouts.get(workspace.workspace_id);
+        if (!pinned) {
+          const folder = shown.panes.find((pane) => pane.workspace_id === workspace.workspace_id)?.cwd;
+          const answer = folder ? await answerFor(folder) : null;
+          if (!answer) return;
+          pinned = pinnedCheckouts.get(workspace.workspace_id) ?? answer;
+          pinnedCheckouts.set(workspace.workspace_id, pinned);
+        }
+        workspace.worktree = { ...pinned.facts };
+      }));
+    }
     const names = await agentNames.names(list.terminals);
     for (const agent of shown.agents) agent.name = names.get(agent.pane_id)?.name ?? null;
     return { shown, own: ownsLayout(doc.value), names };
@@ -788,7 +844,8 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
   const openCheckout = async (shown: SessionSnapshot, repository: Repository, checkout: string, name: string) => {
     const head = (await openWorkspaces(shown, repository)).get(repository.repo_root);
     // the repository's own checkout keeps its git folder in the common one
-    if (head && !shown.workspaces.find((workspace) => workspace.workspace_id === head)?.worktree) {
+    // (a label: facts git gave only for drawing keep no git folder identity)
+    if (head && !(await worktreeLabelOf(shown, head))[WORKTREE_LABEL]) {
       await label(shown.panes.filter((pane) => pane.workspace_id === head).map((pane) => pane.pane_id), { [WORKTREE_LABEL]: worktreeLabel(factsOf(repository, repository.repo_root), repository.repo_key) });
     }
     const own = checkout === repository.repo_root ? repository.repo_key : (await repositoryOf(checkout)).git_dir;
@@ -1021,9 +1078,10 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       const shown = await snapshot();
       const panes = shown.panes.filter((pane) => pane.workspace_id === workspaceId);
       if (panes.length === 0) throw new AdapterError("workspace_not_found", `workspace ${workspaceId} not found`);
-      // as herdr: a repository's workspace closes over its open worktrees only when the group is meant
+      // as herdr: a repository's workspace closes over every other workspace of the repository (its open
+      // worktrees, and any other one on its main checkout) only when the group is meant
       const facts = shown.workspaces.find((candidate) => candidate.workspace_id === workspaceId)?.worktree;
-      const group = facts && !facts.is_linked_worktree ? shown.workspaces.filter((candidate) => candidate.worktree?.is_linked_worktree && candidate.worktree.repo_key === facts.repo_key).map((candidate) => candidate.workspace_id) : [];
+      const group = facts && !facts.is_linked_worktree ? shown.workspaces.filter((candidate) => candidate.workspace_id !== workspaceId && candidate.worktree?.repo_key === facts.repo_key).map((candidate) => candidate.workspace_id) : [];
       if (group.length > 0 && params["close_group"] !== true) throw new AdapterError("workspace_group_close_required", `workspace ${workspaceId} has open worktree workspaces: close the group`);
       await end([...panes, ...shown.panes.filter((pane) => group.includes(pane.workspace_id))].map((pane) => pane.pane_id));
       return { type: "ok" };
@@ -1309,6 +1367,7 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       gitId = labeledWorktree((await terminal(pane.pane_id)).labels)?.gitId ?? null;
       if (gitId) break;
     }
+    gitId ??= pinnedCheckouts.get(workspaceId)?.gitId ?? null;
     if (!now || now.repo_key !== facts.repo_key || now.checkout !== facts.checkout_path || now.checkout === now.repo_root || (gitId !== null && gitDirIdentity(now.git_dir) !== gitId)) {
       throw new AdapterError("worktree_not_found", `${facts.checkout_path} is no longer a worktree of ${facts.repo_name}`);
     }
