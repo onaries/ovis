@@ -1171,6 +1171,10 @@ const OWN: Record<string, Record<string, string>> = {
   "/api/sessions/history": { agent: "claude" }, "/api/pane/find": { direction: "forward" },
   "/api/pane/move": { side: "right" },
 };
+const OWN_BODY: Record<string, Record<string, unknown>> = {
+  "/api/pane/codex-restart": { terminal_id: "t1", session_id: "01a0c7a1-56d9-7e20-9f08-f7a2d973bc02", process_id: 1, process_started_at: 1 },
+  "/api/pane/codex-manual": { target: { pane_id: "w1:p1", terminal_id: "t1", process_id: 1, process_started_at: 1 }, session_id: "01a0c7a1-56d9-7e20-9f08-f7a2d973bc02" },
+};
 /**
  * Routes the walk asks and does not take to herdr, each for a reason of its own: what they need first is a running
  * login, an agent CLI install, a file or folder, a key an earlier list gave, or a request shape of their own. The walk
@@ -1186,7 +1190,7 @@ async function walk(ask: (path: string, init: RequestInit) => Promise<Response>,
       const before = calls();
       const own = OWN[path] ?? {};
       const response = await ask(`${path}${walkQuery}&${new URLSearchParams(own).toString()}`, { method, headers: { ...headers, origin: "http://localhost", "content-type": "application/json" },
-        ...(method === "GET" ? {} : { body: JSON.stringify({ ...walkBody, ...own }) }), signal: AbortSignal.timeout(10_000) });
+        ...(method === "GET" ? {} : { body: JSON.stringify({ ...walkBody, ...own, ...OWN_BODY[path] }) }), signal: AbortSignal.timeout(10_000) });
       const text = await response.text();
       let code: string | null = null;
       try { code = (JSON.parse(text) as { error?: { code?: string } }).error?.code ?? null; } catch { /* not JSON */ }
@@ -1231,7 +1235,7 @@ it.each(["refusing every call", "answering only its snapshot and panes", "not li
       const [method, path] = answer.route.split(" ") as [string, string];
       const own = OWN[path] ?? {};
       const response = await fetch(`${ordinary}${path}${walkQuery}&${new URLSearchParams(own).toString()}`, { method, headers: { ...headers, origin: ordinary, "content-type": "application/json" },
-        ...(method === "GET" ? {} : { body: JSON.stringify({ ...walkBody, ...own }) }), signal: AbortSignal.timeout(10_000) });
+        ...(method === "GET" ? {} : { body: JSON.stringify({ ...walkBody, ...own, ...OWN_BODY[path] }) }), signal: AbortSignal.timeout(10_000) });
       const body = await response.json() as { error?: unknown };
       expect([answer.route, response.status, body.error, response.headers.get("cache-control")]).toEqual([answer.route, answer.status, { code: marker, message: `${marker} at ${socket}` }, null]);
     }
