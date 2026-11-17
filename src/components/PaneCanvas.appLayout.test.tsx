@@ -98,6 +98,7 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     phone = true;
     const itemsOf = await draw(TUI);
     expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["pane:p1", "pane:p2", "rename", "clear-name", "rename-agent", "close", "new-terminal", "new-agent-tab", "rename-tab", "close-tab"]);
+    expect(actionsRef.current!(snapshot.panes[0] as HerdrPane).filter((item) => item.id.startsWith("pane:")).map((item) => item.hint)).toEqual([undefined, undefined]);
     const heads = renderer!.root.findAll((node) => node.props.className === "pane-frame-head");
     expect(heads.map((head) => head.parent?.props["data-layout-pane"])).toEqual(["p2"]);
   });
@@ -387,5 +388,8 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     await draw(OVIS_CORE, { ...snapshot, panes: [{ ...snapshot.panes[0]!, terminal_id: "t10" }, { ...snapshot.panes[1]!, terminal_id: "term_65c5f082012c52d" }] });
     expect(renderer!.root.findAllByProps({ className: "pane-frame-title-text" }).map((node) => node.children.join(""))).toEqual(["named", "p2"]);
     expect(renderer!.root.findAllByProps({ className: "pane-terminal-id" }).map((node) => node.children.join(""))).toEqual(["t10"]);
+    phone = true;
+    await draw(TUI, { ...snapshot, panes: [{ ...snapshot.panes[0]!, terminal_id: "t10" }, { ...snapshot.panes[1]!, terminal_id: "t1b" }] });
+    expect(actionsRef.current!(snapshot.panes[0] as HerdrPane).filter((item) => item.id.startsWith("pane:")).map((item) => item.hint)).toEqual(["t10", "t1b"]);
   });
 });

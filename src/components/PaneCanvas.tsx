@@ -285,6 +285,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     return {
       panes: own.length < 2 ? [] : own.map((item): RowMenuItem => ({
         id: `pane:${item.pane_id}`, label: displayPaneTitle(item), icon: Terminal,
+        hint: /^(?:[^/]+\/)?t[0-9a-z]+$/.test(item.terminal_id) ? item.terminal_id : undefined,
         glyph: item.agent ? <AgentMark agent={item.agent} size={16} /> : undefined,
         current: item.pane_id === selectedPaneId, run: () => onSelect(item.pane_id),
       })),

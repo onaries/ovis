@@ -2835,6 +2835,20 @@ button {
   position: relative;
   align-self: center;
   padding-right: var(--space-1-5);
+  margin-inline-start: auto;
+}
+
+.context-title > .pane-terminal-id {
+  margin-inline-start: auto;
+}
+
+@media (min-width: 769px) {
+  .context-title { flex: 1 1 auto; }
+  .tab-strip-item.is-active:has(.tab-strip-terminal) { flex: 1 1 auto; }
+}
+
+@media (max-width: 768px) {
+  .pane-terminal-id { display: none; }
 }
 
 .app-header .header-tabs.is-phone .tab-strip-item.is-active {
