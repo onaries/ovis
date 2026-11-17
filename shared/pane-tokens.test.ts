@@ -27,11 +27,8 @@ describe("paneTokenValues", () => {
     expect(paneTokenValues(layout, "claude", tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);
     expect(paneTokenValues(layout, null, tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);
     expect(paneTokenValues(layout, "codex", tokens)).toEqual(["40% 12m"]);
-    // only the layout's own keys are agents
     expect(paneTokenValues(layout, "constructor", tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);
-    // rows that name no token draw none, as herdr's would
     expect(paneTokenValues({ rows: [], by_agent: {} }, "claude", tokens)).toEqual([]);
-    // an override for one agent leaves the others drawing every token where `rows` is unset
     expect(paneTokenValues({ rows: null, by_agent: { codex: [] } }, "claude", tokens)).toHaveLength(3);
   });
 
@@ -50,7 +47,6 @@ describe("paneTokenValues", () => {
       rows: [{ name: "quota", rules: [{ equals: "unknown", hide: true }] }, { name: "progress" }, { name: "quota" }],
       by_agent: {},
     };
-    // hidden at its first place, shown at its second, as herdr tests each place on its own
     expect(paneTokenValues(layout, null, { quota: "unknown", progress: "40% 12m" })).toEqual(["40% 12m", "unknown"]);
     expect(paneTokenValues(layout, null, { quota: "5h 95%", progress: "40% 12m" })).toEqual(["5h 95%", "40% 12m"]);
   });
@@ -64,7 +60,6 @@ describe("paneTokenRuleMatches", () => {
     expect(paneTokenRuleMatches({ equals: "Ä", ignore_case: true }, "ä")).toBe(false);
     expect(paneTokenRuleMatches({ contains: "WK", ignore_case: true }, "5h 95% · Wk 67%")).toBe(true);
     expect(paneTokenRuleMatches({ starts_with: "Reviewer #" }, "Reviewer #2")).toBe(true);
-    // empty: equals only an empty value, contains and starts_with any value
     expect(paneTokenRuleMatches({ equals: "" }, "x")).toBe(false);
     expect(paneTokenRuleMatches({ contains: "" }, "x")).toBe(true);
     expect(paneTokenRuleMatches({ starts_with: "" }, "x")).toBe(true);

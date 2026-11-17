@@ -773,7 +773,10 @@ verification file, the installers, the favicons and the demo. It writes no sitem
 on `main`, or on manual dispatches from `main`. A completed CI run only builds and deploys when it
 succeeded for a push from this repository; PR runs and forks cannot publish. It builds that CI run's
 head SHA without running validation again. Manual dispatches run reusable CI validation and the site
-build in parallel against the dispatch SHA, and deployment requires both to succeed.
+build in parallel against the dispatch SHA, and deployment requires both to succeed. Every job of the
+run, that validation's included, runs on GitHub's runners and restores no Actions cache
+([Security model](../scripts/self-hosted-runner/README.md#security-model)); a manual run takes about
+as long as a hosted CI run, about 15 minutes.
 Deployments are serialized. A `current` job, with no environment, first checks that the validated SHA
 is still the latest `main` commit: when `main` has moved on, the run deploys nothing, records no
 deployment and ends green with a notice. The deploy job checks again immediately before deploying and
@@ -1018,8 +1021,8 @@ published version with a new patch release. If publishing fails after a tag was 
 verify that tag's commit and repair its GitHub release rather than moving the tag.
 
 The hosted shell is then built and deployed in three jobs, so the Cloudflare token never shares a
-job with the build's dependencies. `shell-build` (no environment, no secrets, the dependency cache
-restored read-only) checks out the release tag, fails unless the tag points at the commit this
+job with the build's dependencies. `shell-build` (no environment, no secrets, no Actions cache
+restored) checks out the release tag, fails unless the tag points at the commit this
 release published, builds the shell (`bun run build:shell`), fails if `dist-shell/` lacks
 `index.html` or `build.json`, and uploads `dist-shell.tar.gz` and `dist-shell.tar.gz.sha256`,
 passing the tarball's SHA-256 on as a job output. `shell-deploy`, on a GitHub-hosted runner with
@@ -1213,9 +1216,15 @@ user authorization.
 The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
 
 - **Fast checks**: frozen dependency install, then `bun run check fast`: workflow syntax
-  (checksum-pinned actionlint), generated type freshness, application and critical-tools typechecks
-  (`tsconfig.tools.json`), build, and
-  `bun run test:unit`. This suite does not start herdr.
+  (checksum-pinned actionlint), generated type freshness, application and tools typechecks
+  (`tsconfig.tools.json`: every TypeScript file under `scripts/`, `integrations/`, `site/` and
+  `app/scripts/` but the ones its `exclude` lists: files with type errors, files that import one or
+  lean on its declarations, and untracked `scripts/*.tmp.ts` probes; that list may only shrink, and
+  a new file is checked without being named), build, and
+  `bun run test:unit`. This suite does not start herdr. Its ratchets (fixed sleeps, that exclude
+  list) compare with main's head for a pull request (its merge commit's first parent) or the commit
+  before a push, which the job fetches first (`RATCHET_BASE`); one that cannot read
+  its base fails, and a Release or manual run compares with nothing.
 - **Integration and browser**: a summary job that fails when any of three jobs fails, each with
   checksum-pinned herdr 0.9.3, Node 22 and the lockfile's Chromium:
   - **Integration tests** runs `bun run check integration`: a build and
@@ -1301,8 +1310,12 @@ does not fail the job, and is not counted as a plain pass either: its first log 
 is a bug to fix in the script or the app, not noise: the second run only keeps one PR's merge
 from waiting on another change's race. A script that fails twice fails the job.
 One run of a script may take `BROWSER_SCRIPT_TIMEOUT_SECONDS` (default 600). A run past it is
-stopped with every process it started, prints `TIMEOUT <script>` and its last 40 log lines at
-once, is not run again and fails the lane (the summary and `summary.json` give it exit 124), so a
+stopped (SIGTERM, then SIGKILL, then SIGKILL again for what the run started meanwhile and still carries its
+mark), says what it saw (`stopped N processes`, `could NOT stop: <pid> (<program name>)` for each one it could not, the name read from its executable and never from its arguments, only a process still running at the last look, at most 20 and then `and N more`,
+and `processes started at the last moment may not be listed` when the last look still found new ones or a
+signal was refused: finding a run's processes always races with their forking; a process without the run's
+mark that outlives the script and ignores SIGTERM is no longer found, and can be counted as stopped), prints `TIMEOUT <script>`
+and its last 40 log lines at once, is not run again and fails the lane (the summary and `summary.json` give it exit 124), so a
 hang names itself instead of running into the job's `timeout-minutes`. A script that exits while
 a process it started still holds its output open is stopped the same way, as `STOPPED`; on
 Linux such a process is found through `/proc` even after its parent has exited. A job cancelled at its `timeout-minutes` with scripts still logging
@@ -1310,12 +1323,17 @@ was usually short of time, not hung: check how long `check: took a slot after` s
 The console, GitHub annotations, job summary and `summary.json` name the failing assertion and
 its first script file and line when the log contains them.
 `bun scripts/ci-flakes.ts` ranks, across the last 24 hours of `ci.yml` runs and every attempt of
-each, which script failed or passed only on a second run, and at which assertion and site. It reads
+each, which script failed or passed only on a second run, at which assertion and site, and how many
+of those job attempts were in runs of the default branch itself (the others were on other
+branches). A script the lane stopped at its time limit is listed with that limit and no site. It reads
 through `gh` and changes nothing: a failed job's log, and a passed job's only when the job carries
 the flaky warning.
 Use `--hours 30` for a different window, `--repo owner/name` to select a repository instead of
 the current one, or `--json` for counts and rows as JSON; running jobs and unavailable logs are
 counted as skipped.
+`.github/workflows/ci-flakes.yml` runs it every day through `scripts/ci-flakes-issue.ts`, which keeps
+the list in the one open issue titled "CI flakes: browser scripts that failed or needed a second
+run", rewritten each time (`--dry-run` prints the body and writes nothing).
 
 Under `CI` or with `CHECK_DIR` set, both runners create `UI_EVIDENCE_DIR` at
 `${CHECK_DIR:-.ci}/browser-evidence`. Only the existing sticky-modifier and file-viewer captures
@@ -1346,11 +1364,15 @@ pull request stays hosted. Other events stay on `ubuntu-24.04`. The repository v
 `CI_SELF_HOSTED_LABELS` overrides that (labels send every same-repository pull request to the
 self-hosted runners) with another JSON array of runner labels that contains `"self-hosted"`, or with the
 JSON string `"ubuntu-24.04"` to keep every job GitHub-hosted while that PC is offline (unless
-`CI_LIGHT_LABELS`, below, holds labels: it wins for the light jobs). `release.yml`
-stays on `ubuntu-24.04` unless the variable holds labels. The variable routes:
+`CI_LIGHT_LABELS`, below, holds labels: it wins for the light jobs). The variable routes:
 
 - in `ci.yml`: Fast checks, Integration tests and both Browser regression jobs;
-- in `release.yml`: the preflight and publish jobs.
+- in `release.yml`: none: the Release run is GitHub-hosted and cacheless as a whole, the `ci.yml` it
+  runs through `release-validate.yml` (`hosted_only: true`) included
+  ([Security model](../scripts/self-hosted-runner/README.md#security-model)).
+
+`pages.yml` reads none of them: its run is GitHub-hosted and cacheless as a whole, the `ci.yml` its
+manual validation calls (`hosted_only: true`) included.
 
 `release-validate.yml`'s own three jobs are always GitHub-hosted. The one that asks about main's
 CI run may wait up to 40 minutes for that run, which needs the self-hosted runners itself. Its Fast
@@ -1359,9 +1381,7 @@ verdict runs for seconds.
 
 Light jobs, which wait longest in GitHub's hosted queue for the few seconds they run, take the
 self-hosted runners for every same-repository run: Detect changes, the herdr-core live contract and
-the Integration and browser summary in `ci.yml`, `pr-title.yml`, `remote-bundles.yml`'s Windows
-bundle, and `pages.yml`'s site build and deploy (after successful same-repository main push CI, or
-on a manual dispatch with reusable CI validation). Their `runs-on` sends a fork pull request to
+the Integration and browser summary in `ci.yml` and `pr-title.yml`. Their `runs-on` sends a fork pull request to
 `ubuntu-24.04` before it reads any variable; a push to main then takes `CI_MAIN_SELF_HOSTED_LABELS`
 when it is set (on a push or a run started from main), so main's Detect changes never waits behind pull requests; otherwise the job takes the repository variable `CI_LIGHT_LABELS`,
 else `CI_SELF_HOSTED_LABELS`, else `["self-hosted","self-hosted-ovis"]`; `"ubuntu-24.04"` in
@@ -1402,7 +1422,8 @@ job's worker before any step, `if: always()` ones included, can run
 (`scripts/self-hosted-runner/job-started.sh`). Otherwise the `self_hosted_labels`
 workflow_dispatch input, when not empty, overrides the variable for that one manual run. A value
 that is not a non-empty array of strings containing `"self-hosted"` fails the job instead of
-falling back. `pages.yml` and `release.yml` read the variable directly.
+falling back. A call with `hosted_only: true` (`pages.yml`'s and the Release's validation) gets
+`ubuntu-24.04` before the route reads anything else.
 
 Only a `pull_request` may skip the heavy jobs as docs-only, and only when every changed file is
 under `docs/`, ends in `.md` or `.txt`, is the root `LICENSE` or sits under
@@ -1428,10 +1449,13 @@ fails on a stale image instead of downloading replacements. Rebuild the image af
 its pins; its Bun pin must match `.github/actions/setup-ci/action.yml`, and its Playwright pin
 must match `bun.lock`.
 
-The composite setup action used by `ci.yml`, `pages.yml` and `release.yml` keeps Bun's dependency
+The composite setup action (`.github/actions/setup-ci`) keeps Bun's dependency
 cache in `.ci-cache/bun`. Only GitHub-hosted jobs restore/save that cache remotely: on the measured
 self-hosted connection, downloading the archive took longer than a fresh dependency install.
 Self-hosted jobs install directly from the lockfile without transferring a remote dependency cache.
+`cache: none` restores and saves none: for every job of a run in which a job that publishes or signs takes an
+artifact, and for a job that publishes, signs or holds a secret itself (the relay deploy job, say, while the
+`ci.yml` its workflow calls keeps its caches).
 Hosted browsers use
 `.ci-cache/playwright`; self-hosted browsers come from the image. Neither cache restores a
 home-directory archive across different workspace depths. Tool/browser preparation no longer

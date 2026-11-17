@@ -1,10 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_ROW_SIZE, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeRecord, opencodeSessionId, opencodeSessionsTitled, opencodeToolOutput, opencodeTurns, pageStart, type OpencodeAnswer, type RowMeta } from "./opencode.ts";
+import * as herdr from "./herdr/client.ts";
+import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_ROW_SIZE, opencodeConversation, opencodeDatabasePath, opencodeFreshSession, opencodeImage, opencodeReadKey, opencodeRecord, opencodeSessionId, opencodeSessionsTitled, opencodeToolOutput, opencodeTurns, pageStart, type OpencodeAnswer, type RowMeta } from "./opencode.ts";
 import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-opencode-store-"));
@@ -175,8 +176,8 @@ describe("OpenCode's rows as a conversation", () => {
       {
         role: "assistant", ts: new Date(T0 + 10).toISOString(), end_ts: new Date(T0 + 60).toISOString(), parts: [
           { kind: "thinking", text: "Write it, then read it." },
-          { kind: "tool", name: "write", summary: "hello.txt", input: JSON.stringify({ path: "hello.txt", content: "hi\n" }, null, 2), output: "Created file successfully: hello.txt" },
-          { kind: "tool", name: "shell", summary: "cat hello.txt", input: JSON.stringify({ command: "cat hello.txt" }, null, 2), output: "hi\n" },
+          { kind: "tool", name: "write", summary: "hello.txt", input: JSON.stringify({ path: "hello.txt", content: "hi\n" }, null, 2), output: "Created file successfully: hello.txt", state: "ok" },
+          { kind: "tool", name: "shell", summary: "cat hello.txt", input: JSON.stringify({ command: "cat hello.txt" }, null, 2), output: "hi\n", state: "ok" },
           { kind: "text", text: "It says hi.", phase: "final_answer" },
         ],
       },
@@ -225,6 +226,34 @@ describe("OpenCode's rows as a conversation", () => {
     expect(parts[2]!.skill).toEqual({ name: "opencode", evidence: "invocation", status: "loaded" });
     expect(parts[4]!.output_ref).toBe("msg_step1:4");
     expect(parts[4]!.output_size).toBe(5000);
+  });
+
+  it("records each call's outcome as OpenCode does: waiting or running, completed, failed", () => {
+    const todos = (done: number) => ({ todos: ["a", "b"].map((content, index) => ({ content, status: index < done ? "completed" : "pending", priority: "medium" })) });
+    const step = record("assistant", {
+      time: { created: T0 }, finish: "tool-calls",
+      content: [
+        tool("todowrite", { status: "completed", input: todos(1), content: [{ type: "text", text: "[]" }] }, "call_a"),
+        tool("todowrite", { status: "running", input: todos(2), content: [] }, "call_b"),
+        tool("todowrite", { status: "pending", input: {}, content: [] }, "call_c"),
+        tool("todowrite", { status: "error", input: todos(2), error: { type: "unknown", message: "invalid" } }, "call_d"),
+      ],
+    });
+    const parts = step !== null && step.role === "assistant" ? step.parts as Extract<ConversationPart, { kind: "tool" }>[] : [];
+    expect(parts.map((part) => part.state)).toEqual(["ok", "pending", "pending", "error"]);
+  });
+
+  it("reads a call whose input OpenCode 2 is still streaming as not answered yet, so it never stands for the list", () => {
+    // as opencode 2.2.2 stored a held session: a completed `todowrite`, then the next one while the model still wrote it
+    const step = record("assistant", {
+      time: { created: T0 }, finish: "tool-calls",
+      content: [
+        tool("todowrite", { status: "completed", input: { todos: [{ content: "a", status: "in_progress" }] }, content: [{ type: "text", text: "Todos updated: 0/1 completed, 1 in progress." }] }, "call_todo_0"),
+        { type: "tool", id: "call_todo_1", name: "todowrite", state: { status: "streaming", input: "" }, time: { created: T0 } },
+      ],
+    });
+    const parts = step !== null && step.role === "assistant" ? step.parts as Extract<ConversationPart, { kind: "tool" }>[] : [];
+    expect(parts.map((part) => part.state)).toEqual(["ok", "pending"]);
   });
 
   it("offers a tool's pictures by their place among the message's images", () => {
@@ -656,7 +685,7 @@ describe("an OpenCode 1.x session (session/message/part)", () => {
     expect(answer.turns[0]!.parts).toEqual([{ kind: "text", text: "first prompt" }]);
     expect(answer.turns[1]!.parts).toEqual([
       { kind: "thinking", text: "think it through" },
-      { kind: "tool", name: "bash", summary: "echo hi", input: JSON.stringify({ command: "echo hi" }, null, 2), output: "hi" },
+      { kind: "tool", name: "bash", summary: "echo hi", input: JSON.stringify({ command: "echo hi" }, null, 2), output: "hi", state: "ok" },
       { kind: "text", text: "done", phase: "final_answer" },
     ]);
     expect(answer.metadata).toEqual({ model: "deepseek-v4.1-flash", reasoning_effort: null, context: { used: 116, window: null } });
@@ -775,4 +804,68 @@ it("finds every session whose terminal title OpenCode would make this one, as it
   expect(opencodeSessionsTitled(storeV1("ses_old2").path, "OC | Old")).toEqual(["ses_old2"]);
   expect(opencodeSessionsTitled(join(root, "absent.db"), "OC | Test")).toEqual([]);
   expect(opencodeSessionsTitled(null, "OC | Test")).toEqual([]);
+});
+
+describe("an OpenCode at its home screen, before its first prompt (#3600)", () => {
+  const HOME = readFileSync(join(import.meta.dir, "fixtures", "opencode-home-2.2.2-wide.txt"), "utf8");
+  const pane = { pane_id: "oc-pane", cwd: root };
+  /** herdr's answers to `pane.process_info`, one per ask: this test's own process as the pane's OpenCode, started as `argv`. */
+  function answers(...asks: (readonly string[] | number)[]) {
+    const queue = [...asks];
+    const spy = spyOn(herdr, "paneProcessInfo").mockImplementation(async () => {
+      const next = queue.shift();
+      if (next === undefined) throw new Error("fixture: herdr was asked more often than it answers");
+      const [pid, argv] = typeof next === "number" ? [next, ["opencode"]] : [process.pid, [...next]];
+      return { pane_id: pane.pane_id, foreground_processes: [{ pid, name: "opencode", argv, cwd: root }] };
+    });
+    return { asked: () => spy.mock.calls.length, restore: () => spy.mockRestore() };
+  }
+  const greet = async (store: string | null, ...asks: (readonly string[] | number)[]) => {
+    const herdrAnswers = answers(...asks);
+    try { return { id: await opencodeFreshSession(pane, HOME, store), asked: herdrAnswers.asked() }; }
+    finally { herdrAnswers.restore(); }
+  };
+  const fresh = `unwritten:opencode:oc-pane:${process.pid}:`;
+
+  it.skipIf(process.platform === "win32")("greets it only while no session can be the one it shows", async () => {
+    // no store yet, or one whose sessions of this folder are all older than the process
+    expect((await greet(join(root, "absent.db"), ["opencode"], ["opencode"])).id).toStartWith(fresh);
+    const { path, db } = store("ses_older");
+    expect((await greet(path, ["opencode"], ["opencode"])).id).toStartWith(fresh);
+    for (const argv of [["opencode", "--standalone"], ["opencode", "--log-level", "debug", root], ["sh", "/usr/local/bin/opencode", "--auto"]]) {
+      expect((await greet(path, argv, argv)).id).toStartWith(fresh);
+    }
+    // a session of another folder made since says nothing of this pane
+    const made = (id: string, directory: string) => db.query("INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'New', '2.2.2', ?, ?)").run(id, directory, Date.now(), Date.now());
+    made("ses_elsewhere", join(root, "elsewhere"));
+    expect((await greet(path, ["opencode"], ["opencode"])).id).toStartWith(fresh);
+    // one of its folder made since may be its first prompt's, whose report has not come yet
+    made("ses_begun", root);
+    expect(await greet(path, ["opencode"], ["opencode"])).toEqual({ id: null, asked: 1 });
+  });
+
+  it.skipIf(process.platform === "win32")("says nothing for one started on a session, a screen that is not home, or a store it cannot read", async () => {
+    const { path } = store("ses_older");
+    mkdirSync(join(root, "project"), { recursive: true });
+    // a flag is a flag even where a folder bears its name
+    mkdirSync(join(root, "--continue"), { recursive: true });
+    for (const argv of [["opencode", "-c"], ["opencode", "--continue"], ["opencode", "-s", "ses_x"], ["opencode", "--session=ses_x"], ["opencode", "--prompt", "hi"],
+      ["opencode", "--server", "http://127.0.0.1:4096"], ["opencode", "run", "hi"], ["opencode", "not-a-folder"], ["opencode", "project", "project"], ["node", "cli.js"]]) {
+      expect(await greet(path, argv)).toEqual({ id: null, asked: 1 });
+    }
+    // a session's screen asks herdr nothing
+    const session = readFileSync(join(import.meta.dir, "fixtures", "opencode-session-2.2.2.txt"), "utf8");
+    const herdrAnswers = answers(["opencode"]);
+    try {
+      expect(await opencodeFreshSession(pane, session, path)).toBeNull();
+      expect(herdrAnswers.asked()).toBe(0);
+    } finally { herdrAnswers.restore(); }
+    expect((await greet(null, ["opencode"])).id).toBeNull();
+    const garbage = join(root, "not-a-store.db");
+    writeFileSync(garbage, "not sqlite");
+    expect((await greet(garbage, ["opencode"], ["opencode"])).id).toBeNull();
+    // asked again after the store, herdr names another process, or the same one started on a session
+    expect(await greet(path, ["opencode"], process.pid + 1)).toEqual({ id: null, asked: 2 });
+    expect(await greet(path, ["opencode"], ["opencode", "-c"])).toEqual({ id: null, asked: 2 });
+  });
 });

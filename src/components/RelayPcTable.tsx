@@ -96,7 +96,7 @@ export function RelayPcTable({
     const word = stateHeadline(row, updating);
     const reason = !updating && row.state === "needs-approval" && !freshIds.has(row.server_id) ? askToJoinReason(row, t) : null;
     const title = reason !== null ? `${word} · ${reason}` : word;
-    return <span className="relay-pc-state-word" title={title}>{word}</span>;
+    return <span className="relay-pc-state-word" title={title} {...(reason !== null ? { "data-reason": "join" } : {})}>{word}</span>;
   };
 
   const renderAction = (row: DashboardRow): ReactNode => {

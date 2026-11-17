@@ -50,13 +50,15 @@ export function localStateWord(check: PcStatus | null, t: Translate): string {
 }
 
 /**
- * What a listed PC past its 10-minute Add window asks of this device, in the same words wherever it is drawn,
+ * What a listed PC not offered Add (past its 10-minute window, or already seen by the directory) asks of this device, in the same words wherever it is drawn,
  * or null when it has no such line: a PC the account never listed, or one whose directory row gives no route
- * to join by, so no Join button stands beside it. It names the button it sits next to.
+ * to join by, so no Join button stands beside it. It names the button it sits next to and the only two ways in: a
+ * connected device of the account approves, or someone types the number the PC's own screen shows. The directory cannot
+ * say whether such a device exists now (Revoke all keeps the row seen), so neither is claimed.
  */
 export function askToJoinReason(pc: { readonly added_at: string | null; readonly join?: unknown }, t: Translate): string | null {
   if (pc.added_at === null || pc.join === undefined) return null;
-  return t("Join · a device of your account connected to it approves");
+  return t("Join · approve on a connected device of your account, or type the number the PC shows");
 }
 
 export function formatAbsoluteTime(iso: string): string {

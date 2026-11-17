@@ -1217,7 +1217,7 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
   // Phone dialog and sheet footers stack primary above secondary and keep DOM/Tab order equal to top-to-bottom visual order (f2-delta finding 4).
   await check("sheet-footer-tab-order-390", async () => {
     const { page } = await open({ fleet: "FREADY", width: 390 });
-    const tabFooter = async (label: string, expectedVisual: readonly [string, string]): Promise<string> => {
+    const tabFooter = async (label: string, expectedVisual: readonly string[]): Promise<string> => {
       await page.waitForFunction(() => document.getAnimations().every((animation) => animation.effect?.getTiming().iterations === Infinity || animation.playState === "finished"));
       const layout = await page.evaluate(() => {
         const footer = document.querySelector<HTMLElement>("[role=dialog] .modal-footer");
@@ -1273,13 +1273,13 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
 
     await listedRows(page).filter({ hasText: "New mini PC" }).locator('[data-pc-action="add"]').click();
     await page.locator('[role=dialog][data-add-pc-mode="new"][data-add-pc-phase="start"]').waitFor();
-    measured.push(await tabFooter("sheet-new", ["Add this PC", "Cancel"]));
+    measured.push(await tabFooter("sheet-new", ["Add this PC", "Ask to join", "Cancel"]));
     await page.keyboard.press("Escape");
     await page.locator("[role=dialog]").waitFor({ state: "detached" });
 
     await listedRows(page).filter({ hasText: "Old MacBook" }).locator('[data-pc-action="join"]').click();
     await page.locator('[role=dialog][data-add-pc-mode="join"][data-add-pc-phase="start"]').waitFor();
-    measured.push(await tabFooter("sheet-join", ["Ask to join", "Cancel"]));
+    measured.push(await tabFooter("sheet-join", ["Ask to join", "Type the number", "Cancel"]));
     await page.keyboard.press("Escape");
     await page.locator("[role=dialog]").waitFor({ state: "detached" });
 

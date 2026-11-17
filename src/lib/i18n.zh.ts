@@ -520,7 +520,7 @@ const BASE: Record<string, string> = {
   "Sign in and add this PC": "登录并添加此电脑",
   "Add this PC to your account, so every device of your account can use it with one approval.": "将此电脑添加到账号后，只需批准一次，账号的所有设备都能使用它。",
   "Every device of your account can use this PC after that.": "之后，账号的所有设备都能使用此电脑。",
-  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "在已登录此账号的设备上（Ovis 应用或 app.ovis.sh），选择 {name} 的“添加”。随后此屏幕会显示六位数字：在那台设备上输入，然后在这里按“批准”。请保持此页面打开。",
+  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. If it shows Join there instead, choose Join, then Type the number. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "在已登录此账号的设备上（Ovis 应用或 app.ovis.sh），选择 {name} 的“添加”。如果那里显示的是“加入”，请选择“加入”，再选择“输入数字”。随后此屏幕会显示六位数字：在那台设备上输入，然后在这里按“批准”。请保持此页面打开。",
   "Waiting. The window reopens by itself if Ovis restarts.": "正在等待。即使 Ovis 重启，也会自动重新开放。",
   "Stop waiting": "停止等待",
   "This PC stopped waiting after 30 minutes.": "已过 30 分钟，此电脑已停止等待。",

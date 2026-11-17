@@ -688,7 +688,7 @@ export function AddThisPc({ relayAbove = true, service, signedInHere, onListed }
       ) : state.kind === "waiting" ? (
         <>
           {state.signedIn === true && <p className="settings-description">{t("Signed in. Adding this PC to your account…")}</p>}
-          <p className="settings-description">{t("On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.", { name: state.name })}</p>
+          <p className="settings-description">{t("On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. If it shows Join there instead, choose Join, then Type the number. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.", { name: state.name })}</p>
           <p className="settings-description">{t("Every device of your account can use this PC after that.")}</p>
           <p className="settings-description" role="status">{t("Waiting. The window reopens by itself if Ovis restarts.")}</p>
           <button type="button" className="btn" onClick={stop}>{t("Stop waiting")}</button>

@@ -1,6 +1,5 @@
 /**
  * The wire shape of GET /api/system: what one PC says about its own load right now.
- * Types only (src/ imports nothing else from here); the numbers are read by server/system-stats.ts.
  */
 
 /** One filesystem the user's files live on, with the numbers `df` prints for it. */

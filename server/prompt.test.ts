@@ -557,6 +557,21 @@ Press enter to continue
       { keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] },
     ]);
 
+    // Codex's update menu, as its start drew it on a herdr-core terminal: the footer does not say "Press enter to continue"
+    const update = parseInteractivePrompt("codex", `
+  Update available · 0.167.0 → 0.167.2
+  Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs \`npm install -g @openai/codex\`)
+  2. Skip
+  3. Skip until next version
+
+  enter continue · esc skip
+`);
+    expect(update).toMatchObject({ kind: "menu", title: "Codex", question: "Choose how to continue" });
+    expect(labels(update)).toEqual(["Update now (runs `npm install -g @openai/codex`)", "Skip", "Skip until next version"]);
+    expect(answerKeys(update!, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+
     const question = parseInteractivePrompt("codex", `
 Question 1/1 (1 unanswered)
 Which export format should we use?
@@ -849,6 +864,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
   });
 
   test("does not read Codex's update prompt as an approval under a question-like line", () => {
+    // it is the update menu's card (the continue menu), never an approval of the line above it
     expect(parseInteractivePrompt("codex", `
 • Would you like to continue with the tests next?
 
@@ -857,7 +873,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
   2. Skip
   3. Skip until next version
   enter continue · esc skip
-`)).toBeNull();
+`)).toMatchObject({ kind: "menu", title: "Codex", question: "Choose how to continue" });
   });
 
   test("ignores unknown agents, stale transcript menus, and ordinary output", () => {

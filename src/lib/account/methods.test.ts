@@ -24,15 +24,15 @@ async function linkToken(fake: FakeAccountService, bearer: string, provider: Acc
 describe("the sign-ins a service offers", () => {
   it("lists Google only when the service says it is set up for it, and a PC's page only the device ones", async () => {
     const fake = new FakeAccountService();
-    fake.offer(["github", "google"], ["github"]);
+    fake.offerSignIns(["github", "google"], ["github"]);
     expect(await offeredProviders(SERVICE, ["github"], { fetch: fake.fetch })).toEqual({ providers: ["github", "google"], device: ["github"], page: [] });
-    fake.offer(["github"], ["github"]);
+    fake.offerSignIns(["github"], ["github"]);
     expect(await offeredProviders(SERVICE, ["github"], { fetch: fake.fetch })).toEqual({ providers: ["github"], device: ["github"], page: [] });
   });
 
   it("names the sign-ins the Ovis link page offers, only among those set up", async () => {
     const fake = new FakeAccountService();
-    fake.offer(["github", "google"], ["github"]);
+    fake.offerSignIns(["github", "google"], ["github"]);
     fake.offerLinkPage(["github", "google", "apple"]);
     expect((await offeredProviders(SERVICE, ["github"], { fetch: fake.fetch })).page).toEqual(["github", "google"]);
   });

@@ -1,4 +1,3 @@
-/** Opt-in wire representation; application state and legacy/bridge responses keep full agents. */
 import type { AgentInfo, PaneInfo, SessionSnapshot } from "./protocol.ts";
 import type { Machine, MachineEvent } from "./machines.ts";
 
@@ -16,23 +15,19 @@ export type WireMachineEvent = MachineEvent
   | { type: "machines"; machines: WireMachine[] }
   | (Omit<SnapshotEvent, "message"> & { message: Omit<Extract<SnapshotEvent["message"], { type: "snapshot" }>, "snapshot"> & { snapshot: SessionSnapshot | CompactSnapshot } });
 
-/** A compact snapshot the encoder cannot have written: its PC keeps the last roster read until a full read. */
 export class CompactAgentsError extends Error {
   override name = "CompactAgentsError";
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-/** A row that names its pane, with no key a plain object would read as its prototype. */
 const namedRow = (row: unknown): row is { pane_id: string } =>
   isRecord(row) && typeof row.pane_id === "string" && !Object.hasOwn(row, "__proto__") && !Object.hasOwn(row, "constructor");
 
+const REFS_KEY_EXTRA = "agent_refs".length - "agents".length;
+
 const ownOmit = (row: unknown): row is Record<string, unknown> => isRecord(row) && Object.hasOwn(row, "_omit");
 
-/**
- * `agent_refs` and a row's `_omit` are this server's alone: those a PC put in its own snapshot are removed
- * before any wire form, or the decoder would read them as the encoder's.
- */
-function fullSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
+function withoutCompactMarkers(snapshot: SessionSnapshot): SessionSnapshot {
   const { agents }: { agents: unknown } = snapshot;
   const omitted = Array.isArray(agents) && agents.some(ownOmit);
   if (!Object.hasOwn(snapshot, "agent_refs") && !omitted) return snapshot;
@@ -47,8 +42,7 @@ function fullSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
 
 /** Only equal values are inherited. Conflicts, agent-only fields, array order and absent fields survive. */
 export function compactSnapshot(received: SessionSnapshot): SessionSnapshot | CompactSnapshot {
-  const snapshot = fullSnapshot(received);
-  // A PC's snapshot is not shape-checked: one the decoder could not take whole goes on full, as it came.
+  const snapshot = withoutCompactMarkers(received);
   const { panes: paneList, agents }: { panes: unknown; agents: unknown } = snapshot;
   if (!Array.isArray(paneList) || !Array.isArray(agents) || !paneList.every(isRecord)) return snapshot;
   const panes = new Map(snapshot.panes.map((pane) => [pane.pane_id, pane]));
@@ -66,26 +60,23 @@ export function compactSnapshot(received: SessionSnapshot): SessionSnapshot | Co
     if (omit.length) ref._omit = omit;
     return ref;
   });
-  // The longer wire key costs four characters. Do not grow sparse agent rows with omission metadata.
-  if (!saved || JSON.stringify(refs).length + 4 >= JSON.stringify(snapshot.agents).length) return snapshot;
+  if (!saved || JSON.stringify(refs).length + REFS_KEY_EXTRA >= JSON.stringify(snapshot.agents).length) return snapshot;
   const { agents: _agents, ...rest } = snapshot;
   return { ...rest, agent_refs: refs };
 }
 
 /** Expands only the encoder's own form, its marker without full rows: a snapshot carrying both is full. */
 export function expandSnapshot(snapshot: SessionSnapshot | CompactSnapshot): SessionSnapshot {
-  if (Object.hasOwn(snapshot, "agents") || !Object.hasOwn(snapshot, "agent_refs")) return fullSnapshot(snapshot as SessionSnapshot);
+  if (Object.hasOwn(snapshot, "agents") || !Object.hasOwn(snapshot, "agent_refs")) return withoutCompactMarkers(snapshot as SessionSnapshot);
   const { agent_refs: refs, ...rest } = snapshot as CompactSnapshot;
   const { panes: paneList }: { panes: unknown } = snapshot;
   if (!Array.isArray(paneList) || !paneList.every(isRecord) || !Array.isArray(refs)) throw new CompactAgentsError("compact snapshot without panes or agent_refs");
   const panes = new Map(snapshot.panes.map((pane) => [pane.pane_id, pane]));
   const agents = refs.map((ref: unknown): AgentInfo => {
-    // every reference the encoder writes names a pane of the same snapshot
     if (!namedRow(ref) || !panes.has(ref.pane_id)) throw new CompactAgentsError("agent_refs row names no pane of its snapshot");
     const { _omit: omit, ...overrides } = ref as AgentRef;
     if (omit !== undefined && !(Array.isArray(omit) && omit.every((key) => typeof key === "string"))) throw new CompactAgentsError("_omit is not a list of field names");
     const pane = panes.get(ref.pane_id)!;
-    // Never inherit a value the agent did not have, including optional titles and token fields.
     const inherited = Object.fromEntries(SHARED_FIELDS.filter((key) => Object.hasOwn(pane, key) && !omit?.includes(key)).map((key) => [key, pane[key]]));
     return { ...inherited, ...overrides } as AgentInfo;
   });
@@ -97,7 +88,7 @@ export function wireMachine(machine: Machine, compact: false): Machine;
 export function wireMachine(machine: Machine, compact: boolean): WireMachine;
 export function wireMachine(machine: Machine, compact: boolean): WireMachine {
   if (!machine.snapshot) return machine;
-  return { ...machine, snapshot: compact ? compactSnapshot(machine.snapshot) : fullSnapshot(machine.snapshot) };
+  return { ...machine, snapshot: compact ? compactSnapshot(machine.snapshot) : withoutCompactMarkers(machine.snapshot) };
 }
 
 export function expandMachine(machine: WireMachine): Machine {
@@ -109,7 +100,7 @@ export function wireMachineEvent(event: MachineEvent, compact: boolean): WireMac
   if (event.type === "machines") return { ...event, machines: event.machines.map((machine) => wireMachine(machine, compact)) };
   if (event.type === "machine-message" && event.message.type === "snapshot") {
     const { snapshot } = event.message;
-    return { ...event, message: { ...event.message, snapshot: compact ? compactSnapshot(snapshot) : fullSnapshot(snapshot) } };
+    return { ...event, message: { ...event.message, snapshot: compact ? compactSnapshot(snapshot) : withoutCompactMarkers(snapshot) } };
   }
   return event;
 }

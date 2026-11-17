@@ -85,7 +85,6 @@ describe("opt-in agent references", () => {
     const original = snapshot();
     original.agents = [{ ...original.agents[0]!, pane_id: "orphan", agent_session: { agent: "codex", source: "test", kind: "id", value: "session-B" } }];
     const forged = { ...original, agent_refs: [{ pane_id: "w1:p1" }] } as SessionSnapshot;
-    // as the server sends it, and as a client reads a snapshot carrying both full rows and the marker
     expect(expandSnapshot(wire(compactSnapshot(forged)))).toEqual(original);
     expect(expandSnapshot(wire(forged))).toEqual(original);
   });

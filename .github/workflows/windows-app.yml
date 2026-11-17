@@ -37,7 +37,8 @@ concurrency:
 jobs:
   gate:
     if: github.event_name != 'pull_request'
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # GitHub-hosted whatever the runner variables say, and no shared cache (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Check the release
@@ -195,7 +196,8 @@ jobs:
   attach:
     needs: build
     if: github.event_name != 'pull_request' && needs.build.outputs.skip != 'true'
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # GitHub-hosted whatever the runner variables say (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

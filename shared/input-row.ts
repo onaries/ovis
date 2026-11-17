@@ -1,47 +1,16 @@
-/**
- * Whether an agent's own empty input row is on its screen (the terminal peek's way back to the
- * chat, lib/terminalPeek.ts). herdr reports the agents' pickers, panels and dialogs as idle, and
- * none of them writes its close to a transcript (Claude Code alone does, for some), so the screen is
- * the only thing that says a command's screen has closed: the row the agent takes a message in is
- * drawn again, empty, with nothing over or under it.
- *
- * One recognizer per agent, each a pure function over a small snapshot of the screen (its rows'
- * text and the few cell attributes a placeholder needs), built from the xterm buffer (src/lib/inputRow.ts readScreen) or from herdr's ANSI read (screenFromAnsi). The
- * rules come from recordings of every command the automatic return lists, at 119 or 120 and at 40
- * columns, idle, open and closed (Codex 0.163.0, omp 18.8.7, pi 0.86.0, gjc 0.18.12, OmO 5.1.40,
- * Hermes classic 0.21.5, Devin 3000.11.92, agy 1.4.4, Grok 1.0.67), and Claude Code's box follows
- * server/prompt.ts claudeInputBox. Each one prefers "not back" when in doubt: a missed return leaves
- * the reader one press away from the chat, an early one hides a screen they are still using.
- *
- * A chat send reads them too (typedDraft): before a message is pasted, a box holding typed text
- * refuses it. There the doubt goes the other way, and only typed text a recognizer reports refuses.
- */
-
-/**
- * What a frame shows of the agent's input row:
- * - ready: the agent's own empty input row, with nothing drawn over or under it
- * - covered: the row is drawn and empty, but a command's screen is drawn too (an overlay, a panel
- *   under the box, a hidden status bar)
- * - draft: the row is drawn and holds text
- * - gone: the row is not on screen
- * - unknown: a blank frame, which says nothing
- */
 export type InputRowState = "ready" | "covered" | "draft" | "gone" | "unknown";
 
 export interface ScreenCell {
-  /** the cell's character, a space for an empty cell */
   char: string;
   dim: boolean;
   italic: boolean;
   inverse: boolean;
-  /** drawn in the terminal's default foreground: a placeholder colour is not */
   fgDefault: boolean;
   /** the foreground colour as its SGR parameters (`2;204;211;219`, `5;244`), where a read gives it (screenFromAnsi) */
   fg?: string;
 }
 
 export interface ScreenRow {
-  /** the row's characters, its right edge trimmed */
   text: string;
   /** one per drawn character: the second half of a wide one is left out, as in `text` */
   cells: readonly ScreenCell[];
@@ -52,23 +21,14 @@ export interface ScreenSnapshot {
   rows: readonly ScreenRow[];
 }
 
-/**
- * `typed`: where a recognizer that answers "draft" puts the cells it read in the box (after its mark),
- * for typedDraft to look for typed text in. A recognizer that leaves it empty never refuses a send.
- */
 export type InputRowRecognizer = (screen: ScreenSnapshot, typed?: ScreenCell[]) => InputRowState;
 
 /** a full-width rule of pi's TUI and its family */
 const RULE = /^─{10,}$/;
 const blank = (cell: ScreenCell): boolean => cell.char.trim() === "";
-/** the non-empty rows' indexes, top to bottom */
 const filled = (screen: ScreenSnapshot): number[] => screen.rows.flatMap((row, index) => row.text.trim() === "" ? [] : [index]);
-/** the row's cells from a character index on (cells and characters line up, wide halves left out) */
 const cellsFrom = (row: ScreenRow, index: number): readonly ScreenCell[] => row.cells.slice(index);
-/** every drawn character is blank or passes `test` */
 const blankOr = (cells: readonly ScreenCell[], test: (cell: ScreenCell) => boolean): boolean => cells.every((cell) => blank(cell) || test(cell));
-
-// ---- Claude Code (server/prompt.ts claudeInputBox, claudeInputDraft) ----------------------------
 
 const CLAUDE_SOLID_RULE = /^[─━]{8,}$/;
 /** a named session labels its rule (`──── my-session ─`) */
@@ -120,8 +80,6 @@ export const claudeInputRow: InputRowRecognizer = (screen) => {
   return cursor && !grey ? "draft" : "ready";
 };
 
-// ---- Codex ----------------------------------------------------------------------------------------
-
 /** a picker's or a field's hint under a row that only looks like the composer (/rename's field) */
 const CODEX_HINT = /\besc (back|cancel|close|exit|dismiss)\b|\bq close\b|\benter (select|submit|save|continue|open|resume)\b/;
 
@@ -155,8 +113,6 @@ export const codexInputRow: InputRowRecognizer = (screen, typed) => {
   return below.slice(0, 4).some((text) => text.includes("? for")) ? "ready" : "covered";
 };
 
-// ---- omp ------------------------------------------------------------------------------------------
-
 /**
  * omp: its status bar `╭── π … ╮` is the editor's top border, and the editor is empty when the next
  * row is `╰─ … ─╯` with nothing in it and nothing under it. /context draws a `⎋ to close` box over
@@ -181,8 +137,6 @@ export const ompInputRow: InputRowRecognizer = (screen) => {
   }
   return "ready";
 };
-
-// ---- pi and OmO (pi's TUI) ------------------------------------------------------------------------
 
 /**
  * pi: the editor is the one blank row between the screen's last two full-width rules, under it 1 to
@@ -252,8 +206,6 @@ export const omoInputRow: InputRowRecognizer = (screen, typed) => {
   return "gone";
 };
 
-// ---- gjc ------------------------------------------------------------------------------------------
-
 /**
  * gjc: the screen ends in its box, `╭─╮`, `│ > … │`, `╰─╯`, holding nothing or the placeholder
  * (`Type your message…`, cut short at 40 columns), which gjc draws in its placeholder colour where
@@ -266,7 +218,6 @@ export const gjcInputRow: InputRowRecognizer = (screen, typed) => {
     const index = rows[position]!;
     if (!text(index).startsWith("│ >")) continue;
     const top = rows[position - 1]!;
-    // the draft check (`typed` given) also reads the rows a draft wraps onto, `│ …│` down to the bottom border
     const wrapped = typed === undefined ? 0 : Math.max(0, rows.slice(position + 1, position + 1 + BOX_MAX_ROWS).findIndex((row) => !/^│ .*│$/.test(text(row))));
     const bottom = rows[position + 1 + wrapped];
     if (!/^╭─+╮$/.test(text(top)) || bottom === undefined || !/^╰─+╯$/.test(text(bottom))) continue;
@@ -275,15 +226,12 @@ export const gjcInputRow: InputRowRecognizer = (screen, typed) => {
       .flat().filter((cell) => !blank(cell) && cell.char !== "│");
     const placeholder = body.startsWith("Type your message") && cells.every((cell) => !cell.fgDefault);
     const after = rows.slice(position + 2 + wrapped);
-    // with wrapped rows read, the box is empty only when all of them are (a draft may start with a blank line)
     if ((wrapped === 0 ? body === "" : cells.length === 0) || placeholder) return after.length === 0 ? "ready" : "covered";
     typed?.push(...cells);
     return "draft";
   }
   return "gone";
 };
-
-// ---- Hermes Agent (classic CLI) -------------------------------------------------------------------
 
 /**
  * Hermes' classic CLI: the bottom-most row that is no rule is `❯` with nothing after it but its
@@ -306,8 +254,6 @@ export const hermesInputRow: InputRowRecognizer = (screen) => {
   if (!blankOr(cellsFrom(screen.rows[index]!, 2), (cell) => cell.italic)) return "draft";
   return status.startsWith(" ☤ ") ? "ready" : "covered";
 };
-
-// ---- Devin ----------------------------------------------------------------------------------------
 
 /**
  * Devin: in the last 10 rows, a `❭` box between two plain full-width rules (a labelled top rule is
@@ -338,8 +284,6 @@ export const devinInputRow: InputRowRecognizer = (screen) => {
   return footer.length >= 1 && footer.length <= 2 ? "ready" : "covered";
 };
 
-// ---- agy (Antigravity CLI) ------------------------------------------------------------------------
-
 /**
  * agy: the bottom-most pair of unindented full-width rules with one row between them, that row
  * exactly `>`, and under it one row with `? for shortcuts`. Most of its panels draw under the box
@@ -360,8 +304,6 @@ export const agyInputRow: InputRowRecognizer = (screen) => {
   }
   return "gone";
 };
-
-// ---- Grok -----------------------------------------------------------------------------------------
 
 /**
  * Grok: the bottom-most `│ ❯ │` row empty with every row of the box under it (a draft's later lines, Grok 1.0.77),
@@ -388,8 +330,7 @@ export const grokInputRow: InputRowRecognizer = (screen) => {
 
 /**
  * The agents whose input row is known, by herdr's agent name (OmO's own, not the `pi` herdr labels
- * it with). OpenCode is not here: only its home screen was recorded, not the in-session layout most
- * of its screens open over. Neither is Command Code, which was not recorded.
+ * it with).
  */
 const RECOGNIZERS: Readonly<Record<string, InputRowRecognizer>> = {
   claude: claudeInputRow,
@@ -404,29 +345,18 @@ const RECOGNIZERS: Readonly<Record<string, InputRowRecognizer>> = {
   grok: grokInputRow,
 };
 
-/** Whether the pane's agent has a recognizer: without one, nothing here reads its screen. */
 export function readsInputRow(agent: string | null | undefined): boolean {
   return agent != null && Object.hasOwn(RECOGNIZERS, agent);
 }
 
-/** What the screen shows of `agent`'s input row; null: no recognizer for that agent. A blank screen is `unknown`. */
 export function inputRowState(agent: string | null | undefined, screen: ScreenSnapshot): InputRowState | null {
   if (!readsInputRow(agent)) return null;
   if (screen.rows.every((row) => row.text.trim() === "")) return "unknown";
   return RECOGNIZERS[agent!]!(screen);
 }
 
-// ---- boxes read only for the chat send's draft check (the terminal peek does not read them) --------
-// Recorded 2026-11-12 in the agent lab (src/lib/fixtures-input-rows/README.md): empty, typed into, and with
-// their command list open. Each reports only the box's row, and only when the box is drawn whole.
-
-/** how many rows a draft may wrap onto under the box's first row before the box is taken as not made out */
 const BOX_MAX_ROWS = 8;
 
-/**
- * The box's rows: `mark` at the start of its first (after any indent), the row `above` it a border, and its
- * draft's wrapped rows down to the row `below` matched as the other border, at most BOX_MAX_ROWS of them.
- */
 function boxRow(screen: ScreenSnapshot, mark: RegExp, above: RegExp, below: RegExp, typed: ScreenCell[] | undefined): InputRowState {
   const rows = filled(screen);
   const text = (index: number): string => screen.rows[index]!.text;
@@ -504,7 +434,6 @@ const kiloInputRow: InputRowRecognizer = (screen, typed) => {
 const ompDraftInputRow: InputRowRecognizer = (screen, typed) => {
   const bar = filled(screen).filter((index) => /^ ?π > .*▶/.test(screen.rows[index]!.text)).at(-1);
   if (bar === undefined || !screen.rows[bar + 1]?.text.startsWith("╰─")) return ompInputRow(screen);
-  // the draft's rows run on while they are indented three columns or blank; the last indented one ends it
   let end = bar + 2;
   for (let index = bar + 2; index < screen.rows.length && index < bar + 2 + BOX_MAX_ROWS; index++) {
     const text = screen.rows[index]!.text;
@@ -518,13 +447,11 @@ const ompDraftInputRow: InputRowRecognizer = (screen, typed) => {
   return "draft";
 };
 
-/** Every box the draft check reads, by herdr's agent name: the peek's and the ones above. */
 const DRAFT_RECOGNIZERS: Readonly<Record<string, InputRowRecognizer>> = {
   ...RECOGNIZERS, omp: ompDraftInputRow, muse: museInputRow, qwen: qwenInputRow, cline: clineInputRow, "dsh-tui": dshTuiInputRow,
   letta: lettaInputRow, maki: makiInputRow, kimi: kimiInputRow, gemini: geminiInputRow, kilo: kiloInputRow,
 };
 
-/** The agents whose recognizer reports the cells of its box: only their box can refuse a send (typedDraft). */
 const REPORTS_TYPED: ReadonlySet<string> = new Set(["codex", "pi", "omo", "gjc", "omp", "muse", "qwen", "cline", "dsh-tui", "letta", "maki", "kimi", "gemini", "kilo"]);
 
 /**
@@ -541,19 +468,10 @@ const TYPED_COLOURS: Readonly<Record<string, readonly string[]>> = {
   kilo: ["2;250;250;249"],
 };
 
-/** Whether a send to `agent` is worth a read of its box: typedDraft can answer true only for these. */
 export function readsTypedDraft(agent: string | null | undefined): boolean {
   return agent != null && REPORTS_TYPED.has(agent);
 }
 
-/**
- * Whether `agent`'s input box on this screen holds text a person typed, which a pasted chat message would
- * join and its Enter send along. Only positive evidence counts: the recognizer found the box, answered
- * "draft" and reported its cells (InputRowRecognizer `typed`), and one of them is drawn as typed text is,
- * in the terminal's own colour, neither dim nor italic nor inverse. A placeholder or a suggestion (dim, grey,
- * italic), a drawn cursor, a box not found, a screen a recognizer cannot read, and an agent without one
- * all answer false: a send there goes as it always did, never refused for good on a misreading.
- */
 export function typedDraft(agent: string | null | undefined, screen: ScreenSnapshot): boolean {
   if (!readsTypedDraft(agent)) return false;
   const typed: ScreenCell[] = [];
@@ -579,7 +497,6 @@ const ESCAPE = /\u001b(?:\[([0-?]*)[ -/]*([@-~])|\][^\u0007\u001b]*(?:\u0007|\u0
 /** Made on first use, where the runtime has one: a browser this module is bundled for may not (Safari 14, Firefox before 125). */
 let graphemes: Intl.Segmenter | undefined;
 
-/** A row's characters as drawn: graphemes, or code points without Intl.Segmenter. */
 function characters(text: string): string[] {
   if (typeof Intl.Segmenter === "function") graphemes ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
   return graphemes ? Array.from(graphemes.segment(text), ({ segment }) => segment) : Array.from(text);

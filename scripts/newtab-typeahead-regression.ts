@@ -184,7 +184,10 @@ const typed = (text: string, delay = 0) => async (page: Page): Promise<void> => 
 const CASES: Case[] = [
   { name: "plus", way: "plus", viewport: desktop, type: typed("echo ahead-plus"), ran: "ahead-plus", sent: "echo ahead-plus\r" },
   { name: "sheet", way: "sheet", viewport: phone, type: typed("echo ahead-sheet"), ran: "ahead-sheet", sent: "echo ahead-sheet\r" },
-  { name: "touch", way: "sheet", viewport: phone, touch: true, type: typed("echo ahead-touch"), ran: "ahead-touch", sent: "echo ahead-touch\r" },
+  // herdr's answer waits for the keys: on a touch screen a tab that came before the first key leaves the keyboard
+  // where it was (no on-screen keyboard unasked, useTerminalMount's takeKeyboard), so keys typed after it are no
+  // longer typed ahead, and touch-midway is the case for a tab that comes while they are typed
+  { name: "touch", way: "sheet", viewport: phone, touch: true, holdCreate: true, type: typed("echo ahead-touch"), ran: "ahead-touch", sent: "echo ahead-touch\r" },
   // a keyboard on a touch screen: the keys typed after the new tab came go on to it, not lost
   {
     name: "touch-midway", way: "sheet", viewport: phone, touch: true, holdCreate: true, ran: "ahead-midway", sent: "echo ahead-midway\r",

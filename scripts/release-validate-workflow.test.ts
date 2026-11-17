@@ -9,7 +9,7 @@ import { DEPLOY_ACTIONS, type Job, parseWorkflow, root, runScript, scriptProblem
 // there, or main's own push run that scripts/release-ci-reuse.ts verified, with Fast checks run
 // again on GitHub's runner. These tests hold the shape that makes a skipped, failed or cancelled job
 // stop a release instead of passing it, and run the two scripts that decide.
-type CallJob = Job & { name?: string; with?: Record<string, string>; "continue-on-error"?: boolean };
+type CallJob = Job & { name?: string; with?: Record<string, unknown>; "continue-on-error"?: boolean };
 interface Input { description?: string; required?: boolean; default?: unknown; type?: string }
 const wrapper = parseWorkflow(join(root, ".github/workflows/release-validate.yml"));
 const release = parseWorkflow(join(root, ".github/workflows/release.yml"));
@@ -125,12 +125,26 @@ describe("release-validate.yml", () => {
     const theirs = job(ciYml, "fast");
     const UPDATE = "release-validate.yml's `fast` job is ci.yml's Fast checks, which a release that takes main's run runs again on GitHub's runner: make the same change to both, so such a release still checks what every other does";
     const uploads = (candidate: Step): boolean => candidate.uses?.startsWith("actions/upload-artifact@") === true;
-    /** All of a job but where it runs and when, its artifact's name and this workflow's own answer left out. */
-    const checks = ({ name: _name, needs: _needs, if: _if, "runs-on": _runner, "continue-on-error": _may, outputs: _outputs, ...rest }: CallJob): object =>
-      ({ ...rest, steps: rest.steps!.filter((candidate) => candidate.id !== "passed").map((candidate) => (uploads(candidate) ? { ...candidate, with: { ...candidate.with, name: "" } } : candidate)) });
+    // the Release run restores no cache: this copy says `none`, ci.yml's says it under hosted_only, which the Release passes
+    const HOSTED_ONLY_CACHE = "${{ inputs.hosted_only && 'none' || 'save' }}";
+    expect(theirs.steps!.find((candidate) => candidate.uses === "./.github/actions/setup-ci")!.with!["cache"]).toBe(HOSTED_ONLY_CACHE);
+    expect(fast.steps!.find((candidate) => candidate.uses === "./.github/actions/setup-ci")!.with!["cache"]).toBe("none");
+    const withoutCache = (candidate: Step): Step => {
+      if (candidate.uses !== "./.github/actions/setup-ci" || (candidate.with?.["cache"] !== HOSTED_ONLY_CACHE && candidate.with?.["cache"] !== "none")) return candidate;
+      const { cache: _cache, ...inputs } = candidate.with;
+      return { ...candidate, with: inputs };
+    };
+    // ci.yml's ratchets compare with the pull request's base or the commit before a push, which a Release run never has:
+    // the copy leaves out EVENT_BASE and the step that fetches the base, and compares with nothing, as ci.yml's own would there
+    const RATCHET_STEP = "Fetch the base the ratchets compare with";
+    expect(stepList(theirs)).toContain(RATCHET_STEP);
+    const { EVENT_BASE: _base, ...ciEnv } = theirs.env!;
+    /** All of a job but where it runs and when, its artifact's name, ci.yml's hosted_only cache, the ratchets' base and this workflow's own answer left out. */
+    const checks = ({ name: _name, needs: _needs, if: _if, "runs-on": _runner, "continue-on-error": _may, outputs: _outputs, env, ...rest }: CallJob): object =>
+      ({ ...rest, env: env && (({ EVENT_BASE: _eventBase, ...kept }) => kept)(env), steps: rest.steps!.filter((candidate) => candidate.id !== "passed" && candidate.name !== RATCHET_STEP).map(withoutCache).map((candidate) => (uploads(candidate) ? { ...candidate, with: { ...candidate.with, name: "" } } : candidate)) });
     expect(checks(fast), UPDATE).toEqual(checks(theirs));
     expect(fast["timeout-minutes"], UPDATE).toBe(theirs["timeout-minutes"]!);
-    expect(fast.env, UPDATE).toEqual(theirs.env!);
+    expect(fast.env, UPDATE).toEqual(ciEnv);
     expect(stepList(fast)).toEqual(["actions/checkout", "./.github/actions/setup-ci", "bun install --frozen-lockfile", "bun run check fast", "Release guards", "Say that Fast checks passed", "Preserve check report and verification logs"]);
     // what a copy cannot follow: a step that reads the jobs ci.yml's own needs, or an environment set for all of ci.yml
     expect(JSON.stringify(checks(theirs)), UPDATE).not.toMatch(/\b(?:needs|matrix|strategy)\./);
@@ -146,7 +160,8 @@ describe("release-validate.yml", () => {
     expect(ci.needs).toBe("reuse");
     expect(ci.if).toBe("${{ !cancelled() && (inputs.revalidate || needs.reuse.result != 'success' || needs.reuse.outputs.green != 'true') }}");
     expect(ci.uses).toBe("./.github/workflows/ci.yml");
-    expect(ci.with).toBeUndefined();
+    // the Release run is GitHub-hosted and cacheless as a whole (scripts/privileged-jobs-workflow.test.ts)
+    expect(ci.with?.["hosted_only"]).toBe(true);
   });
 
   test("ends in a verdict that runs whatever happened before it", () => {

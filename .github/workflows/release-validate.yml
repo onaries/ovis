@@ -99,6 +99,7 @@ jobs:
       - uses: ./.github/actions/setup-ci
         with:
           node: 'true'
+          cache: none
       - run: bun install --frozen-lockfile
       - run: bun run check fast
       # BASE_SHA is empty here (no push, no pull request), so a commit whose version has no tag yet is
@@ -132,6 +133,9 @@ jobs:
     # skipped only for a verified yes: a reuse job that failed, was skipped or gave no answer runs it
     if: ${{ !cancelled() && (inputs.revalidate || needs.reuse.result != 'success' || needs.reuse.outputs.green != 'true') }}
     uses: ./.github/workflows/ci.yml
+    # the Release run publishes and signs: every job of it is GitHub-hosted and cacheless (scripts/privileged-jobs-workflow.test.ts)
+    with:
+      hosted_only: true
     permissions:
       contents: read
       actions: read

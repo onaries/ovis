@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import type { MyPc } from "../lib/account/myPcs.ts";
+import { myPcs, type MyPc } from "../lib/account/myPcs.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { keyIdGroups } from "./KeyId.tsx";
 import { RelayShell, type RelayShellProps } from "./RelayShell.tsx";
@@ -176,7 +176,8 @@ describe("the dashboard", () => {
   const four = (): MyPc[] => [
     pc(ids.desk, "Desk PC", "paired", { last_seen_at: new Date().toISOString() }),
     pc(ids.mac, "MacBook", "paired", { listed: false, linked: false }),
-    pc(ids.mini, "Mac mini", "needs-approval", { last_seen_at: new Date().toISOString(), added_at: new Date().toISOString(), join: { server_public_key: "k", relay: AP } }),
+    // new in the account and never seen there: it waits on its own screen to be added
+    pc(ids.mini, "Mac mini", "needs-approval", { added_at: new Date().toISOString(), join: { server_public_key: "k", relay: AP } }),
     pc(ids.home, "Home server", "offline", { paired: true, last_seen_at: new Date(Date.now() - 20 * 3_600_000).toISOString() }),
   ];
   const devices = () => [device(ids.desk, "Desk PC", AP), device(ids.mac, "MacBook", AP), device(ids.home, "Home server", GLOBAL)];
@@ -467,6 +468,27 @@ describe("the dashboard", () => {
       expect(textOf(dialog())).toContain("Add this device to nuc");
       await act(async () => { button("Ask to join").props.onClick(); });
       expect(joined[1]).toEqual(["nuc", { sheet: "join" }]);
+    });
+
+    it("keeps the number on the PC's own screen as a way in from Join for a PC the directory saw once, which may wait there again after Revoke all", async () => {
+      // the directory row a review recorded after Revoke all and a listing again inside the relist threshold, moved to now,
+      // with a synthetic key and its derived server_id (deriveServerId): the PC was in no account, had zero members and
+      // showed its own pairing window, yet the row keeps its old sighting
+      const recorded = { server_id: "e185e94711a6d7f1eb7a12a582da9b04", label: "r2a-box", public_key: "ab".repeat(32), relay: "wss://relay.test", added_at: "2026-11-14T17:34:14.214Z", last_seen_at: "2026-11-14T17:39:14.119Z" };
+      const now = Date.now(), shift = now - Date.parse("2026-11-14T17:39:14.300Z");
+      const moved = (iso: string) => new Date(Date.parse(iso) + shift).toISOString();
+      const relisted = myPcs([{ ...recorded, added_at: moved(recorded.added_at), last_seen_at: moved(recorded.last_seen_at) }], [], { now });
+      const joined: [string, unknown][] = [];
+      await mount(signedIn(relisted, { onJoin: (target, options) => { joined.push([target.name, options]); } }));
+      // the row offers Join, not Add
+      expect(buttons("Add")).toHaveLength(0);
+      await act(async () => { buttons("Join")[0]!.props.onClick({ stopPropagation() {} }); });
+      expect(dialog().props["data-add-pc-mode"]).toBe("join");
+      expect(textOf(dialog())).not.toMatch(/never on/i);
+      await act(async () => { button("Type the number").props.onClick(); });
+      expect(dialog().props["data-add-pc-mode"]).toBe("new");
+      await act(async () => { button("Add this PC").props.onClick(); });
+      expect(joined).toEqual([["r2a-box", { typed: true, sheet: "new" }]]);
     });
 
     it("takes Add a PC to the sheet's add mode, opens Pair with a QR or code as a dialog over the inert dashboard, and returns focus to its trigger on close", async () => {

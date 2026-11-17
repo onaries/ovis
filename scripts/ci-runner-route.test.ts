@@ -346,6 +346,39 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     }
   });
 
+  describe("hosted_only (pages.yml's call of ci.yml)", () => {
+    const vm = '["self-hosted","ovis-vm"]';
+    // every routing above: the input unset or false changes none of them, and true sends each to the hosted image
+    const scenarios = (): Record<string, string>[] => [
+      { EVENT_NAME: "push" },
+      { EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: '["self-hosted","self-hosted-ovis-main"]' },
+      { EVENT_NAME: "push", REF: "refs/heads/topic", LINUX_LABELS: vm, FAST_LABELS: '["self-hosted","self-hosted-ovis"]' },
+      { EVENT_NAME: "push", CONFIGURED_LABELS: '"ubuntu-24.04"' },
+      { EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({}) },
+      { EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({ in_progress: { 1: running(7) } }) },
+      { EVENT_NAME: "pull_request", HEAD_REPO: "someone/fork", CONFIGURED_LABELS: labels },
+      { EVENT_NAME: "workflow_dispatch" },
+      { EVENT_NAME: "workflow_dispatch", REQUESTED_LABELS: labels },
+      { EVENT_NAME: "workflow_dispatch", CONFIGURED_LABELS: labels },
+    ];
+
+    it("changes nothing when it is unset or false", () => {
+      for (const env of scenarios()) {
+        const before = route(env);
+        for (const value of ["", "false"]) {
+          const after = route({ ...env, HOSTED_ONLY: value });
+          expect({ env, value, status: after.status, stdout: after.stdout, stderr: after.stderr }).toEqual({ env, value, status: before.status, stdout: before.stdout, stderr: before.stderr });
+        }
+      }
+    });
+
+    it("sends the Linux jobs and Fast checks to the hosted image when true, before it reads anything else", () => {
+      for (const env of scenarios()) expect(outputs({ ...env, HOSTED_ONLY: "true" })).toEqual({ linux: "ubuntu-24.04", fast: "ubuntu-24.04" });
+      // a label list the route would refuse is never read
+      expect(outputs({ EVENT_NAME: "workflow_dispatch", REQUESTED_LABELS: '"self-hosted"', HOSTED_ONLY: "true" })).toEqual({ linux: "ubuntu-24.04", fast: "ubuntu-24.04" });
+    });
+  });
+
   describe("Browser regression (other scripts)'s parts", () => {
     type CiJob = { "runs-on"?: unknown; strategy?: { matrix?: { shard?: string } } };
     const ci = Bun.YAML.parse(readFileSync(fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url)), "utf8")) as { jobs: Record<string, CiJob> };
@@ -378,10 +411,11 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
       expect(parts({ EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: '["self-hosted","self-hosted-ovis-main"]' })).toEqual([1, 2, 3]);
       expect(parts({ EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({ in_progress: { 1: running(5) } }) })).toEqual([1, 2, 3, 4]);
       expect(parts({ EVENT_NAME: "push", REF: "refs/heads/topic", LINUX_LABELS: '["self-hosted","ovis-vm"]' })).toEqual([1, 2, 3, 4, 5]);
+      expect(parts({ EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: '["self-hosted","self-hosted-ovis-main"]', HOSTED_ONLY: "true" })).toEqual([1, 2, 3, 4]);
     });
 
     it("count in the route's room for one run: every routed Linux job, the matrix job as its self-hosted parts", () => {
-      const routedJobs = Object.entries(ci.jobs).filter(([, job]) => job["runs-on"] === "${{ fromJSON(needs.changes.outputs.linux) }}" || job["runs-on"] === "${{ fromJSON(needs.changes.outputs.fast) }}");
+      const routedJobs = Object.entries(ci.jobs).filter(([, job]) => ["linux", "fast"].some((output) => job["runs-on"] === `\${{ inputs.hosted_only && 'ubuntu-24.04' || fromJSON(needs.changes.outputs.${output}) }}`));
       const selfHosted = parts({ EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({}) }).length;
       const needed = routedJobs.reduce((sum, [id]) => sum + (id === "browser-other" ? selfHosted : 1), 0);
       expect(routedJobs.map(([id]) => id).sort()).toEqual(["browser-main", "browser-other", "fast", "integration"]);

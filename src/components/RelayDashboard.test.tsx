@@ -34,8 +34,8 @@ const fourPcs = (): DashboardPc[] =>
     [
       pc(IDS.desk, "Desk PC", "paired", { last_seen_at: new Date().toISOString() }),
       pc(IDS.mac, "MacBook", "paired", { listed: false, linked: false }),
+      // new in the account and never seen there: it waits on its own screen to be added, as a PC that pulled could not
       pc(IDS.mini, "Mac mini", "needs-approval", {
-        last_seen_at: new Date().toISOString(),
         added_at: new Date().toISOString(),
         join: { server_public_key: "k", relay: AP },
       }),

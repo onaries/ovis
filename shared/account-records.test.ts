@@ -24,7 +24,6 @@ const unsigned: { [K in AccountRecord["kind"]]: Extract<UnsignedAccountRecord, {
   link: { v: 1, kind: "link", account: "acct_1", key: signer.spki, server_id: "0123456789abcdef0123456789abcdef", device_id: "0123456789abcdef", old_key: other.spki, issued_at: issued, id: newRecordId(), signer: signer.spki },
 };
 
-/** Another valid value for each field, so a mutation still parses and only the signature can refuse it. */
 const alternatives: Record<string, string> = {
   account: "acct_2", key: third.spki, label: "Windows app", role: "watch", server_id: "f".repeat(32),
   device_id: "f".repeat(16), old_key: third.spki, issued_at: "2026-11-05T01:02:03.457Z", id: newRecordId(), signer: third.spki,
@@ -43,7 +42,6 @@ describe("account records", () => {
       const fields = Object.keys(record).filter((name) => name !== "signature" && name !== "v" && name !== "kind");
       for (const name of fields) {
         const changed = { ...record, [name]: alternatives[name] } as AccountRecord;
-        // a link's signer is its key; moving one without the other is refused before the signature
         if (kind === "link" && (name === "key" || name === "signer")) {
           expect(() => parseAccountRecord(changed)).toThrow(AccountRecordError);
           continue;
@@ -84,7 +82,6 @@ describe("account records", () => {
   test("record and AUTH signatures cannot stand in for each other", async () => {
     const serverId = "0123456789abcdef0123456789abcdef";
     const nonce = crypto.getRandomValues(new Uint8Array(32));
-    // AUTH as server/devices.ts matchRelay verifies it: `ovis-relay-auth/1 || nonce || server_id`
     const auth = new Uint8Array([...new TextEncoder().encode("ovis-relay-auth/1"), ...nonce, ...new TextEncoder().encode(serverId)]);
     const authSignature = new Uint8Array(await crypto.subtle.sign(SIGN, signer.pair.privateKey, auth));
     for (const kind of ["add", "remove", "link"] as const) {

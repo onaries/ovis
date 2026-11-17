@@ -131,7 +131,7 @@ it("keeps the active account code and polling when recheck changes", async () =>
 });
 
 it("opens Settings without a tab when only a desktop provider is offered", async () => {
-  service.offer(["apple"], []);
+  service.offerSignIns(["apple"], []);
   service.offerLinkPage([]);
   await mount(relayView());
   await act(async () => { button("Sign in to Ovis").props.onClick(); });

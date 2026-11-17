@@ -5,7 +5,7 @@
  * call goes through the PC's own session (`fetch` is that PC's transport), so the PC sees which of
  * its devices is asking.
  */
-import { ACCOUNT_ENROLL_MAX, AccountRecordError, accountDeviceId, isAccountKey, newRecordId, readAccountRecord, signAccountRecord } from "../../../shared/account-records.ts";
+import { ACCOUNT_ENROLL_MAX, AccountRecordError, accountDeviceId, isAccountKeyEncoding, newRecordId, readAccountRecord, signAccountRecord } from "../../../shared/account-records.ts";
 import type { AddRecord, LinkRecord, RemoveRecord } from "../../../shared/account-records.ts";
 import { isWssOrigin } from "../../../shared/relay-offer.ts";
 import type { RemotePairingRequest } from "../../../shared/protocol.ts";
@@ -69,7 +69,7 @@ export async function pcAccountStatus(fetch: PcFetch, options: { fresh?: boolean
   return {
     account: typeof body.account === "string" ? body.account : null, unlinked,
     removals: Array.isArray(body.removals) ? body.removals : [], adds: Array.isArray(body.adds) ? body.adds : [],
-    blocked: Array.isArray(body.blocked) ? body.blocked.filter(isAccountKey) : [],
+    blocked: Array.isArray(body.blocked) ? body.blocked.filter(isAccountKeyEncoding) : [],
     // an Ovis from before enrollments sends no `fresh` at all
     ...(options.fresh && "fresh" in body ? { fresh: (body as { fresh?: unknown }).fresh === true } : {}),
     ...((body as { blocked_all?: unknown }).blocked_all === true ? { blockedAll: true } : {}),

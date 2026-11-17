@@ -1542,6 +1542,7 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     out([
       `Signed in. This PC is listed in your account as ${name}.`,
       `On a device already signed in to this account (the Ovis app or ${appHost(options, options.app ?? "https://app.ovis.sh")}), choose Add on ${name}.`,
+      "If it shows Join there instead, choose Join, then Ask to join or Type the number.",
       "Its request shows here to approve. Press Ctrl+C to stop.",
       "",
     ].join("\n"));

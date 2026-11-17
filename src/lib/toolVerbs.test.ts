@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isToolNarration, toolVerb, toolVerbKind } from "./toolVerbs.ts";
+import { isToolNarration, toolDisplayName, toolVerb, toolVerbKind } from "./toolVerbs.ts";
 
 describe("toolVerbKind", () => {
   it("reads every agent's file and shell tools as one of four verbs", () => {
@@ -108,5 +108,22 @@ describe("isToolNarration", () => {
     expect(isToolNarration(part("Read", { file_path: "src/a.ts" }), "src/a.ts")).toBe(false);
     expect(isToolNarration(part("eval", { code: "1" }), "eval")).toBe(false);
     expect(isToolNarration({ name: "exec", input: "console.log(1)" }, "console.log(1)")).toBe(false);
+  });
+});
+
+describe("toolDisplayName", () => {
+  it("names an MCP tool by its server and tool (#3875)", () => {
+    expect(toolDisplayName("mcp__claude_ai_HomeAssistant__get_entity_state")).toBe("HomeAssistant get_entity_state");
+    expect(toolDisplayName("mcp__plugin_playwright_playwright__browser_take_screenshot")).toBe("playwright browser_take_screenshot");
+    expect(toolDisplayName("mcp__plugin_tools_github__create_issue")).toBe("tools_github create_issue");
+    expect(toolDisplayName("mcp__linear__create_issue")).toBe("linear create_issue");
+    // a tool's own double underscore stays in the tool
+    expect(toolDisplayName("mcp__custom-tools__a__b")).toBe("custom-tools a__b");
+  });
+
+  it("keeps any other id as the agent names it", () => {
+    for (const name of ["Grep", "exec", "read_mcp_resource", "mcp__linear", "mcp____create_issue", "mcp__linear__", "MCP__linear__create_issue"]) {
+      expect(toolDisplayName(name)).toBe(name);
+    }
   });
 });

@@ -376,7 +376,7 @@ describe("signing in on a PC's own page, with the Ovis link page", () => {
 
   it("starts without the name on an account service that does not take one yet", async () => {
     const { fake, options } = setup();
-    fake.linkPageTakesRequester = false;
+    fake.linkPageAcceptsLabelAndOs = false;
     const started = await startDeviceSignIn({ ...options, requester: { label: "Desk", os: "linux" } });
     expect(started.verificationUri).toBe(`${SERVICE}/link`);
     expect(fake.linkRequester(started.userCode)).toEqual({ label: null, os: null });

@@ -1,27 +1,19 @@
-/** A complete Codex visualization reference on its own line; malformed/streaming text stays text. */
 export interface VisualizationReference {
   path: string;
   title?: string;
 }
 
-/**
- * What a card shows of a name or a title an agent wrote: no bidi control or other invisible format character
- * (they reorder or hide what is read), every run of spaces and control characters one space, and at most `limit`
- * characters, cut in the middle so the end (a file's type) stays.
- */
-function shown(text: string, limit: number): string {
+function oneLineMiddleCut(text: string, limit: number): string {
   const clean = [...text.replace(/\p{Cf}/gu, "").replace(/[\p{Cc}\s]+/gu, " ").trim()];
   return clean.length <= limit ? clean.join("") : `${clean.slice(0, limit - 17).join("")}\u2026${clean.slice(-16).join("")}`;
 }
 
-/** The file's own name as its card shows it: always the path's last part, never what the reference calls it. */
 export function visualizationName(path: string): string {
-  return shown(path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1), 80);
+  return oneLineMiddleCut(path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1), 80);
 }
 
-/** The reference's title as its card's second line; null when it has none, or it only repeats the file's name. */
 export function visualizationTitle(reference: Pick<VisualizationReference, "path" | "title">): string | null {
-  const title = reference.title === undefined ? "" : shown(reference.title, 120);
+  const title = reference.title === undefined ? "" : oneLineMiddleCut(reference.title, 120);
   return title === "" || title === visualizationName(reference.path) ? null : title;
 }
 
@@ -34,8 +26,7 @@ export function visualizationReference(line: string): VisualizationReference | n
     const { path, title } = data as Record<string, unknown>;
     // An absolute local path, never a network share however its two leading separators are written
     // (`//host`, `/\host`): the file viewer the card opens looks the file up, and on a Windows PC that
-    // lookup would reach out to the share. `mode` (how Codex's own app lays its preview out) is not
-    // read: the card is the same for every mode, also one this app has never seen.
+    // lookup would reach out to the share.
     if (typeof path !== "string" || !/^(?:\/|[A-Za-z]:[\\/])/.test(path) || /^[\\/]{2}/.test(path)
       || /[\x00-\x1f\x7f]/.test(path) || !/\.html?$/i.test(path)
       || (title !== undefined && (typeof title !== "string" || title.length > 200))) return null;

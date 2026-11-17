@@ -105,6 +105,12 @@ describe("dashboardModel urgency", () => {
     expect(m.attention.map(({ server_id, expiresAt }) => [server_id, expiresAt])).toEqual([["open", NOW + 1], ["closed", null]]);
   });
 
+  it("offers no Add window to a new PC that already came by the account service: it pulls only once it belongs to the account", () => {
+    const inAccount: DashboardPc = { ...fresh("in-account", 2 * 60_000), last_seen_at: new Date(NOW - 30_000).toISOString() };
+    const m = model([inAccount, fresh("waiting", 2 * 60_000)]);
+    expect(m.attention.map(({ server_id, expiresAt }) => [server_id, expiresAt])).toEqual([["waiting", NOW + 8 * 60_000], ["in-account", null]]);
+  });
+
   it("offers no Add window to a new PC without a join route, and puts a PC without a relay under the default one", () => {
     const routeless: DashboardPc = { ...pc("routeless", "needs-approval"), added_at: new Date(NOW - 60_000).toISOString() };
     const m = model([routeless, pc("update", "needs-update")]);

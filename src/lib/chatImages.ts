@@ -4,6 +4,7 @@ import { fileUrl } from "./api.ts";
 import type { Translate } from "./i18n.ts";
 import { attachmentFileName, mentionFileName } from "./imageViewer.ts";
 import { folderPattern, pasteFolder } from "./pasteFolders.ts";
+import { toolDisplayName } from "./toolVerbs.ts";
 import type { GalleryImage } from "./imageViewer.ts";
 import type { WorkImage } from "./workImages.ts";
 
@@ -11,7 +12,7 @@ import type { WorkImage } from "./workImages.ts";
 export function toolGalleryImage(machineId: string, paneId: string, image: WorkImage, t: Translate): GalleryImage {
   return {
     src: machinePath(machineId, `pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref: image.ref }).toString()}`),
-    name: t("Image {n} from {tool}", { n: image.ordinal + 1, tool: image.part.name }),
+    name: t("Image {n} from {tool}", { n: image.ordinal + 1, tool: toolDisplayName(image.part.name) }),
     file: attachmentFileName(image.mediaType, image.ordinal),
   };
 }

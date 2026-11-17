@@ -5,7 +5,7 @@
  * lifts neither, and a file that will not parse holds every add back until it is restored.
  */
 import { readFileSync, rmSync } from "node:fs";
-import { isAccountKey } from "../../shared/account-records.ts";
+import { isAccountKeyEncoding } from "../../shared/account-records.ts";
 import { writePrivateState } from "../private-state.ts";
 
 /** Keys held at most; past them every add is held back, as a full list could be missing the one that matters. */
@@ -35,7 +35,7 @@ export class AccountHolds {
     if (held === null) problems.push(`${options.heldPath} cannot be read`);
     else if (held !== "missing") {
       const value = held.value as { keys?: unknown; full?: unknown } | null;
-      if (!Array.isArray(value?.keys) || !value.keys.every(isAccountKey) || typeof value.full !== "boolean") problems.push(`${options.heldPath} is not a list of held keys`);
+      if (!Array.isArray(value?.keys) || !value.keys.every(isAccountKeyEncoding) || typeof value.full !== "boolean") problems.push(`${options.heldPath} is not a list of held keys`);
       else { this.keys = new Set(value.keys); this.overflowed = value.full; }
     }
     if (enrolling === null) problems.push(`${options.enrollingPath} cannot be read`);

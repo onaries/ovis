@@ -57,13 +57,10 @@ export interface PortalAuth {
 
 export const NO_PORTAL_AUTH: PortalAuth = { method: "none", allow: [], issuer: null, client_id: null };
 
-/** The environment variable of the server's PC that holds the OIDC client secret, which no request, file or answer carries. */
 export const PORTAL_OIDC_SECRET_VARIABLE = "OVIS_PORTAL_OIDC_CLIENT_SECRET";
 
-/** Why a check refuses. */
 export type PortalAuthProblem = "invalid" | "name" | "wallet" | "principal" | "duplicate" | "no_wallet" | "no_principal" | "issuer" | "client_id";
 
-/** What a check refuses, in the words the server answers with and the panel shows (translated there: src/lib/i18n.test.ts reads this map). */
 export const PORTAL_AUTH_PROBLEMS: Record<PortalAuthProblem, string> = {
   invalid: "The sign-in settings are not valid.",
   name: "A link name is 1 to 256 printable ASCII characters; spaces are fine.",
@@ -78,16 +75,10 @@ export const PORTAL_AUTH_PROBLEMS: Record<PortalAuthProblem, string> = {
 
 type Checked<T> = T | { readonly problem: PortalAuthProblem };
 
-/**
- * One `--auth-allow` entry, as Portal reads it. Names and ids are narrower than Portal's own rules
- * (printable ASCII, not any non-control character): a visitor's name reaches this server in an HTTP
- * header, which carries nothing else, so a name outside ASCII could never sign in.
- */
 export function checkEntry(method: PortalSignIn, raw: string): Checked<{ readonly entry: string }> {
   const text = raw.trim();
   if (method === "credential") return /^[\x20-\x7e]{1,256}$/.test(text) ? { entry: text } : { problem: "name" };
   if (method === "siwe") return /^0x[0-9a-f]{40}$/i.test(text) ? { entry: text } : { problem: "wallet" };
-  // sub:<id> keeps its case, an email or @domain is lower-cased, as Portal compares them
   if (/^sub:/i.test(text)) {
     const id = text.slice("sub:".length).trim();
     return /^[\x20-\x7e]{1,256}$/.test(id) ? { entry: `sub:${id}` } : { problem: "principal" };
@@ -95,11 +86,10 @@ export function checkEntry(method: PortalSignIn, raw: string): Checked<{ readonl
   return /^[\x21-\x3f\x41-\x7e]*@[\x21-\x3f\x41-\x7e]+$/.test(text) ? { entry: text.toLowerCase() } : { problem: "principal" };
 }
 
-/** The identity provider's address as Portal takes it: https, no credentials, query or fragment, no trailing slash. */
 export function checkIssuer(raw: string): Checked<{ readonly issuer: string }> {
   const text = raw.trim().replace(/\/+$/, "");
   let url: URL | null = null;
-  try { url = new URL(text); } catch { /* refused below */ }
+  try { url = new URL(text); } catch {}
   const plain = url !== null && url.protocol === "https:" && url.hostname !== "" && !url.username && !url.password;
   // a `?` or `#` anywhere is a query or fragment, even an empty one the URL parser would not report
   return plain && /^[\x21-\x7e]{1,2048}$/.test(text) && !/[?#]/.test(text) ? { issuer: text } : { problem: "issuer" };
@@ -110,12 +100,6 @@ export function checkClientId(raw: string): Checked<{ readonly clientId: string 
   return /^[\x21-\x7e]{1,256}$/.test(text) ? { clientId: text } : { problem: "client_id" };
 }
 
-/**
- * A request's or the saved state's sign-in, settled: entries in Portal's form and without
- * duplicates, the OIDC fields only for OIDC. Unset is no sign-in. Refuses what Portal would refuse
- * at its start (OIDC needs an issuer, a client ID and an entry) and one list Portal accepts but this
- * app does not: Ethereum with no wallet, which would let any wallet in to every terminal.
- */
 export function checkPortalAuth(input: unknown): Checked<{ readonly auth: PortalAuth }> {
   if (input === undefined || input === null) return { auth: NO_PORTAL_AUTH };
   if (typeof input !== "object" || Array.isArray(input)) return { problem: "invalid" };
@@ -144,7 +128,6 @@ export function checkPortalAuth(input: unknown): Checked<{ readonly auth: Portal
   return { auth: { method: "oidc", allow: entries, issuer: provider.issuer, client_id: client.clientId } };
 }
 
-/** How long a private link lasts, in days, to choose from. */
 export const PORTAL_INVITE_DAYS = [1, 7, 30, 90] as const;
 export const DEFAULT_INVITE_DAYS = 30;
 

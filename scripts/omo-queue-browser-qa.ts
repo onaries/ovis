@@ -51,7 +51,7 @@ try {
   copyFileSync(process.execPath, binary); chmodSync(binary, 0o755);
   const script = join(root, "recorder.cjs");
   writeFileSync(script, `const net=require("node:net");const s=net.connect(${recorder.port},"127.0.0.1");process.stdin.setRawMode(true);process.stdin.resume();s.on("connect",()=>{process.stdout.write("\\x1b[?2004h\\r\\n"+${JSON.stringify(screen.replace(/\n/g, "\r\n"))});s.write(JSON.stringify("READY")+"\\n")});process.stdin.on("data",d=>s.write(JSON.stringify(d.toString("utf8"))+"\\n"));`);
-  const created = await workspaceCreate({ cwd: root, label: `herdr-web-ui-test-${agent}-queue`, focus: false });
+  const created = await workspaceCreate({ cwd: root, label: `herdr-web-ui-test-${agent}-queue` });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
   const ready = waitFor((event) => event === "READY");
@@ -124,7 +124,7 @@ try {
           const button = node.getBoundingClientRect();
           const siblings = Array.from(node.parentElement?.querySelectorAll("button") ?? [], (item) => item.getBoundingClientRect());
           return button.width > 0 && button.left >= 0 && button.right <= innerWidth
-            && siblings.every((item, index) => index === 0 || siblings[index - 1].right <= item.left);
+            && siblings.every((item, index) => index === 0 || (siblings[index - 1]?.right ?? 0) <= item.left);
         }), true, "pending-row actions fit without overlap");
       }
       const mark = frames.length;

@@ -7,8 +7,8 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { readFileSync } from "node:fs";
 import { writePrivateState } from "../private-state.ts";
-import { DEFAULT_ACCOUNT_SERVICE } from "../static.ts";
-import { ACCOUNT_RECORDS_MAX, isAccountKey } from "../../shared/account-records.ts";
+import { accountServiceOff, DEFAULT_ACCOUNT_SERVICE } from "../../shared/web-policy.ts";
+import { ACCOUNT_RECORDS_MAX, isAccountKeyEncoding } from "../../shared/account-records.ts";
 import { importPublicKey, importSecretKey } from "../../shared/relay-e2ee.ts";
 import { answerServerChallenge } from "../../shared/relay-server-proof.ts";
 import type { DeviceStore } from "../devices.ts";
@@ -51,7 +51,7 @@ export function passAccountService(value?: string): string | Error | undefined {
 }
 
 export function accountServiceUrl(value = process.env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE): string {
-  if (value.trim().toLowerCase() === "off") throw new AccountServiceOff();
+  if (accountServiceOff(value)) throw new AccountServiceOff();
   const url = new URL(value);
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error("The account service must be https");
@@ -421,7 +421,7 @@ export class AccountMailbox {
     }
     const admissions = Array.isArray(mailbox.admissions) ? mailbox.admissions : [];
     const waiting = admissions.filter((a): a is { key: string; at: string } => typeof a === "object" && a !== null
-      && isAccountKey((a as { key?: unknown }).key) && typeof (a as { at?: unknown }).at === "string" && !Number.isNaN(Date.parse((a as { at: string }).at)));
+      && isAccountKeyEncoding((a as { key?: unknown }).key) && typeof (a as { at?: unknown }).at === "string" && !Number.isNaN(Date.parse((a as { at: string }).at)));
     return { entries: records as { seq: number; record: unknown }[], waiting };
   }
 }

@@ -34,9 +34,9 @@ test("no script interpolates an expression or writes $GITHUB_ENV or $GITHUB_PATH
   expect(scriptProblems(loadWorkflow())).toEqual([]);
 });
 
-test("every job that installs packages restores the dependency cache read-only", () => {
+test("every job that installs packages restores no dependency cache or only reads it, and the build restores none", () => {
   expect(cacheProblems(loadWorkflow())).toEqual([]);
-  expect(find(build(), (step) => step.uses === "./.github/actions/setup-ci").with).toEqual({ cache: "restore" });
+  expect(find(build(), (step) => step.uses === "./.github/actions/setup-ci").with).toEqual({ cache: "none" });
 });
 
 test("the build holds no secret and no environment, and builds the release tag's checkout after the tag gate", () => {

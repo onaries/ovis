@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { topLevelTerms, workflowAndActionFiles, workflowFileProblems } from "./shell-workflow-rules.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const action = Bun.YAML.parse(readFileSync(join(root, ".github/actions/setup-ci/action.yml"), "utf8")) as {
@@ -16,10 +17,8 @@ type Workflow = { jobs?: Record<string, { uses?: string; steps?: Step[] }>; runs
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const actionName = (uses: string) => uses.slice(0, uses.lastIndexOf("@"));
-const actionFiles = [
-  ...readdirSync(join(root, ".github/workflows")).filter((name) => name.endsWith(".yml")).map((name) => `.github/workflows/${name}`),
-  ".github/actions/setup-ci/action.yml",
-];
+// every workflow and action GitHub loads; a `.yaml` file or another spelling fails the test below instead of being skipped
+const actionFiles = workflowAndActionFiles().filter((path) => (path.startsWith(".github/workflows/") && path.endsWith(".yml")) || path.endsWith("/action.yml"));
 
 /** What is wrong with the action references of one workflow or composite action, step by step. */
 function auditActions(file: string, text: string) {
@@ -178,8 +177,9 @@ describe("CI cache contract", () => {
     const save = action.runs.steps.find((step) => step.name === "Cache Bun dependencies")!;
     const restore = action.runs.steps.find((step) => step.name === "Restore Bun dependencies (read-only)")!;
     expect(action.inputs.cache!.default).toBe("save");
-    expect(save.if).toContain("inputs.cache != 'restore'");
-    expect(restore.if).toContain("inputs.cache == 'restore'");
+    // a top-level && term: a mode comparison inside an || would let the step run under any mode
+    expect(topLevelTerms(save.if!)).toContain("inputs.cache == 'save'");
+    expect(topLevelTerms(restore.if!)).toContain("inputs.cache == 'restore'");
     expect(actionName(restore.uses!)).toBe("actions/cache/restore");
     expect(restore.with).toEqual(save.with);
     const canary = Bun.YAML.parse(readFileSync(join(root, ".github/workflows/omp-question-compat.yml"), "utf8")) as {
@@ -268,6 +268,9 @@ describe("action pins and checkout credentials", () => {
   });
 
   it("pins every external action to a full commit SHA and keeps local actions and workflows relative", () => {
+    // a workflow or action GitHub loads under another spelling (`.yaml`), or behind a symlink, would escape this audit: it fails instead
+    expect(workflowFileProblems()).toEqual([]);
+    expect(actionFiles).toContain(".github/actions/setup-ci/action.yml");
     const names = new Set<string>();
     for (const file of actionFiles) {
       const text = readFileSync(join(root, file), "utf8");

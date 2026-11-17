@@ -1,9 +1,3 @@
-/**
- * Voice input: the browser records a short clip, the connection server sends it to the
- * user's own OpenAI key (BYOK) and streams the text back. The key lives only on the server
- * (stateDir/voice.json, mode 0600, or OVIS_OPENAI_API_KEY); no route ever returns it.
- */
-
 export type VoiceMode = "chat" | "terminal";
 export type VoiceProvider = "openai" | "elevenlabs";
 
@@ -67,7 +61,6 @@ export const VOICE_FORM = {
 } as const;
 
 export const VOICE_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
-/** the recorder stops itself here; the server does not trust it and checks bytes only */
 export const VOICE_MAX_SECONDS = 120;
 export const VOICE_KEYWORDS_MAX = 50;
 export const VOICE_KEYWORD_MAX_CHARS = 80;

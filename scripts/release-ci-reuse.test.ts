@@ -734,14 +734,37 @@ describe("ci.yml", () => {
     expect(ci.jobs["changes"]!.outputs).toMatchObject({ code: "${{ steps.filter.outputs.code }}", draft: "${{ steps.filter.outputs.draft }}" });
   });
 
+  // hosted_only is set by pages.yml's and the Release's calls (scripts/light-runner-workflow.test.ts), not in main's push run.
+  // Each of these exact expressions decides only a runner, a cache mode or whether a cache step runs; any other read of
+  // the input (`toJSON(inputs.hosted_only) == 'false'`, say) is one more place where the two runs could differ.
+  const HOSTED_ONLY_READS = [
+    "${{ inputs.hosted_only && 'ubuntu-24.04' || fromJSON(needs.changes.outputs.fast) }}",
+    "${{ inputs.hosted_only && 'ubuntu-24.04' || fromJSON(needs.changes.outputs.linux) }}",
+    "${{ inputs.hosted_only && 'none' || 'save' }}",
+    "${{ inputs.hosted_only && 'none' || 'restore' }}",
+    "needs.changes.outputs.draft != 'true' && !inputs.hosted_only",
+    "needs.changes.outputs.draft != 'true' && runner.environment != 'self-hosted' && !inputs.hosted_only",
+    "${{ inputs.hosted_only }}",
+  ];
+
+  // The Release's own call passes hosted_only: true (the Release run is hosted and cacheless as a whole). Each expression
+  // above decides only where a job runs, a cache mode or whether a cache step runs, never which check runs, so main's
+  // push run (input unset) checks what the Release run's own ci.yml checks, and the Release may still take it.
+  it("passes hosted_only: true in a Release run's call, which moves runners and caches only", () => {
+    const validate = Bun.YAML.parse(readFileSync(join(root, ".github/workflows/release-validate.yml"), "utf8")) as { jobs: Record<string, { uses?: string; with?: Record<string, unknown> }> };
+    const calls = Object.values(validate.jobs).filter((job) => job.uses === "./.github/workflows/ci.yml");
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.with?.["hosted_only"]).toBe(true);
+  });
+
   it("gives no step a condition on the event, which differs between a push run and Release's own", () => {
-    const reading = Object.entries(ci.jobs).flatMap(([id, job]) => (job.steps ?? []).filter((step) => /\b(?:github|inputs)\./.test(step.if ?? "")).map((step) => `${id}: ${step.if}`));
+    const reading = Object.entries(ci.jobs).flatMap(([id, job]) => (job.steps ?? []).filter((step) => /\b(?:github|inputs)\./.test(step.if ?? "") && !HOSTED_ONLY_READS.includes(step.if!)).map((step) => `${id}: ${step.if}`));
     expect(reading, "A step that runs for some events only makes main's push run check something else than the Release run's own ci.yml: decide in Detect changes instead, as code and draft are").toEqual([]);
   });
 
   // Every place where ci.yml reads the event or the run's inputs, with why a Release run may still
   // take main's push run although the two differ there.
-  const LIGHT = "${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '[\"self-hosted\",\"self-hosted-ovis\"]') }}";
+  const LIGHT = "${{ inputs.hosted_only && 'ubuntu-24.04' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '[\"self-hosted\",\"self-hosted-ovis\"]') }}";
   const EVENT_READS: Record<string, string> = {
     // which runs wait for or cancel one another (scripts/ci-concurrency.test.ts), not what a run checks
     "concurrency.group": "validation-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-manual' || '' }}",
@@ -753,7 +776,7 @@ describe("ci.yml", () => {
     "jobs.integration-browser.runs-on": LIGHT,
     // the macOS session job's guard against a fork's pull request (scripts/light-runner-workflow.test.ts): a push and a
     // Release run carry none, and both then stay on macos-15 (the test below)
-    "jobs.macos-session.runs-on": "${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"') }}",
+    "jobs.macos-session.runs-on": "${{ inputs.hosted_only && 'macos-15' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"') }}",
     // the runner of the Linux jobs (scripts/ci-runner-route.sh): the self-hosted PC for a push,
     // GitHub's for the Release run's own call. The jobs and their steps are the same on either;
     // the unit tests the self-hosted runner skips run in release-validate.yml's own Fast checks, on
@@ -770,6 +793,9 @@ describe("ci.yml", () => {
     // than either before anything is validated, and release-validate.yml's Fast checks runs this
     // step again
     "jobs.fast.steps.Release guards.env.BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
+    // the ratchets' base: the same commits, none in a Release run, whose ratchets then compare with nothing (a pull
+    // request's own run compared them before it merged)
+    "jobs.fast.env.EVENT_BASE": "${{ github.event.pull_request.base.sha || github.event.before }}",
   };
 
   it("never validates a release on the self-hosted Mac: CI_MAC_LABELS reaches neither a Release run nor main's run", () => {
@@ -789,7 +815,7 @@ describe("ci.yml", () => {
     const found: Record<string, string> = {};
     const scan = (value: unknown, path: string[]): void => {
       if (typeof value === "string") {
-        if (EVENT.test(expressions(path.at(-1)!, value))) found[path.join(".")] = value;
+        if (EVENT.test(expressions(path.at(-1)!, value)) && !HOSTED_ONLY_READS.includes(value)) found[path.join(".")] = value;
       } else if (Array.isArray(value)) {
         // a step by its id or name, which stay when a step is added before it
         value.forEach((entry: CiStep | null, index) => scan(entry, [...path, entry?.id ?? entry?.name ?? String(index)]));
@@ -805,7 +831,8 @@ describe("ci.yml", () => {
       ["if", "github.event_name == 'push'", true], ["if", "needs.changes.outputs.draft != 'true'", false], ["if", "inputs.self_hosted_labels != ''", true],
       ["run", "echo \"${{ github.event.before }}\"", true], ["run", "# where github.event_name is the caller's event\necho inputs.x", false],
       ["env", "${{ github.event_path }}", true], ["env", "${{ github['event_name'] }}", true], ["env", "${{ toJSON(github) }}", true], ["env", "${{ github.sha }}-${{ github.run_id }}", false],
-    ] as const) expect([key, value, EVENT.test(expressions(key, value))]).toEqual([key, value, read]);
+      ["if", "toJSON(inputs.hosted_only) == 'false'", true],
+    ] as const) expect([key, value, EVENT.test(expressions(key, value)) && !HOSTED_ONLY_READS.includes(value)]).toEqual([key, value, read]);
   });
 
   // GITHUB_EVENT_NAME and GITHUB_EVENT_PATH are the same event, read by what a step runs instead of

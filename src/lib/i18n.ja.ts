@@ -518,7 +518,7 @@ const BASE: Record<string, string> = {
   "Sign in and add this PC": "サインインしてこのPCを追加",
   "Add this PC to your account, so every device of your account can use it with one approval.": "このPCをアカウントに追加すると、一度の承認でアカウントのすべてのデバイスから使えます。",
   "Every device of your account can use this PC after that.": "その後は、アカウントのすべてのデバイスからこのPCを使えます。",
-  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "すでにこのアカウントにサインインしているデバイス（Ovisアプリまたは app.ovis.sh）で、{name} の「追加」を選んでください。するとこの画面に6桁の数字が表示されます。それをそのデバイスに入力し、ここで「承認」を押してください。このページは開いたままにしてください。",
+  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. If it shows Join there instead, choose Join, then Type the number. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "すでにこのアカウントにサインインしているデバイス（Ovisアプリまたは app.ovis.sh）で、{name} の「追加」を選んでください。「追加」ではなく「参加」が表示されている場合は、「参加」を選んでから「番号を入力」を選んでください。するとこの画面に6桁の数字が表示されます。それをそのデバイスに入力し、ここで「承認」を押してください。このページは開いたままにしてください。",
   "Waiting. The window reopens by itself if Ovis restarts.": "待機中です。Ovisが再起動しても自動的に受け付けを再開します。",
   "Stop waiting": "待機をやめる",
   "This PC stopped waiting after 30 minutes.": "30分が過ぎたため、このPCは待機を終了しました。",

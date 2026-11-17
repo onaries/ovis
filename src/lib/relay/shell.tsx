@@ -162,7 +162,7 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     shell.render(createElement(StrictMode, null, createElement(SettingsProvider, null, createElement(RelayShell, {
       state, scoped, iosTab, pcStatus: new Map(sweep.status), onCheckPcs: () => void sweep.check(), onCheckPc: (serverId: string) => void sweep.checkOne(serverId), onPair: confirmed, onRetry: retry, onCancel: cancel, onBack: toFront, onForget: forget,
       onForgetPc: async (serverId: string) => { account.cancelEnrollment(serverId); await forgetSavedPc(serverId, store); await account.refresh(); if (frontUp()) await showFront(); },
-      onUpdate: updates.update, onMatch: match, onCodeStart: codeStart, onCodeSubmit: codeSubmit, onCodeMatch: codeMatch, onOpenPc: openPc, defaultRelay: GLOBAL_RELAY, meLabel: label,
+      onUpdate: updates.update, onMatch: match, onJoinInstead: joinInstead, onCodeStart: codeStart, onCodeSubmit: codeSubmit, onCodeMatch: codeMatch, onOpenPc: openPc, defaultRelay: GLOBAL_RELAY, meLabel: label,
       directoryRelays: account.directory, sheetJoin, continuedAccount: sheetJoin ? account.state : null, observedVersions: observedVersions(),
       ...(account.enabled ? { onSignIn: account.signIn, accountProviders: account.providers, onJoin: joinPc, onSignOut: account.signOut, onLeave: account.leave, onDeleteAccount: account.deleteAccount, ...(account.signedInAs?.sign_in_id === undefined ? {} : { accountSignIn: account.signedInAs.sign_in_id }), onRefreshAccount: () => account.refreshNow() } : {}),
     })))); account.armRefresh();
@@ -374,6 +374,20 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     keepTypedJoin(null);
     show({ kind: "compare", name: current.name, digits: current.typed ? "" : current.digits, confirmed: true, typed: current.typed, challenge });
     current.matched();
+  };
+  /**
+   * A typed comparison whose PC shows no number (it is not waiting on its own screen): the request is a join's on the
+   * wire, so it goes on as one. This device shows its digits for a device of the account, or the PC, to pick, and the
+   * sheet becomes the join sheet; a Try again after it joins rather than types.
+   */
+  const joinInstead = (): void => {
+    const current = comparison;
+    if (current === null || !current.typed) return;
+    comparison = { ...current, typed: false };
+    if (last !== null) last.typed = false;
+    keepTypedJoin(null);
+    if (sheetJoin !== null) { sheetJoin = { ...sheetJoin, mode: "join" }; keepSheetContext(sheetJoin); }
+    show({ kind: "compare", name: current.name, digits: current.digits, confirmed: false, challenge });
   };
   const codeStart = (): void => { cancelAttempt(); codeOffer = null; show({ kind: "code-entry", failure: null }); };
   const codeSubmit = (input: string): void => {

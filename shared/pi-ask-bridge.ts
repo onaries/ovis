@@ -1,25 +1,14 @@
 /**
- * The contract between the web UI's pi extension (integrations/pi-ask.ts) and the server
- * (server/pi-ask-bridge.ts) for @eko24ive/pi-ask's ask_user form (#1202).
- *
  * pi-ask answers only through `pi.events` inside the pi process (its docs/remote-events.md: no
- * terminal keystrokes, no network API). The extension, which the user installs with
- * `bun scripts/install-pi-integration.ts`, listens there and serves HTTP on a unix socket that only
- * the user can open: `<pi agent dir>/<PI_ASK_BRIDGE_DIRECTORY>/<pid>.sock`.
- *
- *   GET  /v1/state   -> PiAskBridgeState: the forms pi-ask reports open, and the session file
- *   POST /v1/submit  PiAskSubmitRequest -> PiAskSubmitReply: pi-ask's own submit-result
- *   GET  /v1/commands -> PiBridgeCommands: the commands pi's extensions registered (#1448)
+ * terminal keystrokes, no network API).
  */
 
 export const PI_ASK_BRIDGE_DIRECTORY = "herdr-web-ui-ask";
 export const PI_ASK_BRIDGE_VERSION = 1;
-/** How long the extension waits for pi-ask's submit-result before it answers `timeout`. */
 export const PI_ASK_SUBMIT_TIMEOUT_MS = 3_000;
 /** A unix socket path longer than this does not fit sockaddr_un on macOS (104 bytes, with its NUL). */
 export const PI_ASK_SOCKET_PATH_MAX = 100;
 
-/** pi-ask 1.2.0's channels (src/remote-ask.ts). */
 export const PI_ASK_EVENTS = {
   started: "@eko24ive/pi-ask:started",
   completed: "@eko24ive/pi-ask:completed",
@@ -44,7 +33,6 @@ export interface PiAskQuestion {
   options: PiAskOption[];
 }
 
-/** One open form, as pi-ask's started event names it. */
 export interface PiAskFlow {
   flowId: string;
   toolCallId?: string;
@@ -57,13 +45,8 @@ export interface PiAskFlow {
 export interface PiAskBridgeState {
   version: typeof PI_ASK_BRIDGE_VERSION;
   pid: number;
-  /** The session file pi is writing, or null before it has one. */
   sessionFile: string | null;
   flows: PiAskFlow[];
-  /**
-   * The ask_user calls pi-ask still waits on, read from pi's live branch (`getBranch()`): a /tree
-   * move changes it without writing to the session file. Null when pi could not say.
-   */
   openCalls: string[] | null;
 }
 
@@ -87,21 +70,16 @@ export function piAskOpenCalls(open: readonly string[], entry: unknown): string[
   return calls.length ? [...open.filter((call) => !calls.includes(call)), ...calls] : [...open];
 }
 
-/** One extension command as `pi.getCommands()` lists it (pi 1.3.0 core/slash-commands.ts). */
 export interface PiBridgeCommand {
-  /** pi's invocation name, without the slash: `name:2` when two extensions register `name` */
   name: string;
   description?: string;
-  /** `sourceInfo.scope`: user, project, temporary (-e) or system */
   scope?: string;
-  /** `sourceInfo.origin`: package (an installed pi package) or top-level */
   origin?: string;
 }
 
 export interface PiBridgeCommands {
   version: typeof PI_ASK_BRIDGE_VERSION;
   pid: number;
-  /** Null when pi could not say: no `getCommands` in this pi, or its extension runtime is not bound. */
   commands: PiBridgeCommand[] | null;
 }
 
@@ -118,7 +96,6 @@ export interface PiAskSubmitRequest {
   flowId: string;
   /** The form the card was read from: pi-ask reopens a call's form under the same flowId. */
   createdAt: number;
-  /** The session the card was read for. */
   sessionFile: string;
   response: PiAskResponse;
 }

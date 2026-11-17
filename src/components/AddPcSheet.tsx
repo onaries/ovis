@@ -50,9 +50,20 @@ export interface AddPcSheetProps {
   mode: AddPcSheetMode; pc: MyPc | null; state: RelayShellState;
   onJoin: (pc: MyPc, options?: { typed?: boolean }) => void; onPair: () => void; onMatch: (typed?: string) => void;
   onRetry?: () => void; onOpenPc?: () => void; onCancel: () => void; onClose: () => void; onPairByQr: () => void;
+  /**
+   * A new PC's second way: the directory cannot tell a PC whose screen waits to be added from one already put in the
+   * account by a QR code before its first mailbox pull, so the start offers the join sheet beside the typed number, and
+   * a typed comparison whose PC shows no number turns into a join (this device then shows its digits).
+   */
+  onAskToJoin?: () => void;
+  /**
+   * A listed PC's other way in from Join: the directory cannot tell a PC in the account from one seen there once that
+   * waits on its own screen again (Revoke all, then listed again), so the join start keeps the typed number beside it.
+   */
+  onTypeNumber?: () => void;
 }
 
-export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, onOpenPc, onCancel, onClose, onPairByQr }: AddPcSheetProps) {
+export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, onOpenPc, onCancel, onClose, onPairByQr, onAskToJoin, onTypeNumber }: AddPcSheetProps) {
   const t = useT(), locale = useLocale(), phone = useMediaQuery(SHEET_QUERY);
   const id = useId();
   const name = pc?.name ?? "";
@@ -73,7 +84,7 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
     }
   }, [phase, challenge, state.kind]);
 
-  useLayoutEffect(() => { const node = surface.current; if (node !== null && !node.contains(document.activeElement)) node.focus({ preventScroll: true }); }, [phase]);
+  useLayoutEffect(() => { const node = surface.current; if (node !== null && !node.contains(document.activeElement)) node.focus({ preventScroll: true }); }, [phase, mode]);
 
   const close = (): void => { if (phase !== null && phase !== "start" && phase !== "failed" && phase !== "ready") onCancel(); onClose(); };
   const latestClose = useRef(close);
@@ -107,18 +118,31 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
   if (phase === null || pc === null) {
     title = t("Add a PC");
     sub = t("A PC joins through your account, or pairs with this device alone.");
-    body = <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs → Account, sign in, then choose Add this PC to my account. It then shows here with Add.")}</p>;
+    body = <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs → Account, sign in, then choose Add this PC to my account. It then shows here.")}</p>;
     actions = pairActions(<button key="close" type="button" className="btn" onClick={onClose}>{t("Close")}</button>, <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={onPairByQr}>{t("Pair with a QR or code")}</button>);
   } else {
     title = mode === "new" ? t("Add {name} to your account", { name }) : t("Add this device to {name}", { name });
     sub = mode === "new"
-      ? t("Type the number {name} shows on its own screen, then approve there.", { name })
-      // only a device connected to the PC hears its join request (docs/account.md "Who may admit a device"), so none is named
-      : t("A device of your account that is connected to {name} approves this one.", { name });
+      ? phase === "start" && onAskToJoin
+        ? t("Type the number {name} shows on its own screen after you start Add, then approve there. If {name} is already in your account, ask to join instead.", { name })
+        : t("Type the number {name} shows on its own screen, then approve there.", { name })
+      // a device connected to the PC hears its join request (docs/account.md "Who may admit a device"), or the PC itself
+      // while its own Add screen waits; an instruction, not a claim: the directory cannot say which, so both are named
+      : t("Approve this device on a device of your account connected to {name}, or on {name} if it shows this request.", { name });
     switch (phase) {
       case "start":
         // a join is heard only by a device with the PC open, so that comes before the press
-        if (mode !== "new") body = <p className="relay-shell-copy">{t("First open {name} in Ovis on a device that already uses it (your phone, for example) and keep it open. Then choose Ask to join.", { name })}</p>;
+        if (mode !== "new") body = <><p className="relay-shell-copy">{t("First open {name} in Ovis on a device that already uses it (your phone, for example) and keep it open. Then choose Ask to join.", { name })}</p>{onTypeNumber && <p className="relay-shell-copy">{t("If {name} is waiting on its own screen to be added, type its number here instead.", { name })}</p>}</>;
+        if (mode !== "new" && onTypeNumber) {
+          const type = <button key="type" type="button" className="btn" data-action="type-number" onClick={onTypeNumber}>{t("Type the number")}</button>;
+          actions = pairActions(phone ? [type, cancel] : [cancel, type], <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => onJoin(pc)}>{t("Ask to join")}</button>);
+          break;
+        }
+        if (mode === "new" && onAskToJoin) {
+          const ask = <button key="ask" type="button" className="btn" data-action="ask-to-join" onClick={onAskToJoin}>{t("Ask to join")}</button>;
+          actions = pairActions(phone ? [ask, cancel] : [cancel, ask], <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => onJoin(pc, { typed: true })}>{t("Add this PC")}</button>);
+          break;
+        }
         actions = mode === "new"
           ? pairActions(cancel, <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => onJoin(pc, { typed: true })}>{t("Add this PC")}</button>)
           : pairActions(cancel, <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => onJoin(pc)}>{t("Ask to join")}</button>);
@@ -143,14 +167,17 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
                 <input ref={digitsInputRef} id={`${id}-digits`} name="digits" className="input relay-shell-code-input" aria-label={t("Number on {name}", { name })} inputMode="numeric" pattern="[0-9 ]{6,7}" maxLength={7} autoComplete="one-time-code" disabled={pendingTyped} required autoFocus />
               </div>
               <p className="relay-shell-detail">{freshAfterWrong ? t("A new number is shown on {name} because the previous number changed.", { name }) : t("{name} shows six digits on its own screen now. Type them here, then approve on {name}.", { name })}</p>
+              {onAskToJoin && <p className="relay-shell-detail">{t("{name} shows no number? Ask to join instead.", { name })}</p>}
             </form>
           );
-          actions = pairActions(cancel, <button key="primary" type="submit" form={`${id}-digits-form`} className="btn btn-primary" data-sheet-primary disabled={pendingTyped} aria-busy={pendingTyped ? true : undefined}>{t("Add this PC")}</button>);
+          // a PC not waiting on its own screen shows no number: the same request goes on as a join, with this device's digits
+          const ask = onAskToJoin && <button key="ask" type="button" className="btn" data-action="ask-to-join" onClick={onAskToJoin}>{t("Ask to join")}</button>;
+          actions = pairActions(ask ? (phone ? [ask, cancel] : [cancel, ask]) : cancel, <button key="primary" type="submit" form={`${id}-digits-form`} className="btn btn-primary" data-sheet-primary disabled={pendingTyped} aria-busy={pendingTyped ? true : undefined}>{t("Add this PC")}</button>);
         } else {
           body = (
             <>
               <p className="relay-shell-digits" aria-label={digits.split("").join(" ")}>{`${digits.slice(0, 3)} ${digits.slice(3)}`}</p>
-              <p className="relay-shell-copy">{t("A device connected to {name} shows three numbers: pick this one there.", { name })}</p>
+              <p className="relay-shell-copy">{t("Check that this number matches where you approve, then approve.")}</p>
             </>
           );
           actions = pairActions(cancel, <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => onMatch()}>{t("The numbers match")}</button>);
@@ -170,7 +197,7 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
         body = (
           <div className="relay-shell-wait" role="status">
             <div className="boot-spinner" aria-hidden="true" />
-            <p className="relay-shell-detail">{mode === "new" ? t("Approve this device on {name} within 90 seconds to finish.", { name }) : t("Waiting for an account member to approve this device within 90 seconds…")}</p>
+            <p className="relay-shell-detail">{mode === "new" ? t("Approve this device on {name} within 90 seconds to finish.", { name }) : t("Waiting up to 90 seconds for approval…")}</p>
           </div>
         );
         actions = cancel;
@@ -208,7 +235,7 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
   ] : [
     [t("Ask to join"), t("Through your account, with this device's key")],
     [t("Check the number on a device connected to {name}", { name }), t("It shows three; pick the one this device shows")],
-    [t("Approved by an account member"), t("On that device, never on {name} itself", { name })],
+    [t("Approved by an account member"), t("On a device of your account that is connected to {name}, or on {name} itself", { name })],
     [t("Ready"), t("This device can open {name}", { name })],
   ]).map(([label, detail], step) => ({ label, detail, status: statuses[step] ?? "todo" }));
 

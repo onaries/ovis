@@ -3,10 +3,15 @@ import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
+import { translate } from "../lib/i18n.ts";
 import { dashboardModel, type DashboardFilter, type DashboardPc } from "../lib/relay/dashboard.ts";
 import type { PcStatus } from "../lib/relay/pcStatus.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+import { askToJoinReason } from "./relayPcState.tsx";
 import { RelayPcTable, type RelayPcTableProps } from "./RelayPcTable.tsx";
+
+// the Join reason as the code words it (askToJoinReason), compared with what each marked element shows
+const joinReason = askToJoinReason({ added_at: new Date(0).toISOString(), join: { server_public_key: "k", relay: "wss://relay.ovis.sh" } }, (key, vars) => translate("en", key, vars))!;
 
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 const GLOBAL = "wss://relay.ovis.sh";
@@ -46,8 +51,10 @@ function makePc(
 function sampleFleet(): DashboardPc[] {
   return [
     makePc(IDS.ready, "Studio desktop", "paired", { relay: GLOBAL }),
+    // new in the account and never seen there: it waits on its own screen to be added
     makePc(IDS.fresh, "New mini PC", "needs-approval", {
       added_at: new Date(NOW - 2 * 60_000).toISOString(),
+      last_seen_at: null,
       paired: false,
       linked: false,
       join: { server_public_key: "k1", relay: GLOBAL },
@@ -240,6 +247,17 @@ describe("RelayPcTable", () => {
     expect(rowAction(IDS.offlineJoin)).toEqual(["button", "join", "Join"]);
     // V-073: a needs-approval or offline PC without a verified join route offers Details instead of an empty cell
     expect(rowAction(IDS.routeless)).toEqual(["button", "details", "Details"]);
+  });
+
+  it("offers Join, not Add, on the row of a PC new in the account that already came by the account service", () => {
+    const inAccount = makePc(IDS.fresh, "m1-box", "needs-approval", {
+      added_at: new Date(NOW - 2 * 60_000).toISOString(), last_seen_at: new Date(NOW - 30_000).toISOString(),
+      paired: false, linked: false, join: { server_public_key: "k1", relay: GLOBAL },
+    });
+    const html = renderHtml(buildProps([inAccount]));
+    const tr = new RegExp(`<tr[^>]*data-pc-id="${IDS.fresh}"[\\s\\S]*?<\\/tr>`).exec(html)?.[0] ?? "";
+    expect(/data-pc-action="([^"]+)"/.exec(tr)?.[1]).toBe("join");
+    expect(tr).not.toContain("min left");
   });
 
   it("opens Details without a connection attempt on row click, name button Enter/click, or Details button, and action clicks do not bubble into Details", async () => {
@@ -478,12 +496,15 @@ describe("RelayPcTable", () => {
   it("keeps a Join row's State cell to one line by putting the closed-window reason in the state word's title (while the phone list keeps the line), so rows stay 44px without clipping (PF-1)", async () => {
     const html = renderHtml(buildProps());
     const joinRow = new RegExp(`<tr[^>]*data-pc-id="${IDS.join}"[\\s\\S]*?<\\/tr>`).exec(html)?.[0] ?? "";
-    expect(joinRow).toContain('<span class="relay-pc-state-word" title="Needs approval · Join · a device of your account connected to it approves">Needs approval</span>');
+    // the cell holds the state word alone; the Join reason rides in its title, named by data-reason
+    expect(joinRow).toContain(`<span class="relay-pc-state-word" title="Needs approval · ${joinReason}" data-reason="join">Needs approval</span>`);
     expect(joinRow).not.toContain("relay-pc-probe-line");
     phoneMatches = true;
     await mount(buildProps());
     const joinPhone = rootOf(renderer).find((n) => n.type === "li" && n.props["data-pc-id"] === IDS.join);
-    expect(textOf(joinPhone)).toContain("Join · a device of your account connected to it approves");
+    // the phone row keeps the reason as its own line under the state word that names it
+    expect(joinPhone.find((n) => n.props.className === "relay-pc-state-word").props["data-reason"]).toBe("join");
+    expect(joinPhone.findAll((n) => n.type === "p" && n.props.className === "relay-pc-probe-line").map(textOf)).toEqual([joinReason]);
   });
 
   it("names the specific state in the State cell (Needs approval, Needs update, Offline · when, Ready) with the full text in a title, while the filter chip keeps Needs you", () => {

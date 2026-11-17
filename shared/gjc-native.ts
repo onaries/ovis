@@ -27,7 +27,6 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-/** Shared shape only; readers apply their own process identity and lease checks. */
 export function isGjcNativeBindingShape(value: unknown): value is GjcNativeBinding {
   if (!isRecord(value) || !hasExactKeys(value, recordKeys)) return false;
   if (value.version !== 1 || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0

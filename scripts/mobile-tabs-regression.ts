@@ -350,7 +350,8 @@ export async function checkMobileTabs(browser: Browser, origin: string): Promise
 
     // Wider than a phone a touch screen keeps the row: the open tab's own touch menu beside its name
     await page.setViewportSize(TABLET);
-    await page.locator(".tab-strip").waitFor();
+    // the row under the header: the phone's row in the header is a .tab-strip too, found before the new width is drawn
+    await page.locator(".pane-slot .tab-strip").waitFor();
     assert.equal(await page.locator(".app-header .header-tabs-sheet").count(), 0, "no chevron lists the tabs where the row is drawn");
     assert.equal(await page.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "tabs have no close buttons or chevrons");
     assert.equal(await page.locator(".tab-strip-menu:visible").count(), 1, "only the active tab exposes a touch menu");

@@ -7,13 +7,9 @@ import type { ConversationPart, ConversationTurn } from "./protocol.ts";
 
 /** Panes one summary request may name. */
 export const PANE_SUMMARY_MAX_IDS = 24;
-/** UTF-16 units of a summary's text. */
 export const PANE_SUMMARY_TEXT_MAX = 280;
-/** How long one summary request reads conversations; panes not read by then are left out of its answer. */
 export const PANE_SUMMARY_DEADLINE_MS = 1500;
-/** How long one pane's read may take within a request; a pane read no faster is left out and the next one read. */
 export const PANE_SUMMARY_PANE_MS = 400;
-/** How long a pane's read that a request stopped waiting for keeps its result once settled, for the next request for the pane. */
 export const PANE_SUMMARY_KEEP_MS = 5_000;
 
 export interface PaneSummary {
@@ -48,22 +44,11 @@ type TextPart = Extract<ConversationPart, { kind: "text" }>;
 
 interface Words { part: TextPart; text: string }
 
-/** a code fence line: three or more backticks or tildes, with an info string and nothing after it ("```npm test```" is words) */
 const FENCE = /^\s*(?:`{3,}[^`]*|~{3,}.*)$/u;
-/**
- * an inline link or image, `[label](target)`, read as its label: a label of at most 200 characters, a target of at
- * most 2000 that names a path, a file or an address (it holds `/`, `.`, `#` or `:`), so a call such as
- * `handlers[0](event)` stays as written; the bounds keep each `[` from scanning to the line's end
- */
 const LINK = /!?\[([^\]\n]{0,200})\]\(([^()\s]{1,2000})(?:\s+"[^"\n]{0,200}")?\)/gu;
 const LINK_TARGET = /[/.#:]/u;
-/** a heading, list item or quote mark at a line's start; inline marks stay for the client */
 const BLOCK_MARK = /^\s*(?:#{1,6} |[-*+] |\d+[.)] |> )/u;
 
-/**
- * A text as one line: fence lines and block marks dropped, links as their labels, whitespace runs collapsed, trimmed.
- * Lines are taken in only until the words collected pass PANE_SUMMARY_TEXT_MAX: the rest would be cut.
- */
 function plain(text: string): string {
   const words: string[] = [];
   let length = 0;
@@ -82,13 +67,11 @@ function plain(text: string): string {
 /** Made on first use, where the runtime has one: a browser this module is bundled for may not (Safari 14, Firefox before 125). */
 let graphemes: Intl.Segmenter | undefined;
 
-/** A text's characters: graphemes, or code points without Intl.Segmenter. */
 function characters(text: string): Iterable<string> {
   if (typeof Intl.Segmenter === "function") graphemes ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
   return graphemes ? Array.from(graphemes.segment(text), ({ segment }) => segment) : text;
 }
 
-/** The whole characters from the start (graphemes, or code points without Intl.Segmenter) that fit in PANE_SUMMARY_TEXT_MAX units. */
 function cut(text: string): string {
   if (text.length <= PANE_SUMMARY_TEXT_MAX) return text;
   let end = 0;
@@ -99,7 +82,6 @@ function cut(text: string): string {
   return text.slice(0, end);
 }
 
-/** The words a turn ends on: an answer's last final answer, else its last text; a user's first text. A text with nothing left once cleaned counts as blank. */
 function wordsOf(turn: ConversationTurn): Words | undefined {
   const texts = turn.parts.flatMap((part): Words[] => {
     if (part.kind !== "text") return [];
@@ -111,11 +93,9 @@ function wordsOf(turn: ConversationTurn): Words | undefined {
   return texts[texts.length - 1];
 }
 
-/** parts the agent's runtime puts in the user's seat: a turn holding one is drawn as the runtime's (ChatView.tsx), nobody typed it */
 const RUNTIME_PARTS = new Set<ConversationPart["kind"]>(["compact", "notice", "task_result", "goal_wait"]);
 const userWrote = (turn: ConversationTurn): boolean => turn.role === "user" && !turn.parts.some((part) => RUNTIME_PARTS.has(part.kind));
 
-/** The newest turn's words that has any, or null when no turn has text. */
 export function summaryOf(turns: readonly ConversationTurn[]): PaneSummary | null {
   let newestUser = turns.length - 1;
   while (newestUser >= 0 && !userWrote(turns[newestUser]!)) newestUser--;

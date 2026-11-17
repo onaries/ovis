@@ -1,11 +1,4 @@
-/**
- * The account service API (docs/account.md, "Account service API") in memory, for tests of the PC
- * and the apps. Not a service: no provider behind sign-in, no push, no persistence. `signInAs` says who
- * the next sign-in is, `appleIdToken` stands in for Apple's, and `issueToken` skips sign-in altogether. It checks what the real service must check (record shape and signature, the
- * caller's directory, server proof with the `account` role), so tests fail where a PC or app relies
- * on something the service would refuse.
- */
-import { ACCOUNT_RECORDS_MAX, AccountRecordError, isAccountKey, readAccountRecord, type AccountRecord } from "./account-records.ts";
+import { ACCOUNT_RECORDS_MAX, AccountRecordError, isAccountKeyEncoding, readAccountRecord, type AccountRecord } from "./account-records.ts";
 import { accountOsOf, type AccountOs, type AccountPlace } from "./account-asker.ts";
 import { isWssOrigin } from "./relay-offer.ts";
 import { deriveServerId, proofKey, serverChallenge, verifyServerProof } from "./relay-server-proof.ts";
@@ -13,17 +6,14 @@ import { deriveServerId, proofKey, serverChallenge, verifyServerProof } from "./
 export const CHALLENGE_TTL_MS = 60_000;
 export const MAILBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAILBOX_PAGE = 100;
-/** Records one account may hold for one PC at once; past it, `/v1/records` answers 429 `mailbox_full`. */
 export const MAILBOX_MAX = 1000;
 export const ACCESS_TOKEN_TTL_S = 3600;
-/** PCs one account may list; past it, a new PC answers 409 `directory_full`. */
 export const DIRECTORY_MAX = 100;
 export const LIMIT_WINDOW_MS = 10 * 60_000;
 export const ADMISSIONS_PER_WINDOW = 10;
 export const ACCOUNT_REQUESTS_PER_WINDOW = 600;
 export const DEVICE_CODE_TTL_S = 900;
 export const DEVICE_POLL_S = 5;
-/** What every push ring says; which device or PC it is about, the app learns from its PCs. */
 export const ACCOUNT_RING = { pane_id: null, title: "Ovis", body: "Your Ovis account has news", tag: "ovis-account" } as const;
 
 export interface FakeRing { account: string; endpoint: string; payload: typeof ACCOUNT_RING }
@@ -31,16 +21,12 @@ export const SIGNIN_CODE_TTL_MS = 60_000;
 
 export type SignInProvider = "github" | "google" | "apple";
 const SIGN_IN_PROVIDERS: readonly string[] = ["github", "google", "apple"];
-/** The providers with a device flow, and the page each one's code is typed at. */
 const DEVICE_PAGES: Readonly<Record<string, string>> = { github: "https://github.com/login/device", google: "https://www.google.com/device" };
 export const LINK_TOKEN_TTL_S = 600;
-/** How recent a sign-in must be to add or remove a sign-in method. */
 export const REAUTH_MS = 10 * 60_000;
 
-/** The web app's redirect: the code comes back in the fragment there, so it never reaches the host's logs. */
 export const WEB_REDIRECT = "https://app.ovis.sh/";
 
-/** The only redirects sign-in returns to (docs/account.md, "Signing in"), compared exactly. */
 export function isAllowedRedirect(uri: string): boolean {
   if (uri === WEB_REDIRECT || uri === "ovis://account/callback") return true;
   const loopback = /^http:\/\/127\.0\.0\.1:([0-9]{1,5})\/callback$/.exec(uri);
@@ -62,28 +48,22 @@ const PKCE = /^[A-Za-z0-9._~-]{43,128}$/;
 
 interface Session { account: string; provider: SignInProvider | "test"; family: string; expires: number }
 
-/** `public_key`: the PC's relay key (X25519, 64 hex), from which `server_id` derives; `relay`: the wss origin it is reached through. */
 export interface FakePc { server_id: string; label: string; public_key: string; relay: string; added_at: string; last_seen_at: string | null }
-/** `key`: the waiting device's account key, which the PC matches against the comparison it is asked for. */
 export interface FakeAdmission { id: string; server_id: string; account: string; label: string; key: string; at: string; os: AccountOs | null; country: string | null; city: string | null }
-/** How long an admission reaches its PC's mailbox: the PC lets a waiting account device compare digits only within it. */
 export const ADMISSION_TTL_MS = 10 * 60_000;
 
 interface Mail { seq: number; record: AccountRecord; at: number }
 
 export class FakeAccountService {
   private readonly tokens = new Map<string, Session>();
-  /** `link`: the sign-in (account and refresh family) a linking sign-in adds this identity to, once that sign-in redeems the code */
   private readonly codes = new Map<string, { account: string; provider: SignInProvider; challenge: string; redirect: string; expires: number; link: { account: string; family: string } | null }>();
   private readonly refreshTokens = new Map<string, { account: string; provider: SignInProvider; family: string; used: boolean }>();
   private readonly revokedFamilies = new Set<string>();
   private readonly appleTokens = new Map<string, { account: string; nonce: string }>();
   private readonly signIns = new Map<SignInProvider, string>();
   private readonly deviceSignIns = new Map<string, { provider: SignInProvider; userCode: string; account: string | null; denied: boolean; interval: number; nextPoll: number; expires: number; challenge: string | null; page?: boolean; requester?: { label: string | null; os: AccountOs | null } }>();
-  /** by account: its sign-in methods, one per provider */
   private readonly identityList = new Map<string, Map<SignInProvider, { added_at: string }>>();
   private readonly linkTokens = new Map<string, { account: string; family: string; provider: SignInProvider; expires: number }>();
-  /** by refresh family: when that sign-in was made (a refresh keeps it), for what needs a recent one */
   private readonly signedInAt = new Map<string, number>();
   private offered: { providers: SignInProvider[]; device: SignInProvider[]; device_page?: SignInProvider[] } = { providers: ["github", "google", "apple"], device: ["github", "google"] };
   private readonly pushes = new Map<string, { account: string; endpoint: string }>();
@@ -94,22 +74,16 @@ export class FakeAccountService {
   private readonly challenges = new Map<string, { server_id: string; expected: string; expires: number }>();
   private readonly admissionList: FakeAdmission[] = [];
   private readonly accountLimits = new Map<string, Record<string, unknown>>();
-  /** accounts whose subscription still renews: their delete is refused */
   private readonly subscribed = new Set<string>();
   private readonly deletedAccounts = new Set<string>();
-  /** sign-ins made with a device code or on the link page, refreshes included: they cannot delete the account */
   private readonly deviceFamilies = new Set<string>();
-  /** Where the service sees every request come from (Cloudflare's `request.cf`); unknown unless a test says. */
   requestPlace: AccountPlace = { country: null, city: null };
-  /** False acts as an account service from before "Who is asking", whose link page start refuses `label` and `os`. */
-  linkPageTakesRequester = true;
+  linkPageAcceptsLabelAndOs = true;
   private seq = 0;
-  /** Every request the fake answered, oldest first: `METHOD /path`. */
   readonly requests: string[] = [];
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** A bearer token for `account`, as if its owner had just signed in. */
   issueToken(account: string): string {
     const token = randomHex(32);
     const family = randomHex(16);
@@ -118,36 +92,27 @@ export class FakeAccountService {
     return token;
   }
 
-  /** Sets the limits `GET /v1/account/limits` answers for `account`. */
   setLimits(account: string, limits: Record<string, unknown> | null): void {
     if (limits === null) this.accountLimits.delete(account);
     else this.accountLimits.set(account, limits);
   }
 
-  /** Who the next sign-in with `provider` turns out to be; unset, `acct_<provider>`. */
   signInAs(provider: SignInProvider, account: string): void { this.signIns.set(provider, account); }
 
-  /** The account has a subscription that still renews (`false`: cancelled, or none). */
   subscribe(account: string, renews = true): void { if (renews) this.subscribed.add(account); else this.subscribed.delete(account); }
 
-  /** Whether `DELETE /v1/account` erased that account. */
   deleted(account: string): boolean { return this.deletedAccounts.has(account); }
 
-  /** What `GET /v1/providers` answers: the sign-ins this service is set up for. */
-  offer(providers: SignInProvider[], device: SignInProvider[]): void { this.offered = { providers, device }; }
+  offerSignIns(providers: SignInProvider[], device: SignInProvider[]): void { this.offered = { providers, device }; }
 
-  /** Says the service has the link page (`device_page`), finishing `/v1/signin/ovis/device` with these sign-ins. */
   offerLinkPage(providers: SignInProvider[]): void { this.offered = { ...this.offered, device_page: providers }; }
 
-  /** What the PC that started the link page sign-in showing `userCode` said it is; undefined for no such sign-in. */
   linkRequester(userCode: string): { label: string | null; os: AccountOs | null } | undefined {
     for (const entry of this.deviceSignIns.values()) if (entry.page && entry.userCode === userCode) return entry.requester;
     return undefined;
   }
 
-  /** The person typed `userCode` on the link page and confirmed a sign-in with `provider`. */
   approveOnLinkPage(userCode: string, account: string, provider: SignInProvider): void {
-    // one approval, as the service: an approved request's code names nothing any more
     for (const entry of this.deviceSignIns.values()) {
       if (entry.userCode === userCode && entry.page && entry.account === null && this.now() < entry.expires) { entry.account = account; entry.provider = provider; entry.userCode = ""; }
     }
@@ -160,14 +125,12 @@ export class FakeAccountService {
     this.identityList.set(account, methods);
   }
 
-  /** An identity token as Sign in with Apple hands an iOS app, for `account`, whose `nonce` claim is the hash the app gave Apple. */
   appleIdToken(account: string, nonceHash: string): string {
     const token = randomHex(32);
     this.appleTokens.set(token, { account, nonce: nonceHash });
     return token;
   }
 
-  /** The person typed `userCode` at GitHub and approved (or refused) the device sign-in. */
   approveDevice(userCode: string, account: string): void {
     for (const entry of this.deviceSignIns.values()) if (entry.userCode === userCode) entry.account = account;
   }
@@ -176,16 +139,13 @@ export class FakeAccountService {
     for (const entry of this.deviceSignIns.values()) if (entry.userCode === userCode) entry.denied = true;
   }
 
-  /** Every push the fake would have sent, oldest first. */
   rings(): readonly FakeRing[] { return this.ringList; }
 
-  /** Rings every other signed-in device of `account` that subscribed. */
   private ring(account: string, family: string): void {
     for (const [owner, push] of this.pushes) if (push.account === account && owner !== family) this.ringList.push({ account, endpoint: push.endpoint, payload: ACCOUNT_RING });
   }
 
-  /** Counts one more of `key` in its 10-minute window; false past `max`. */
-  private spend(key: string, max: number): boolean {
+  private withinRateLimit(key: string, max: number): boolean {
     const now = this.now();
     const counter = this.counters.get(key);
     if (!counter || now - counter.start >= LIMIT_WINDOW_MS) { this.counters.set(key, { start: now, count: 1 }); return true; }
@@ -214,7 +174,6 @@ export class FakeAccountService {
     const state = url.searchParams.get("state") ?? "";
     const challenge = url.searchParams.get("code_challenge") ?? "";
     if (!isAllowedRedirect(redirect)) return problem(400, "invalid_redirect_uri", "That redirect is not allowed");
-    // the web redirect always takes the fragment; the app's scheme may ask for it; a loopback server never sees one
     const mode = url.searchParams.get("response_mode") ?? (redirect === WEB_REDIRECT ? "fragment" : "query");
     const loopback = redirect.startsWith("http://127.0.0.1:");
     if ((mode !== "fragment" && mode !== "query") || (redirect === WEB_REDIRECT && mode !== "fragment") || (loopback && mode !== "query")) {
@@ -223,7 +182,6 @@ export class FakeAccountService {
     if (url.searchParams.get("code_challenge_method") !== "S256" || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || state.length === 0) {
       return problem(400, "invalid_request", "Send state and an S256 code_challenge");
     }
-    // a link token is spent here, but nothing is linked until its code is redeemed (token)
     const link = url.searchParams.get("link_token");
     const linking = link === null ? undefined : this.linkTokens.get(link);
     if (link !== null) this.linkTokens.delete(link);
@@ -250,7 +208,6 @@ export class FakeAccountService {
           this.addIdentity(code.account, code.provider);
           return this.grant(code.account, code.provider);
         }
-        // a link commits only here, redeemed by the very sign-in that asked for it
         const bearer = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
         const holder = bearer === undefined ? undefined : this.tokens.get(bearer);
         if (holder === undefined || holder.family !== code.link.family || this.now() >= holder.expires || this.revokedFamilies.has(holder.family)) return invalid("Redeem a link with the sign-in that asked for it");
@@ -262,7 +219,6 @@ export class FakeAccountService {
       case "refresh_token": {
         const refresh = typeof body.refresh_token === "string" ? this.refreshTokens.get(body.refresh_token) : undefined;
         if (!refresh || this.revokedFamilies.has(refresh.family)) return invalid("Sign in again");
-        // a refresh token is good once: seeing it again means it leaked, so the whole family goes
         if (refresh.used) { this.revokeFamily(refresh.family); return invalid("Sign in again"); }
         refresh.used = true;
         return this.grant(refresh.account, refresh.provider, refresh.family);
@@ -277,7 +233,6 @@ export class FakeAccountService {
       case "urn:ietf:params:oauth:grant-type:device_code": {
         const entry = typeof body.device_code === "string" ? this.deviceSignIns.get(body.device_code) : undefined;
         if (!entry || this.now() >= entry.expires) return problem(400, "expired_token", "Start the sign-in again");
-        // a bound sign-in: refused before anything else, so a poll without the verifier moves nothing
         if (entry.challenge !== null && (typeof body.code_verifier !== "string" || !PKCE.test(body.code_verifier) || await s256(body.code_verifier) !== entry.challenge)) {
           return invalid("That verifier is not this sign-in's");
         }
@@ -297,7 +252,6 @@ export class FakeAccountService {
     }
   }
 
-  /** Everything kept under `account` goes, at once: the provider that signed in to it then signs in to none. */
   private erase(account: string): void {
     for (const held of [...this.tokens.values()]) if (held.account === account) this.revokeFamily(held.family);
     for (const [token, refresh] of this.refreshTokens) if (refresh.account === account) { this.revokedFamilies.add(refresh.family); this.refreshTokens.delete(token); }
@@ -323,19 +277,16 @@ export class FakeAccountService {
 
   admissions(): readonly FakeAdmission[] { return this.admissionList; }
 
-  /** What a PC would still get from `account`'s mailbox for it, for assertions; the service hiding a record is `drop`. */
   mailbox(serverId: string, account: string): AccountRecord[] {
     this.expire();
     return (this.mailboxes.get(box(serverId, account)) ?? []).map(({ record }) => record);
   }
 
-  /** A misbehaving service: removes queued records it should have delivered. */
-  drop(serverId: string, account: string, predicate: (record: AccountRecord) => boolean): void {
+  dropQueuedRecords(serverId: string, account: string, predicate: (record: AccountRecord) => boolean): void {
     const key = box(serverId, account);
     this.mailboxes.set(key, (this.mailboxes.get(key) ?? []).filter(({ record }) => !predicate(record)));
   }
 
-  /** Answers like the service: pass it as the PC's or app's `fetch`. */
   readonly fetch = async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
@@ -351,7 +302,7 @@ export class FakeAccountService {
         const label = body.label;
         if (body.code_challenge_method !== "S256" || typeof body.code_challenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.code_challenge)
           || (label !== undefined && (typeof label !== "string" || label.length < 1 || label.length > 48 || /[\p{Cc}\p{Cs}]/u.test(label)))
-          || Object.keys(body).some((name) => !["code_challenge", "code_challenge_method", ...(this.linkPageTakesRequester ? ["label", "os"] : [])].includes(name))) {
+          || Object.keys(body).some((name) => !["code_challenge", "code_challenge_method", ...(this.linkPageAcceptsLabelAndOs ? ["label", "os"] : [])].includes(name))) {
           return problem(400, "invalid_request", "Start a sign-in on the link page with an S256 code_challenge, and a label of 1-48 characters if any");
         }
         const deviceCode = randomHex(32);
@@ -393,7 +344,7 @@ export class FakeAccountService {
     const session = bearer === undefined ? undefined : this.tokens.get(bearer);
     if (session === undefined || this.now() >= session.expires || this.revokedFamilies.has(session.family)) return problem(401, "unauthorized", "Sign in again");
     const account = session.account;
-    if (!this.spend(`requests:${account}`, ACCOUNT_REQUESTS_PER_WINDOW)) return problem(429, "rate_limited", "Too many requests; try again later");
+    if (!this.withinRateLimit(`requests:${account}`, ACCOUNT_REQUESTS_PER_WINDOW)) return problem(429, "rate_limited", "Too many requests; try again later");
     if (path === "/v1/signout" && request.method === "POST") {
       this.revokeFamily(session.family);
       return new Response(null, { status: 204 });
@@ -402,7 +353,6 @@ export class FakeAccountService {
       const body = await request.json() as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
       if (typeof body.endpoint !== "string" || !URL.canParse(body.endpoint) || typeof body.keys?.p256dh !== "string" || !/^[A-Za-z0-9_-]{87}$/.test(body.keys.p256dh)
         || typeof body.keys.auth !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(body.keys.auth)) return problem(400, "invalid_endpoint", "Send the subscription's endpoint and keys");
-      // one subscription per signed-in device: a new one replaces it
       this.pushes.set(session.family, { account, endpoint: body.endpoint });
       return new Response(null, { status: 204 });
     }
@@ -422,7 +372,6 @@ export class FakeAccountService {
       if (!recent) return problem(403, "reauth_required", "Sign in again first");
     }
     if (path === "/v1/account" && request.method === "DELETE") {
-      // a device code can be typed for someone else's PC: its sign-in must not end the account
       if (this.deviceFamilies.has(session.family)) return problem(403, "web_sign_in_required", "Sign in on this device first");
       if (!recent) return problem(403, "reauth_required", "Sign in again first");
       if (this.subscribed.has(account)) return problem(409, "subscription_active", "Cancel the subscription in the billing portal first");
@@ -444,7 +393,6 @@ export class FakeAccountService {
       if (methods.size === 1) return problem(409, "last_identity", "Add another way to sign in first");
       methods.delete(removed);
       if (this.signIns.get(removed) === account) this.signIns.delete(removed);
-      // the sign-ins made with it end
       for (const held of [...this.tokens.values()]) if (held.account === account && held.provider === removed) this.revokeFamily(held.family);
       return new Response(null, { status: 204 });
     }
@@ -455,7 +403,6 @@ export class FakeAccountService {
     if (pc !== undefined && request.method === "PUT") {
       const body = await request.json() as { label?: unknown; public_key?: unknown; relay?: unknown };
       if (typeof body.label !== "string" || body.label.length < 1 || body.label.length > 48) return problem(400, "invalid_label", "Name the PC");
-      // the key is stored, but it cannot be forged: it must give this server_id
       const key = proofKey(body.public_key);
       if (!key || deriveServerId(key) !== pc) return problem(400, "server_key_mismatch", "That key does not give that server_id");
       if (typeof body.relay !== "string" || !isWssOrigin(body.relay)) return problem(400, "invalid_relay", "Give the relay's wss origin");
@@ -489,7 +436,6 @@ export class FakeAccountService {
       return json({ queued: new Set(body.server_ids).size });
     }
     if (path === "/v1/admissions" && request.method === "GET") {
-      // what the approving client checks the key PC X shows it against, before it signs an add
       const admissions = this.admissionList
         .filter((a) => a.account === account && this.now() - Date.parse(a.at) < ADMISSION_TTL_MS)
         .map(({ key, label, server_id, at, os, country, city }) => ({ key, label, server_id, at, os, country, city }));
@@ -498,8 +444,8 @@ export class FakeAccountService {
     if (path === "/v1/admissions" && request.method === "POST") {
       const body = await request.json() as { server_id?: unknown; label?: unknown; key?: unknown; os?: unknown };
       if (typeof body.server_id !== "string" || !directory.has(body.server_id) || typeof body.label !== "string") return problem(400, "unknown_pc", "List PCs of this account only");
-      if (!isAccountKey(body.key)) return problem(400, "invalid_key", "Name the waiting device's account key");
-      if (!this.spend(`admissions:${account}`, ADMISSIONS_PER_WINDOW)) return problem(429, "too_many_admissions", "Too many requests; try again later");
+      if (!isAccountKeyEncoding(body.key)) return problem(400, "invalid_key", "Name the waiting device's account key");
+      if (!this.withinRateLimit(`admissions:${account}`, ADMISSIONS_PER_WINDOW)) return problem(429, "too_many_admissions", "Too many requests; try again later");
       const admission = { id: randomHex(16), server_id: body.server_id, account, label: body.label, key: body.key, at: this.iso(), os: accountOsOf(body.os), ...this.requestPlace };
       this.admissionList.push(admission);
       this.ring(account, session.family);
@@ -532,10 +478,8 @@ export class FakeAccountService {
       const ack = typeof body.ack === "number" ? body.ack : null;
       const rest = ack === null ? queue : queue.filter(({ seq }) => seq > ack);
       this.mailboxes.set(key, rest);
-      // only the account the PC says it belongs to learns that it came by
       const entry = this.directories.get(body.account)?.get(challenge.server_id);
       if (entry) entry.last_seen_at = this.iso();
-      // the account's admissions for this PC in the last ten minutes, every pull until they age out
       const admissions = this.admissionList
         .filter((a) => a.server_id === challenge.server_id && a.account === body.account && this.now() - Date.parse(a.at) < ADMISSION_TTL_MS)
         .map(({ key, label, at }) => ({ key, label, at }));
@@ -552,7 +496,6 @@ export class FakeAccountService {
   private iso(): string { return new Date(this.now()).toISOString(); }
 }
 
-/** One mailbox per PC and account: another account's records can neither fill nor hide this account's. */
 function box(serverId: string, account: string): string {
   return `${serverId}\0${account}`;
 }

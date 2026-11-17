@@ -5,7 +5,7 @@ import { copyFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSy
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium } from "playwright-core";
-import type { BrowserContext, Page } from "playwright-core";
+import type { BrowserContext, Page, Request as BrowserRequest, Response as BrowserResponse } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import type { SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
@@ -1147,6 +1147,8 @@ try {
       assert.ok(Math.abs(left.x - card.x) <= 2.5 && Math.abs(status.x - (left.x + left.width)) <= 1 && Math.abs(right.x - (status.x + status.width)) <= 1
         && Math.abs(right.x + right.width - left.x - card.width) <= 4, `the controls row spans the box: ${JSON.stringify({ left, status, right, card })}`);
       for (const selector of [".composer-queue", ".chat-transcript"]) {
+        // after the reload the chat is mounted on its own, possibly after the held rows and the status
+        await page.locator(selector).waitFor();
         const box = await page.locator(selector).boundingBox();
         assert.ok(box, selector);
         assert.equal(Math.round(box.x), Math.round(card.x), `${selector} starts on the box's edge`);
@@ -1534,11 +1536,13 @@ try {
     console.log("PASS a path that does not fit waits whole and says how much to cut, and the count shows only near the limit");
     // One pick takes up to 100 files, and says what it left out.
     await page.unroute("**/api/pane/image");
+    // watched, not routed: a routed request makes a round trip to this script, and 99 of them follow
     const limitedUploads: string[] = [];
-    await page.route("**/api/pane/image", async (route) => {
-      limitedUploads.push(route.request().postDataJSON().pane_id);
-      await route.continue();
-    });
+    let uploadsAnswered = 0;
+    const onUpload = (request: BrowserRequest) => { if (request.url().endsWith("/api/pane/image")) limitedUploads.push(request.postDataJSON().pane_id); };
+    const onUploadAnswer = (response: BrowserResponse) => { if (response.url().endsWith("/api/pane/image")) uploadsAnswered += 1; };
+    page.on("request", onUpload);
+    page.on("response", onUploadAnswer);
     const ready = page.locator(".composer-attachment.is-ready");
     const readyBefore = await ready.count();
     await page.locator('input[type="file"]').setInputFiles(["a", "b", "c", "d", "e", "f"].map((name) => ({ name: `${name}.png`, mimeType: "image/png", buffer: png })));
@@ -1557,12 +1561,21 @@ try {
       writeFileSync(path, png);
       return path;
     });
+    const answeredBefore = uploadsAnswered;
     await page.locator('input[type="file"]').setInputFiles([hugeFile, ...manyFiles]);
+    // 99 real uploads, three at a time, each placing its path in the box: about 3 s on an idle
+    // runner and over 20 s on a busy one. The bound is on the next answer, so an upload that stalls
+    // fails here and a batch that is only slow does not
+    for (let answered = uploadsAnswered; answered < answeredBefore + 99; answered = uploadsAnswered) {
+      await until(() => uploadsAnswered > answered, `upload ${answered - answeredBefore + 1} of 99 answered`);
+    }
     await until(async () => (await ready.count()) === readyBefore + 6 + 99, "the files within both limits uploaded");
     const note = page.getByRole("alert").filter({ hasText: "Too large to attach: huge.bin" });
     await note.waitFor();
     assert.match(await note.innerText(), /the first 100 of 101 files were taken/);
     assert.deepEqual(limitedUploads, Array(99).fill(paneB), "only the files within the limit are uploaded");
+    page.off("request", onUpload);
+    page.off("response", onUploadAnswer);
     console.log("PASS one pick attaches up to 100 files and names what it left out");
 
     let releaseCreate!: () => void;
@@ -2036,6 +2049,8 @@ try {
     await tabPhonePage.goto(`${origin}/?pane=${encodeURIComponent(createdTab.pane_id)}`);
     const phoneStrip = tabPhonePage.locator(".tab-strip");
     await phoneStrip.getByRole("tab", { name: "build", exact: true, selected: true }).waitFor();
+    // herdr has the neighbour, but the roster this page loaded may list it only in a later update
+    await phoneStrip.getByRole("tab", { name: "neighbour", exact: true }).waitFor();
     assert.equal(await phoneStrip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "no close button or chevron is rendered");
     assert.equal(await phoneStrip.locator(".tab-strip-menu:visible").count(), 1, "only the open tab has the touch menu button");
     await phoneStrip.getByRole("button", { name: "Actions for build", exact: true }).tap();
@@ -2218,14 +2233,17 @@ try {
     const rule = "─".repeat(40);
     writeFileSync(pendingScreen, `${rule}\r\n❯ \u001b[2mcheck the diff\u001b[0m\r\n${rule}\r\n`);
     await until(async () => await composer.getAttribute("placeholder") === "check the diff", "suggestion beside a pending message");
+    // every prompt read is held until the suggestion is gone: only the Send now can have dropped it
+    let releasePromptReads!: () => void;
+    const promptReadsHeld = new Promise<void>((resolve) => { releasePromptReads = resolve; });
+    releases.push(releasePromptReads);
     await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await promptReadsHeld;
       await route.continue().catch(() => {});
     });
-    const sentAt = Date.now();
     await pendingRows.getByRole("button", { name: /^Send now:/ }).click();
-    await until(async () => await composer.getAttribute("placeholder") !== "check the diff", "Send now drops the suggestion");
-    assert.ok(Date.now() - sentAt < 2500, "the suggestion goes with the Send now, not with a later read");
+    await until(async () => await composer.getAttribute("placeholder") !== "check the diff", "the suggestion goes with the Send now, not with a later read");
+    releasePromptReads();
     await pendingRows.waitFor({ state: "hidden" });
     await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`);
     await herdrRpc("pane.send_text", { pane_id: pendingPane, text: "\u0003" });

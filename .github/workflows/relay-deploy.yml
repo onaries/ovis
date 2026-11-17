@@ -39,6 +39,8 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        with:
+          cache: none
       - run: bun install --frozen-lockfile
       - run: bun test ./relay
       - name: Check the Cloudflare secrets

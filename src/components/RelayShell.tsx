@@ -52,6 +52,8 @@ export interface RelayShellProps {
   onJoin?: (pc: MyPc, options?: { typed?: boolean; sheet?: "new" | "join" }) => void;
   /** on a PC's own page: the join the dashboard's sheet started for this PC, which the sheet takes up again over the pairing screens */
   sheetJoin?: { mode: "new" | "join"; server_id: string; returnHash?: string } | null;
+  /** that sheet's typed comparison, for a PC that shows no number: the same request goes on as a join, with this device's digits */
+  onJoinInstead?: () => void;
   onSignOut?: () => void; onLeave?: () => void; onDeleteAccount?: () => void;
   /** which sign-in the signed-in account view speaks of (AccountSession.sign_in_id): a question asked under one is dropped under the next */
   accountSignIn?: string;
@@ -164,7 +166,7 @@ export function ReadyCheckpoint({ open, cancel, state, retry }: { readonly open:
  * sheet over the dashboard frame across a scoped join, and the pairing/recovery screens.
  */
 export function RelayShell(props: RelayShellProps) {
-  const { state, pcStatus, onCheckPcs, onCheckPc, onRefreshAccount, observedVersions, scoped, onPair, onRetry, onCancel, onBack, onForgetPc, onMatch, onCodeStart, onCodeSubmit, onCodeMatch, onOpenPc, continuedAccount, onSignIn, onJoin, sheetJoin = null, onSignOut, onLeave, onDeleteAccount, accountSignIn, directoryRelays = [], defaultRelay = GLOBAL_RELAY, meLabel } = props;
+  const { state, pcStatus, onCheckPcs, onCheckPc, onRefreshAccount, observedVersions, scoped, onPair, onRetry, onCancel, onBack, onForgetPc, onMatch, onCodeStart, onCodeSubmit, onCodeMatch, onOpenPc, continuedAccount, onSignIn, onJoin, sheetJoin = null, onJoinInstead, onSignOut, onLeave, onDeleteAccount, accountSignIn, directoryRelays = [], defaultRelay = GLOBAL_RELAY, meLabel } = props;
   const t = useT();
   const [cachedAccount, setCachedAccount] = useState<AccountView | null>(null);
   const rawAccount: AccountView | null = (state.kind === "list" || state.kind === "empty") && onSignIn ? state.account ?? null : null;
@@ -219,7 +221,7 @@ export function RelayShell(props: RelayShellProps) {
         {/* one wrapper whether a sheet is open or not: swapping it in would remount the dashboard, losing the control that opened the sheet before its focus trap records it */}
         <div inert={modalOpen || undefined}>{dash}</div>
         {sheet && (
-          <AddPcSheet mode={sheet.mode} pc={sheet.pc} state={state} onJoin={(target, options) => onJoin?.(target, { ...options, sheet: sheet.mode === "new" ? "new" : "join" })} onPair={onPair} onMatch={onMatch} onCancel={onCancel} onClose={() => setSheet(null)} onPairByQr={() => { setSheet(null); setAddingPc(true); }} />
+          <AddPcSheet mode={sheet.mode} pc={sheet.pc} state={state} onJoin={(target, options) => onJoin?.(target, { ...options, sheet: sheet.mode === "new" ? "new" : "join" })} onPair={onPair} onMatch={onMatch} onCancel={onCancel} onClose={() => setSheet(null)} onPairByQr={() => { setSheet(null); setAddingPc(true); }} {...(sheet.mode === "new" && sheet.pc !== null ? { onAskToJoin: () => setSheet({ pc: sheet.pc, mode: "join" }) } : {})} {...(sheet.mode === "join" && sheet.pc !== null ? { onTypeNumber: () => setSheet({ pc: sheet.pc, mode: "new" }) } : {})} />
         )}
         {addingPc && (
           <PairQrDialog state={state} onCodeStart={onCodeStart} onCodeSubmit={onCodeSubmit} onCodeMatch={onCodeMatch} onCancel={onCancel} onClose={() => {
@@ -242,7 +244,7 @@ export function RelayShell(props: RelayShellProps) {
         {continuedAccount !== undefined && <div inert>
           <RelayDashboard pcs={continuedAccount?.kind === "signed-in" && continuedAccount.pcs !== null ? dashboardPcs(continuedAccount.pcs, [], directoryRelays) : null} account={continuedAccount?.kind === "signed-in" ? { provider: continuedAccount.provider } : null} defaultRelay={defaultRelay} meLabel={meLabel ?? t("This device")} error={continuedAccount?.kind === "signed-in" ? continuedAccount.error : null} onAddPc={onBack} onOpenSheet={onBack} />
         </div>}
-        <AddPcSheet mode={sheetJoin.mode} pc={joining} state={state} onJoin={() => {}} onPair={onPair} onMatch={onMatch} onRetry={onRetry} {...(onOpenPc ? { onOpenPc } : {})} onCancel={onCancel} onClose={onBack} onPairByQr={onCodeStart} />
+        <AddPcSheet mode={sheetJoin.mode} pc={joining} state={state} onJoin={() => {}} onPair={onPair} onMatch={onMatch} onRetry={onRetry} {...(onOpenPc ? { onOpenPc } : {})} onCancel={onCancel} onClose={onBack} onPairByQr={onCodeStart} {...(sheetJoin.mode === "new" && onJoinInstead ? { onAskToJoin: onJoinInstead } : {})} />
       </main>
     );
   }

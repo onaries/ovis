@@ -111,6 +111,38 @@ export function agyStartScreenUnused(screen: string): boolean {
   return box.length > 0 && AGY_PROMPT.test(box[0]!) && box.slice(1).every((line) => /^\s{2,}\S/u.test(line));
 }
 
+/** OpenCode's logo as its home screen draws it (2.0.32 to 2.2.2): "open" and "code" side by side, or, in a narrow pane, "open" over "code". */
+const OPENCODE_OPEN = ["█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█  █ █  █ █▀▀▀ █  █", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀"];
+const OPENCODE_CODE = ["█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█    █  █ █  █ █▀▀▀", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"];
+const OPENCODE_LOGO = OPENCODE_OPEN.map((row, index) => `${row} ${OPENCODE_CODE[index]}`);
+/** The dot over the logo's "d". */
+const OPENCODE_DOT = "▄";
+/** A line of a box (OpenCode's composer, a dialog) or of a panel's frame. */
+const OPENCODE_FRAME = /[┃╹│┌┐└┘╭╮╰╯]/u;
+
+/**
+ * Whether an OpenCode screen is its home screen, which shows no session: OpenCode draws it while it
+ * has none open, and opens a session (and with it a screen of turns, with no logo) on the first
+ * prompt. From the top, only the logo (and the dot over its "d"), then notices under it (an update),
+ * then the composer (rows behind `┃`, closed by `╹▀▀…`) with whatever draft it holds, then the footer
+ * (folder, key hints) and the version. A dialog or an autocomplete drawn over it, a toast, or any
+ * text above the logo leaves the screen unknown, and this says no.
+ */
+export function opencodeStartScreenUnused(screen: string): boolean {
+  const lines = screen.split("\n").map((line) => line.trim());
+  const top = lines.findIndex((line) => line !== "" && line !== OPENCODE_DOT);
+  const drawn = (at: number, logo: readonly string[]) => logo.every((row, index) => lines[at + index] === row);
+  let below: number;
+  if (top >= 0 && drawn(top, OPENCODE_LOGO)) below = top + OPENCODE_LOGO.length;
+  else if (top >= 0 && drawn(top, OPENCODE_OPEN) && lines[top + 3] === OPENCODE_DOT && drawn(top + 4, OPENCODE_CODE)) below = top + 7;
+  else return false;
+  const composer = lines.findIndex((line, index) => index >= below && OPENCODE_FRAME.test(line));
+  if (composer < 0 || !lines[composer]!.startsWith("┃")) return false;
+  let end = composer;
+  while (lines[end]?.startsWith("┃")) end++;
+  return /^╹▀+$/u.test(lines[end] ?? "") && !lines.slice(end + 1).some((line) => OPENCODE_FRAME.test(line));
+}
+
 /** ` ⬢ opus-5.5 · ◉ xhigh · 1.5% / …`, the status line over the composer. */
 function gjcScreen(lines: string[]): Screen {
   const found = lastMatch(lines, new RegExp(`⬢ (\\S+) · ◉ (${EFFORT})(?: |$)`, "u"));

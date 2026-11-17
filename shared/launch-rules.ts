@@ -1,12 +1,4 @@
 /**
- * What a new agent's launch may carry from the new workspace and tab dialogs (#774, #1311, #2232): a
- * model, an effort level, Claude Code's Ultracode, a first prompt on Codex's command line, and a first
- * message the bridge queues. The dialog (src/lib/agentLaunchMode.ts) and the bridge's create routes
- * (server/agent-launch.ts, server/workspace-routes.ts) check them by these rules, so what the dialog
- * lets through is what the bridge takes; the demo's transport checks only the first message.
- */
-
-/**
  * Claude Code's effort levels, as its `claude --help` lists them: "--effort <level>  Effort level for
  * the current session (low, medium, high, xhigh, max)" (2.1.311). Ultracode is no level: since 2.1.284
  * it is a setting of its own that keeps whichever level the session runs at (code.claude.com/docs/en/
@@ -58,13 +50,10 @@ export function withoutTrailingBreaks(text: string): string {
   return end === text.length ? text : text.slice(0, end);
 }
 
-/** terminal control characters a queued message may not carry; TAB, LF and CR are text there */
 const MESSAGE_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
-/** every control character, TAB and line breaks included: one argument on a command line is one line */
 const ARGUMENT_CONTROLS = /[\u0000-\u001f\u007f-\u009f]/u;
 
-/** Whether `text` can go on an agent's command line as one argument. */
-export const argumentText = (text: string): boolean => !ARGUMENT_CONTROLS.test(text);
+export const hasNoControlCharacters = (text: string): boolean => !ARGUMENT_CONTROLS.test(text);
 
 /** What is wrong with a create request's `first_message`, in the API's words; null when it can be queued (or there is none). */
 export function firstMessageFault(value: unknown, agent: unknown): string | null {
@@ -77,7 +66,6 @@ export function firstMessageFault(value: unknown, agent: unknown): string | null
 }
 
 type LaunchFlag = "model" | "effort" | "config";
-/** the flags whose values are checked, by agent: Codex's `-c`/`--config` sets `model` and `model_reasoning_effort` too */
 const LAUNCH_FLAGS: Record<"claude" | "codex" | "dsh-tui", Record<string, LaunchFlag>> = {
   claude: { "--model": "model", "--effort": "effort" },
   codex: { "--model": "model", "-m": "model", "--config": "config", "-c": "config" },
@@ -85,10 +73,6 @@ const LAUNCH_FLAGS: Record<"claude" | "codex" | "dsh-tui", Record<string, Launch
 };
 const LAUNCH_EFFORTS: Record<keyof typeof LAUNCH_FLAGS, readonly string[]> = { claude: CLAUDE_EFFORT_ARGS, codex: CODEX_EFFORTS, "dsh-tui": DSH_EFFORTS };
 
-/**
- * Which checked flag `arg` is, as the CLIs' parsers read it: `--flag value`, `--flag=value`, and for a
- * short flag `-f value`, `-fvalue` or `-f=value`. `value` is undefined when the next argument holds it.
- */
 function launchFlag(arg: string, flags: Record<string, LaunchFlag>): { flag: LaunchFlag; value?: string } | null {
   for (const [name, flag] of Object.entries(flags)) {
     if (arg === name) return { flag };
@@ -114,7 +98,7 @@ const configValue = (value: string): string => {
  * rules. Any other flag is the agent's own: Ultracode's `--settings {"ultracode":true}` passes as it is.
  */
 export function launchArgsFault(kind: string, args: readonly string[]): string | null {
-  if (!args.every(argumentText)) return "agent.args must not contain control characters (a tab or a line break included)";
+  if (!args.every(hasNoControlCharacters)) return "agent.args must not contain control characters (a tab or a line break included)";
   if (kind !== "claude" && kind !== "codex" && kind !== "dsh-tui") return null;
   const efforts = LAUNCH_EFFORTS[kind];
   for (let at = 0; at < args.length; at++) {
@@ -127,7 +111,6 @@ export function launchArgsFault(kind: string, args: readonly string[]): string |
     }
     const read = launchFlag(arg, LAUNCH_FLAGS[kind]);
     if (read === null) continue;
-    // the flag's value is the flag's own, a "--" there included: it is not read again as an argument
     let value = read.value;
     if (value === undefined) { at += 1; value = args[at] ?? ""; }
     let model: string | null = read.flag === "model" ? value : null;

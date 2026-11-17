@@ -1,13 +1,6 @@
 import type { HerdrKeys } from "./herdr-keys.ts";
 import type { MachineEvent } from "./machines.ts";
 /**
- * Ovis's own HTTP/WebSocket contract, shared by the Bun server and the React client.
- *
- * The herdr WIRE types are NOT hand-written here: they are generated from herdr's
- * published API schema into ./herdr-api.generated.ts and re-exported below, so a
- * herdr upgrade shows up as a failing `bun run generate:types --check` instead of
- * types that quietly disagree with the server.
- *
  * HTTP responses and successful WebSocket handshakes carry X-Request-Id, a fresh
  * server UUID. A client's optional X-Request-Id (1-64 ASCII letters, digits, dot,
  * underscore or hyphen) is correlation data only, never the response's identity.
@@ -42,9 +35,11 @@ export interface HerdrUiConfig {
   keys?: HerdrKeys;
 }
 
-/** Friendly aliases used across the UI. */
 export type HerdrWorkspace = WorkspaceInfo;
 export type HerdrTab = TabInfo;
+/** What a request filled of the model's context, in tokens; `window` is null when nothing says it. */
+export type PaneContext = { used: number; window: number | null };
+
 /**
  * `background_tasks`: an OmO pane's tasks, Claude Code or OpenCode subagents and commands, parent-reported Codex subagents, or agy and grok background tasks still running; absent when none.
  * `background_wait`: the pane is at rest while work its turn started still runs, and the turn goes on when it ends (server/background-wait.ts); absent when not.
@@ -60,9 +55,6 @@ export type HerdrTab = TabInfo;
  * agent waits for (`permission`, `question`, `auth`), its message in its own words (never
  * translated), and how far it is, 0 to 100.
  */
-/** What a request filled of the model's context, in tokens; `window` is null when nothing says it. */
-export type PaneContext = { used: number; window: number | null };
-
 export type HerdrPane = PaneInfo & {
   background_tasks?: number; background_wait?: true; plan?: PlanSummary; context?: PaneContext;
   parent_pane_id?: string;
@@ -722,7 +714,8 @@ export type ConversationPart =
      * What the transcript itself records of the call's outcome, never guessed from its output text.
      * Claude: `pending` until its tool_result, then `ok`, or `error` when the result is flagged so.
      * Codex: `pending` until its output record, then absent (it records no failure flag: done, outcome
-     * unknown). Absent for other agents and older servers.
+     * unknown). OpenCode: `pending` while waiting or running, then `ok` or `error` as it records the call.
+     * Absent for other agents and older servers.
      */
     state?: "pending" | "ok" | "error";
   }

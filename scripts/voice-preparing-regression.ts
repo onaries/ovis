@@ -13,7 +13,8 @@ try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.port}`);
   const states = await page.evaluate(async () => {
-    const { createVoiceEngine } = await import("/voice.js");
+    const modulePath = "/voice.js";
+    const { createVoiceEngine } = await import(modulePath);
     const states: string[] = [];
     const errors: string[] = [];
     let elapsed = 0;
@@ -30,7 +31,7 @@ try {
       return stream;
     };
     let uploaded = false;
-    window.fetch = async () => { uploaded = true; return new Response('{"type":"done","text":"test"}\n'); };
+    window.fetch = Object.assign(async () => { uploaded = true; return new Response('{"type":"done","text":"test"}\n'); }, { preconnect: window.fetch.preconnect });
     const voice = createVoiceEngine({
       setState: (state: string) => states.push(state), setElapsed: (value: number) => { elapsed = value; }, setSilent: () => {},
       setError: (error: string | null) => { if (error) errors.push(error); },

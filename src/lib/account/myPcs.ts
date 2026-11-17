@@ -20,9 +20,16 @@ function joinRoute(pc: DirectoryPc): MyPc["join"] {
 /** How long a PC new in the directory is offered as a card to add: as long as the PC's own screen keeps its pairing window open. */
 export const NEW_PC_MS = 10 * 60_000;
 
-/** PCs that joined the directory lately and wait for this device to add them: offered as a card above the list. */
+/**
+ * PCs that joined the directory lately and wait for this device to add them: offered as a card above the list. A PC
+ * the directory has seen is left out and offered Join: it pulls its mailbox only while it belongs to an account, and
+ * only its own account's directory notes the pull (docs/account.md, "Account service API"), so it was in this account
+ * once, most often put there by another device (`ovis add` with a QR code, say). The sighting does not say it still
+ * is: after Revoke all and a listing again the row keeps it while the PC's own screen may wait with a number, so the
+ * join sheet keeps typing that number as its other way (AddPcSheet's onTypeNumber).
+ */
 export function newPcs(pcs: readonly MyPc[], now: number): MyPc[] {
-  return pcs.filter((pc) => pc.state === "needs-approval" && pc.join !== undefined && pc.added_at !== null && now - Date.parse(pc.added_at) < NEW_PC_MS);
+  return pcs.filter((pc) => pc.state === "needs-approval" && pc.join !== undefined && pc.last_seen_at === null && pc.added_at !== null && now - Date.parse(pc.added_at) < NEW_PC_MS);
 }
 
 /** The PC pulls its mailbox every five minutes while it belongs to the account; three missed pulls and it is called off. */

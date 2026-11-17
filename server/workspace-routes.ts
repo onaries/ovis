@@ -7,7 +7,7 @@ import type { ServerContext } from "./dispatch.ts";
 import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { MAX_INVENTORY_WORKSPACES, type WorktreeInventoryEntry } from "../shared/workspace-lifecycle.ts";
-import { argumentText, firstMessageFault } from "../shared/launch-rules.ts";
+import { hasNoControlCharacters, firstMessageFault } from "../shared/launch-rules.ts";
 import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
@@ -68,7 +68,7 @@ function envFault(env: unknown): string | null {
   for (const [name, value] of entries) {
     // the name is quoted and cut: before this check it may hold anything
     if (!ENV_NAME.test(name)) return `env name ${JSON.stringify(name.slice(0, 64))} must be letters, digits and _, not starting with a digit`;
-    if (typeof value !== "string" || !argumentText(value)) return `env.${name} must be a string without control characters`;
+    if (typeof value !== "string" || !hasNoControlCharacters(value)) return `env.${name} must be a string without control characters`;
     bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
   }
   if (bytes > MAX_ENV_BYTES) return `env may hold at most ${MAX_ENV_BYTES} bytes`;

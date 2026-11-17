@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { agyStartScreenUnused, codexStartScreenUnused, readsStartScreen, startScreenMetadata } from "./start-screen.ts";
+import { agyStartScreenUnused, codexStartScreenUnused, opencodeStartScreenUnused, readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 
 const AGY = [
   "❯ agy",
@@ -167,6 +169,25 @@ describe("startScreenMetadata", () => {
     expect(agyStartScreenUnused(AGY.replace(" ? for shortcuts   Gemini 3.8 Flash · high", " Code Search:\n ? for shortcuts   Gemini 3.8 Flash · high"))).toBeFalse();
     expect(agyStartScreenUnused(AGY.replace("       ▄▀▀▄         Antigravity CLI 1.4.4", ""))).toBeFalse();
     expect(agyStartScreenUnused(` > hello\n\n ✦ Hi there\n\n${AGY}`)).toBeFalse();
+  });
+
+  it("tells OpenCode's home screen, which shows no session, from a session's screen or one drawn over", () => {
+    // recorded from OpenCode 2.2.2 in a herdr pane: wide, narrow ("open" over "code"), and a session after its first prompt
+    const recorded = (name: string) => readFileSync(join(import.meta.dir, "fixtures", `${name}.txt`), "utf8");
+    const home = recorded("opencode-home-2.2.2-wide");
+    expect(opencodeStartScreenUnused(home)).toBeTrue();
+    expect(opencodeStartScreenUnused(recorded("opencode-home-2.2.2-narrow"))).toBeTrue();
+    // a draft in the composer, and no update notice
+    expect(opencodeStartScreenUnused(home.replace("Ask anything\u2026 \"Fix broken tests\"", "fix the build"))).toBeTrue();
+    expect(opencodeStartScreenUnused(home.replace("/update to install v2.3.0", ""))).toBeTrue();
+    expect(opencodeStartScreenUnused(recorded("opencode-session-2.2.2"))).toBeFalse();
+    // 2.0.32's home screen with the autocomplete drawn over the logo
+    expect(opencodeStartScreenUnused(recorded("opencode-autocomplete-2.0.32-skill-wide"))).toBeFalse();
+    // anything above the logo, a box under the composer (a dialog), or no composer
+    expect(opencodeStartScreenUnused(`hello\n${home}`)).toBeFalse();
+    expect(opencodeStartScreenUnused(home.replace("2.2.2", "\u250c Sessions \u2510"))).toBeFalse();
+    expect(opencodeStartScreenUnused(home.replace(/\u2579\u2580+/u, ""))).toBeFalse();
+    expect(opencodeStartScreenUnused(home.replace(/^ *\u2503.*$/gmu, ""))).toBeFalse();
   });
 
   it("reads gjc's status line, keeping a model it has no id for as gjc wrote it", () => {

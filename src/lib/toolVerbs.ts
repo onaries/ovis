@@ -85,6 +85,23 @@ export function isToolNarration(part: { name: string; input: string }, summary: 
 }
 
 /**
+ * A tool id as a row names it. Claude Code ids an MCP tool `mcp__<server>__<tool>`, its server
+ * a claude.ai connector (`claude_ai_HomeAssistant`) or a plugin's (`plugin_playwright_playwright`,
+ * from `plugin:playwright:playwright`): the row says the server and the tool, as Claude Code splits
+ * them, without the connector's or the plugin's prefix (`HomeAssistant get_entity_state`). Any
+ * other id is shown as the agent names it.
+ */
+export function toolDisplayName(name: string): string {
+  const [prefix, server, ...rest] = name.split("__");
+  const tool = rest.join("__");
+  if (prefix !== "mcp" || !server || !tool) return name;
+  const connector = /^claude_ai_(.+)$/.exec(server)?.[1];
+  const plugin = /^plugin_(.+)$/.exec(server)?.[1];
+  const shown = connector ?? (plugin !== undefined ? /^(.+)_\1$/.exec(plugin)?.[1] ?? plugin : server);
+  return `${shown} ${tool}`;
+}
+
+/**
  * The English verb (an i18n key) a row shows in place of the tool id, or null when the id stays:
  * an unknown tool, a call with no object to follow the verb, or a summary that is not the call's
  * own command or path.

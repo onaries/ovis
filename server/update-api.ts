@@ -1,4 +1,4 @@
-import { INSTALL_ID, noInstalledNotes, noUpdateNotes, readInstalledNotes, readUpdateNotes, REVISION, unmanagedUpdateStatus, type InstalledNotes, type UpdateNotes, type UpdateRequest, type UpdateStatus } from "../shared/update.ts";
+import { INSTALL_ID, noInstalledNotes, noUpdateNotes, readInstalledNotes, readUpdateNotes, REVISION, unmanagedUpdateStatus, updateIpcMessage, type InstalledNotes, type UpdateNotes, type UpdateRequest, type UpdateStatus } from "../shared/update.ts";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
@@ -70,10 +70,7 @@ export function connectUpdater(channel?: SupervisorChannel): UpdateService {
     status: () => status,
     notes: () => notes,
     installed: () => installed,
-    // an install goes as a message an older supervisor does not know, never as its unbound `install`
-    request: (request) => supervisor?.send(request.command === "install"
-      ? { type: "update-install-revision", expected_revision: request.expected_revision, ...(request.install_id ? { install_id: request.install_id } : {}) }
-      : request.command === "cancel" ? { type: "update-cancel-v2", install_id: request.install_id } : { type: "update-command", command: "check" }),
+    request: (request) => supervisor?.send(updateIpcMessage(request)),
     // from source, the release or checkout the supervisor starts the bridge in (its cwd), as on main; the binary serves dist/ from its assets root
     ...(managed ? { servedRevision: servedRevision(COMPILED ? ASSETS : process.cwd()), availableClientRevision: servedRevision(COMPILED ? ASSETS : process.cwd(), 0) } : {}),
   };

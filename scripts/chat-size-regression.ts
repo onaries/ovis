@@ -16,7 +16,7 @@ import { openLens } from "./header-lens.ts";
 /** how long a resize that should not happen gets to show up */
 const NO_RESIZE_WAIT_MS = 400;
 
-type Frame = { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string };
+type Frame = { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string; receipt?: boolean };
 const framesOf = (page: Page) => page.evaluate(() => (window as unknown as { frames_: Frame[] }).frames_);
 
 /**
@@ -83,7 +83,7 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
   await context.addInitScript((stored) => {
     localStorage.setItem("ovis:settings", JSON.stringify(stored));
     // every frame this page's socket sends and receives, to wait on the server's answers
-    const frames: { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string }[] = [];
+    const frames: { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string; receipt?: boolean }[] = [];
     (window as unknown as { frames_: typeof frames }).frames_ = frames;
     const Native = window.WebSocket;
     class Recording extends Native {
@@ -91,12 +91,12 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
         super(url, protocols);
         (window as unknown as { socket_: WebSocket }).socket_ = this;
         frames.push({ dir: "in", type: "socket-opened" });
-        this.addEventListener("message", (event) => { try { frames.push({ dir: "in", type: JSON.parse(String(event.data)).type }); } catch {} });
+        this.addEventListener("message", (event) => { try { const frame = JSON.parse(String(event.data)); frames.push({ dir: "in", type: frame.type, ...(frame.type === "pane-geometry" ? { cols: frame.cols, rows: frame.rows } : {}) }); } catch {} });
         // Navigation releases a pane with detach while the PC connection retains receipts.
         // Physical closes remain separate evidence for the explicit reconnect scenarios.
         this.addEventListener("close", () => frames.push({ dir: "in", type: "socket-closed" }));
       }
-      override send(data: string): void { try { const frame = JSON.parse(data); frames.push({ dir: "out", type: frame.type, keep_size: frame.keep_size, ...(frame.type === "detach" ? { pane_id: frame.pane_id } : {}), ...(frame.type === "resize" ? { cols: frame.cols, rows: frame.rows } : {}), ...(frame.type === "input" ? { text: frame.text } : {}) }); } catch {} super.send(data); }
+      override send(data: string): void { try { const frame = JSON.parse(data); frames.push({ dir: "out", type: frame.type, keep_size: frame.keep_size, ...(frame.type === "detach" ? { pane_id: frame.pane_id } : {}), ...(frame.type === "resize" ? { cols: frame.cols, rows: frame.rows } : {}), ...(frame.type === "input" ? { text: frame.text, receipt: frame.id !== undefined } : {}) }); } catch {} super.send(data); }
     }
     Object.assign(window, { WebSocket: Recording });
   }, settings);
@@ -730,11 +730,18 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
             "the fresh attach succeeds without a held retry");
           assert.equal(await page.getByText("Another app has this pane open.", { exact: false }).count(), 0,
             "a fresh resume must clear the previous attach's held state");
-          await page.clock.resume();
+          // typed with the page clock still paused, so before the new attach's first output is drawn: the terminal
+          // takes keys from the resume on, not only once that output has cleared what the hold closed
+          const typedFrom = (await framesOf(page)).length;
           await page.locator(".xterm-helper-textarea").focus();
           await page.keyboard.type("z");
-          await page.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_
-            .some((f) => f.dir === "out" && f.type === "input"), undefined, { timeout: 10_000 });
+          await page.waitForFunction((from) => (window as unknown as { frames_: Frame[] }).frames_.slice(from)
+            .some((f) => f.dir === "out" && f.type === "input" && f.text === "z"), typedFrom, { timeout: 10_000 });
+          // a masked prompt may have come while the pane was held: until the new screen is read, a key goes as a password
+          // would, with no receipt that keeps it
+          const typedZ = (await framesOf(page)).slice(typedFrom).find((f) => f.dir === "out" && f.type === "input" && f.text === "z");
+          assert.equal(typedZ?.receipt, false, "typed before the taken-back pane's screen is read, a key is sent as a password");
+          await page.clock.resume();
           console.log("PASS inactive attach lifecycle: held");
           continue;
         }
@@ -1309,11 +1316,23 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
     const phone = await openRecording(browser, contexts, origin, paneId, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { ...settings, terminalInputMode: "line" }, false, asking);
     await attached(phone);
     const phoneSize = await tookAskedGrid(phone, "the phone took the pane at its own size");
+    // A window takes the pane back on a click or a key only once it has heard that another took it: the server's
+    // pane-geometry sets the grid it compares with its own, and can reach a window after the shell already answers at
+    // the new size. Each size the pty took is heard by both windows before either acts on it.
+    const heard = (page: Page, grid: string) => page.waitForFunction((want) => {
+      const last = (window as unknown as { frames_: Frame[] }).frames_.filter((f) => f.dir === "in" && f.type === "pane-geometry").at(-1);
+      return last !== undefined && `${last.rows} ${last.cols}` === want;
+    }, grid, { timeout: 10_000 });
+    const took = async (grid: string, what: string) => {
+      await sizeBecomes(grid, what);
+      await Promise.all([heard(desktop, grid), heard(phone, grid)]);
+    };
+    await Promise.all([heard(desktop, phoneSize), heard(phone, phoneSize)]);
 
     await desktop.locator(".xterm").click();
-    await sizeBecomes(desktopSize, "a click in the desktop terminal");
+    await took(desktopSize, "a click in the desktop terminal");
     await phone.locator(".xterm").tap();
-    await sizeBecomes(phoneSize, "a tap in the phone terminal");
+    await took(phoneSize, "a tap in the phone terminal");
     // a right-click is for the pane menu, not the user taking the pane: the grid stays the phone's
     await desktop.locator(".xterm").click({ button: "right" });
     await Bun.sleep(500);
@@ -1321,7 +1340,7 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
     // Escape closes the menu where one opened; in the terminal it is a key like any other
     await desktop.keyboard.press("Escape");
     await desktop.keyboard.press("Shift");
-    await sizeBecomes(desktopSize, "a key in the desktop terminal");
+    await took(desktopSize, "a key in the desktop terminal");
     console.log("PASS a window that kept its focus takes the pane back on a click or a key in its terminal");
 
     // The phone's own input sits outside its grid: the input line, its Send and Enter and the key
@@ -1340,7 +1359,7 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
       assert.ok(sent >= 0, `${what}: the phone sent none of ${sends.join("/")}: ${JSON.stringify(out)}`);
       const resized = out.findIndex((f) => f.type === "resize" && f.cols === phoneCols && f.rows === phoneRows);
       assert.ok(resized >= 0 && resized < sent, `${what}: the phone's own grid goes out before its input: ${JSON.stringify(out)}`);
-      await sizeBecomes(phoneSize, what);
+      await took(phoneSize, what);
     };
     // focus into the line: a tap there is the user on the phone, before a key is typed
     let mark = (await framesOf(phone)).length;
@@ -1351,10 +1370,10 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
       await Bun.sleep(50);
     }
     assert.ok((await outFrom(phone, mark)).some((f) => f.type === "resize" && f.cols === phoneCols && f.rows === phoneRows), "a tap into the input line takes the pane back to the phone's grid");
-    await sizeBecomes(phoneSize, "a tap into the input line");
+    await took(phoneSize, "a tap into the input line");
     // the line keeps its focus from here on: no focus event helps the steps below
     await desktop.keyboard.press("Shift");
-    await sizeBecomes(desktopSize, "a key in the desktop terminal, the phone's line focused");
+    await took(desktopSize, "a key in the desktop terminal, the phone's line focused");
     await phone.keyboard.type("true");
     mark = (await framesOf(phone)).length;
     await phone.keyboard.press("Enter");
@@ -1362,13 +1381,13 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
     await phone.waitForFunction(() => (document.querySelector(".terminal-input-text") as HTMLTextAreaElement | null)?.value === "", undefined, { timeout: 10_000 });
     await resizedBefore("a line sent from the phone's input line", mark, ["submit", "input"]);
     await desktop.keyboard.press("Shift");
-    await sizeBecomes(desktopSize, "a key in the desktop terminal, before the key bar");
+    await took(desktopSize, "a key in the desktop terminal, before the key bar");
     mark = (await framesOf(phone)).length;
     // Ctrl+C, not Esc: the shell would read Esc and the size command's first letter as one Meta key
     await phone.locator(".key-bar").getByRole("button", { name: "Control C" }).tap();
     await resizedBefore("a key-bar tap on the phone", mark, ["input", "keys"]);
     await desktop.keyboard.press("Shift");
-    await sizeBecomes(desktopSize, "a key in the desktop terminal, before the empty line's Enter");
+    await took(desktopSize, "a key in the desktop terminal, before the empty line's Enter");
     mark = (await framesOf(phone)).length;
     await phone.locator(".terminal-input-send").tap();
     await resizedBefore("Enter from the phone's empty input line", mark, ["input", "keys"]);

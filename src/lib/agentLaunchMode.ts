@@ -9,7 +9,7 @@
  * nothing is guessed for the rest. The bridge checks them again by the same rules
  * (shared/launch-rules.ts).
  */
-import { argumentText, CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, CODEX_EFFORTS, DSH_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
+import { hasNoControlCharacters, CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, CODEX_EFFORTS, DSH_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
 
 export { CLAUDE_EFFORTS, CODEX_EFFORTS };
 
@@ -131,7 +131,7 @@ export function launchChoiceFault(kind: string, choices: LaunchChoices): "model"
 export function firstPromptDelivery(kind: string, prompt: string | undefined): "positional" | "pending" | null {
   const text = prompt?.trim() ?? "";
   if (text === "" || kind === "") return null;
-  return launchCapabilities(kind).positionalPrompt && argumentText(text) ? "positional" : "pending";
+  return launchCapabilities(kind).positionalPrompt && hasNoControlCharacters(text) ? "positional" : "pending";
 }
 
 /** Settings > Agents: the model and effort a new Claude Code or Codex starts on; "" leaves each to the agent's own configuration. */

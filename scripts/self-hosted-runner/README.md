@@ -54,6 +54,34 @@ a slot, instead of each runner believing it has the PC to itself ([Check slots](
 limit. The container still has a pids limit of 8192, and `--ulimit core=0`: a crash never leaves a
 core file in the checkout, where `scripts/check.ts` would count it as a source change.
 
+Each slot's network is a /28 of one block, `10.213.0.0/16`, never a range docker picks. Left to
+itself, docker takes 172.17-31.x/16 ranges and then 192.168.x/20 ones: on a host whose 172 ranges
+were used up, a runner network made at boot, before the LAN's route was there, got 192.168.0.0/20
+and put its bridge on 192.168.0.1, the LAN router's address, and the host was offline until that
+network was removed. So the launcher removes and makes no network while the kernel has no route
+to the internet (`ip -4 route get 1.1.1.1`, which follows policy routing and a VPN's split
+default): the slot says so in the journal and tries again. Slot N takes the block's Nth /28, or the
+next one that no route or address of the host overlaps at that moment (`ip -4 route show table
+all`, `ip -4 addr`) and that docker does not refuse as overlapping another of its networks; after
+16 refusals its next try goes on from where it stopped. A route broader than /8 counts as a
+default, not a network (a full-tunnel VPN's /1 pair or four /2s): a runner network inside it takes
+those few addresses from it, as it does from a default route; /8 and narrower count. A slot's
+network that is there already is kept when its only IPv4 range is a /28 of the block; any other
+(one from a launcher before the block, say) is removed and made again before the slot's next
+container, unless a container is on it: then the slot leaves it, says so in the journal and tries
+again. Limits: a network that is kept is not checked against the host's routes again, so if the
+host later joins a network inside the block, set `OVIS_CI_NETWORK_BLOCK` to another block. A host
+that routes all of both 10.0.0.0/8 and 172.16.0.0/16 has no block it may use: its slots say so and
+start no runner (192.168.0.0/16 stays refused, as home networks are there). A host with no IPv4
+route to the internet at all (IPv6 only, or a proxy only), or without `ip`, starts no runner
+either: its slots report "no default route yet". Every launcher on a host must run this `run.sh`:
+a host may run several, and a copy installed under another name keeps letting docker pick its
+ranges until it is replaced too, by this `run.sh` with that copy's own `PREFIX` line. The block
+is private, outside docker's own pools, and rarely a home or office network. On a host where it is
+one, set `OVIS_CI_NETWORK_BLOCK` in the launcher's environment (the unit's `Environment=`) to
+another network address from /8 to /24 inside `10.0.0.0/8`, or inside `172.16.0.0/16` on a host
+that routes all of 10.0.0.0/8 (a VPN); the launcher refuses anything else.
+
 `--work-tmpfs SIZE` (say `4g`) puts each container's work folder (`/w`, the checkout) and `/tmp` in
 RAM, each capped at SIZE. A job's files end with its container anyway; on disk, its checkout, Bun
 cache copy and browser profiles are most of what a busy host writes. Only what a job writes takes
@@ -79,10 +107,10 @@ same docker network reaches as well.
 
 So each slot has a docker network of its own, made when the slot first starts a container and
 removed at the launcher's stop, and docker keeps its networks apart. (A launcher that was killed
-leaves them, and the next one uses them; one started with a lower `--count` leaves those of the
-slots above it, for `docker network rm`.) Docker takes each network's addresses from its address
-pools (the P620 made twenty networks beside its own); a slot whose network cannot be made starts
-no runner, says so in the journal and tries again. The slots themselves are lock
+leaves them, and the next one uses each that is a /28 of the block and makes the others again;
+one started with a lower `--count` leaves those of the slots above it, for `docker network rm`.) Each network is a /28 of the runner networks' block
+([Run](#run)); a slot whose network cannot be made starts no runner, says so in the journal and
+tries again. The slots themselves are lock
 files, one for each port (`41737` to `41770`), in the Docker volume `herdr-ci-<host>-check-slots`
 (RAM, 1 MiB), which every runner container mounts at `/check-slots` and learns of in
 `CHECK_SLOTS_DIR`. A run holds a file with `flock`, which the kernel grants to one holder and takes
@@ -281,7 +309,7 @@ online. The repository variable overrides the choice:
 
 ```sh
 gh variable set CI_SELF_HOSTED_LABELS --body '"ubuntu-24.04"'   # PC offline: everything GitHub-hosted
-gh variable set CI_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis"]'   # every pull request, pages.yml and release.yml too
+gh variable set CI_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis"]'   # every pull request and release.yml too
 gh variable delete CI_SELF_HOSTED_LABELS   # back to the default
 gh variable set CI_SELF_HOSTED_CAPACITY --body 10   # self-hosted-ovis runners online
 ```
@@ -412,7 +440,7 @@ vm-runner.sh supervise                              # forever: one container per
   the Linux jobs go to `ovis-vm` (never to a fork's run); delete it once #3808 is in to move Fast checks too.
 - Routing: `gh variable set CI_LINUX_SELF_HOSTED_LABELS --body '["self-hosted","ovis-vm"]'` moves ci.yml's Linux jobs
   of pull requests and branch pushes to them (main keeps `CI_MAIN_SELF_HOSTED_LABELS`; tag pushes, manual runs and
-  the workflows that call ci.yml, such as release-validate, pages and relay-deploy, keep `CI_SELF_HOSTED_LABELS`). With `ovis-vm` the browser scripts run as five jobs. A manual run takes
+  relay-deploy's call to ci.yml keep `CI_SELF_HOSTED_LABELS`; pages.yml's and release-validate's calls are always hosted). With `ovis-vm` the browser scripts run as five jobs. A manual run takes
   `self_hosted_labels`. `gh variable delete CI_LINUX_SELF_HOSTED_LABELS` moves them back.
 - The VM's per-host caps (`CHECK_HOST_*`, 3 browser workers, 3 test shards) keep a job inside 4 vCPUs. A VM that
   sleeps or drops mid-job loses that job (GitHub fails it once the runner stops answering); keep the VMs awake.
@@ -444,6 +472,145 @@ GitHub names as trusted (above), each under the run that built it, which is the 
 restore it: a trusted run's build never reaches another run, main's included. A job can write its
 own outbox (on disk, as its workspace is) and the 16 MiB locks volume, so at worst it makes the jobs
 waiting on a key wait up to five minutes and build themselves.
+
+Anyone who holds a runner registration token can register a runner under any label, and that runner
+then takes the jobs that ask for the label, with the run's token: every job of a run can write the run's
+artifacts, and any job of a main run can write an Actions cache that later runs restore. So
+`scripts/privileged-jobs-workflow.test.ts` holds the workflows to one rule set:
+
+- A privileged job (a write permission, `id-token: write` included; an environment; or a secret it
+  references) names a hosted label from a fixed list literally, never a self-hosted label or a variable,
+  input, job output or matrix value that could carry one, whatever the routing variables above say; it uses
+  only reviewed actions at their exact references, and restores no Actions cache.
+- A whole-run run is GitHub-hosted and cacheless as a whole. These are every run with a privileged job that
+  takes an artifact (download-artifact, deploy-pages), since any job of the run could have written it: the
+  Release (with the CI it runs itself, called with `hosted_only: true`), and the desktop, Windows app, PTY
+  host, beta, remote bundle and hosted-shell preview workflows; and every Pages run, found by any of four
+  signs: a job that can write Pages, a job in the `github-pages` environment, a job holding `id-token: write`
+  with a secret, or the deploy and upload actions. Pages' build, `current` and deploy jobs name `ubuntu-24.04`,
+  and its manual validation calls `ci.yml` with `hosted_only: true`, which puts every job of that call on a
+  hosted label and turns its caches off; `ci.yml`'s own runs and relay-deploy's call leave it unset.
+- Every other privileged job is held to the first rule only. A push to a `gh-pages` branch by a job with
+  `contents: write` shows none of the four Pages signs: the first rule keeps that job hosted, and if it takes
+  an artifact its whole run is hosted.
+
+The test fails closed on any other form: a listed label written literally, the `hosted_only` prefix under a
+call that passes `hosted_only: true`, setup-ci's `cache: none` (or its `hosted_only` form), cache steps whose
+condition has `!inputs.hosted_only` as a top-level `&&` term, setup-bun's `no-cache: true`, setup-node's
+`package-manager-cache: false`, and reviewed actions at their exact references. Every job-level and step-level
+`if` of a covered job, and every `if` of every workflow and of setup-ci, is refused when it still holds `${{` or
+`}}` after one whole-value wrapper is stripped: GitHub reads such a condition as a string, always true. The
+inputs of reviewed actions are read without regard to case, as the runner reads them, and inputs that differ
+only in case are refused; a download with a token, from another repository, by run id or by artifact ids is
+refused. It also fails on a workflow or action file GitHub loads that does not end in
+`.yml`, on a symlink in `.github/workflows` or `.github/actions`, on a job that calls a workflow it cannot read
+(another repository's), on a key it reads written in another case, two keys (or two workflow files) that
+differ only in case, a key with a character outside ASCII, and on a runner label or action reference other
+than its exact listed form; a character outside ASCII inside an expression counts as a secret reference. A
+trial on 2026-11-17 observed why: GitHub refuses structural keys in another case, and matrix axes or job ids
+that differ only in case, but reads a matrix include key `OS` as the axis `os` (a job then waited for a
+`self-hosted` runner), and matches expression contexts and hosted labels without regard to case; the test
+resolves matrix axes the same way and refuses the rest itself. A permission value other than `read`, `none`
+or `read-all` counts as write. Actions are recognised by owner/repo, with `.` and empty path pieces dropped,
+in any case.
+
+Stated limits. A Pages run is missed when no job of its workflow, or of a workflow it calls, shows any of the
+four signs, and a run is whole-run only when one of its privileged jobs takes an artifact through a reviewed
+action. The first rule sees a secret only by its reference: a credential that reaches a job another way
+(through an artifact, from `vars.*`, fetched at run time) is not seen as one, and such a job is held only by
+the other signs it shows. A job that only gates another (a check, `current`, the CI a release reuses from
+main's push run) can falsify its own result and so decide whether a publishing job runs, never what it
+publishes; the Release's reuse of main's run reads only that run's conclusions and takes nothing from it.
+The test reads runner labels, actions and their inputs, not shell commands or scripts.
+The hosted labels on the list are the ones the covered jobs use: `ubuntu-24.04`, `ubuntu-24.04-arm`,
+`windows-latest`, `windows-2025`, `macos-15`, `macos-15-intel` and `macos-latest`. For `ubuntu-24.04` the
+boundary is observed: a job that asks only for it (or for `ubuntu-latest`, which no job uses) ran on
+GitHub's own runners even while a self-registered runner carrying that label was online and idle, and
+only a job that also asked for `self-hosted` reached such a runner. That was observed by a trial on
+2026-11-17 (14 of 14 jobs); it is not documented by GitHub. The other six labels are assumed to behave
+the same.
+
+### Every job and its runner
+
+Every job of `.github/workflows` as of this change (2026-11-17). LIGHT is the light runner expression (a
+fork's pull request gets `ubuntu-24.04`; otherwise main takes `CI_MAIN_SELF_HOSTED_LABELS`, then
+`CI_LIGHT_LABELS`, `CI_SELF_HOSTED_LABELS`, `["self-hosted","self-hosted-ovis"]`); ROUTE is
+`scripts/ci-runner-route.sh`'s output; MAC is the macOS job's expression (`CI_MAC_LABELS` in ci.yml's own
+runs off main, else `macos-15`); HO is the `hosted_only` prefix, taken in `pages.yml`'s and
+`release-validate.yml`'s calls. Write permissions without "(workflow)" are the
+job's own; a call's jobs are listed under its workflow. No test reads this table; the test above holds
+the rules.
+
+| workflow | job | runs-on at this head | hosted? | write permissions / environment / secrets | cache restores |
+| --- | --- | --- | --- | --- | --- |
+| beta.yml | pick | `ubuntu-24.04` | yes | - | none |
+| beta.yml | host-build | calls `pty-sidecar.yml` | (its jobs) | id-token, attestations write | (its jobs) |
+| beta.yml | host-publish | `ubuntu-24.04` | yes | contents write | none |
+| beta.yml | tag | `ubuntu-24.04` | yes | contents write | none |
+| beta.yml | desktop | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15 | yes | secrets MAC_NOTARY_KEY_P8, MAC_DEVELOPER_ID_P12, MAC_DEVELOPER_ID_P12_PASSWORD, MAC_NOTARY_KEY_ID, MAC_NOTARY_ISSUER | none |
+| beta.yml | desktop-publish | `ubuntu-24.04` | yes | contents write | none |
+| ci.yml | changes | HO ubuntu-24.04, else LIGHT | yes under hosted_only; else no: self-hosted unless a fork PR | - | none |
+| ci.yml | windows-install | `windows-latest` | yes | - | setup-ci save, none under hosted_only |
+| ci.yml | macos-session | HO macos-15, else MAC | yes under hosted_only; else yes unless CI_MAC_LABELS is set | - | setup-ci save, none under hosted_only |
+| ci.yml | rust-pty-host | `ubuntu-24.04` | yes | - | setup-ci save, none under hosted_only |
+| ci.yml | herdr-core-live | HO ubuntu-24.04, else LIGHT | yes under hosted_only; else no: self-hosted unless a fork PR | - | setup-ci restore, none under hosted_only; actions/cache (Cache hc, off under hosted_only) |
+| ci.yml | fast | HO ubuntu-24.04, else ROUTE fast | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only |
+| ci.yml | integration | HO ubuntu-24.04, else ROUTE linux | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only |
+| ci.yml | browser-main | HO ubuntu-24.04, else ROUTE linux | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only; actions/cache (Cache Playwright browser, hosted runners, off under hosted_only) |
+| ci.yml | browser-other | HO ubuntu-24.04, else ROUTE linux | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only; actions/cache (Cache Playwright browser, hosted runners, off under hosted_only) |
+| ci.yml | integration-browser | HO ubuntu-24.04, else LIGHT | yes under hosted_only; else no: self-hosted unless a fork PR | - | none |
+| cla.yml | cla | `ubuntu-24.04` | yes | actions, contents, pull-requests write (workflow) | none |
+| desktop.yml | build | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025 | yes | secrets MAC_NOTARY_KEY_P8, MAC_DEVELOPER_ID_P12, MAC_DEVELOPER_ID_P12_PASSWORD, MAC_NOTARY_KEY_ID, MAC_NOTARY_ISSUER, WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD | none |
+| desktop.yml | feed | `ubuntu-24.04` | yes | - | none |
+| desktop.yml | attach | `ubuntu-24.04` | yes | contents write | none |
+| growth-snapshot.yml | snapshot | `ubuntu-24.04` | yes | secrets GROWTH_METRICS_TOKEN, GROWTH_SNAPSHOT_KEY | none |
+| hook-kill-tests.yml | hook-kill-tests | `ubuntu-24.04` | yes | - | setup-ci restore |
+| mac-dmg.yml | gate | `ubuntu-24.04` | yes | secrets MAC_DEVELOPER_ID_P12, MAC_DEVELOPER_ID_P12_PASSWORD, MAC_NOTARY_KEY_P8, MAC_NOTARY_KEY_ID, MAC_NOTARY_ISSUER | none |
+| mac-dmg.yml | dmg | `macos-latest` | yes | contents write; secrets MAC_DEVELOPER_ID_P12, MAC_DEVELOPER_ID_P12_PASSWORD, MAC_NOTARY_KEY_P8, MAC_NOTARY_KEY_ID, MAC_NOTARY_ISSUER | none |
+| omp-question-compat.yml | native-questions | `ubuntu-24.04` | yes | - | setup-ci restore |
+| ovis-tui.yml | check | `ubuntu-24.04` | yes | - | none |
+| pages.yml | validate | calls `ci.yml` with hosted_only: true | (its jobs) | - | (its jobs) |
+| pages.yml | build | `ubuntu-24.04` | yes | - | none |
+| pages.yml | current | `ubuntu-24.04` | yes | - | none |
+| pages.yml | deploy | `ubuntu-24.04` | yes | pages, id-token write; environment github-pages | none |
+| pr-title.yml | title | LIGHT | no: self-hosted unless a fork PR | - | none |
+| pty-sidecar-attach.yml | gate | `ubuntu-24.04` | yes | - | none |
+| pty-sidecar-attach.yml | build | calls `pty-sidecar.yml` | (its jobs) | id-token, attestations write | (its jobs) |
+| pty-sidecar-attach.yml | attach | `ubuntu-24.04` | yes | contents write | none |
+| pty-sidecar.yml | build | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15 | yes | - | none |
+| pty-sidecar.yml | manifest | `ubuntu-24.04` | yes | - | none |
+| pty-sidecar.yml | attest | `ubuntu-24.04` | yes | id-token, attestations write | none |
+| relay-deploy.yml | validate | calls `ci.yml` | (its jobs) | - | (its jobs) |
+| relay-deploy.yml | deploy | `ubuntu-24.04` | yes | environment production; secrets: a deploy token and an account id for the host it deploys to | none |
+| release-validate.yml | reuse | `ubuntu-24.04` | yes | - | none |
+| release-validate.yml | fast | `ubuntu-24.04` | yes | - | none |
+| release-validate.yml | ci | calls `ci.yml` with hosted_only: true | (its jobs) | - | (its jobs) |
+| release-validate.yml | verdict | `ubuntu-24.04` | yes | - | none |
+| release.yml | preflight | `ubuntu-24.04` | yes | - | none |
+| release.yml | validate | calls `release-validate.yml` | (its jobs) | - | (its jobs) |
+| release.yml | pty-sidecar | calls `pty-sidecar.yml` | (its jobs) | id-token, attestations write | (its jobs) |
+| release.yml | server-binary | `ubuntu-24.04` | yes | - | none |
+| release.yml | server-binary-sign | `ubuntu-24.04` | yes | environment release-signing; secrets OVIS_SERVER_SIGNING_KEY | none |
+| release.yml | server-binary-attest | `ubuntu-24.04` | yes | id-token, attestations write | none |
+| release.yml | publish | `ubuntu-24.04` | yes | contents write | none |
+| release.yml | shell-build | `ubuntu-24.04` | yes | - | none |
+| release.yml | shell-deploy | `ubuntu-24.04` | yes | environment production; secrets: a deploy token and an account id for the host it deploys to | none |
+| release.yml | shell-attach | `ubuntu-24.04` | yes | contents write | none |
+| release.yml | windows-app | calls `windows-app.yml` | (its jobs) | contents write | (its jobs) |
+| release.yml | desktop | calls `desktop.yml` | (its jobs) | contents write; passes 7 secrets | (its jobs) |
+| release.yml | mac-dmg | calls `mac-dmg.yml` | (its jobs) | contents write; passes secrets: inherit | (its jobs) |
+| remote-bundles.yml | bundle | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel | yes | - | none |
+| remote-bundles.yml | bundle-windows | `ubuntu-24.04` | yes | - | none |
+| remote-bundles.yml | smoke-windows | `windows-latest` | yes | - | none |
+| remote-bundles.yml | ssh | `ubuntu-24.04` | yes | - | none |
+| remote-bundles.yml | release | `ubuntu-24.04` | yes | contents write | none |
+| shell-preview.yml | shell-build | `ubuntu-24.04` | yes | - | none |
+| shell-preview.yml | shell-deploy | `ubuntu-24.04` | yes | environment production; secrets: a deploy token and an account id for the host it deploys to | none |
+| windows-app.yml | gate | `ubuntu-24.04` | yes | - | none |
+| windows-app.yml | build | `windows-latest` | yes | - | none |
+| windows-app.yml | attach | `ubuntu-24.04` | yes | contents write | none |
+| windows-install.yml | install | `windows-latest` | yes | - | none |
+| windows-terminal-qa.yml | qa | `windows-latest` | yes | - | setup-ci save; actions/cache (Cache Playwright browser) |
 
 ### Mac runner
 

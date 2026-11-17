@@ -4,8 +4,9 @@
  * once this device asked for it, and herdr's focus moving back brings this device back too. It
  * never takes the view while this window is in front and someone types into it or has a dialog
  * open, and a split this device opens itself stays its own pick when herdr's frame for it comes
- * first (#1470). Imported by ui-regression.ts, with Settings closed; it ends on the pane selected
- * when it began and with the setting off, also when it fails.
+ * first (#1470). Imported by ui-regression.ts, with Settings closed, on a page with its
+ * rewriteMachinesFrames init script; it ends on the pane selected when it began and with the
+ * setting off, also when it fails.
  */
 import assert from "node:assert/strict";
 import type { Page } from "playwright-core";
@@ -44,14 +45,29 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   const focusedTab = (label: string) => herdrRpc<{ tab: { tab_id: string }; root_pane: { pane_id: string } }>(
     "tab.create", { workspace_id: fixture.workspaceId, label, focus: true });
 
-  // the tabs listed here: those in the row and those behind its More, a full row's last ones (TabStrip)
-  const tabsListed = () => page.evaluate(() => document.querySelectorAll('.tab-strip [role="tab"]').length
-    + Number(document.querySelector(".tab-strip-more")?.textContent?.replace(/\D/g, "") || 0));
-  // the tab herdr opened is listed here: its pane-focused frame, sent before that, has been handled
-  const listed = (label: string, was: number) => until(async () => await tabsListed() > was, `${label} is listed`);
-
   const before = await selectedPaneId();
   assert.ok(before, "a pane is selected before the check");
+  // herdr sends its focus on a connection of its own, apart from its tab and pane events
+  // (server/collector.ts), so a tab listed here says nothing of the focus frame for it, which may
+  // come later. The pane-focused frames the page's roster reads are recorded as it reads them
+  // (ui-regression.ts rewriteMachinesFrames), and it decides on each one in that same call.
+  await page.evaluate(() => {
+    const read: string[] = [];
+    (window as unknown as { __focusFramesRead?: string[] }).__focusFramesRead = read;
+    (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame = (data) => {
+      let event: { type?: string; message?: { type?: string; pane_id?: string } };
+      try { event = JSON.parse(data); } catch { return data; }
+      if (event.type === "machine-message" && event.message?.type === "pane-focused" && event.message.pane_id) read.push(event.message.pane_id);
+      return data;
+    };
+  });
+  // A wrong follow is only a React update scheduled in that call: the selection read here is stored
+  // by an effect after the render, so the read waits two frames and a task past the frame for both
+  const focusRead = async (paneId: string, label: string): Promise<void> => {
+    await until(() => page.evaluate(
+      (paneId) => (window as unknown as { __focusFramesRead?: string[] }).__focusFramesRead?.includes(paneId) === true, paneId), label);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))));
+  };
   const tabs: string[] = [];
   let following = false;
   let releaseSplit = (): void => undefined;
@@ -59,7 +75,9 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     // off, as it starts: herdr's focus is herdr's, and this device stays where it is
     const ignored = await focusedTab("follow focus off");
     tabs.push(ignored.tab.tab_id);
-    // fixed wait: proving that the selection does not move
+    await focusRead(ignored.root_pane.pane_id, "herdr's focus frame for the tab opened while off is read");
+    // a wrong follow is only a scheduled render when the frame is read, and no later step would show it
+    // fixed wait: the selection gets the time to move before it is read
     await page.waitForTimeout(NO_FOLLOW_WAIT_MS);
     assert.equal(await selectedPaneId(), before, "a device that did not ask to follow herdr's focus keeps its pane");
 
@@ -80,20 +98,18 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await page.bringToFront();
     await page.locator(".xterm-helper-textarea").first().focus();
     assert.ok(await page.evaluate(() => document.hasFocus()), "this window is in front while typing");
-    const beforeTyping = await tabsListed();
     const typing = await focusedTab("follow focus typing");
     tabs.push(typing.tab.tab_id);
-    await listed("follow focus typing", beforeTyping);
+    await focusRead(typing.root_pane.pane_id, "herdr's focus frame for the tab opened while typing is read");
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "herdr's focus does not take the view while this device types");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // a dialog open here: the same
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await page.locator('[aria-modal="true"]').first().waitFor();
-    const beforeDialog = await tabsListed();
     const dialog = await focusedTab("follow focus dialog");
     tabs.push(dialog.tab.tab_id);
-    await listed("follow focus dialog", beforeDialog);
+    await focusRead(dialog.root_pane.pane_id, "herdr's focus frame for the tab opened under a dialog is read");
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "herdr's focus does not take the view while a dialog is open here");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -117,11 +133,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await palette.getByRole("searchbox", { name: "Search panes and actions", exact: true }).fill("Split pane right and open it");
     await palette.getByRole("option", { name: "Split pane right and open it", exact: true }).click();
     await until(async () => made !== undefined, "herdr made the split");
-    // a tab made after the split is listed here: herdr's frame for the split, sent before it, has been handled
-    const beforeMarker = await tabsListed();
-    const marker = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: fixture.workspaceId, label: "follow focus split marker", focus: false });
-    tabs.push(marker.tab.tab_id);
-    await listed("follow focus split marker", beforeMarker);
+    await focusRead(made!, "herdr's focus frame for the split is read");
     assert.equal(await selectedPaneId(), splitFrom, "herdr's frame for this device's own split is left to the split's answer");
     releaseSplit();
     await until(async () => await selectedPaneId() === made, "the split's answer opens its new pane");
@@ -139,6 +151,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     following = false;
     console.log("PASS herdr's focus is followed only once this device asks for it, to a new tab and back, never while this device types or has a dialog open, and a split this device opens stays its own pick");
   } finally {
+    await page.evaluate(() => { delete (window as unknown as { __rewriteMachinesFrame?: unknown }).__rewriteMachinesFrame; }).catch(() => undefined);
     releaseSplit();
     await page.unroute("**/api/pane/split").catch(() => undefined);
     for (const tab of tabs) await tabClose(tab).catch(() => undefined);

@@ -50,18 +50,19 @@ const turn = (prompt: string, answer: string, session = SESSION) => {
 const reportSession = (session: string, targetPaneId = paneId) =>
   herdrRpc("pane.report_agent_session", { pane_id: targetPaneId, source: "herdr:opencode", agent: "opencode", agent_session_id: session, session_start_source: "select" });
 
-const startOpencode = async (session: string): Promise<string> => {
-  const created = await workspaceCreate({ cwd: root, label: `ovis-test-opencode-${session}` });
+/** A pane running `program` (the stand-in OpenCode), with `session` reported for it, or none, as at OpenCode's home screen. */
+const startOpencode = async (session: string | null, program = fakeOpencode): Promise<string> => {
+  const created = await workspaceCreate({ cwd: root, label: `ovis-test-opencode-${session ?? "home"}` });
   workspaces.push(created.workspace.workspace_id);
   const targetPaneId = created.root_pane.pane_id;
-  await herdrRpc("pane.send_text", { pane_id: targetPaneId, text: `${fakeOpencode}\n` });
+  await herdrRpc("pane.send_text", { pane_id: targetPaneId, text: `${program}\n` });
   for (const deadline = Date.now() + 10_000;;) {
     const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === targetPaneId);
     if (pane?.agent === "opencode") break;
     if (Date.now() > deadline) throw new Error("test opencode did not start");
     await Bun.sleep(50);
   }
-  await reportSession(session, targetPaneId);
+  if (session !== null) await reportSession(session, targetPaneId);
   return targetPaneId;
 };
 
@@ -220,6 +221,34 @@ it("keeps the terminal for a session the store does not hold", async () => {
     await reportSession(SESSION);
   }
   expect((await read()).source).toBe("opencode-transcript");
+});
+
+it("greets an OpenCode at its home screen, which reports no session until its first prompt, and then shows that session (#3600)", async () => {
+  // a stand-in that draws OpenCode 2.2.2's recorded home screen (narrow: it fits any pane) on a screen of its own, and
+  // after a line typed, the recorded screen of a session, as when a stored one is opened with nothing reported
+  const recorded = (name: string) => `${readFileSync(join(import.meta.dir, "fixtures", `${name}.txt`), "utf8").trim()}\n`.replaceAll("\n", "\r\n");
+  writeFileSync(join(root, "home-screen.txt"), recorded("opencode-home-2.2.2-narrow"));
+  writeFileSync(join(root, "session-screen.txt"), recorded("opencode-session-2.2.2"));
+  const homeOpencode = join(root, "home-bin", "opencode");
+  mkdirSync(join(root, "home-bin"), { recursive: true });
+  writeFileSync(homeOpencode, `#!/bin/sh\nprintf '\\033[?1049h\\033[H'\ncat '${join(root, "home-screen.txt")}'\nread line\nprintf '\\033[2J\\033[H'\ncat '${join(root, "session-screen.txt")}'\nsleep 600\n`);
+  chmodSync(homeOpencode, 0o755);
+  const drawn = (pane: string, value: string) => herdrRpc("pane.wait_for_output", {
+    pane_id: pane, source: "visible", match: { type: "substring", value }, timeout_ms: 10000,
+  }, undefined, 12000);
+  const target = await startOpencode(null, homeOpencode);
+  await drawn(target, "Ask anything");
+  const greeting = await read({}, target);
+  // read off the screen alone, so the chat reads it again on the pane's output
+  expect(greeting).toMatchObject({ source: "opencode-transcript", turns: [], cursor: null, screen: true, metadata: { model: null, reasoning_effort: null } });
+  expect(greeting.history_id).toStartWith(`unwritten:opencode:${target}:`);
+  // the screen shows a session now, still with none reported: no greeting over it
+  await herdrRpc("pane.send_text", { pane_id: target, text: "\n" });
+  await drawn(target, "esc interrupt");
+  expect(await read({}, target)).toMatchObject({ source: "scrollback", turns: [] });
+  // the first prompt's session, once herdr reports it, arrives under its own history id: the chat takes it whole
+  await reportSession(SESSION, target);
+  expect(await read({}, target)).toMatchObject({ source: "opencode-transcript", history_id: `opencode-${SESSION}` });
 });
 
 it("counts an OpenCode pane's running subagent, holds the turn that ends meanwhile as BG, and leaves its card when it ends", async () => {

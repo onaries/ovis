@@ -14,7 +14,7 @@ inputs:
     required: false
     default: 'false'
   cache:
-    description: "'save' restores and saves the Bun dependency cache; 'restore' only restores it, for a job that runs unpinned third-party code and must not write a cache other workflows trust."
+    description: "'save' restores and saves the Bun dependency cache; 'restore' only restores it, for a job that runs unpinned third-party code and must not write a cache other workflows trust; 'none' restores and saves no Actions cache, Bun's executable included, for every job of a run in which a publishing or signing job takes an artifact (pages.yml, the Release and the other publishing workflows, ci.yml when called with hosted_only) and for a job that publishes, signs or holds a secret itself: any job of a main run can write a cache under any key that later runs restore (scripts/privileged-jobs-workflow.test.ts)."
     required: false
     default: 'save'
 runs:
@@ -53,6 +53,7 @@ runs:
       if: runner.environment != 'self-hosted'
       with:
         bun-version: ${{ inputs.bun-version }}
+        no-cache: ${{ inputs.cache == 'none' }}
     # setup-bun installs into $HOME/.bun/bin. The self-hosted Mac runs jobs as a person's own account, whose Bun
     # that would replace, so there it installs under the job's temp folder, which the runner empties after the job.
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -61,14 +62,17 @@ runs:
         HOME: ${{ runner.temp }}/setup-bun-home
       with:
         bun-version: ${{ inputs.bun-version }}
+        no-cache: ${{ inputs.cache == 'none' }}
     - if: inputs.node == 'true' && runner.environment != 'self-hosted'
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '22'
+        # setup-node caches by itself when package.json's packageManager names npm: never here
+        package-manager-cache: false
     - name: Cache Bun dependencies
       # On the measured self-hosted connection this archive costs 37–43s to restore,
       # versus 7–20s for a fresh install. Do not pay for restore/save on disposable runners.
-      if: runner.environment != 'self-hosted' && inputs.cache != 'restore'
+      if: runner.environment != 'self-hosted' && inputs.cache == 'save'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/bun

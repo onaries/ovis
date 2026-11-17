@@ -102,7 +102,6 @@ describe("envelope boundaries", () => {
     rejects(() => encodeFrame({ ...stream, type: FrameType.HTTP_DATA, payload: new Uint8Array(16377) }));
   });
   it("rejects text-kind mux records", () => {
-    // JSON transport input is untrusted, even when a caller bypasses TypeScript.
     rejects(() => Reflect.apply(decodeFrame, undefined, ["not binary"]));
   });
   it("rejects wrong envelope version", () => {
@@ -260,7 +259,6 @@ describe("metadata constraints", () => {
       const invalid = { ...welcome.payload, limits: { ...LIMITS_V1, [key]: value + 1 } };
       rejects(() => decodeFrame(wire(FrameType.WELCOME, JSON.stringify(invalid))));
     }
-    // The pre-release old HTTP window must not silently negotiate asymmetric credit.
     rejects(() => decodeFrame(wire(FrameType.WELCOME, JSON.stringify({
       ...welcome.payload, limits: { ...LIMITS_V1, http_window_bytes: 65536 },
     }))));

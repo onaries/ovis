@@ -41,20 +41,32 @@ function completeJson<T>(path: string): T | undefined {
   catch (error) { if (error instanceof SyntaxError) return undefined; throw error; }
 }
 
-/** Waits for the whole JSON in `path`, looking again on every change in `dir`, until `ms` runs out. */
+/**
+ * Waits for the whole JSON in `path`, looking once when the watch starts (it may be there already), again on every
+ * change in `dir`, and a last time when `ms` runs out: a change whose event was merged or missed, or a look while the
+ * file was busy with no change after it, still counts. It fails only on a file not whole at that last look.
+ */
 function watchJson<T>(dir: string, path: string, ms: number): { result: Promise<T>; looked: () => Promise<void>; close: () => Promise<void> } {
   const watcher = watch(dir);
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const lookers: (() => void)[] = [];
   const result = new Promise<T>((resolve, reject) => {
-    deadline = setTimeout(() => reject(new Error(`${path} was not written`)), ms);
-    watcher.on("change", () => {
+    // whether this look settled the result
+    const look = (): boolean => {
       try {
         const value = completeJson<T>(path);
-        if (value !== undefined) { clearTimeout(deadline); resolve(value); }
+        if (value === undefined) return false;
+        clearTimeout(deadline);
+        resolve(value);
       } catch (error) { clearTimeout(deadline); reject(error); }
+      return true;
+    };
+    deadline = setTimeout(() => { if (!look()) reject(new Error(`${path} was not written`)); }, ms);
+    watcher.on("change", () => {
+      look();
       for (const looker of lookers.splice(0)) looker();
     });
+    look();
   });
   // A waiting host has no child and therefore no result; still observe a later rejection on failure.
   void result.catch(() => {});
@@ -153,45 +165,62 @@ it.skipIf(!onWindows)("starts a desktop child outside the launcher, preserving q
   symlinkSync(registry, legacy, "junction");
   const resultPath = join(root, "result.json");
   const stopPath = join(root, "stop");
+  const stoppedPath = join(root, "stopped.json");
   const script = join(root, "child with spaces.ts");
   const sentinel = "private-launch-sentinel-\"&%!\n한글";
   const previous = process.env["OVIS_START_TEST_SECRET"];
-  let pid: number | undefined;
   const waiting = watchJson<{ pid: number; secret: string; args: string[]; session: number }>(root, resultPath, 15_000);
   writeFileSync(script, `import { watch, existsSync, renameSync, writeFileSync } from 'node:fs';
 import { dlopen, FFIType } from 'bun:ffi';
 const { symbols } = dlopen('kernel32.dll', { ProcessIdToSessionId: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.i32 } });
 const session = new Uint32Array(1); if (!symbols.ProcessIdToSessionId(process.pid, session)) throw new Error('no session');
-watch(${JSON.stringify(root)}, () => { if (existsSync(${JSON.stringify(stopPath)})) process.exit(0); });
+// on its stop file: says so in a file of its own, then exits; looked for again at once, for a stop written before the watch
+const stop = () => { if (!existsSync(${JSON.stringify(stopPath)})) return; writeFileSync(${JSON.stringify(`${stoppedPath}.tmp`)}, '{}'); renameSync(${JSON.stringify(`${stoppedPath}.tmp`)}, ${JSON.stringify(stoppedPath)}); process.exit(0); };
+watch(${JSON.stringify(root)}, stop);
+stop();
+// a stop whose event never comes still cannot keep it past the test's own 60 s
+setTimeout(() => process.exit(0), 55_000);
 // written whole under another name first: the result's name only appears with all of it (#2165)
 writeFileSync(${JSON.stringify(`${resultPath}.tmp`)}, JSON.stringify({pid:process.pid, secret:process.env.OVIS_START_TEST_SECRET, args:process.argv.slice(2), session:session[0]}));
 renameSync(${JSON.stringify(`${resultPath}.tmp`)}, ${JSON.stringify(resultPath)});
 `);
   process.env["OVIS_START_TEST_SECRET"] = sentinel;
   const failures: unknown[] = [];
+  // none: the launcher started no child; running: its result came; unknown: a child may still start or run
+  let child: "none" | "running" | "unknown" = "unknown";
   try {
     const started = await startInteractiveWindowsHerdr(process.execPath, [script, "argument with spaces & 한글"], join(legacy, "herdr.log"));
     if (started === "waiting_login") {
+      child = "none";
       expect(existsSync(resultPath)).toBe(false);
     } else {
       // The launcher already exited, but this child's watch still runs in the desktop session.
-      const child = await waiting.result;
-      pid = child.pid;
-      expect(child.session).toBeGreaterThan(0);
-      expect(child.secret).toBe(sentinel);
-      expect(child.args).toEqual(["argument with spaces & 한글"]);
-      expect(() => process.kill(child.pid, 0)).not.toThrow();
+      const result = await waiting.result;
+      child = "running";
+      expect(result.session).toBeGreaterThan(0);
+      expect(result.secret).toBe(sentinel);
+      expect(result.args).toEqual(["argument with spaces & 한글"]);
+      expect(() => process.kill(result.pid, 0)).not.toThrow();
     }
     expect(readdirSync(registry).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
   } catch (error) { failures.push(error); }
   try {
     await waiting.close();
     if (previous === undefined) delete process.env["OVIS_START_TEST_SECRET"]; else process.env["OVIS_START_TEST_SECRET"] = previous;
-    // Only this fixture's child is stopped, never a herdr daemon or another test's task.
-    if (pid !== undefined) try { process.kill(pid); } catch {}
+    // The child ends itself on its stop file: nothing is signalled by the pid it wrote, which by now may be another
+    // process's. The fixture is removed only once no child can still need the file: none was started, or the running
+    // one said it saw it. Otherwise the file and the fixture stay, so a child that runs or starts later still finds it
+    // (at once, right after its watch is in place). Its watch keeps root busy until it exits, which the removal waits out.
+    const acknowledged = child === "running" ? watchJson<Record<string, never>>(root, stoppedPath, 20_000) : undefined;
+    writeFileSync(stopPath, "");
+    if (acknowledged) {
+      try { await acknowledged.result; child = "none"; } finally { await acknowledged.close(); }
+    }
+    if (child !== "none") throw new Error(`${root} is kept with its stop file: a child that did not say it stopped may still run or start`);
     // Remove the junction itself before recursively cleaning its target fixture.
     await rm(legacy, { force: true, recursive: true });
-    const cleanupBy = Date.now() + 5000;
+    // the child exits by itself now, in the desktop session: a slow hosted runner gets more than the 5 s a kill needed
+    const cleanupBy = Date.now() + 20_000;
     for (;;) {
       try { await rm(root, { recursive: true, force: true }); break; }
       catch (error) {
@@ -268,6 +297,38 @@ it.skipIf(!onWindows)("keeps the bridges in the migration junction's target, rea
   }
 }, 30_000);
 
+/**
+ * `script`'s output from Windows PowerShell, started as an SSH host starts it: from PowerShell 7 (the CI step) the
+ * child would inherit its module path, and Windows PowerShell then cannot load its own modules (Get-FileHash). A
+ * failure says its exit code and both streams.
+ */
+async function windowsPowerShell(script: string): Promise<string> {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"));
+  // no progress, as over SSH (ssh.ts): over a pipe PowerShell 5 writes it to stderr as CLIXML, where it buries what failed
+  const encoded = Buffer.from(`$ProgressPreference = 'SilentlyContinue'; ${script}`, "utf16le").toString("base64");
+  const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe", env });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (code !== 0) throw new Error(`powershell.exe exited with ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
+  return stdout;
+}
+
+/**
+ * Removes a fixture folder once Windows lets go of it, within `ms`. A process the test started can still be exiting
+ * and hold its executable, its log or its folder; nothing waits for that process. Bun's rm takes `maxRetries` but
+ * never reads it (bun 1.4.2, src/runtime/node/node_fs.rs: the options parser keeps it, and `rm` deletes the tree once),
+ * so the retry is here, on the codes Node's rm retries.
+ */
+async function removeFixture(path: string, ms: number): Promise<void> {
+  const removeBy = Date.now() + ms;
+  for (;;) {
+    try { await rm(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || Date.now() >= removeBy) throw error;
+      await Bun.sleep(25);
+    }
+  }
+}
+
 for (const migrated of [false, true]) {
   it.skipIf(!onWindows)(`writes the Windows bridge launcher and reads startup status with migration junction=${migrated}`, async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "ovis-registry-native-")));
@@ -276,16 +337,10 @@ for (const migrated of [false, true]) {
     const registry = join(target, "bridges");
     const session = migrated ? "web-qa" : undefined;
     const files = windowsBridgeFiles(session);
-    const runPowerShell = async (script: string) => {
-      const wait = script.includes("Invoke-CimMethod") ? "; Wait-Process -Id $r.ProcessId -Timeout 15 -ErrorAction SilentlyContinue" : "";
-      const prefixed = `[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $env:USERPROFILE=${psQuote(home)}; $env:APPDATA=${psQuote(home)}; $env:LOCALAPPDATA=${psQuote(home)}; $env:XDG_CONFIG_HOME=''; ${script}${wait}`;
-      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"));
-      const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(prefixed, "utf16le").toString("base64")], { stdout: "pipe", stderr: "pipe", env });
-      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      if (code !== 0) throw new Error(stderr);
-      return stdout.replaceAll("\r\n", "\n").trim();
-    };
+    const runPowerShell = async (script: string) =>
+      (await windowsPowerShell(`[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $env:USERPROFILE=${psQuote(home)}; $env:APPDATA=${psQuote(home)}; $env:LOCALAPPDATA=${psQuote(home)}; $env:XDG_CONFIG_HOME=''; ${script}`)).replaceAll("\r\n", "\n").trim();
     const ssh = { runPowerShell } as unknown as SshConnection;
+    const failures: unknown[] = [];
     try {
       mkdirSync(registry, { recursive: true });
       if (migrated) {
@@ -304,11 +359,29 @@ for (const migrated of [false, true]) {
       // the bundle's server, compiled as the bundle's is: the launcher runs `ovis-server.exe remote`
       mkdirSync(inspection.runtimeDir, { recursive: true });
       const standIn = join(home, "stand-in.ts");
-      writeFileSync(standIn, `await Bun.write(${JSON.stringify(join(home, "started.json"))}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd(), entry: process.argv[2] })); console.log("bridge log line");`);
+      const startedPath = join(home, "started.json");
+      // the log line (the launcher makes stdout the log) is written before started.json, and started.json appears whole
+      // under its name (#2165): once it can be read, both are there
+      writeFileSync(standIn, `import { renameSync, writeFileSync, writeSync } from "node:fs";
+writeSync(1, "bridge log line\\n");
+writeFileSync(${JSON.stringify(`${startedPath}.tmp`)}, JSON.stringify({ session: process.env.HERDR_REMOTE_SESSION ?? "", cwd: process.cwd(), entry: process.argv[2] }));
+renameSync(${JSON.stringify(`${startedPath}.tmp`)}, ${JSON.stringify(startedPath)});
+`);
       expect(Bun.spawnSync([process.execPath, "build", "--compile", standIn, "--outfile", join(inspection.runtimeDir, "ovis-server.exe")], { stdout: "ignore", stderr: "inherit" }).exitCode).toBe(0);
       writeFileSync(join(registry, files.status), "interactive_failed: stale attempt");
-      await windowsHost.start(ssh, { session, herdrPath: "C:\\herdr.exe", inspection });
-      expect(JSON.parse(readFileSync(join(home, "started.json"), "utf8"))).toEqual({ session: session ?? "", cwd: home, entry: "remote" });
+      // what the started bridge leaves, watched before the start; not its launcher's process, which can be gone before
+      // anything looks it up
+      const started = watchJson<{ session: string; cwd: string; entry: string }>(home, startedPath, 30_000);
+      try {
+        await windowsHost.start(ssh, { session, herdrPath: "C:\\herdr.exe", inspection });
+        const result = await started.result.catch((error: unknown) => {
+          // a stand-in that failed said why in the log (the launcher sends its stderr there too)
+          let log: string;
+          try { log = readFileSync(join(registry, files.log), "utf8"); } catch (readError) { log = `not read: ${(readError as Error).message}`; }
+          throw new Error(`${(error as Error).message}\nbridge log: ${log}`, { cause: error });
+        });
+        expect(result).toEqual({ session: session ?? "", cwd: home, entry: "remote" });
+      } finally { await started.close(); }
       const launcher = readFileSync(join(registry, files.launcher), "utf8");
       expect(launcher.startsWith("@echo off\r\n")).toBe(true);
       expect(launcher).toContain(`set "HERDR_REMOTE_SESSION=${session ?? ""}"`);
@@ -319,27 +392,26 @@ for (const migrated of [false, true]) {
       expect(existsSync(join(registry, files.status))).toBe(false);
       writeFileSync(join(registry, files.status), "interactive_failed: this attempt");
       expect(await windowsHost.startupNotice!(ssh, session)).toBe("this attempt");
-    } finally {
+    } catch (error) { failures.push(error); }
+    // after the test's own error, never in its place
+    try {
       if (migrated && existsSync(legacy)) await runPowerShell(`[IO.Directory]::Delete(${psQuote(legacy)})`);
-      await rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    }
-  }, 60_000);
+      // The launcher and the stand-in may still be exiting once started.json is there, holding the log or the
+      // executable: 20 s, no less than the 15 s the old test waited for the launcher before removing the folder.
+      await removeFixture(home, 20_000);
+    } catch (error) { failures.push(error); }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Bridge start test and cleanup failed");
+    // the steps before the wait for started.json on a busy runner, its 30 s, and the 20 s removal
+  }, 90_000);
 }
 
 it.skipIf(!onWindows)("installs with native tar when PATH shadows tar, and preserves the runtime after bad extraction", async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-bundle-native-")));
   const before = process.env["OVIS_BUNDLE_MANIFEST"];
   const runtime = join(home, "herdr-web-ui", `remote-v${REMOTE_BUNDLE_VERSION}`);
-  const runPowerShell = async (script: string) => {
-    const prefixed = `$env:LOCALAPPDATA=${psQuote(home)}; $env:PATH=${psQuote(join(home, "shadow"))}+';'+$env:PATH; ${script}`;
-    // started from PowerShell 7 (the CI step), the child inherits its module path, and Windows
-    // PowerShell then cannot load its own Get-FileHash; with none set it builds its own, as over SSH
-    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"));
-    const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(prefixed, "utf16le").toString("base64")], { stdout: "pipe", stderr: "pipe", env });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (code !== 0) throw new Error(stderr);
-    return stdout.trim();
-  };
+  const runPowerShell = async (script: string) =>
+    (await windowsPowerShell(`$env:LOCALAPPDATA=${psQuote(home)}; $env:PATH=${psQuote(join(home, "shadow"))}+';'+$env:PATH; ${script}`)).trim();
   const ssh = { runPowerShell, upload: async (source: string, destination: string) => copyFileSync(source, destination) } as unknown as SshConnection;
   try {
     // the bundle's server, compiled as the bundle's is: the install runs `ovis-server.exe remote --help` and refuses a

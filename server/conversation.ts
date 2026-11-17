@@ -58,7 +58,7 @@ import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptFileForPa
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processAlive, processStartedAtAsync } from "./process-start.ts";
 import { ompBlobStore, ompHeldOpen, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
-import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
+import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeFreshSession, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
 import { piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { cmdTranscriptPath } from "./cmd.ts";
 import { defaultDevinDbPath, DevinHistoryUnavailable, devinConversation, forgetDevinState } from "./devin.ts";
@@ -2482,9 +2482,10 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   // no longer runs.
   const screenMetadata = async (source: RecognizedConversation["source"]): Promise<ConversationMetadata> =>
     startScreenMetadata(source, await bottomViewport(paneId));
-  const notBegun = async (source: RecognizedConversation["source"], id: string, read?: ConversationMetadata): Promise<RecognizedConversation> => {
-    // what the screen states can change with the pane's output, with no file to watch: the chat re-reads on it
-    const screen = readsStartScreen(source);
+  const notBegun = async (source: RecognizedConversation["source"], id: string, read?: ConversationMetadata, fromScreen = false): Promise<RecognizedConversation> => {
+    // what the screen states can change with the pane's output, with no file to watch: the chat re-reads on it.
+    // So does an answer the screen alone decided (`fromScreen`): the pane may leave that screen with nothing reported
+    const screen = fromScreen || readsStartScreen(source);
     const metadata = read ?? (screen ? await screenMetadata(source) : { model: null, reasoning_effort: null });
     return { source, turns: [], metadata, ...(screen ? { screen: true as const } : {}), cursor: null, history_id: id, version: answerVersion(id, `${metadata.model}\0${metadata.reasoning_effort}`) };
   };
@@ -2543,6 +2544,11 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       if (pane.agent === "agy" && error.message === "no_session_path" && page.before === undefined && page.since === undefined && page.from === undefined && pane.agent_status !== "working" && pane.agent_status !== "blocked") {
         const fresh = await agyFreshSession(pane, await bottomViewport(paneId));
         if (fresh !== null) return await notBegun("agy-transcript", fresh);
+      }
+      // an OpenCode at its home screen, which herdr reports no session for until the first prompt (#3600)
+      if (pane.agent === "opencode" && pane.agent_session == null && error.message === "no_session_id" && page.before === undefined && page.since === undefined && page.from === undefined && pane.agent_status !== "working" && pane.agent_status !== "blocked") {
+        const fresh = await opencodeFreshSession(pane, await bottomViewport(paneId), opencodeDb ?? opencodeDatabasePath());
+        if (fresh !== null) return await notBegun("opencode-transcript", fresh, { model: null, reasoning_effort: null }, true);
       }
       throw error;
     }

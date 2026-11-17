@@ -23,7 +23,7 @@
  */
 import { availableParallelism } from "node:os";
 import { basename, join } from "node:path";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repo = join(import.meta.dir, "..");
@@ -137,6 +137,8 @@ interface ScriptResult {
   message?: string;
   /** the run was stopped at its deadline */
   stopped?: boolean;
+  /** what stopping the run saw: how many processes it ended, which it could not, and whether more may have gone unseen */
+  stop?: StopOutcome;
 }
 
 /**
@@ -158,7 +160,7 @@ export function failureSite(log: string): { site: string | null; message: string
 }
 
 const failureDetail = (result: ScriptResult): string =>
-  [result.site, result.message].filter(Boolean).join(": ");
+  [result.site, result.stop ? stopReport(result.message!, result.stop) : result.message].filter(Boolean).join(": ");
 
 const workflowData = (message: string): string =>
   message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
@@ -224,15 +226,16 @@ async function runProcesses(child: { pid: number; exitCode: number | null; signa
   const found = new Set(running() ? tree : []);
   let entries: string[] = [];
   try { entries = readdirSync("/proc"); } catch { /* no /proc: the ps tree is all there is */ }
-  const wanted = `${RUN_MARK}=${mark}`;
   for (const entry of entries) {
-    if (!/^\d+$/.test(entry)) continue;
-    try {
-      if (readFileSync(`/proc/${entry}/environ`, "latin1").split("\0").includes(wanted)) found.add(Number(entry));
-    } catch { /* gone, or another user's */ }
+    if (/^\d+$/.test(entry) && carriesMark(Number(entry), mark)) found.add(Number(entry));
   }
   found.delete(process.pid);
   return [...found];
+}
+
+/** Whether `pid`'s environment carries the run's mark now; false for a process gone, another user's or without it. */
+function carriesMark(pid: number, mark: string): boolean {
+  try { return readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").includes(`${RUN_MARK}=${mark}`); } catch { return false; }
 }
 
 /** Every process below `root`, from `ps`; none when `ps` cannot run. */
@@ -256,10 +259,15 @@ async function descendants(root: number): Promise<number[]> {
   return found;
 }
 
-const signal = (pids: number[], name: NodeJS.Signals): void => {
+/** Signals `pids`; resolves with those the system refused (EPERM), which are not known to have stopped. */
+const signal = (pids: number[], name: NodeJS.Signals): number[] => {
+  const refused: number[] = [];
   for (const pid of pids) {
-    try { process.kill(pid, name); } catch { /* already gone */ }
+    try { process.kill(pid, name); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") refused.push(pid);
+    }
   }
+  return refused;
 };
 
 /** Resolves true when `done` settles within `ms`, false at the bound. */
@@ -271,19 +279,119 @@ function within(done: Promise<unknown>, ms: number): Promise<boolean> {
   ]).finally(() => clearTimeout(timer));
 }
 
+/** What stopRun reads and signals: the real process table, or a test's stand-in. */
+export interface StopIo {
+  processes(): Promise<number[]>;
+  /** Sends `name` to `pids`; returns the ones the system refused (EPERM), which are not known to have stopped. */
+  signal(pids: number[], name: NodeJS.Signals): number[];
+  running(pid: number): boolean;
+  /** Whether `pid` still carries this run's mark, read now: a pid found a moment ago may have been freed and reused. */
+  marked(pid: number): boolean;
+  /** The program name of `pid` (see processName), or an empty string where it cannot be read. */
+  command(pid: number): string;
+  /** The clock the grace is measured on, in ms. */
+  now(): number;
+  graceMs: number;
+}
+
+const SURVIVOR_LIMIT = 20;
+
+/** What stopRun saw, which is all it can know: finding a run's processes always races with their forking. */
+export interface StopOutcome {
+  /** how many of the processes it found it ended */
+  stopped: number;
+  /** the processes it could not stop, as `<pid> (<program name>)` or `<pid>` alone: nothing of a command line is ever printed */
+  survivors: string[];
+  /** the last read still found new processes, or a signal was refused: others may have gone unlisted */
+  unsure: boolean;
+}
+
 /**
  * Stops what is left of a run: SIGTERM, which lets Playwright close its browser, then, once the
  * run has ended or the grace is over, SIGKILL for whatever is still there, such as a child that
  * ignores SIGTERM and writes elsewhere. The processes are read again before each signal, so a pid
- * freed since is not signalled (on Linux the mark is checked on the process itself).
+ * freed since is not signalled (on Linux the mark is checked on the process itself). A killed
+ * process ends when the kernel next runs it, which on a loaded machine is not at once, so it waits
+ * one more grace for them to go, reading the run's processes again and killing any that appeared
+ * since (a child forked while SIGKILL was landing), each only if its mark is still there just before
+ * the signal; one that is not marked is not signalled, and is named as not stopped only if it still
+ * runs at the last look (a short-lived process ends by itself between the read and the check). A
+ * process that refused a signal (permission denied is not a stop) stays named even when a later read
+ * no longer finds it. At most SURVIVOR_LIMIT are named, then "and N more". Resolves with what it
+ * saw, not with a promise that nothing is left.
  */
-async function stopRun(child: Parameters<typeof runProcesses>[0], mark: string, finished: Promise<unknown>): Promise<void> {
-  signal(await runProcesses(child, mark), "SIGTERM");
-  await within(finished, STOP_GRACE_MS);
-  const left = await runProcesses(child, mark);
-  if (left.length === 0) return;
-  signal(left, "SIGKILL");
-  await within(finished, STOP_GRACE_MS);
+export async function stopRun(io: StopIo, finished: Promise<unknown>): Promise<StopOutcome> {
+  const seen = new Set<number>();
+  // refused a signal: not known to have stopped, named whatever a later look finds
+  const refused = new Set<number>();
+  // found without the run's mark, so never signalled: named if it still runs at the last look
+  const unmarked = new Set<number>();
+  const send = (pids: number[], name: NodeJS.Signals): void => {
+    for (const pid of pids) seen.add(pid);
+    for (const pid of io.signal(pids, name)) refused.add(pid);
+  };
+  const outcome = (left: number[], unsure: boolean): StopOutcome => {
+    const stillUnmarked = [...unmarked].filter(io.running);
+    const named = [...new Set([...left.filter(io.running), ...refused, ...stillUnmarked])];
+    const listed = named.slice(0, SURVIVOR_LIMIT).map((pid) => { const name = io.command(pid); return name === "" ? `${pid}` : `${pid} (${name})`; });
+    if (named.length > SURVIVOR_LIMIT) listed.push(`and ${named.length - SURVIVOR_LIMIT} more`);
+    return { stopped: Math.max(0, seen.size - named.length), survivors: listed, unsure: unsure || refused.size > 0 || stillUnmarked.length > 0 };
+  };
+  send(await io.processes(), "SIGTERM");
+  await within(finished, io.graceMs);
+  const first = await io.processes();
+  if (first.length === 0 && refused.size === 0) return outcome([], false);
+  send(first, "SIGKILL");
+  await within(finished, io.graceMs);
+  const killed = new Set(first);
+  const deadline = io.now() + io.graceMs;
+  for (;;) {
+    // each read is of the run's own processes, so one forked since the last read is killed too
+    const left = await io.processes();
+    const fresh = left.filter((pid) => !killed.has(pid));
+    for (const pid of fresh) { seen.add(pid); killed.add(pid); }
+    // the mark is read again right before the signal: a pid freed and reused since the read is not ours to kill
+    const ours = fresh.filter((pid) => io.marked(pid));
+    for (const pid of fresh) if (!ours.includes(pid)) unmarked.add(pid);
+    send(ours, "SIGKILL");
+    const done = outcome(left, fresh.length > 0);
+    if (io.now() >= deadline || (fresh.length === 0 && done.survivors.length === 0)) return done;
+    if (fresh.length === 0) await Bun.sleep(25);
+  }
+}
+
+/** Whether `pid` still runs; a zombie, ended but not yet reaped by its parent, does not, and a refused check (EPERM) is no proof of a stop. */
+function running(pid: number): boolean {
+  try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+  try { return readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "")[0] !== "Z"; } catch { return true; }
+}
+
+const NAME_LIMIT = 64;
+
+/**
+ * The name of the program a process runs, from the path of its executable: the file's own name,
+ * cut to the characters a program name has and to a short length. Nothing else about a process is
+ * printed, and not argv[0], which a process sets to anything it likes (a credential, a URL): the
+ * report goes into public logs and issues.
+ */
+export function programName(executable: string): string {
+  const path = executable.replace(/ \(deleted\)$/, "");
+  return path.slice(path.lastIndexOf("/") + 1).replace(/[^A-Za-z0-9._+-]/g, "?").slice(0, NAME_LIMIT);
+}
+
+/** A process's program name from /proc/<pid>/exe; empty where the link cannot be read (another user's process, no /proc): the report then names the pid alone. */
+export function processName(pid: number): string {
+  try { return programName(readlinkSync(`/proc/${pid}/exe`)); } catch { return ""; }
+}
+
+/** What the lane says of a run it had to stop: what it saw, never a promise that nothing is left. */
+export function stopReport(message: string, { stopped, survivors, unsure }: StopOutcome): string {
+  return [
+    `${message}; stopped ${stopped} process${stopped === 1 ? "" : "es"}`,
+    survivors.length ? `; could NOT stop: ${survivors.join("; ")}` : "",
+    unsure ? "; processes started at the last moment may not be listed" : "",
+    ".",
+  ].join("");
 }
 
 async function runScript(script: string, env: Record<string, string>, log: string, timeoutSeconds: number): Promise<ScriptResult> {
@@ -304,20 +412,19 @@ async function runScript(script: string, env: Record<string, string>, log: strin
   // The run ends when the script has exited and its output is read.
   const drained = Promise.all([timestampLog(child.stdout, log), timestampLog(child.stderr, log)]);
   const finished = Promise.all([child.exited, drained]);
-  const stopped = (code: number, message: string): ScriptResult => {
-    appendFileSync(log, `[${new Date().toISOString()}] ${message}: stopped by scripts/ci-browser-parallel.ts\n`);
-    return { script, seconds: (Date.now() - started) / 1000, code, log, message, stopped: true };
+  const io: StopIo = { processes: () => runProcesses(child, mark), signal, running, marked: (pid) => carriesMark(pid, mark), command: processName, now: Date.now, graceMs: STOP_GRACE_MS };
+  const stopped = (code: number, message: string, stop: StopOutcome): ScriptResult => {
+    appendFileSync(log, `[${new Date().toISOString()}] ${stopReport(message, stop)}\n`);
+    return { script, seconds: (Date.now() - started) / 1000, code, log, message, stopped: true, stop };
   };
   try {
     if (!(await within(child.exited, timeoutSeconds * 1000))) {
-      await stopRun(child, mark, finished);
-      return stopped(TIMEOUT_EXIT_CODE, `Timed out after ${timeoutSeconds}s`);
+      return stopped(TIMEOUT_EXIT_CODE, `Timed out after ${timeoutSeconds}s`, await stopRun(io, finished));
     }
     const code = await child.exited;
     // A script's output ends with it, unless a process it started is still holding it open.
     if (await within(drained, STOP_GRACE_MS)) return { script, seconds: (Date.now() - started) / 1000, code, log };
-    await stopRun(child, mark, drained);
-    return stopped(code || 1, `Exited ${code}, but a process it started still held its output`);
+    return stopped(code || 1, `Exited ${code}, but a process it started still held its output`, await stopRun(io, drained));
   } finally {
     clearInterval(heartbeat);
   }
@@ -399,7 +506,7 @@ async function main(): Promise<void> {
         // Said now, not only in the summary: a hang is what the job's own timeout would otherwise end.
         const lines = readFileSync(log, "utf8").trimEnd().split("\n");
         const kind = result.code === TIMEOUT_EXIT_CODE ? "TIMEOUT" : "STOPPED";
-        console.log(`[worker-${workerId}] ${kind} ${script}: ${result.message}; what it started was stopped. Last ${Math.min(lines.length, TIMEOUT_TAIL_LINES)} lines of ${log}:`);
+        console.log(`[worker-${workerId}] ${kind} ${script}: ${stopReport(result.message!, result.stop!)} Last ${Math.min(lines.length, TIMEOUT_TAIL_LINES)} lines of ${log}:`);
         console.log(lines.slice(-TIMEOUT_TAIL_LINES).join("\n"));
       }
       const outcome = scriptOutcome(result.code, result.firstLog !== undefined);
@@ -446,9 +553,9 @@ async function main(): Promise<void> {
     passed,
     total: results.length,
     flaky: flaky.map((r) => r.script),
-    scripts: ordered.map(({ script, seconds, code, log, firstLog, site, message }) => ({
+    scripts: ordered.map(({ script, seconds, code, log, firstLog, site, message, stop }) => ({
       script, seconds, code, log, ...(firstLog ? { firstLog } : {}),
-      ...(site ? { site } : {}), ...(message ? { message } : {}),
+      ...(site ? { site } : {}), ...(message ? { message } : {}), ...(stop ? { stop } : {}),
     })),
   }, null, 2) + "\n");
 

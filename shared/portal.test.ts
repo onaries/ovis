@@ -9,7 +9,6 @@ describe("an allow-list entry", () => {
     expect(checkEntry("credential", "  Alice Smith  ")).toEqual({ entry: "Alice Smith" });
     expect(checkEntry("credential", "-bob")).toEqual({ entry: "-bob" });
     expect(checkEntry("credential", "x".repeat(256))).toEqual({ entry: "x".repeat(256) });
-    // outside Portal's own rules, on purpose: a name reaches this server in an HTTP header, which carries ASCII only
     for (const refused of ["", "   ", "x".repeat(257), "tab\tinside", "line\nbreak", "\u0085", "김철수", "café"]) {
       expect(problem(checkEntry("credential", refused))).toBe("name");
     }
@@ -28,7 +27,6 @@ describe("an allow-list entry", () => {
     expect(checkEntry("oidc", "@Example.com")).toEqual({ entry: "@example.com" });
     expect(checkEntry("oidc", "sub:AbC123")).toEqual({ entry: "sub:AbC123" });
     expect(checkEntry("oidc", "SUB: AbC123 ")).toEqual({ entry: "sub:AbC123" });
-    // an email-shaped id is still an id: the prefix keeps it from standing for an email entry
     expect(checkEntry("oidc", "sub:Me@Example.com")).toEqual({ entry: "sub:Me@Example.com" });
     for (const refused of ["", "me", "example.com", "@", "me@", "a@b@c.example", "me @example.com", "me@exa mple.com", "sub:", "sub:   ", "me@exämple.com", "안녕@example.com", "sub:\u0001"]) {
       expect(problem(checkEntry("oidc", refused))).toBe("principal");

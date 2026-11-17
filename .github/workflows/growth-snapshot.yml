@@ -37,7 +37,7 @@ jobs:
       - if: steps.secrets.outputs.ready == 'true'
         uses: ./.github/actions/setup-ci
         with:
-          cache: restore
+          cache: none
       - if: steps.secrets.outputs.ready == 'true'
         name: Take the snapshot
         env:

@@ -18,6 +18,10 @@ jobs:
     name: Validate source
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
+    # every job of a run can write its artifacts, and deploy publishes the run's github-pages artifact: the validation runs
+    # GitHub-hosted and cacheless too (the whole Pages run is GitHub-hosted and cacheless: scripts/privileged-jobs-workflow.test.ts)
+    with:
+      hosted_only: true
     permissions:
       contents: read
       actions: read
@@ -29,8 +33,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
-    # light: same-repository runs take the self-hosted pool, fork pull requests stay GitHub-hosted (scripts/light-runner-workflow.test.ts)
-    runs-on: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '["self-hosted","self-hosted-ovis"]') }}
+    # it builds the site deploy publishes: GitHub-hosted whatever the runner variables say, and no shared cache (the whole Pages run is GitHub-hosted and cacheless: scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -41,6 +45,8 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        with:
+          cache: none
       # the demo is a Vite build of the client
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-site.ts
@@ -66,8 +72,8 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
     needs: [validate, build]
-    # light: same-repository runs take the self-hosted pool, fork pull requests stay GitHub-hosted (scripts/light-runner-workflow.test.ts)
-    runs-on: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '["self-hosted","self-hosted-ovis"]') }}
+    # it runs between build's upload and deploy: GitHub-hosted whatever the runner variables say (the whole Pages run is GitHub-hosted and cacheless: scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -111,8 +117,8 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
     needs: [validate, build, current]
-    # light: same-repository runs take the self-hosted pool, fork pull requests stay GitHub-hosted (scripts/light-runner-workflow.test.ts)
-    runs-on: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '["self-hosted","self-hosted-ovis"]') }}
+    # it publishes the site: GitHub-hosted whatever the runner variables say (the whole Pages run is GitHub-hosted and cacheless: scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pages: write

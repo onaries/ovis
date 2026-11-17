@@ -208,7 +208,6 @@ describe("signing in to the fake account service", () => {
     const flow = await signIn(service);
     expect(flow.answer.status).toBe(302);
     expect(flow.back.origin + flow.back.pathname).toBe(flow.redirect);
-    // on the web the code comes back in the fragment, which never reaches app.ovis.sh
     expect(flow.back.search).toBe("");
     expect(flow.params.get("state")).toBe("s1");
     const wrong = await token(service, { grant_type: "authorization_code", code: flow.code, code_verifier: (await pkce()).verifier, redirect_uri: flow.redirect });
@@ -312,7 +311,6 @@ describe("signing in to the fake account service", () => {
     const poll = async (code_verifier?: string) => (await (await token(service, { grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: started.device_code, ...(code_verifier ? { code_verifier } : {}) })).json()) as { error?: { code: string }; account?: string };
     expect((await poll()).error?.code).toBe("invalid_grant");
     expect((await poll((await pkce()).verifier)).error?.code).toBe("invalid_grant");
-    // the refused polls did not move the interval: the right verifier gets the tokens at once
     expect((await poll(verifier)).account).toBe("acct_page");
   });
 

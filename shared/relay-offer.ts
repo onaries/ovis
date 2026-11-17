@@ -1,10 +1,3 @@
-/**
- * The pairing offer a server shows to a phone: which server it is, the public key to pin, and the
- * relay to reach it through. It travels in the URL fragment (`${appBase}/s/${server_id}/#offer=<base64url JSON>`),
- * which a browser never sends to any server. The path carries the server_id too, so one origin can
- * hold a PWA scope per PC; decodeOffer refuses a URL whose path and payload name different servers.
- * The browser imports this file, so it reads no environment.
- */
 import { importPublicKey } from "./relay-e2ee.ts";
 import { SERVER_ID_PATTERN } from "./relay-id.ts";
 
@@ -12,15 +5,10 @@ export { SERVER_ID_PATTERN };
 
 export interface RelayOffer {
   v: 1;
-  /** 32 lowercase hex characters */
   server_id: string;
-  /** the server's X25519 public key, as the vendored key helpers encode it */
   server_public_key: string;
-  /** the relay's wss origin, no path */
   relay: string;
-  /** one-time pairing code, 6 digits */
   code?: string;
-  /** a label for the PC, at most 64 characters */
   name?: string;
 }
 
@@ -35,7 +23,6 @@ export function encodeOffer(offer: RelayOffer, appBase: string): string {
   return `${base}/s/${checked.server_id}/${OFFER_PREFIX}${toBase64Url(JSON.stringify(checked))}`;
 }
 
-/** The offer in `url`'s fragment; null when there is none. Throws on anything malformed. */
 export function decodeOffer(url: string): RelayOffer | null {
   const parsed = new URL(url);
   if (!parsed.hash.startsWith(OFFER_PREFIX)) return null;

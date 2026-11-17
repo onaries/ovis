@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, posix, sep } from "node:path";
 import { fixedSleepCounts, fixedSleeps, sleepFiles } from "./fixed-sleeps.ts";
 import { fail, files, lineOf, read, repo, stripComments } from "./source-scan.ts";
 
@@ -14,23 +14,28 @@ const SOURCES = [...files("{src,server,shared,scripts,site,telemetry,integration
 /** Module specifiers of static imports and re-exports, side-effect imports and `import("…")` with a literal. */
 const SPECIFIER = /(?:^|[\s;])(?:import|export)\s[^;]*?\sfrom\s*["']([^"']+)["']|(?:^|[\s;])import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
 
+/** Every module specifier in the code, with the line it is written on (a match may start on the line before). */
+const specifiersIn = (code: string): { specifier: string; line: number }[] =>
+  [...code.matchAll(SPECIFIER)].map((match) => {
+    const specifier = match[1] ?? match[2] ?? match[3]!;
+    return { specifier, line: lineOf(code, match.index + match[0].lastIndexOf(specifier)) };
+  });
+
+/** Every module specifier in a file's code (comments removed), and where it is written. */
+const specifiers = (file: string): { specifier: string; at: string }[] =>
+  specifiersIn(stripComments(read(file))).map(({ specifier, line }) => ({ specifier, at: `${file}:${line}: ${specifier}` }));
+
 describe("imports", () => {
   it("name relative modules with their extension and never use the @shared alias", () => {
-    const offenders = SOURCES.flatMap((file) => {
-      const code = stripComments(read(file));
-      return [...code.matchAll(SPECIFIER)].flatMap((match) => {
-        const specifier = match[1] ?? match[2] ?? match[3]!;
-        const bad = specifier.startsWith("@shared/") || (specifier.startsWith(".") && !/\.(?:ts|tsx|mjs|js|css|json|md|svg|png|woff2|html|txt|sh)(?:\?[\w&=-]*)?$/.test(specifier));
-        return bad ? [`${file}:${lineOf(code, match.index)}: ${specifier}`] : [];
-      });
-    });
+    const offenders = SOURCES.flatMap((file) => specifiers(file)
+      .filter(({ specifier }) => specifier.startsWith("@shared/") || (specifier.startsWith(".") && !/\.(?:ts|tsx|mjs|js|css|json|md|svg|png|woff2|html|txt|sh)(?:\?[\w&=-]*)?$/.test(specifier)))
+      .map(({ at }) => at));
     fail(offenders, "Imports carry explicit .ts/.tsx extensions and relative paths (AGENTS.md, Code conventions): write \"./x.ts\" or \"../shared/x.ts\", never \"./x\" or \"@shared/x\".");
   });
 
-  it("finds the specifiers", () => {
-    const found = (code: string) => [...code.matchAll(SPECIFIER)].map((match) => match[1] ?? match[2] ?? match[3]);
-    expect(found("import { a } from \"./a.ts\";\nimport type {\n  B,\n} from '../b';\nimport \"./side.css\";\nconst c = await import(\"./c.tsx\");\nexport * from \"./d.ts\";"))
-      .toEqual(["./a.ts", "../b", "./side.css", "./c.tsx", "./d.ts"]);
+  it("finds the specifiers and the line each is on", () => {
+    expect(specifiersIn("import { a } from \"./a.ts\";\nimport type {\n  B,\n} from '../b';\nimport \"./side.css\";\nconst c = await import(\"./c.tsx\");\nexport * from \"./d.ts\";"))
+      .toEqual([{ specifier: "./a.ts", line: 1 }, { specifier: "../b", line: 4 }, { specifier: "./side.css", line: 5 }, { specifier: "./c.tsx", line: 6 }, { specifier: "./d.ts", line: 7 }]);
   });
 });
 
@@ -38,14 +43,93 @@ describe("the frontend build", () => {
   const BUILD_SCRIPTS = ["vite.config.ts", "scripts/build-xterm.ts", "scripts/compressed-assets.ts", "scripts/service-worker-build.ts", "scripts/theme-bootstrap-build.ts", "scripts/shell-build.ts", "scripts/build-cache.ts"];
 
   it("imports nothing from server/ or relay/", () => {
-    const offenders = BUILD_SCRIPTS.flatMap((file) => {
-      const code = stripComments(read(file));
-      return [...code.matchAll(SPECIFIER)].flatMap((match) => {
-        const specifier = match[1] ?? match[2] ?? match[3]!;
-        return /(?:^|\/)(?:server|relay)\//.test(specifier) ? [`${file}:${lineOf(code, match.index)}: ${specifier}`] : [];
-      });
-    });
+    const offenders = BUILD_SCRIPTS.flatMap((file) => specifiers(file).filter(({ specifier }) => /(?:^|\/)(?:server|relay)\//.test(specifier)).map(({ at }) => at));
     fail(offenders, "The frontend build scripts import nothing from server/ or relay/ (they would load the server's environment): put what both need in shared/ (shared/web-policy.ts) and import it from there.");
+  });
+});
+
+describe("what the browser loads", () => {
+  // src/ and site/ are bundled for the browser, and shared/ is loaded there and by the server both.
+  // An import that leads out of them (server/, relay/, scripts/, app/ …) puts code written for Bun
+  // or Node into that bundle, where the environment it reads is not there. Each directory names the
+  // others it may import from; tests are left out, since a contract test reads both ends.
+  const MAY_IMPORT: Readonly<Record<string, readonly string[]>> = { src: ["shared"], site: ["src", "shared"], shared: [] };
+  /** The top-level directory, or the file at the root, that a relative specifier written in `file` leads to. */
+  const leadsTo = (file: string, specifier: string): string => posix.normalize(posix.join(posix.dirname(file), specifier)).replace(/\/.*$/, "");
+  /** Every import in those directories' code that leaves its own directory. */
+  const crossings = Object.keys(MAY_IMPORT).flatMap((own) =>
+    files(`${own}/**/*.{ts,tsx,mjs,js}`).filter((file) => !/\.test\./.test(file)).flatMap((file) =>
+      specifiers(file).filter(({ specifier }) => specifier.startsWith(".")).map(({ specifier, at }) => ({ own, to: leadsTo(file, specifier), at })))
+      .filter(({ to }) => to !== own));
+
+  it("imports only from its own directory and the ones it may", () => {
+    fail(crossings.filter(({ own, to }) => !MAY_IMPORT[own]?.includes(to)).map(({ at }) => at),
+      "Code the browser loads imports only from the browser's side: src/ from src/ and shared/, site/ from site/, src/ and shared/, and shared/ from shared/ alone, since the server loads it too. Move what both sides need into shared/ (as shared/web-policy.ts and shared/markdown.ts were) and import it from there; a type that describes the wire goes in shared/protocol.ts.");
+  });
+
+  it("lists no import that nothing makes any more", () => {
+    const made = new Set(crossings.map(({ own, to }) => `${own}/ from ${to}/`));
+    fail(Object.entries(MAY_IMPORT).flatMap(([own, others]) => others.map((to) => `${own}/ from ${to}/`)).filter((allowed) => !made.has(allowed)),
+      "MAY_IMPORT in scripts/conventions.test.ts allows these imports, and no code makes them any more: take them out.");
+  });
+
+  it("knows the directory an import leads to", () => {
+    expect(leadsTo("src/lib/api.ts", "../../shared/protocol.ts")).toBe("shared");
+    expect(leadsTo("src/lib/api.ts", "../../server/http.ts")).toBe("server");
+    expect(leadsTo("src/server/list.ts", "./server/row.ts")).toBe("src");
+    expect(leadsTo("site/demo/transport.ts", "../../src/lib/phone.ts")).toBe("src");
+    expect(leadsTo("shared/web-policy.ts", "../package.json")).toBe("package.json");
+  });
+});
+
+const gitIn = (cwd: string, ...args: string[]) => spawnSync("git", args, { cwd, encoding: "utf8" });
+
+/**
+ * The commit the ratchets below compare with: the one CI names in RATCHET_BASE (ci.yml's Fast checks fetches it into
+ * its shallow checkout), else where this branch left origin/main, so a stale branch is compared with its own base, else
+ * null (no git or no origin/main here, or a Release run). A named commit that is not in the checkout fails: a ratchet
+ * that cannot see its base must not pass.
+ */
+function ratchetBase(env: Record<string, string | undefined> = process.env, cwd: string = repo): string | null {
+  const named = env["RATCHET_BASE"];
+  if (named) {
+    if (gitIn(cwd, "cat-file", "-e", `${named}^{commit}`).status !== 0) throw new Error(`RATCHET_BASE ${named} is not in this checkout: fetch it first, as ci.yml's Fast checks does.`);
+    return named;
+  }
+  const base = gitIn(cwd, "merge-base", "HEAD", "origin/main");
+  if (base.status === 0) return base.stdout.trim();
+  if (env["CI"]) console.log("No base for the ratchets here (no RATCHET_BASE, no origin/main): they compare with nothing.");
+  return null;
+}
+
+/** The files git sees renamed since `base` (committed, or staged as `git mv` does), each new path with its old one. */
+const renamesSince = (base: string): Map<string, string> =>
+  new Map(gitIn(repo, "diff", "--name-status", "-M", "--diff-filter=R", base).stdout.split("\n")
+    .map((line) => line.split("\t")).filter((parts) => parts.length === 3).map(([, from, to]) => [to!, from!]));
+
+/** `file` as it was at `base`, or null when it was not there. */
+const atBase = (base: string, file: string): string | null => {
+  const shown = gitIn(repo, "show", `${base}:${file}`);
+  return shown.status === 0 ? shown.stdout : null;
+};
+
+describe("the ratchets' base", () => {
+  it("is the commit CI names, fails when that commit is not in the checkout, and is else where the branch left origin/main", () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-ratchet-base-"));
+    try {
+      const git = (...args: string[]) => gitIn(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args);
+      git("init", "-q", "-b", "work");
+      git("commit", "-q", "--allow-empty", "-m", "base");
+      const first = git("rev-parse", "HEAD").stdout.trim();
+      expect(ratchetBase({}, root)).toBeNull();
+      git("update-ref", "refs/remotes/origin/main", first);
+      git("commit", "-q", "--allow-empty", "-m", "change");
+      expect(ratchetBase({}, root)).toBe(first);
+      expect(ratchetBase({ RATCHET_BASE: first }, root)).toBe(first);
+      expect(() => ratchetBase({ RATCHET_BASE: `${"0".repeat(39)}1` }, root)).toThrow("is not in this checkout");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -55,26 +139,23 @@ describe("fixed sleeps", () => {
   // and a file that is not listed has none.
   const baseline = JSON.parse(read("scripts/fixed-sleeps.json")) as Record<string, number>;
 
-  /**
-   * scripts/fixed-sleeps.json where this branch left origin/main, or null when git or that ref is
-   * not there (CI's shallow checkout); a stale branch is compared with its own base, not a main
-   * that has moved on.
-   */
-  const committed = (): Record<string, number> | null => {
-    const git = (...args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
-    const base = git("merge-base", "HEAD", "origin/main");
-    if (base.status !== 0) return null;
-    const json = git("show", `${base.stdout.trim()}:scripts/fixed-sleeps.json`);
-    return json.status === 0 ? JSON.parse(json.stdout) as Record<string, number> : null;
+  /** scripts/fixed-sleeps.json at the ratchets' base, with the renames since, or null with no base. */
+  const committed = (): { counts: Record<string, number>; renames: Map<string, string> } | null => {
+    const base = ratchetBase();
+    const json = base === null ? null : atBase(base, "scripts/fixed-sleeps.json");
+    return base === null || json === null ? null : { counts: JSON.parse(json) as Record<string, number>, renames: renamesSince(base) };
   };
 
-  it("never raises scripts/fixed-sleeps.json above the one on origin/main", () => {
-    const before = committed();
-    if (before === null) return;
+  it("never raises scripts/fixed-sleeps.json above the one at the ratchets' base", () => {
+    const at = committed();
+    if (at === null) return;
+    const before = at.counts;
+    /** A file's count at the base, under its old path when git sees it renamed. */
+    const was = (file: string): number => before[file] ?? before[at.renames.get(file) ?? ""] ?? 0;
     const total = (counts: Record<string, number>) => Object.values(counts).reduce((sum, count) => sum + count, 0);
     fail([
-      ...Object.entries(baseline).filter(([file, count]) => count > (before[file] ?? 0)).map(([file, count]) => `${file}: ${count}, origin/main has ${before[file] ?? 0}`),
-      ...total(baseline) > total(before) ? [`total: ${total(baseline)}, origin/main has ${total(before)}`] : [],
+      ...Object.entries(baseline).filter(([file, count]) => count > was(file)).map(([file, count]) => `${file}: ${count}, the base has ${was(file)}`),
+      ...total(baseline) > total(before) ? [`total: ${total(baseline)}, the base has ${total(before)}`] : [],
     ], "scripts/fixed-sleeps.json may only shrink: take the new fixed sleep out of the code instead (see the message of the test above for how). A renamed file takes its entry along with the same count, which keeps the total.");
   });
 
@@ -126,6 +207,102 @@ describe("fixed sleeps", () => {
     expect(found("const wait = io.wait ?? Bun.sleep;\nwhile (Date.now() < deadline) await wait(25);")).toBe(0);
     // a function that starts with a sleep is not a sleep helper: it counts once, where it sleeps
     expect(found("async function flood() {\n  await Bun.sleep(150);\n  send();\n}\nawait flood();\nawait flood();")).toBe(1);
+  });
+});
+
+describe("the tools typecheck", () => {
+  // A ratchet: tsconfig.tools.json checks every file under scripts/, integrations/, site/ and app/scripts/ but the ones
+  // its "exclude" lists, which had type errors when the list was made, or import or lean on a declaration of one that
+  // had, and the untracked scripts/*.tmp.ts probes .gitignore allows. A new file is checked without being named
+  // anywhere, and the list may only shrink.
+  const ROOTS = ["scripts", "integrations", "site", "app/scripts"];
+  /** The tracked .ts/.tsx files under the roots of the checkout at `cwd` that are hidden or in a hidden folder; `-z`, since git quotes a name with non-ASCII bytes. */
+  const hiddenSources = (cwd: string): string[] =>
+    gitIn(cwd, "ls-files", "-z", ...ROOTS).stdout.split("\0").filter((file) => /\.tsx?$/.test(file) && /(^|\/)\./.test(file));
+  const config = JSON.parse(read("tsconfig.tools.json")) as { extends?: unknown; include?: unknown; exclude?: unknown; files?: unknown; compilerOptions?: unknown };
+  const excluded = (json: string): string[] | null => {
+    const list = (JSON.parse(json) as { exclude?: unknown }).exclude;
+    return Array.isArray(list) ? list as string[] : null;
+  };
+  /** The entries `now` has and `before` lacks, but a renamed file's (`renames`: new path to old), which takes its entry along. */
+  const added = (now: readonly string[], before: readonly string[], renames: ReadonlyMap<string, string>): string[] =>
+    now.filter((file) => !before.includes(file) && !before.includes(renames.get(file) ?? ""));
+  /**
+   * The exclude entries that take out a file the base checked: against its exclude list, the entries it lacks but a
+   * renamed file's; against the file list the exclude list replaced, the entries that list names. Null when the base
+   * has neither.
+   */
+  const uncheckedNow = (now: readonly string[], baseJson: string, renames: ReadonlyMap<string, string>): string[] | null => {
+    const base = JSON.parse(baseJson) as { exclude?: unknown; files?: unknown };
+    if (Array.isArray(base.exclude)) return added(now, base.exclude as string[], renames);
+    if (Array.isArray(base.files)) return now.filter((file) => (base.files as string[]).includes(file));
+    return null;
+  };
+  const now = excluded(read("tsconfig.tools.json")) ?? [];
+
+  it("excludes no more files than at the ratchets' base", () => {
+    const base = ratchetBase();
+    if (base === null) return;
+    const json = atBase(base, "tsconfig.tools.json");
+    const offenders = json === null ? null : uncheckedNow(now, json, renamesSince(base));
+    if (offenders === null) throw new Error(`tsconfig.tools.json at ${base} has no exclude list to compare with: keep the list in it, empty when every file is fixed.`);
+    fail(offenders, "The exclude list of tsconfig.tools.json may only shrink: fix the type errors `bun run typecheck` reports in these files instead of excluding them. A renamed file (renamed with `git mv`, or with the rename staged, so git sees it) takes its entry along under the new path.");
+  });
+
+  it("against the file list the exclude list replaced, refuses excluding any file that list checked", () => {
+    const files = JSON.stringify({ files: ["scripts/a.ts", "scripts/b.ts"] });
+    expect(uncheckedNow(["scripts/c.ts"], files, new Map())).toEqual([]);
+    expect(uncheckedNow(["scripts/b.ts", "scripts/c.ts"], files, new Map())).toEqual(["scripts/b.ts"]);
+    expect(uncheckedNow(["scripts/c.ts"], JSON.stringify({ exclude: [] }), new Map())).toEqual(["scripts/c.ts"]);
+    expect(uncheckedNow([], JSON.stringify({ include: ["scripts"] }), new Map())).toBeNull();
+  });
+
+  it("tells a new entry from a renamed file's, whatever the list's length", () => {
+    const renames = new Map([["scripts/renamed.ts", "scripts/b.ts"], ["scripts/moved.ts", "scripts/never-excluded.ts"]]);
+    expect(added(["scripts/a.ts", "scripts/new.ts"], ["scripts/a.ts"], renames)).toEqual(["scripts/new.ts"]);
+    expect(added(["scripts/a.ts", "scripts/new.ts"], ["scripts/a.ts", "scripts/b.ts"], renames)).toEqual(["scripts/new.ts"]);
+    expect(added(["scripts/a.ts", "scripts/renamed.ts"], ["scripts/a.ts", "scripts/b.ts"], renames)).toEqual([]);
+    expect(added(["scripts/a.ts", "scripts/moved.ts"], ["scripts/a.ts", "scripts/b.ts"], renames)).toEqual(["scripts/moved.ts"]);
+    expect(added(["scripts/a.ts"], ["scripts/a.ts", "scripts/b.ts"], renames)).toEqual([]);
+  });
+
+  it("checks every root, with nothing beside the exclude list taking a file out", () => {
+    expect(config.include, `tsconfig.tools.json checks the folders ${ROOTS.join(", ")} whole: keep them all in "include".`).toEqual(ROOTS);
+    expect(config.files, "tsconfig.tools.json names no files: a file under its roots is checked without being listed.").toBeUndefined();
+    expect([config.extends, config.compilerOptions], "tsconfig.tools.json loosens nothing of tsconfig.json: it extends it and only adds noEmit.").toEqual(["./tsconfig.json", { noEmit: true }]);
+    expect(Array.isArray(config.exclude), "Keep the exclude list in tsconfig.tools.json, empty when every file is fixed: the next change compares with it.").toBe(true);
+    const inherited = (JSON.parse(read("tsconfig.json")) as { compilerOptions?: Record<string, unknown> }).compilerOptions ?? {};
+    expect([inherited["strict"], inherited["noCheck"]], "tsconfig.json, which both typechecks extend, keeps full checking: strict, and no noCheck.").toEqual([true, undefined]);
+    expect(gitIn(repo, "ls-files", "scripts/*.tmp.ts").stdout.trim(), "A tracked scripts/*.tmp.ts is not typechecked: that name is for untracked probes, so give a script another name.").toBe("");
+    // one glob per root: Bun.Glob reads no slash inside braces; the untracked probes are not checked
+    const sources = ROOTS.flatMap((root) => files(`${root}/**/*.{ts,tsx}`)).filter((file) => !/^scripts\/[^/]+\.tmp\.ts$/.test(file));
+    expect(sources.length).toBeGreaterThan(400);
+    fail(hiddenSources(repo),
+      "Rename these: tsc's folder include skips a hidden file or folder, so this file would never be typechecked.");
+    fail(sources.filter((file) => file.endsWith(".tsx") && sources.includes(file.replace(/\.tsx$/, ".ts"))),
+      "Rename one of each pair: beside a .ts of the same name, tsc's folder include leaves the .tsx unchecked.");
+    // the directive in a line comment of any number of slashes, or a block comment
+    fail(sources.filter((file) => /^\s*(?:\/\/+|\/\*+)\s*@ts-nocheck\b/m.test(read(file))),
+      "Fix the type errors in these files instead of `// @ts-nocheck`: a file under the tools typecheck's roots is checked, or listed in its exclude list until it is fixed.");
+  });
+
+  it("finds a hidden file whatever its name", () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-hidden-sources-"));
+    try {
+      mkdirSync(join(root, "scripts"));
+      for (const name of [".x.ts", ".숨김.ts", "plain.ts"]) writeFileSync(join(root, "scripts", name), "");
+      gitIn(root, "init", "-q");
+      gitIn(root, "config", "core.quotePath", "true");
+      gitIn(root, "add", "scripts");
+      expect(hiddenSources(root)).toEqual(["scripts/.x.ts", "scripts/.숨김.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes only files that exist", () => {
+    fail(now.filter((file) => !file.includes("*") && !existsSync(join(repo, file))),
+      "Remove these entries from the exclude list of tsconfig.tools.json: the files are gone. A renamed file that still has type errors keeps its entry under the new path.");
   });
 });
 

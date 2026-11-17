@@ -205,7 +205,7 @@ describe("the relay tab's Sign in", () => {
   });
 
   it("uses the offered Google device page when the link page is unavailable", async () => {
-    fake.offer(["google"], ["google"]);
+    fake.offerSignIns(["google"], ["google"]);
     linkPageAvailable = false;
     await mount();
     await signIn();

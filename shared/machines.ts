@@ -113,7 +113,6 @@ export interface PcUpdateOffer {
  * release (docs/remote-pcs.md). `machine_id` names a PC added here whose own Ovis cannot update itself (its offer's
  * `how: "install"`); without one, the PC is added once Ovis answers there.
  */
-/** POST /api/machines/install: a PC saved here by its id, or a new one by its SSH address (and a name for it) */
 export type PcInstallRequest = { machine_id: string } | (SshTarget & { name?: string; machine_id?: undefined });
 /** why an install over SSH stopped, for the words to show (`error` carries them in English) */
 export type PcInstallFailure = "ssh_refused" | "ssh_host_key" | "ssh_unreachable" | "unsupported" | "missing_tool" | "disk" | "permission"
@@ -207,15 +206,7 @@ export interface RemoteOvis {
   /** the HTTPS address it says Tailscale already serves it at, when it says so */
   url: string | null;
 }
-/**
- * How a PC's error starts while its own Ovis is offered an update it can run (server/machines.ts ownUpdateOffered).
- * Any other error beside that offer says why its last update failed, and the card shows it.
- */
 export const OWN_UPDATE_OFFER = "This PC runs its own Ovis";
-/**
- * What a device's `pcs_off` (shared/notify-policy.ts) lists this PC by: its relay ID, which its own
- * server and every roster that lists it know alike, else its name.
- */
 export function pcAlertKey(machine: Pick<Machine, "name" | "relay" | "server_id">): string {
   return machine.relay?.server_id ?? machine.server_id ?? machine.name;
 }
@@ -264,10 +255,6 @@ export interface HerdrCoreLayout {
   paneRename?: boolean;
   worktrees: boolean;
 }
-/**
- * The workspace a herdr-core PC shows its terminals no workspace holds in ("Other terminals"): it has
- * no name to change, and a helper whose parent is shown cannot go there (server/herdr-core/adapter.ts).
- */
 export const HC_OTHER_WORKSPACE_ID = "hc-other";
 /**
  * A runtime a server can be asked to serve: herdr's TUI server, herdr-core (the Herdr app's core), or
@@ -369,13 +356,6 @@ export interface SetupJob {
 }
 export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" } | { action: "start_headless" };
 /**
- * A device was durably enrolled (server/devices.ts): its registry write succeeded, whether at a
- * gated pairing or when a first-pair cookie came back. Never for an unconfirmed credential, a
- * last-seen write or a failed write. Sent to every stream of this server but the new device's
- * own; `event_id` is what a browser deduplicates by. Carries nothing a credential could be
- * made from: the label is the normalized one (at most 48 characters), the id the public one.
- */
-/**
  * A device lost its access (docs/account.md, "On the PC"): revoked on this PC (`by` "pc", or the device that
  * revoked it), or removed by an account record (`by` the member that signed it). Told to driving streams only.
  */
@@ -387,6 +367,13 @@ export interface DeviceRemovedEvent {
   removed_at: string;
   by?: { device_id: string; label: string } | "pc";
 }
+/**
+ * A device was durably enrolled (server/devices.ts): its registry write succeeded, whether at a
+ * gated pairing or when a first-pair cookie came back. Never for an unconfirmed credential, a
+ * last-seen write or a failed write. Sent to every stream of this server but the new device's
+ * own; `event_id` is what a browser deduplicates by. Carries nothing a credential could be
+ * made from: the label is the normalized one (at most 48 characters), the id the public one.
+ */
 export interface DevicePairedEvent {
   type: "device-paired";
   event_id: string;
@@ -398,7 +385,6 @@ export interface DevicePairedEvent {
 }
 /** What a comparison asks for (docs/account.md, "Negotiation"): pairing this PC only, or joining the account. */
 export type PairingIntent = "pc" | "account";
-/** `preferences`: what every browser of this server shares changed (shared/preferences.ts) */
 /**
  * A phone asking to pair through the relay by comparing digits (docs/relay.md): the six digits its
  * screen shows too, waiting for the owner to approve it until `expires_at`.
@@ -445,6 +431,7 @@ export interface RemotePairingRequest {
 }
 
 export type MachineEvent = { type: "machines"; machines: Machine[] } | { type: "machine-message"; machine_id: string; message: ServerMessage }
+  /** `preferences`: what every browser of this server shares changed (shared/preferences.ts) */
   | { type: "preferences"; preferences: SharedPreferences }
   /** the `$name` tokens herdr's `[ui.sidebar.agents]` rows draw on this server's PC, for every PC's agent rows (server/herdr-sidebar.ts) */
   | { type: "herdr-sidebar"; agents: AgentRowTokens | null }
@@ -458,8 +445,8 @@ export type MachineEvent = { type: "machines"; machines: Machine[] } | { type: "
 export interface RelayPairingsEvent { type: "relay-pairings"; pairings: RelayPairingRequest[] }
 /** every relay pairing waiting for approval, after each change; only to drive account members connected through the relay */
 export interface RemotePairingsEvent { type: "remote-pairings"; pairings: RemotePairingRequest[] }
-/** `security`: authenticated requests only, absent from an older server (shared/protocol.ts SecuritySummary) */
 /**
+ * `security`: authenticated requests only, absent from an older server (shared/protocol.ts SecuritySummary).
  * `web_ui.boot_id`: this server lifetime's id, as in the full health answer. `runtime`: the runtime it
  * serves. `accepted`: its launcher took it as its own past the startup check (absent when no launcher
  * runs it). All three absent from older servers.
@@ -477,7 +464,6 @@ export interface BridgeIdentity {
   herdr: HerdrIdentity;
 }
 
-/** Local storage keeps its historical keys; remote IDs occupy a separate namespace. */
 export function paneStorageId(machineId: string, paneId: string): string {
   return machineId === LOCAL_MACHINE ? paneId : `remote:${encodeURIComponent(machineId)}:${encodeURIComponent(paneId)}`;
 }

@@ -94,14 +94,15 @@ export function RelayPcDetails({
     }
   })();
 
+  const joinReason = !updating && pc.state === "needs-approval" && !fresh ? askToJoinReason(pc, t) : null;
   const stateReason = updating
     ? null
     : pc.state === "needs-update"
       ? t("Update Ovis on it")
       : pc.state === "needs-approval"
         ? fresh
-          ? t("{name} is new in your account. Type the number it shows on its own screen to add it.", { name: pc.name })
-          : askToJoinReason(pc, t) ?? t("{name} has not approved this device yet.", { name: pc.name })
+          ? t("{name} is new in your account. Choose Add.", { name: pc.name })
+          : joinReason ?? t("{name} has not approved this device yet.", { name: pc.name })
         : null;
 
   const probeLine = formatProbeLine(pc.check, t) ?? t("Not checked");
@@ -143,7 +144,7 @@ export function RelayPcDetails({
             <dd>
               <span className="relay-pc-details-value">{stateLabel}</span>
               {pc.enrollment === "failed" && <small className="relay-pc-details-sub">{t("Account setup is incomplete.")}</small>}
-              {stateReason !== null && <small className="relay-pc-details-sub">{stateReason}</small>}
+              {stateReason !== null && <small className="relay-pc-details-sub" {...(joinReason !== null ? { "data-reason": "join" } : {})}>{stateReason}</small>}
             </dd>
           </div>
 

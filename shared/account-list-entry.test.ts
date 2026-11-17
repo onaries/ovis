@@ -5,7 +5,7 @@ import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  LIST_BODY_MAX, ListEntryError, entryFromText, entryHash, entryHolds, entryToText, firstState, isListHash, isListKey, isListName,
+  LIST_BODY_MAX, ListEntryError, entryFromText, entryHash, entryHolds, entryToText, firstState, isListHash, isListKeyEncoding, isListName,
   isListNumber, isListPoint, readBody, readFields, readFieldsUnder, signEntry, signatureInRange, verifySignature, writeBody, writeFields, writeFieldsUnder,
   type Entry, type EntryBody, type HeldEntry, type ListRefusalCode,
 } from "./account-list-entry.ts";
@@ -17,7 +17,6 @@ import { fromBase64Url, toBase64Url } from "./relay-pair-sas.ts";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 const SIGN = { name: "ECDSA", hash: "SHA-256" } as const;
 const ORDER = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
-/** P-256's field prime p. */
 const FIELD = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
 
 async function newKey() {
@@ -29,7 +28,6 @@ const other = await newKey();
 
 const encoder = new TextEncoder();
 type Pairs = [string, string | Uint8Array][];
-/** Fields in the order given under `prefix`, unchecked, and any bytes after them: how a forged body is made. */
 function rawUnder(prefix: string, pairs: Pairs, tail: number[] = []): Uint8Array {
   const out: number[] = [...encoder.encode(prefix)];
   const length = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
@@ -41,7 +39,6 @@ function rawUnder(prefix: string, pairs: Pairs, tail: number[] = []): Uint8Array
   return Uint8Array.from([...out, ...tail]);
 }
 const raw = (pairs: Pairs, tail: number[] = []): Uint8Array => rawUnder("ovis-list/1", pairs, tail);
-/** The seven fields of an entry 0 by `owner`, in order. */
 const sevenPairs = (): Pairs => [["issued_at", "1767225600"], ["kind", "genesis"], ["list", ""], ["prev", ""], ["seq", "0"], ["signer", owner.key], ["v", "1"]];
 const set = (pairs: Pairs, name: string, value: string): Pairs => pairs.map(([n, v]) => [n, n === name ? value : v]);
 const without = (pairs: Pairs, name: string): Pairs => pairs.filter(([n]) => n !== name);
@@ -77,14 +74,11 @@ const signRaw = async (body: Uint8Array, pair: CryptoKeyPair = owner.pair): Prom
   body, signature: new Uint8Array(await crypto.subtle.sign(SIGN, pair.privateKey, new Uint8Array(body))),
 });
 const scalarBytes = (value: bigint) => hexToBytes(value.toString(16).padStart(64, "0"));
-/** A key in form with this X and Y, whatever point they name. */
 const keyOf = (x: bigint, y: bigint) => toBase64Url(Uint8Array.from([...fromBase64Url(owner.key).subarray(0, 27), ...scalarBytes(x), ...scalarBytes(y)]));
-/** The X and Y of a key in form. */
 const pointOf = (key: string): [bigint, bigint] => {
   const bytes = fromBase64Url(key);
   return [BigInt(`0x${bytesToHex(bytes.subarray(27, 59))}`), BigInt(`0x${bytesToHex(bytes.subarray(59))}`)];
 };
-/** Whether another library takes X and Y, both below p, as a point of P-256. */
 function onCurveElsewhere(x: bigint, y: bigint): boolean {
   try {
     p256.Point.fromAffine({ x, y }).assertValidity();
@@ -98,7 +92,6 @@ function onCurveElsewhere(x: bigint, y: bigint): boolean {
 describe("the vectors of envelope/", () => {
   const dir = join(import.meta.dir, "account-list-vectors", "envelope");
   const files = readdirSync(dir).filter((file) => file.endsWith(".json")).sort();
-  /** The first set of envelope vectors, in its order. */
   const FIRST = [
     "genesis-entry", "remove-entry", "device-entry", "body-at-limit", "body-8193", "field-missing", "names-out-of-order", "name-twice",
     "name-begins-next", "name-33-bytes", "name-form", "trailing-bytes", "length-past-end", "number-leading-zero", "number-16-digits",
@@ -107,9 +100,7 @@ describe("the vectors of envelope/", () => {
     "prev-wrong", "other-list", "entry-0-with-adds", "wire-second-dot", "wire-empty-part", "wire-outside-alphabet", "wire-padded",
     "wire-white-space", "wire-trailing-newline", "wire-signature-85",
   ];
-  /** Vectors beyond the first set: frozen behaviour that would otherwise be tested in this file only. */
   const MORE = ["signature-second-spelling", "wire-second-spelling", "wire-no-dot", "wire-signature-87", "name-empty", "list-mismatch", "v-zero-prev-wrong-signature-bad"];
-  /** Cases added after the first set, written with this folder's own keys. */
   const SECOND = [
     "adds-not-a-key", "key-outside-alphabet", "key-short", "kind-form", "list-not-a-hash", "number-sign", "seq-leading-zero", "v-leading-zero", "prefix-other",
     "entry-0-prev-missing", "entry-0-with-prev", "list-wrong-prev-right", "signature-r-order", "signature-s-order", "signature-s-zero", "prev-wrong-signature-bad",
@@ -119,7 +110,6 @@ describe("the vectors of envelope/", () => {
   interface VectorEntry { fields: [string, string][]; body: string; signature: string; text: string; hash: string }
   interface Vector {
     name: string;
-    /** The list id the member was given, when it was given one. */
     given_list?: string;
     keys: Record<string, { pkcs8: string; spki: string }>;
     entries: VectorEntry[];
@@ -196,7 +186,7 @@ describe("the vectors of envelope/", () => {
 
   test("signer-off-curve: its signer is a key in form whose point is not on the curve", () => {
     const signer = new Map(byName.get("signer-off-curve")?.entries[1]?.fields ?? []).get("signer") ?? "";
-    expect([isListKey(signer), isListPoint(signer)]).toEqual([true, false]);
+    expect([isListKeyEncoding(signer), isListPoint(signer)]).toEqual([true, false]);
   });
 
   test("the two vectors of an entry that fails more than one check fail every check they name, and stop with the first", async () => {
@@ -221,7 +211,7 @@ describe("the vectors of envelope/", () => {
     for (const vector of vectors) {
       for (const [name, { pkcs8, spki }] of Object.entries(vector.keys)) {
         expect(name).toContain("TEST-ONLY");
-        expect(isListKey(spki)).toBe(true);
+        expect(isListKeyEncoding(spki)).toBe(true);
         const privateKey = await crypto.subtle.importKey("pkcs8", new Uint8Array(fromBase64Url(pkcs8)), P256, false, ["sign"]);
         const message = encoder.encode(vector.name);
         const signature = new Uint8Array(await crypto.subtle.sign(SIGN, privateKey, message));
@@ -342,7 +332,6 @@ describe("a v1 account record (docs/account.md, Records) and an entry", () => {
     const text = entryToText(genesis);
     await expect(readAccountRecord(text)).rejects.toBeInstanceOf(AccountRecordError);
     await expect(readAccountRecord({ body: toBase64Url(genesis.body), signature: toBase64Url(genesis.signature) })).rejects.toBeInstanceOf(AccountRecordError);
-    // the entry's signature on a record of its signer: the record's bytes start with ovis-account/1, the entry's with ovis-list/1
     expect(await verifySignature(genesis.body, genesis.signature, owner.key)).toBe(true);
     expect(await readAccountRecord({ ...unsignedRecord, signature: toBase64Url(genesis.signature) })).toBeNull();
   });
@@ -389,9 +378,9 @@ describe("the fields every entry carries", () => {
     otherPrefix[24] = 0x08;
     const otherPoint = bytes.slice();
     otherPoint[26] = 0x02;
-    expect(isListKey(owner.key)).toBe(true);
+    expect(isListKeyEncoding(owner.key)).toBe(true);
     for (const value of [second, toBase64Url(otherPrefix), toBase64Url(otherPoint), `${owner.key}==`, owner.key.slice(0, -1), `${owner.key.slice(0, 60)}+${owner.key.slice(61)}`]) {
-      expect(isListKey(value)).toBe(false);
+      expect(isListKeyEncoding(value)).toBe(false);
       expect(bodyRefusal(raw(set(sevenPairs(), "signer", value)))).toBe("entry_malformed");
     }
   });
@@ -440,7 +429,6 @@ describe("writing a body", () => {
   });
 
   test("a body above the limit is refused by its size, before anything of that size is allocated", () => {
-    // A value that says it is longer than any buffer can be: a body allocated for it is a RangeError, and no refusal.
     const value = Object.defineProperty(new Uint8Array(1), "length", { value: Number.MAX_SAFE_INTEGER });
     expect(refusal(() => writeFields([{ name: "zz", value }]))).toBe("entry_malformed");
     expect(refusal(() => writeBody({ ...genesisBody, own: [{ name: "zz", value }] }))).toBe("entry_malformed");
@@ -524,18 +512,16 @@ describe("the signature", () => {
   });
 
   test("whether a key's point is on the curve is judged by the library itself: X and Y below p, and Y² = X³ - 3X + b", () => {
-    /** (atOne, 1) and (0, atZero) are points of the curve. */
     const atOne = 0x09e78d4ef60d05f750f6636209092bc43cbdd6b47e11a9de20a9feb2a50bb96cn;
     const atZero = 0x66485c780e2f83d72433bd5d84a06bb6541c2af31dae871728bf856a174f93f4n;
     const points: [bigint, bigint, boolean][] = [
       [atOne, 1n, true], [atOne, FIELD - 1n, true], [0n, atZero, true], [0n, FIELD - atZero, true],
-      // The same points with Y, or X, not below p: equal mod p, and no point.
       [atOne, FIELD + 1n, false], [FIELD, atZero, false],
       [atOne, 2n, false], [atOne + 1n, 1n, false], [0n, 0n, false], [0n, 1n, false], [1n, 1n, false], [FIELD - 1n, FIELD - 1n, false], [2n ** 256n - 1n, 2n ** 256n - 1n, false],
     ];
     for (const [x, y, on] of points) {
       const key = keyOf(x, y);
-      expect([x, y, isListKey(key), isListPoint(key)]).toEqual([x, y, true, on]);
+      expect([x, y, isListKeyEncoding(key), isListPoint(key)]).toEqual([x, y, true, on]);
       if (x < FIELD && y < FIELD) expect([x, y, onCurveElsewhere(x, y)]).toEqual([x, y, on]);
     }
     expect([isListPoint(owner.key), isListPoint(other.key)]).toEqual([true, true]);
@@ -558,9 +544,7 @@ describe("the signature", () => {
   });
 
   describe("on many points, the library, another library and the runtime agree about the curve", () => {
-    /** The same inputs in every run, so that a difference can be found again: the SHA-256 of a label and a number, as one number. */
     const drawn = (label: string, index: number) => BigInt(`0x${bytesToHex(sha256(new TextEncoder().encode(`${label} ${index}`)))}`);
-    /** Whether the runtime takes these 91 bytes as a P-256 key. */
     async function runtimeTakes(key: string): Promise<boolean> {
       try {
         await crypto.subtle.importKey("spki", new Uint8Array(fromBase64Url(key)), P256, false, ["verify"]);
@@ -570,7 +554,6 @@ describe("the signature", () => {
         return false;
       }
     }
-    /** What the library says of the point (x, y), after it was held against the other library (for coordinates below p) and against the runtime. */
     async function agreed(x: bigint, y: bigint): Promise<boolean> {
       const key = keyOf(x, y);
       const here = isListPoint(key);
@@ -593,7 +576,6 @@ describe("the signature", () => {
       let points = 0, others = 0;
       for (let index = 0; index < 300; index++) {
         const { x, y } = p256.Point.BASE.multiply(1n + (drawn("scalar", index) % (ORDER - 1n))).toAffine();
-        // Y and X one more, one bit of each, and the two swapped. (A coordinate with p added fits in 32 bytes only below 2^224: the edges have those.)
         const changed: [bigint, bigint][] = [[x, (y + 1n) % FIELD], [(x + 1n) % FIELD, y], [x ^ (1n << BigInt(index % 256)), y], [x, y ^ (1n << BigInt(index % 256))], [y, x]];
         for (const [cx, cy] of changed) {
           if (await agreed(cx, cy)) points++;
@@ -622,7 +604,6 @@ describe("the signature", () => {
 
     test("1000 texts that are no key in its one spelling name no point", () => {
       const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-      /** A text of these letters, drawn as the points are: 40 letters from each number. */
       const text = (index: number, length: number) => {
         let out = "";
         for (let block = 0; out.length < length; block++) {
@@ -634,12 +615,11 @@ describe("the signature", () => {
       const real = owner.key;
       let texts = 0;
       for (let index = 0; index < 250; index++) {
-        // 122 letters drawn at will; a text of another length; a real key with one letter of its 36-letter prefix changed; a real key with a letter outside the alphabet.
         const at = index % 36;
         const other = letters[(letters.indexOf(real[at] ?? "A") + 1 + (index % 62)) % 64] ?? "A";
         for (const candidate of [text(index, 122), text(index, (index * 7) % 250), `${real.slice(0, at)}${other}${real.slice(at + 1)}`, `${real.slice(0, 40 + index % 80)}+${real.slice(41 + index % 80)}`]) {
           if (candidate === real) continue;
-          expect([candidate, isListKey(candidate), isListPoint(candidate)]).toEqual([candidate, false, false]);
+          expect([candidate, isListKeyEncoding(candidate), isListPoint(candidate)]).toEqual([candidate, false, false]);
           texts++;
         }
       }
@@ -649,7 +629,7 @@ describe("the signature", () => {
 
   test("a signer whose point is off the curve, or that is no key, verifies nothing, and the runtime is not asked", async () => {
     const offCurve = keyOf(0n, 1n);
-    expect([isListKey(offCurve), isListPoint(offCurve)]).toEqual([true, false]);
+    expect([isListKeyEncoding(offCurve), isListPoint(offCurve)]).toEqual([true, false]);
     const entry = await signRaw(raw(set(sevenPairs(), "signer", offCurve)));
     const asked = spyOn(crypto.subtle, "importKey");
     try {
@@ -711,7 +691,6 @@ describe("the signature", () => {
   test("what is verified is the bytes as they were handed over, whatever the caller does to them while the key is imported", async () => {
     const unsigned = genesis.signature.slice();
     unsigned[5] = (unsigned[5] ?? 0) ^ 1;
-    // A signature that verifies, zeroed with its body once the call is under way; and one that does not, replaced by the one that does.
     for (const [handed, after, verdict] of [[genesis.signature, new Uint8Array(64), true], [unsigned, genesis.signature, false]] as const) {
       const signature = handed.slice();
       const body = genesis.body.slice();
@@ -767,15 +746,11 @@ describe("when an entry holds", () => {
   test("an entry that fails more than one check takes the name of the first; list_mismatch is only for an entry 0 that holds by all three", async () => {
     const elsewhere = entryHash(raw([["other", "list"]]));
     const given = "ab".repeat(32);
-    // The chain and the signature: a wrong prev, signed by another key.
     const two = await signEntry(nextBody({ prev: elsewhere }), other.pair.privateKey);
     expect(await asyncRefusal(() => entryHolds(two, held0))).toBe("chain_broken");
-    // The form, the chain and the signature: the same entry with v 0.
     const onePairs = set(set(set(set(set(sevenPairs(), "kind", "remove"), "list", held0.list), "prev", elsewhere), "seq", "1"), "v", "0");
     expect(await asyncRefusal(async () => entryHolds(await signRaw(raw(onePairs), other.pair), held0))).toBe("entry_malformed");
-    // The form and the signature, with the chain in order.
     expect(await asyncRefusal(async () => entryHolds(await signRaw(raw(set(onePairs, "prev", held0.hash)), other.pair), held0))).toBe("entry_malformed");
-    // Entry 0 for a member that was given another list id: each check comes before list_mismatch.
     expect(await asyncRefusal(async () => firstState(await signRaw(raw(set(sevenPairs(), "v", "0"))), given))).toBe("entry_malformed");
     expect(await asyncRefusal(async () => firstState(await signEntry({ ...genesisBody, prev: elsewhere }, owner.pair.privateKey), given))).toBe("chain_broken");
     expect(await asyncRefusal(async () => firstState(await signRaw(genesis.body, other.pair), given))).toBe("signature_invalid");
@@ -794,7 +769,6 @@ describe("when an entry holds", () => {
     // The caller's buffers as a plain Uint8Array, and as Node's Buffer, whose slice() is a view of the same memory.
     for (const [kind, buffer] of [["Uint8Array", (bytes: Uint8Array) => bytes.slice()], ["Buffer", (bytes: Uint8Array) => Buffer.from(bytes)]] as const) {
       const shown: Entry = { body: buffer(signed.body), signature: buffer(signed.signature) };
-      // The runtime verifies the bytes it was handed, and the caller's buffers change before it answers.
       const changing = spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
         const verified = await verify(...args);
         shown.body.fill(0);
@@ -818,7 +792,6 @@ describe("when an entry holds", () => {
     const elsewhere = "f".repeat(64);
     const before = { ...held0 };
     const verify = crypto.subtle.verify.bind(crypto.subtle);
-    // The runtime verifies entry 1, and the state it is held against changes before the runtime answers.
     const changing = spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
       const verified = await verify(...args);
       before.list = elsewhere;
@@ -833,14 +806,24 @@ describe("when an entry holds", () => {
       changing.mockRestore();
     }
     expect([before.list, held.list, held.body.list, held.hash, held.body.seq]).toEqual([elsewhere, held0.list, held0.list, entryHash(one.body), 1]);
-    // So an entry signed for the other id continues nothing, and the list's own next entry does.
     const two = (list: string) => signEntry(nextBody({ seq: 2, list, prev: held.hash }), owner.pair.privateKey);
     expect(await asyncRefusal(async () => entryHolds(await two(elsewhere), held))).toBe("chain_broken");
     expect(await asyncRefusal(async () => entryHolds(await two(held0.list), held))).toBe("none");
   });
 
+  test("the entry it is shown is read once: one whose body or signature reads otherwise a second time is held as it first read", async () => {
+    const second = { body: new Uint8Array(LIST_BODY_MAX + 1), signature: genesis.signature.subarray(0, 63) };
+    const shownOnce = (part: "body" | "signature"): Entry => {
+      let read = 0;
+      return Object.defineProperty({ ...genesis }, part, { get: () => (read++ === 0 ? genesis[part] : second[part]) });
+    };
+    for (const part of ["body", "signature"] as const) {
+      expect([part, await asyncRefusal(() => entryHolds(shownOnce(part), null))]).toEqual([part, "none"]);
+      expect([part, await entryHolds(shownOnce(part), null)]).toEqual([part, held0]);
+    }
+  });
+
   test("a body that says it is above the limit is refused by that size, before a byte of it is read", async () => {
-    // The bytes of an entry that holds, under a length of 64 MiB: only a check of the size, made first, refuses them.
     const body = Object.defineProperty(genesis.body.slice(), "length", { value: 64 * 1024 * 1024 });
     expect(await asyncRefusal(() => entryHolds({ body, signature: genesis.signature }, null))).toBe("entry_malformed");
   });

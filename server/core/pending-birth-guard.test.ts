@@ -23,11 +23,12 @@ const PROMPT = "Enter passphrase for key '/tmp/key': ";
  * was read, the last await before the final checks of the paste; `afterPaste` once the paste was written. Both may
  * replace what the pane shows or runs, as another process or a prompt can between a check and herdr's write.
  */
-async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0, boxCheck = false }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
+async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", tabRace = "none", screen = "", beforeDrain = () => {}, afterDrain, behind = 0, boxCheck = false, herdrStatus = "idle" }: { after?: (pane: Pane) => void; afterPaste?: (pane: Pane) => void; mode?: Mode; tabRace?: "none" | "birth" | "masked" | "live"; screen?: string;
   /** skill mode: run GJC's box check (composer.ts freeAgentInput) on `screen`, its viewport read answered with `screen` too */ boxCheck?: boolean;
   /** once the message is queued (or held), before the agent's turn ends and the queue is drained (or before its Send now) */ beforeDrain?: (pane: Pane) => void;
   /** after that drain; `turn` is one more turn of the agent, ended, and the drain its end brings */ afterDrain?: (pane: Pane, turn: () => Promise<void>) => Promise<void>;
-  /** how many more messages are queued behind the first */ behind?: number }) {
+  /** how many more messages are queued behind the first */ behind?: number;
+  /** what herdr's snapshot says of the pane at the drain (its status event stays `idle`) */ herdrStatus?: string }) {
   spyOn(pi, "piTranscriptPath").mockResolvedValue(null);
   if (mode === "claude") { spyOn(claude, "claudeForegroundSession").mockResolvedValue("session-a"); spyOn(composer, "freeClaudeBox").mockResolvedValue(undefined as never); }
   // the skill mode's pane runs gjc, whose box the send now reads first (composer.ts freeAgentInput): these tests count the
@@ -96,7 +97,7 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   if (mode === "missing") shown.foreground = [];
   for (let more = 1; more <= behind; more++) await delivery.pendingFrames.submit(owner, { type: "submit", id: 10 + more, pane_id: "p", text: `${text} ${more}`, payload: `${text} ${more}`, delivery: "queue" });
   beforeDrain(shown);
-  pane.agent_status = "idle";
+  pane.agent_status = herdrStatus;
   delivery.pending.status("p", "idle");
   delivery.drainPending("p");
   for (let lane = 0; lane < 3; lane++) await serialize("p", () => {});
@@ -182,6 +183,8 @@ it.each(["paste", "Enter"] as const)("withholds Codex's %s when a masked prompt 
 
 // One drain per test: its mocks wrap what they replace, and are taken down after each test.
 const CODEX_COMPOSER = "› Ask Codex to do anything\n  GPT-6-Astra default fast · main · Context 100% left\n  ← for agents · ? for shortcuts\n";
+// Codex's update menu, as its start draws it: "Update now" runs npm under Codex's own process
+const CODEX_UPDATE_MENU = "  Update available · 0.167.0 → 0.167.2\n  Release notes: https://github.com/openai/codex/releases/latest\n\n› 1. Update now (runs `npm install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n";
 // /rename's field, the theme list and the /diff pager, as Codex 0.163 draws them: none is a card the chat can answer
 const CODEX_OWN_SCREENS = {
   "/rename's field": "  Name thread\n› Type a name and press Enter\n  enter submit · esc back\n",
@@ -235,6 +238,35 @@ it("holds a message when the turn ends on the folder question while herdr report
   // the folder question as Codex 0.167 draws it at 40 columns, where herdr 0.9.5 says idle: answering it brings no status event
   const asked = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/codex-0.167.0/trust-40.txt"), "utf8");
   expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, beforeDrain: (pane) => { pane.screen = asked; },
+    afterDrain: async (pane, turn) => { pane.screen = CODEX_COMPOSER; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+it("holds a message when the turn ends on Codex's update menu, so that nothing is typed while the chosen install runs", async () => {
+  // "Update now" is chosen: Codex leaves its screen and runs npm as its child, so its process stays in front while herdr reports idle
+  expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, beforeDrain: (pane) => { pane.screen = CODEX_UPDATE_MENU; },
+    afterDrain: async (pane, turn) => { pane.screen = "$ npm install -g @openai/codex\nadded 1 package in 4s\n"; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+it("holds a message when the update menu comes up during the last checks before the paste, where herdr's status is not read", async () => {
+  // `after` runs in every try: the menu comes up in the first one only, so a retry would find the composer and paste
+  let asked = false;
+  expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, after: (pane) => { if (!asked) pane.screen = CODEX_UPDATE_MENU; asked = true; },
+    afterDrain: async (pane, turn) => { pane.screen = CODEX_COMPOSER; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+it("holds a message when herdr reports the update menu as blocked", async () => {
+  expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, herdrStatus: "blocked", beforeDrain: (pane) => { pane.screen = CODEX_UPDATE_MENU; },
+    afterDrain: async (pane, turn) => { pane.screen = CODEX_COMPOSER; await turn(); } })).toEqual([]);
+  expect(listed()).toEqual(HELD_FOR_SCREEN);
+});
+
+it("holds a message when the older \"Press enter to continue\" menu is up while herdr reports Codex at rest", async () => {
+  // its Enter would pick an option, and nothing tells when it is answered
+  const older = "  Update available \u00b7 0.162.0 \u2192 0.163.0\n\n\u203a 1. Update now (runs `npm install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\n\n  Press enter to continue\n";
+  expect(await drain({ mode: "codex-queued", screen: CODEX_COMPOSER, beforeDrain: (pane) => { pane.screen = older; },
     afterDrain: async (pane, turn) => { pane.screen = CODEX_COMPOSER; await turn(); } })).toEqual([]);
   expect(listed()).toEqual(HELD_FOR_SCREEN);
 });

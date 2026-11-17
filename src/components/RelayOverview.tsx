@@ -212,7 +212,8 @@ export function RelayOverview(props: RelayOverviewProps) {
       { key: "relays", glyph: "ready", label: t("Relays in use"), count: model.relays.length, onClick: () => onOpenRelay?.(), pressed: false },
     ];
   // the attention rows on show, with the reason each one carries; a reason they all share is said once, above them
-  const attentionRows = (model?.attention ?? []).slice(0, ATTENTION_LIMIT).flatMap(({ server_id, reason, expiresAt }) => { const pc = byId.get(server_id); return pc === undefined ? [] : [{ pc, reason, expiresAt, why: attentionReasonText(pc, expiresAt, t, { now, targetVersion }) }]; });
+  // `joins`: the reason is the shared Join one (askToJoinReason), named on what draws it as data-reason="join"
+  const attentionRows = (model?.attention ?? []).slice(0, ATTENTION_LIMIT).flatMap(({ server_id, reason, expiresAt }) => { const pc = byId.get(server_id); return pc === undefined ? [] : [{ pc, reason, expiresAt, why: attentionReasonText(pc, expiresAt, t, { now, targetVersion }), joins: pc.state === "needs-approval" && expiresAt === null && askToJoinReason(pc, t) !== null }]; });
   // how many PCs this device reaches right now and by which way; a check still running or never run counts nowhere
   const reachable = { direct: 0, relay: 0, none: 0 };
   for (const { check } of model?.rows ?? []) if (check !== null && check.kind !== "checking") reachable[check.kind === "offline" ? "none" : check.route === "relay" ? "relay" : "direct"] += 1;
@@ -266,7 +267,7 @@ export function RelayOverview(props: RelayOverviewProps) {
                 <li>{pcCanSignIn
                   ? t("On that PC, open Settings → Devices and PCs → Account and sign in with the same {provider} account as on this device.", { provider: providerName })
                   : t("On that PC, open Settings → Devices and PCs → Account and sign in with a GitHub or Google sign-in that is linked to this account.")}</li>
-                <li>{t("Choose Add this PC to my account there. It then shows here with Add.")}</li>
+                <li>{t("Choose Add this PC to my account there. It then shows here.")}</li>
               </ol>
               <p className="relay-overview-empty-copy" data-empty-provider="">{pcCanSignIn
                 ? t("Signed in with {provider}. GitHub and Google are separate Ovis accounts until you link them, so a PC signed in the other way is not listed here.", { provider: providerName })
@@ -314,7 +315,7 @@ export function RelayOverview(props: RelayOverviewProps) {
             <section className="relay-overview-attention-section" aria-label={t("Needs you")}>
               {(sharedReason !== null || model.attention.length > ATTENTION_LIMIT) && (
                 <div className="relay-overview-attention-head">
-                  {sharedReason !== null && <p className="relay-overview-attention-caption">{sharedReason}</p>}
+                  {sharedReason !== null && <p className="relay-overview-attention-caption" {...(firstAttention?.joins ? { "data-reason": "join" } : {})}>{sharedReason}</p>}
                   {model.attention.length > ATTENTION_LIMIT && (
                     <button type="button" className="btn btn-ghost relay-overview-view-all" data-action="view-all-attention" data-attention-total={model.counts.needsYou} onClick={() => selectFilter?.("needs")}>
                       {t("View all {count}", { count: model.counts.needsYou })}
@@ -323,11 +324,11 @@ export function RelayOverview(props: RelayOverviewProps) {
                 </div>
               )}
               <ol className="relay-overview-attention">
-                {attentionRows.map(({ pc, reason, expiresAt, why }) => (
+                {attentionRows.map(({ pc, reason, expiresAt, why, joins }) => (
                   <li key={pc.server_id} className="relay-overview-attention-row" data-pc-state={pc.state}>
                     <StatusDot state={reason === "offline" ? "offline" : "needs-you"} />
                     <span className="relay-overview-attention-name" title={pc.name}>{pc.name}</span>
-                    <span className="relay-overview-attention-why">{sharedReason === null ? why : pc.relay !== null ? relayHost(pc.relay) : pc.last_seen_at !== null ? lastSeen(pc.last_seen_at, now) : "—"}</span>
+                    <span className="relay-overview-attention-why" {...(sharedReason === null && joins ? { "data-reason": "join" } : {})}>{sharedReason === null ? why : pc.relay !== null ? relayHost(pc.relay) : pc.last_seen_at !== null ? lastSeen(pc.last_seen_at, now) : "—"}</span>
                     <div className="relay-overview-attention-act">{rowAction(pc, expiresAt !== null, t, props)}</div>
                   </li>
                 ))}

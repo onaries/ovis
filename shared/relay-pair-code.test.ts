@@ -95,7 +95,6 @@ describe("the exchange", () => {
     const right = new PairCodeHost("AB3DEFGHJK");
     const guest = new PairCodeGuest("AB3DEFGHJK");
     const m2 = guest.answer(right.hello());
-    // a PC (or a relay acting as one) that guessed wrong: its box is under another key
     const impostor = new PairCodeHost("AB3ZZZZZZZ");
     const impostorGuest = new PairCodeGuest("AB3ZZZZZZZ");
     const box = impostor.answer(impostorGuest.answer(impostor.hello()), offer)!;

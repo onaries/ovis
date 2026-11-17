@@ -516,7 +516,7 @@ const BASE: Record<string, string> = {
   "Sign in and add this PC": "로그인하고 이 PC 추가",
   "Add this PC to your account, so every device of your account can use it with one approval.": "이 PC를 계정에 추가하면 한 번만 승인해서 계정의 모든 기기가 쓸 수 있습니다.",
   "Every device of your account can use this PC after that.": "그 뒤에는 계정의 모든 기기가 이 PC를 쓸 수 있습니다.",
-  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "이미 이 계정으로 로그인한 기기(Ovis 앱 또는 app.ovis.sh)에서 {name}의 추가를 누르세요. 그러면 이 화면에 여섯 자리 숫자가 나옵니다. 그 기기에 입력한 뒤 여기서 승인을 누르세요. 이 페이지는 열어 두세요.",
+  "On a device already signed in to this account (the Ovis app or app.ovis.sh), choose Add on {name}. If it shows Join there instead, choose Join, then Type the number. This screen then shows a six-digit number: type it there, then press Approve here. Keep this page open.": "이미 이 계정으로 로그인한 기기(Ovis 앱 또는 app.ovis.sh)에서 {name}의 추가를 누르세요. 거기에 추가 대신 참여가 보이면 참여를 누른 뒤 숫자 입력을 고르세요. 그러면 이 화면에 여섯 자리 숫자가 나옵니다. 그 기기에 입력한 뒤 여기서 승인을 누르세요. 이 페이지는 열어 두세요.",
   "Waiting. The window reopens by itself if Ovis restarts.": "기다리는 중입니다. Ovis가 다시 시작되어도 자동으로 다시 열립니다.",
   "Stop waiting": "그만 기다리기",
   "This PC stopped waiting after 30 minutes.": "30분이 지나 이 PC가 기다리기를 멈췄습니다.",

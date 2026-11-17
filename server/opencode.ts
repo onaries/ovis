@@ -26,11 +26,15 @@
  */
 
 import { Database } from "bun:sqlite";
+import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, SkillActivity } from "../shared/protocol.ts";
+import { paneProcessInfo } from "./herdr/client.ts";
+import { processStartIdentity, processStartLowerBound } from "./process-start.ts";
 import { opencodeSkillInvocation } from "./skill-invocations/opencode.ts";
+import { opencodeStartScreenUnused } from "./start-screen.ts";
 import { trimOutput } from "./tool-output.ts";
 import { MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary } from "./transcript-records.ts";
 
@@ -76,6 +80,85 @@ export function opencodeSessionId(pane: Pick<HerdrPane, "agent_session">): strin
   return session.value;
 }
 
+/** Flags an OpenCode TUI may be started with and still open no session; any other (`-c`, `-s`, `--prompt`, `--server`) may open one. */
+const NO_SESSION_FLAGS = new Set(["--standalone", "--auto", "--print-logs"]);
+
+/**
+ * The folder an OpenCode process was started in, when its command line opens no session: no flag but
+ * NO_SESSION_FLAGS and `--log-level`, and at most one operand, a folder (not a subcommand: `run`,
+ * `session`, …). null for any other command line, or one that cannot be read.
+ */
+function noSessionFolder(argv: readonly string[] | null | undefined, cwd: string | null | undefined): string | null {
+  // after the program itself: a launcher script runs under its shell (`sh …/opencode`)
+  const program = argv?.findIndex((word) => basename(word) === "opencode") ?? -1;
+  if (program < 0 || !cwd) return null;
+  let folder: string | null = null;
+  for (let index = program + 1; index < argv!.length; index++) {
+    const word = argv![index]!;
+    if (NO_SESSION_FLAGS.has(word) || word.startsWith("--log-level=")) continue;
+    if (word === "--log-level" && index + 1 < argv!.length) { index++; continue; }
+    if (word.startsWith("-") || folder !== null) return null;
+    folder = resolve(cwd, word);
+    try { if (!statSync(folder).isDirectory()) return null; } catch { return null; }
+  }
+  return folder ?? cwd;
+}
+
+/**
+ * The pane's foreground OpenCode processes as herdr names them now, each with its start identity and
+ * folder, ordered by pid; null when there is none, or one whose command line may open a session or
+ * whose start cannot be read.
+ */
+async function noSessionProcesses(paneId: string): Promise<{ pid: number; identity: number; folder: string }[] | null> {
+  const foreground = (await paneProcessInfo(paneId))?.foreground_processes ?? [];
+  const found: { pid: number; identity: number; folder: string }[] = [];
+  for (const entry of foreground.filter((candidate) => candidate.name === "opencode")) {
+    const folder = noSessionFolder(entry.argv, entry.cwd);
+    const identity = Number.isSafeInteger(entry.pid) && entry.pid > 1 ? processStartIdentity(entry.pid) : null;
+    if (folder === null || identity === null) return null;
+    found.push({ pid: entry.pid, identity, folder });
+  }
+  return found.length === 0 ? null : found.sort((a, b) => a.pid - b.pid);
+}
+
+/**
+ * The history id of the conversation an OpenCode at its home screen has not begun, or null unless
+ * every fact says it shows none (#3600). herdr reports no session for it (its integration names one
+ * from the first prompt on), and this server did not start it (launched-agents.ts); what tells instead:
+ *
+ * - its screen is its home screen (opencodeStartScreenUnused), which shows no session;
+ * - its processes were started on none: no `--continue`, `--session` (which opens the home screen
+ *   too for an id the store does not hold yet), `--prompt` or `--server`, no subcommand;
+ * - the store holds no session of their folders made since the first of them started: no first
+ *   prompt of its own whose report is still to come, whichever pane made it. A missing store holds
+ *   none; one that cannot be read says nothing, and then neither does this.
+ *
+ * herdr is asked for the processes again after the store is read, and both answers must name the
+ * same processes with the same starts. The id names the pane and those processes: the first
+ * prompt's session arrives under its own history id, and the chat takes it whole.
+ */
+export async function opencodeFreshSession(pane: Pick<HerdrPane, "pane_id" | "cwd">, screen: string, store: string | null): Promise<string | null> {
+  if (store === null || !opencodeStartScreenUnused(screen)) return null;
+  try {
+    const processes = await noSessionProcesses(pane.pane_id);
+    if (processes === null) return null;
+    const starts = processes.map((entry) => processStartLowerBound(entry.pid));
+    if (starts.some((started) => started === null)) return null;
+    const folders = [...new Set([pane.cwd, ...processes.map((entry) => entry.folder)].filter((folder): folder is string => typeof folder === "string" && folder !== "").flatMap((folder) => {
+      try { return [folder, realpathSync(folder)]; } catch { return [folder]; }
+    }))];
+    if (statSync(store, { throwIfNoEntry: false }) !== undefined) {
+      const begun = withStore(store, (db) => db.query<unknown, (string | number)[]>(
+        `SELECT 1 FROM session_v2 WHERE directory IN (${folders.map(() => "?").join(", ")}) AND time_created >= ? LIMIT 1`,
+      ).get(...folders, Math.min(...(starts as number[]))) !== null);
+      if (begun !== false) return null;
+    }
+    const key = (list: { pid: number; identity: number }[]) => list.map((entry) => `${entry.pid}:${entry.identity}`).join(",");
+    const again = await noSessionProcesses(pane.pane_id);
+    return again !== null && key(again) === key(processes) ? `unwritten:opencode:${pane.pane_id}:${key(processes)}` : null;
+  } catch { return null; }
+}
+
 /** One `session_message` row as the chat needs it: no image bytes, tool outputs already cut. */
 export type OpencodeRecord =
   | { role: "user"; ts: string | null; parts: ConversationPart[] }
@@ -109,6 +192,14 @@ function toolText(state: Row, name: string): string {
     .filter((item) => item.type === "text" && typeof item.text === "string")
     .map((item) => item.text as string).join("\n");
   return name === "subagent" ? unwrap(output) : output;
+}
+
+/**
+ * A call's `state.status` as the transcript's outcome (shared/protocol.ts): not answered yet (1.x `pending`,
+ * 2.x `streaming` while the model still writes its input, then `running`), answered, or failed.
+ */
+function toolState(status: unknown): Extract<ConversationPart, { kind: "tool" }>["state"] {
+  return status === "pending" || status === "streaming" || status === "running" ? "pending" : status === "completed" ? "ok" : status === "error" ? "error" : undefined;
 }
 
 /** OpenCode's `skill` tool names the skill it loads by `id` (1.x: `name`). */
@@ -162,6 +253,8 @@ export function opencodeRecord(id: string, type: string, data: Row): OpencodeRec
           output: "",
         };
         if (skill !== null) part.skill = skill;
+        const outcome = toolState(state.status);
+        if (outcome !== undefined) part.state = outcome;
         trimOutput(part, toolText(state, block.name), `${id}:${index}`);
         const exit = record(state.metadata).exit;
         if (state.status === "error" || (typeof exit === "number" && exit !== 0)) part.error = true;

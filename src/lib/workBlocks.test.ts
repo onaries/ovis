@@ -203,7 +203,7 @@ describe("workSummary", () => {
   });
 
   it("leaves todo updates out of the counts", () => {
-    expect(workSummary([tool("TodoWrite"), tool("Edit"), tool("update_plan"), tool("todo_write"), tool("Read")])).toBe("1 edit · 1 file read");
+    expect(workSummary([tool("TodoWrite"), tool("todowrite"), tool("Edit"), tool("update_plan"), tool("todo_write"), tool("Read")])).toBe("1 edit · 1 file read");
   });
 });
 

@@ -37,14 +37,14 @@ test("no script interpolates an expression or writes $GITHUB_ENV or $GITHUB_PATH
   expect(scriptProblems(preview())).toEqual([]);
 });
 
-test("the build holds no secret and no environment, restores the cache read-only and passes the tarball's SHA-256", () => {
+test("the build holds no secret and no environment, restores no cache and passes the tarball's SHA-256", () => {
   const job = build();
   expect(job.environment).toBeUndefined();
   expect(preview().permissions).toEqual({ contents: "read" });
   expect(job.permissions).toEqual({ contents: "read" });
   expect(JSON.stringify(job)).not.toContain("secrets.");
   expect(cacheProblems(preview())).toEqual([]);
-  expect(find(job, (step) => step.uses === "./.github/actions/setup-ci").with).toEqual({ cache: "restore" });
+  expect(find(job, (step) => step.uses === "./.github/actions/setup-ci").with).toEqual({ cache: "none" });
   expect(find(job, (step) => step.uses?.startsWith("actions/checkout@") === true).with?.ref).toBe("${{ github.sha }}");
   for (const step of job.steps!) if (step.uses && !step.uses.startsWith("./")) expect(step.uses).toMatch(/@[0-9a-f]{40}$/);
   expect(job.outputs).toEqual({ sha256: "${{ steps.pack.outputs.sha256 }}" });

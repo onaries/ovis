@@ -40,7 +40,7 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { answerItems, endedOnAnswer, foldedRequestsMatch, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, runNames, splitTurn, turnSegments, type WorkSegment, todoGroups, visibleWorkParts, workBlockStartsOpen, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
-import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
+import { isTodoTool, parseTodoAnswer, todoCallSummary, todoSnapshot, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, goalWaitSources, goalWaitUntil, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
 import { publishSessionStats, sessionStats } from "../lib/sessionStats.ts";
 import { HISTORY_PROMPTS, useSettings } from "../lib/settings.ts";
@@ -64,6 +64,7 @@ import { toolPathLabel, toolPathRoot } from "../lib/workspacePath.ts";
 import { linkFilePaths } from "./FilePathLink.tsx";
 import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
+import { toolDisplayName } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, drawnMatch, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
@@ -484,8 +485,8 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   const t = useT();
   if (part.arguments_omitted) return <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre>;
   if (part.codex_subagents && part.codex_subagents.length > 0) return <SubagentInput calls={part.codex_subagents} input={part.input} />;
-  // a todo call shows the list as it stood after it, when the agent answered with it
-  const after = isTodoTool(part.name) ? parseTodoAnswer(part.output) : null;
+  // a todo call shows the list as it stood after it: the agent's answer, or the whole list it sent
+  const after = isTodoTool(part.name) ? parseTodoAnswer(part.output) ?? todoSnapshot(part) : null;
   if (after !== null && after.length > 0) return <TodoList items={after} />;
   const patch = patchText(part.input);
   if (patch !== null) return <PatchView patch={patch} />;
@@ -666,7 +667,7 @@ function LineImages({ paneId, images }: { paneId: string; images: readonly WorkI
   const [preview, setPreview] = useState<{ src: string; anchor: HTMLElement } | null>(null);
   // a picture that failed to load leaves the line and the viewer, never a broken icon, while the line is drawn
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
-  const entries = useMemo(() => images.map((image) => ({ image: toolGalleryImage(machineId, paneId, image, t), tool: image.part.name })), [images, machineId, paneId, t]);
+  const entries = useMemo(() => images.map((image) => ({ image: toolGalleryImage(machineId, paneId, image, t), tool: toolDisplayName(image.part.name) })), [images, machineId, paneId, t]);
   const usable = entries.filter((entry) => !failed.has(entry.image.src));
   if (usable.length === 0) return null;
   const gallery = usable.map((entry) => entry.image);
@@ -754,7 +755,7 @@ function ToolOutputText({ stateKey, output, whole }: { stateKey: string; output:
 /**
  * One row of a work block: `▸ Ran bun test`, expanding to the call's input and output. A tool the
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
- * any other keeps its id in front, as the agent names it.
+ * any other keeps its id in front, as the agent names it, an MCP tool's as its server and tool.
  */
 function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"] }) {
   const t = useT();
@@ -772,6 +773,9 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   // reads the call's input: once per call, not on every poll of the transcript
   const { verb, narration: described } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
   const narration = described || hasSubagents;
+  const name = toolDisplayName(part.name);
+  // a verb, the agent's sentence or a tidied MCP name stands for the id: the title and the opened detail keep it
+  const renamed = narration || verb !== null || name !== part.name;
   // the list is the answer of a todo call: its raw text would say it twice
   const output = !attempt && isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
   // an attempt inside a todo run says how it went, in the transcript's words; a failure already says "failed"
@@ -780,10 +784,10 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   const images = useMemo(() => linePictures([part]), [part]);
   return <div className={`work-row${part.error ? " is-error" : ""}`}>
     <div className="work-row-line">
-      <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
+      <button type="button" className="work-row-head" aria-expanded={open} title={renamed ? (summary.length > 0 ? `${part.name} · ${summary}` : part.name) : undefined} onClick={() => setOpen(!open)} {...focus}>
         <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
         {hasSubagents && <span className="work-row-name is-verb">{t("Subagent")}</span>}
-        {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
+        {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{name}</span>)}
         {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
         {!narration && part.error && verb === null && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
         {summary.length > 0 && summary !== part.name && <>{" "}<span className={`work-row-summary${hasSubagents ? " is-subagent" : ""}`}>{hasSubagents ? `· ${subagentSummary}` : summary}</span></>}
@@ -794,7 +798,7 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
       {/* opened, the row shows its pictures larger in its detail */}
       {!open && <LineImages paneId={paneId} images={images} />}
     </div>
-    {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4>{/* each whole output folds on its own, whatever the preview or an earlier one was: another element, another key */}
+    {open && <div className="work-row-detail">{(verb !== null || name !== part.name) && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4>{/* each whole output folds on its own, whatever the preview or an earlier one was: another element, another key */}
       <ToolOutputText key={whole.text !== null ? `whole:${part.output_ref ?? ""}` : "preview"} stateKey={`${stateKey}:${whole.text !== null ? `whole:${part.output_ref ?? ""}` : "output"}`} output={output} whole={whole.text !== null} />
       {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
         {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}

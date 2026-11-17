@@ -41,7 +41,6 @@ describe("insertTextProblem", () => {
   it("takes the longest line the draft holds and refuses one past it, in code units or in bytes", () => {
     expect(insertTextProblem("a".repeat(INSERT_MAX_UNITS))).toBeNull();
     expect(insertTextProblem("a".repeat(INSERT_MAX_UNITS + 1))).toMatchObject({ code: "insert_too_long" });
-    // the widest a line under the unit cap gets: three bytes a code unit, under the byte cap with room
     const widest = "한".repeat(INSERT_MAX_UNITS);
     expect(new TextEncoder().encode(widest).length).toBeLessThanOrEqual(INSERT_MAX_BYTES);
     expect(insertTextProblem(widest)).toBeNull();

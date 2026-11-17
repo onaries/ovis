@@ -79,6 +79,47 @@ if [ -n "$WORK_TMPFS" ]; then
   WORK_TMPFS_ARGS=(--tmpfs "/w:rw,exec,nosuid,size=$WORK_TMPFS,uid=1001,gid=1001,mode=0755"
     --tmpfs "/tmp:rw,exec,nosuid,size=$WORK_TMPFS,mode=1777")
 fi
+# Every slot's docker network is a /28 of this block (README "Run"), never a range docker
+# picks from its own pools: with those used up docker goes on to 192.168.0.0/20, and a network made
+# at boot, before the LAN's route was there, took 192.168.0.1, the home router's address.
+NETWORK_BLOCK="${OVIS_CI_NETWORK_BLOCK:-10.213.0.0/16}"
+# docker's gateway (the first address), the runner container, and room to spare
+NETWORK_PREFIX=28
+NETWORK_SIZE=$(( 1 << (32 - NETWORK_PREFIX) ))
+# An a.b.c.d address as a number; fails on anything else, a part with a leading zero included.
+ip_number() {
+  local part='(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])'
+  [[ $1 =~ ^$part\.$part\.$part\.$part$ ]] || return 1
+  echo "$(( BASH_REMATCH[1] << 24 | BASH_REMATCH[2] << 16 | BASH_REMATCH[3] << 8 | BASH_REMATCH[4] ))"
+}
+# "<first> <last>": the numbers of the first and last address of a.b.c.d/N (an address alone is a /32)
+cidr_range() {
+  local bits=32 number size
+  case "$1" in */*) bits="${1#*/}" ;; esac
+  case "$bits" in [0-9]|[12][0-9]|3[0-2]) ;; *) return 1 ;; esac
+  number="$(ip_number "${1%/*}")" || return 1
+  size=$(( 1 << (32 - bits) ))
+  echo "$(( number - number % size )) $(( number - number % size + size - 1 ))"
+}
+# whether the range "$1" ("<first> <last>") lies inside a.b.c.d/N "$2"
+inside() {
+  local outer
+  outer="$(cidr_range "$2")" && [ "${1% *}" -ge "${outer% *}" ] && [ "${1#* }" -le "${outer#* }" ]
+}
+network_block_refused() {
+  echo "OVIS_CI_NETWORK_BLOCK=$NETWORK_BLOCK $1" >&2
+  exit 2
+}
+case "$NETWORK_BLOCK" in */[89]|*/1[0-9]|*/2[0-4]) ;; *) network_block_refused "must be a network address from /8 to /24, like 10.213.0.0/16" ;; esac
+if ! BLOCK_RANGE="$(cidr_range "$NETWORK_BLOCK")" || [ "${BLOCK_RANGE% *}" != "$(ip_number "${NETWORK_BLOCK%/*}")" ]; then
+  network_block_refused "must be a network address from /8 to /24, like 10.213.0.0/16"
+fi
+# Private: inside 10.0.0.0/8, or inside 172.16.0.0/16 for a host that routes all of 10.0.0.0/8 (a
+# VPN). Never where home networks (192.168.0.0/16), carrier-grade NAT and Tailscale (100.64.0.0/10)
+# or docker's own pools (172.17.0.0/16 to 172.31.0.0/16) are.
+if ! inside "$BLOCK_RANGE" 10.0.0.0/8 && ! inside "$BLOCK_RANGE" 172.16.0.0/16; then
+  network_block_refused "must be inside 10.0.0.0/8 or 172.16.0.0/16: never 192.168.0.0/16, 100.64.0.0/10, docker's 172.17.0.0/16 to 172.31.0.0/16 or a public range"
+fi
 # What this host can take (CHECK_HOST_* in scripts/check.ts), for every runner container: read now,
 # so a missing file stops the launcher instead of every container failing to start.
 ENV_ARGS=()
@@ -471,9 +512,120 @@ cache_args() {
   fi
 }
 
-# The slot's own docker network, made when it is not there.
+# The ranges this host has now, each "<first> <last>" in HOST_RANGES: its routes in every table and
+# its own addresses. A route broader than /8 is no network but a default (`default`, 0.0.0.0/0, or a
+# full-tunnel VPN's /1 pair or four /2s): a runner network inside it takes those few addresses from
+# it, as it does from a default route. /8 and narrower count.
+host_ranges() {
+  local routes addrs words dest range
+  routes="$(ip -4 route show table all)" && addrs="$(ip -4 -o addr show)" || return 1
+  HOST_RANGES=()
+  while read -r -a words; do
+    [ "${#words[@]}" -gt 0 ] || continue
+    case "${words[0]}" in
+      broadcast|multicast) continue ;;
+      # local: an address of the host, as a /32 (one with a peer has no network in `ip -o addr`)
+      local|unicast|anycast|unreachable|blackhole|prohibit|throw|nat) words=("${words[@]:1}") ;;
+    esac
+    dest="${words[0]:-}"
+    case "$dest" in default|0.0.0.0/0|*/[0-7]) continue ;; esac
+    if range="$(cidr_range "$dest")"; then HOST_RANGES+=("$range"); fi
+  done <<< "$routes"
+  # "<index>: <device> inet <address>[/<bits>] ...": an address with a peer has no /<bits>, a /32
+  while read -r -a words; do
+    [ "${words[2]:-}" = inet ] || continue
+    if range="$(cidr_range "${words[3]:-}")"; then HOST_RANGES+=("$range"); fi
+  done <<< "$addrs"
+}
+
+# Whether a range of this host overlaps "<first> <last>" ("$1"), with that range's last address in
+# OVERLAP_END.
+host_overlap() {
+  local range
+  for range in ${HOST_RANGES[@]+"${HOST_RANGES[@]}"}; do
+    if [ "${range% *}" -le "${1#* }" ] && [ "${range#* }" -ge "${1% *}" ]; then
+      OVERLAP_END="${range#* }"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Whether the kernel would route a packet to the internet now, as it decides: `ip route get` follows
+# policy routing, every table and a VPN's split default, and fails where there is no route or an
+# unreachable, prohibit or blackhole one. At boot, before the LAN is up, it fails. So does a host with
+# no IPv4 route to the internet at all (IPv6 only, or a proxy only) and one without `ip`: their
+# slots report "no default route yet" and start no runner.
+host_routed() {
+  ip -4 route get 1.1.1.1 >/dev/null 2>&1
+}
+
+# The slot's own docker network "$1", for slot "$2": a /28 of NETWORK_BLOCK. One that is there is kept
+# when its only IPv4 range is a /28 of the block, and made again otherwise, unless a container is on
+# it. One that is kept is not checked against the host's ranges again: a host that later joins a
+# network inside the block needs another block (README "Run"). Nothing is removed or made while the
+# host has no route to the internet: at boot, before the LAN's route is there, any range could be
+# the LAN's. On failure, NETWORK_PROBLEM says why.
 slot_network() {
-  docker network inspect "$1" >/dev/null 2>&1 || docker network create --driver bridge "$1" >/dev/null 2>&1
+  local name="$1" slot="$2" found fields subnet range ranges=() first last start candidate refused=0 wrapped=0
+  local unrouted="this host has no default route yet: not making a docker network ($name)"
+  NETWORK_PROBLEM="could not make the docker network $name"
+  if ! host_routed; then NETWORK_PROBLEM="$unrouted"; return 1; fi
+  if found="$(docker network inspect -f '{{len .Containers}}{{range .IPAM.Config}} {{.Subnet}}{{end}}' "$name" 2>/dev/null)"; then
+    read -r -a fields <<< "$found"
+    for subnet in ${fields[@]+"${fields[@]:1}"}; do
+      case "$subnet" in *:*) ;; *) ranges+=("$subnet") ;; esac
+    done
+    if [ "${#ranges[@]}" = 1 ] && [ "${ranges[0]#*/}" = "$NETWORK_PREFIX" ] && range="$(cidr_range "${ranges[0]}")" &&
+      inside "$range" "$NETWORK_BLOCK"; then
+      return 0
+    fi
+    # Made by docker from its own pools (by a launcher from before the block), or by hand: a
+    # container on it would lose its network, so it stays until none is.
+    if [ "${fields[0]:-}" != 0 ]; then
+      found="${fields[*]:1}"
+      NETWORK_PROBLEM="the docker network $name (${found:-no address range}) is not a /28 of $NETWORK_BLOCK, and a container is on it: leaving it as it is"
+      return 1
+    fi
+    docker network rm "$name" >/dev/null 2>&1 || return 1
+    if ! host_routed; then NETWORK_PROBLEM="$unrouted"; return 1; fi
+  fi
+  if ! host_ranges; then
+    NETWORK_PROBLEM="could not read this host's routes and addresses (ip -4) to choose a range for the docker network $name"
+    return 1
+  fi
+  # Slot N first tries the block's Nth /28, so the slots of one launcher never race for one, or the
+  # one where its last search stopped, so its retries walk the whole block; then the ones after it,
+  # and on from the block's start. A range the host has is passed whole. Docker refuses a /28 that
+  # another of its networks overlaps: the next is tried, up to 16 refusals a search.
+  read -r first last <<< "$BLOCK_RANGE"
+  start=${SEARCH_FROM:-$(( first + (slot - 1) % ((last - first + 1) / NETWORK_SIZE) * NETWORK_SIZE ))}
+  candidate=$start
+  while [ "$refused" -lt 16 ]; do
+    if [ "$candidate" -gt "$last" ]; then
+      [ "$wrapped" = 0 ] || break
+      candidate=$first wrapped=1
+    fi
+    if [ "$wrapped" = 1 ] && [ "$candidate" -ge "$start" ]; then break; fi
+    if host_overlap "$candidate $(( candidate + NETWORK_SIZE - 1 ))"; then
+      candidate=$(( (OVERLAP_END / NETWORK_SIZE + 1) * NETWORK_SIZE ))
+      continue
+    fi
+    subnet="$(( candidate >> 24 & 255 )).$(( candidate >> 16 & 255 )).$(( candidate >> 8 & 255 )).$(( candidate & 255 ))/$NETWORK_PREFIX"
+    if docker network create --driver bridge --subnet "$subnet" "$name" >/dev/null 2>&1; then
+      unset SEARCH_FROM
+      return 0
+    fi
+    refused=$(( refused + 1 ))
+    candidate=$(( candidate + NETWORK_SIZE ))
+  done
+  if [ "$refused" -ge 16 ]; then
+    if [ "$candidate" -gt "$last" ]; then SEARCH_FROM=$first; else SEARCH_FROM=$candidate; fi
+    return 1
+  fi
+  unset SEARCH_FROM
+  NETWORK_PROBLEM="no /28 of $NETWORK_BLOCK is free for the docker network $name: this host's routes and addresses, or docker's networks, cover all of it (OVIS_CI_NETWORK_BLOCK names another block, inside 10.0.0.0/8 or 172.16.0.0/16)"
+  return 1
 }
 
 slot_loop() {
@@ -501,7 +653,7 @@ slot_loop() {
     # the second no container starts, and neither is worth a registration token.
     problem=""
     if ! start_slots; then problem="could not make the check slots in $SLOTS"
-    elif ! slot_network "$name-net"; then problem="could not make the docker network $name-net"
+    elif ! slot_network "$name-net" "$slot"; then problem="$NETWORK_PROBLEM"
     elif ! token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"; then problem="could not fetch a registration token"
     fi
     if [ -n "$problem" ]; then

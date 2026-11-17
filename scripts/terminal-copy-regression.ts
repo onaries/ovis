@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright-core";
-import { herdrRpc, paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { herdrRpc, paneRead, paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
 
 /** A plain left drag in the desktop terminal selects and copies instead of reaching herdr. */
@@ -305,7 +305,20 @@ setInterval(() => {}, 1000);
     await page.mouse.wheel(0, lineHeight); // drops the highlight
     await page.waitForTimeout(2600); // the copy note fades before the evidence below
 
-    const firstTop = await topRow();
+    // A press counts lines from herdr's own scroll position (/api/pane/scroll), and the screen drawn here can still be
+    // a wheel's scroll behind it: a line number is read off the screen once it shows the top line herdr shows
+    const herdrTop = async (): Promise<number> => Number((await paneRead({ paneId: pane, source: "visible", stripAnsi: true })).text.split("\n")[0]!.trim().slice(1));
+    const syncedTop = async (): Promise<number> => {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const shown = await topRow();
+        const herdr = await herdrTop();
+        if (shown === herdr) return shown;
+        assert.ok(Date.now() < deadline, `the screen shows herdr's top line (${shown}, herdr ${herdr})`);
+        await Bun.sleep(25);
+      }
+    };
+    const firstTop = await syncedTop();
     const pressAt = { x: screen.x + 200, y: screen.y + lineHeight * 5.5 };
     await page.evaluate(() => navigator.clipboard.writeText(""));
     await page.mouse.move(pressAt.x, pressAt.y);
@@ -329,7 +342,7 @@ setInterval(() => {}, 1000);
 
     // dragging past the top edge keeps scrolling
     await page.evaluate(() => navigator.clipboard.writeText(""));
-    const edgeStartTop = await topRow();
+    const edgeStartTop = await syncedTop();
     const bottomAt = { x: screen.x + 200, y: screen.y + screen.height - lineHeight * 1.5 };
     await page.mouse.move(bottomAt.x, bottomAt.y);
     await press();

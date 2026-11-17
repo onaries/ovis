@@ -1,15 +1,8 @@
-/**
- * Codex's file edits: an `apply_patch` call carries the patch as its whole input, and the
- * `exec` tool's scripts carry it as the string argument of `tools.apply_patch(…)`. Both
- * read as a raw blob unless the patch is found and its files named.
- */
-
 import { constantTemplate, execToolCalls } from "./execSummary.ts";
 
 const BEGIN = "*** Begin Patch";
 const WHOLE_PATCH = /^\*\*\* Begin Patch\r?\n(?:[\s\S]*\r?\n)?\*\*\* End Patch\s*$/;
 
-/** The patch an edit call carries, or null when the input is not one. */
 export function patchText(input: string): string | null {
   const trimmed = input.trimStart();
   if (trimmed.startsWith(BEGIN)) return WHOLE_PATCH.test(trimmed) ? trimmed : null;
@@ -51,7 +44,6 @@ export function patchText(input: string): string | null {
   return WHOLE_PATCH.test(text.trimStart()) ? text.trimStart() : null;
 }
 
-/** The files a patch adds, updates or deletes, in the order it names them. */
 export function patchFiles(patch: string): string[] {
   const files: string[] = [];
   for (const match of patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)) {

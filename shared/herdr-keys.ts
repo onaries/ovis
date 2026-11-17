@@ -5,7 +5,6 @@
  * read only to know which keys they take from a default, never returned.
  */
 
-/** The actions the app runs (lib/herdrKeys.ts runHerdrAction). */
 export const HERDR_PREFIX_ACTIONS = [
   "help", "settings", "workspace_picker", "goto", "new_workspace", "previous_workspace", "next_workspace",
   "new_tab", "rename_tab", "previous_tab", "next_tab", "switch_tab", "split_vertical", "split_horizontal", "zoom", "toggle_sidebar",
@@ -108,7 +107,6 @@ export function parseHerdrBinding(raw: string): HerdrBinding | null {
   return f && Number(f[1]) <= 255 ? { prefixed, range: false, chord: { ...flags, key: `F${Number(f[1])}` } } : null;
 }
 
-/** The chords a binding of `field` stands for, each with the index it picks: a range is its nine digits, and an indexed action's lone digit is that index. */
 export function bindingChords(binding: HerdrBinding, field: string): { chord: HerdrChord; index: number | null }[] {
   if (binding.range) return [1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => ({ chord: { ...binding.chord, key: String(index) }, index }));
   return [{ chord: binding.chord, index: Object.hasOwn(INDEXED, field) && /^[1-9]$/.test(binding.chord.key) ? Number(binding.chord.key) : null }];

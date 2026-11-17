@@ -19,7 +19,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   preflight:
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # the release's run: GitHub-hosted whatever the runner variables say, and no shared cache (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require main
@@ -31,6 +32,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        with:
+          cache: none
       - name: Validate version, notes and unused tag
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -71,7 +74,8 @@ jobs:
   server-binary:
     # the Rust PTY hosts go under the signed manifest too: an installer runs no host the manifest does not name
     needs: [preflight, pty-sidecar]
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # it builds what server-binary-sign signs and publish releases: GitHub-hosted whatever the runner variables say, and no shared cache (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -79,10 +83,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # install scripts run here: restore the dependency cache, never save one other jobs trust
+      # install scripts run here: neither restore a cache a self-hosted job could have written nor save one
       - uses: ./.github/actions/setup-ci
         with:
-          cache: restore
+          cache: none
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -176,7 +180,8 @@ jobs:
             server-binary/ovis-server.SHA256SUMS
   publish:
     needs: [validate, pty-sidecar, server-binary-sign, server-binary-attest]
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # a write token: GitHub-hosted whatever the runner variables say (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write
@@ -194,6 +199,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        with:
+          cache: none
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ovis-pty-sidecar
@@ -247,10 +254,10 @@ jobs:
         with:
           ref: refs/tags/v${{ inputs.version }}
           persist-credentials: false
-      # install scripts run here: restore the dependency cache, never save one other jobs trust
+      # install scripts run here: neither restore a cache a self-hosted job could have written nor save one
       - uses: ./.github/actions/setup-ci
         with:
-          cache: restore
+          cache: none
       - name: Require the release tag's commit
         env:
           RELEASE_TAG: v${{ inputs.version }}
@@ -396,7 +403,8 @@ jobs:
   # did not fail (one skipped for unset secrets passes), and only the tarball shell-build hashed
   shell-attach:
     needs: [shell-build, shell-deploy]
-    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    # a write token: GitHub-hosted whatever the runner variables say (scripts/privileged-jobs-workflow.test.ts)
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write

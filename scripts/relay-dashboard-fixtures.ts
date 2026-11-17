@@ -64,7 +64,8 @@ export const FLEETS: Readonly<Record<FleetName, readonly PcSpec[]>> = {
     { label: "Work laptop", relay: AP_RELAY, seenAgo: MIN, addedAgo: 7 * DAY, paired: true, listed: true },
     { label: "Home server", relay: GLOBAL_RELAY, seenAgo: 3 * DAY, addedAgo: 7 * DAY, paired: true, listed: true },
     { label: "Lab NUC", relay: GLOBAL_RELAY, seenAgo: null, addedAgo: 7 * DAY, paired: true, listed: false },
-    { label: "New mini PC", relay: GLOBAL_RELAY, seenAgo: MIN, addedAgo: 2 * MIN, paired: false, listed: true },
+    // never seen: a PC that pulled its mailbox is in the account already, and is joined, not added
+    { label: "New mini PC", relay: GLOBAL_RELAY, seenAgo: null, addedAgo: 2 * MIN, paired: false, listed: true },
     { label: "Old MacBook", relay: AP_RELAY, seenAgo: null, addedAgo: 7 * DAY, paired: false, listed: true },
   ],
   F20: f20(),
