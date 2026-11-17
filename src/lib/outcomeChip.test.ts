@@ -144,6 +144,13 @@ describe("afterMove", () => {
 });
 
 describe("outcomeRows", () => {
+  test("attaches the receipt to an expanded skill request instead of adding another bubble", () => {
+    const ts = "2026-11-17T05:54:24.294Z";
+    const turn = user("Please use [skill: patina] to edit this", ts);
+    turn.parts.push({ kind: "skill", skill: { name: "patina", evidence: "instructions", status: "loaded" } });
+    const sent = outcome({ text: "Please use $skill:patina to edit this", created_at: ts });
+    expect(outcomeRows([turn], [sent])).toEqual([{ kind: "turn", outcome: sent, index: 0 }]);
+  });
   const earlier = [user("hello", "2026-10-20T09:00:00.000Z"), assistant("hi", "2026-10-20T09:00:05.000Z")];
 
   test("an outcome without a transcript turn yields one provisional row after the turns before its send", () => {

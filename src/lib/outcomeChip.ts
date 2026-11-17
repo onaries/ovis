@@ -11,6 +11,7 @@
  */
 import type { CommandOutcome, ConversationTurn } from "../../shared/protocol.ts";
 import { sameMessage } from "./compose.ts";
+import { skillRequestText } from "./skillMentions.ts";
 import type { Translate } from "./i18n.ts";
 
 export type OutcomeState = CommandOutcome["state"];
@@ -84,7 +85,7 @@ const SEND_SKEW_MS = 2_000;
 
 function turnText(turn: ConversationTurn): string {
   // a bash-mode command was sent as `!` and the command
-  return turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : part.kind === "shell" ? [`!${part.command}`] : []).join("\n\n");
+  return skillRequestText(turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : part.kind === "shell" ? [`!${part.command}`] : []).join("\n\n"), turn.parts);
 }
 
 function turnTime(turn: ConversationTurn): number | null {

@@ -1,4 +1,4 @@
-import type { SlashCommand } from "../../shared/protocol.ts";
+import type { ConversationPart, SlashCommand } from "../../shared/protocol.ts";
 import { DEFAULT_SKILL_SYNTAX, type SkillSyntax } from "../../shared/skill-syntax.ts";
 
 /** One skill name as an answer spells it: `/name`, or `$name` for a Codex skill. */
@@ -9,6 +9,16 @@ export interface SkillMention {
 }
 
 export type SkillSplit = string | SkillMention;
+
+/** OmO replaces a selected token in its recorded request; only its loaded instruction proves that replacement. */
+export function skillRequestText(text: string, parts: readonly ConversationPart[]): string {
+  for (const part of parts) {
+    if (part.kind === "skill" && part.skill.evidence === "instructions" && part.skill.status === "loaded") {
+      text = text.replaceAll(`[skill: ${part.skill.name}]`, `$skill:${part.skill.name}`);
+    }
+  }
+  return text;
+}
 
 /** Splits plain answer text around the skill names in it; null when the pane lists no skill. */
 export type SkillMatcher = (text: string) => SkillSplit[];

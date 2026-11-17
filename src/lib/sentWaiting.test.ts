@@ -49,6 +49,13 @@ describe("waiting sends already visible in a native queue", () => {
 });
 
 describe("waitingText", () => {
+  it("settles a skill send once its expanded request and loaded skill are recorded", () => {
+    const turn = user("Please use [skill: patina] to edit this");
+    turn.parts.push({ kind: "skill", skill: { name: "patina", evidence: "instructions", status: "loaded" } });
+    expect(transcriptHolds({ text: "Please use $skill:patina to edit this", at: 1 }, [turn])).toBe(true);
+    expect(transcriptHolds({ text: "Please use $skill:other to edit this", at: 1 }, [turn])).toBe(false);
+    expect(transcriptHolds({ text: "Please use $skill:patina to edit this", at: 1 }, [user("Please use [skill: patina] to edit this")])).toBe(false);
+  });
   const send = { pane: "p1", text: "还有发消息提示：未确认。重新发送前请检查终端。", at: 1 };
 
   it("keeps a sent message in view until the transcript has it", () => {

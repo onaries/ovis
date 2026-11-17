@@ -3064,6 +3064,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The browser demo answers `GET /api/agent/commands` with a few fictional skills per agent (`$` ones
   for Codex) and records nothing: a tab started from it is the demo's own new pane.
 
+Skill requests keep the existing Ovis transcript-and-receipt presentation: one user bubble
+owns its receipt and loaded-skill activity. When OmO records a selected token as a placeholder,
+the recorded loaded instruction identifies the equivalent typed token for receipt and waiting
+send matching. Literal placeholders without that evidence remain distinct messages. This uses
+the existing presentation rather than introducing another visual pattern from an external app.
+
 ### Tab strip and pane canvas
 - On touch and narrow layouts, agent tabs show the existing compact `StatusBadge` as dots or
   glyphs without visible status words, including tabs that are not selected. Split tabs keep the existing

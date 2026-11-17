@@ -1,6 +1,7 @@
 import type { Machine } from "../../shared/machines.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 import { composerMessage } from "./compose.ts";
+import { skillRequestText } from "./skillMentions.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 
 /**
@@ -133,7 +134,7 @@ function newerThanSend(send: WaitingSend, at: number, key: string, answeredAt: n
 }
 
 /** A user turn's words, as the terminal's copy of a send reads them. */
-const turnSaid = (parts: Turn["parts"]): string => said(parts.filter((part) => part.kind === "text").map((part) => part.text).join(" "));
+const turnSaid = (parts: Turn["parts"]): string => said(skillRequestText(parts.filter((part) => part.kind === "text").map((part) => part.text).join(" "), parts));
 
 /** The words of the user turn a userTurns key names: only a turn with a send's words can be that send's. */
 const keySaid = (key: string): string => turnSaid((JSON.parse(key.slice(0, key.lastIndexOf(":"))) as [Turn["ts"], Turn["parts"]])[1]);
