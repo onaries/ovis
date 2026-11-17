@@ -1,8 +1,14 @@
-import type { AppLink } from "./deepLink.ts";
+import type { SessionSnapshot } from "../../shared/protocol.ts";
+import { readLink, resolveLink, type AppLink } from "./deepLink.ts";
+import { desktopLinks, type DesktopLinks } from "./desktopLink.ts";
 
 export type NotificationPaneView = "chat" | "terminal";
-/** `workspace_id`: the workspace the pane was last seen in (server/push.ts), so an ended pane's tap opens it. */
-export type NotificationTarget = { machine_id: string; pane_id: string; view?: NotificationPaneView; workspace_id?: string };
+/**
+ * `workspace_id`: the workspace the pane was last seen in (server/push.ts), so an ended pane's tap opens it.
+ * `link`: a desktop link's place, as the address's own link reads it (lib/desktopLink.ts): it lands as
+ * that link does (linkLanding).
+ */
+export type NotificationTarget = { machine_id: string; pane_id: string; view?: NotificationPaneView; workspace_id?: string; link?: AppLink };
 type Target = NotificationTarget;
 type Select = (target: Target) => void;
 
@@ -48,19 +54,71 @@ export function notificationLanding(roster: readonly RosterMachine[], target: No
   return { kind: "link", link, stale: machineMissing(roster, target.machine_id) };
 }
 
-/** The same place: a second delivery of one tap (public/sw.js names it before and after focus). */
-export function sameLink(a: AppLink | null, b: AppLink): boolean {
-  return a !== null && a.machine === b.machine && a.pane === b.pane && (a.workspace ?? null) === (b.workspace ?? null) && (a.view ?? null) === (b.view ?? null);
+type LinkRoster = { id: string; state?: string; snapshot?: Pick<SessionSnapshot, "workspaces" | "panes" | "layouts"> | null };
+
+/**
+ * Where a desktop link lands: as the address's own link does (lib/deepLink.ts resolveLink, as
+ * lib/useAddressBar.ts lands a Back). Its pane is selected at once only when its PC is connected and
+ * resolveLink places it with no note: in the workspace the link's id names, or the one its slug
+ * names when the id was handed out again (a slug no open workspace has does not overrule the id);
+ * a link with no workspace by its pane id. Anything else selects no pane yet: the link waits as the
+ * address's does, settled once its PC is connected with its roster in, with its note
+ * (lib/useSelection.ts), since an offline PC's cached roster may list a pane that has closed.
+ * `stale`: as notificationLanding's.
+ */
+export function linkLanding(roster: readonly LinkRoster[], link: AppLink): { kind: "select"; pane: string } | { kind: "wait"; stale: boolean } {
+  const machine = roster.find((candidate) => candidate.id === link.machine);
+  const landed = machine?.state === "connected" && machine.snapshot ? resolveLink(machine.snapshot, link) : null;
+  if (landed?.pane && !landed.note) return { kind: "select", pane: landed.pane };
+  return { kind: "wait", stale: machineMissing(roster, link.machine) };
 }
 
-type MessageSource = { addEventListener: (type: "message", listener: (event: MessageEvent) => void) => void };
+/** The same place: a second delivery of one tap (public/sw.js names it before and after focus), or of one link (its slug too). */
+export function sameLink(a: AppLink | null, b: AppLink): boolean {
+  return a !== null && a.machine === b.machine && a.pane === b.pane && (a.workspace ?? null) === (b.workspace ?? null)
+    && (a.workspaceSlug ?? null) === (b.workspaceSlug ?? null) && (a.view ?? null) === (b.view ?? null);
+}
 
-/** Keep the newest target until App is ready, then deliver new selections directly. */
-export function notificationTargets(source?: MessageSource): (select: Select) => () => void {
+type MessageSource = { addEventListener: (type: string, listener: (event: Event) => void) => void };
+
+/**
+ * The event the Android app dispatches on an open page's window with a tapped alert's "select-pane"
+ * as its data (PCStore.selectionScript): a page on plain http has no navigator.serviceWorker. Taken
+ * as the worker's message is, and cancelled, so the app knows this page heard it and does not
+ * dispatch it on the worker as well, as it does for an older page.
+ */
+export const SELECT_PANE_EVENT = "ovis-select-pane";
+
+/**
+ * The pane a desktop link names, with the place as the address's own link reads it (`link`), which
+ * is how it lands (linkLanding). A link that names no pane is no target.
+ */
+export function linkTarget(query: string): NotificationTarget | null {
+  const link = readLink(query);
+  if (!link.pane) return null;
+  const place: AppLink = { machine: link.machine, workspace: link.workspace, workspaceSlug: link.workspaceSlug ?? null, pane: link.pane, view: link.view, settings: null };
+  return { machine_id: link.machine, pane_id: link.pane, ...(link.view ? { view: link.view } : {}), link: place };
+}
+
+/**
+ * Keep the newest target until App is ready, then deliver new selections directly: a tapped
+ * notification's (the worker's messages, `source`, and SELECT_PANE_EVENT on the page, `page`), or a
+ * desktop link's.
+ */
+export function notificationTargets(source?: MessageSource, links?: DesktopLinks, page?: MessageSource): (select: Select) => () => void {
   let pending: Target | null = null;
   let consumer: Select | null = null;
-  source?.addEventListener("message", (event) => {
-    const data = event.data as { type?: unknown; pane_id?: unknown; machine_id?: unknown; view?: unknown; workspace_id?: unknown } | null;
+  const take = (target: Target): void => {
+    if (consumer) consumer(target);
+    else pending = target;
+  };
+  links?.onOpen((query) => {
+    const target = linkTarget(query);
+    if (target) take(target);
+  });
+  // a MessageEvent from the worker or the app; any other event has no data and is ignored
+  const receive = (event: Event) => {
+    const data = (event as Partial<MessageEvent>).data as { type?: unknown; pane_id?: unknown; machine_id?: unknown; view?: unknown; workspace_id?: unknown } | null;
     if (data?.type !== "select-pane" || typeof data.pane_id !== "string") return;
     const target: Target = {
       machine_id: typeof data.machine_id === "string" ? data.machine_id : "local",
@@ -68,8 +126,12 @@ export function notificationTargets(source?: MessageSource): (select: Select) =>
     };
     if (data.view === "chat" || data.view === "terminal") target.view = data.view;
     if (typeof data.workspace_id === "string" && data.workspace_id !== "") target.workspace_id = data.workspace_id;
-    if (consumer) consumer(target);
-    else pending = target;
+    take(target);
+  };
+  source?.addEventListener("message", receive);
+  page?.addEventListener(SELECT_PANE_EVENT, (event) => {
+    event.preventDefault();
+    receive(event);
   });
   return (select) => {
     consumer = select;
@@ -84,4 +146,6 @@ export function notificationTargets(source?: MessageSource): (select: Select) =>
 // Install this listener while App's module loads, before creating its root.
 export const onNotificationTarget = notificationTargets(
   typeof navigator !== "undefined" && "serviceWorker" in navigator ? navigator.serviceWorker : undefined,
+  desktopLinks(),
+  typeof window !== "undefined" ? window : undefined,
 );

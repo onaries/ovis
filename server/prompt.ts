@@ -9,7 +9,7 @@ import { resolveAgent } from "./pane-context.ts";
 import { processAlive, processStartedAt, processStartUpperBoundAsync } from "./process-start.ts";
 import { commandInvocations, commandOutcome, CommandReservations, dialogSettlingScreen, ownsCommandDialog, WINDOW_MS as COMMAND_WINDOW_MS, type CommandSend } from "./outcome.ts";
 import { codexTranscriptPath, paneCodexHomePlaced, unansweredCodexQuestions } from "./codex.ts";
-import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "./herdr/client.ts";
+import { HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "./herdr/client.ts";
 import { isPiProcess, piTranscriptPath } from "./pi.ts";
 import { heldOmoProcess } from "./omo.ts";
 import { OmoAskReader, ompAsksAfter, type OmoAsks } from "./omo-ask.ts";
@@ -26,6 +26,7 @@ import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
 import { CODEX_WORKING_RE, codexFooterLine, codexRuntimeError } from "./dialogs/codex.ts";
 import { LETTA_SEARCH_MAX, lettaPick, lettaSearchShown } from "./dialogs/letta.ts";
 import { agyCustomEditorMatches, agySameQuestion, parseAgyQuestion } from "./dialogs/agy.ts";
+import { dshFreeTextRow, dshTypedText } from "./dialogs/dsh.ts";
 import { sameText } from "./dialogs/omo.ts";
 import { OMP_REVIEW_HINT_RE, OMP_TABS_HINT_RE } from "./dialogs/omp.ts";
 import { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
@@ -530,7 +531,9 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
     if ((parsed.responder === "pi-ask-question" || parsed.responder === "pi-questionnaire-question") && /[\u0000-\u001f\u007f-\u009f]/.test(answer.custom_text)) {
       throw new InvalidAnswer("Pi custom answers must be one line without control characters.");
     }
-    if (parsed.responder === "agy-question" && (/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/.test(answer.custom_text))) {
+    // dsh-tui reads a control byte inside the typed run as its key (measured on 0.20.0): ESC [B moves to an option the
+    // answer then carries, Ctrl+C or a lone ESC cancels the question
+    if ((parsed.responder === "agy-question" || parsed.responder === "dsh-question") && (/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/.test(answer.custom_text))) {
       throw new InvalidAnswer("Custom text contains unsupported control characters.");
     }
     // Letta's model search takes each character as a key: a control one is a command there (Enter picks, Esc closes
@@ -946,6 +949,15 @@ async function beforeKey(paneId: string, agent: string, deadline: AbortSignal): 
   if (agent === "omp" && !(await ompOwnsInput(paneId, deadline))) throw new OmpNotInFront();
 }
 
+/** dsh-tui stopped asking (or ended) since the card was read: nothing more is sent. */
+class DshNotAsking extends KeyRefused {}
+
+/** Whether herdr, asked now, still reports the pane's dsh-tui waiting on the user. */
+async function dshAsks(paneId: string, signal: AbortSignal): Promise<boolean> {
+  const pane = await untilAborted(paneGet(paneId), signal);
+  return pane?.agent === "dsh-tui" && pane.agent_status === "blocked";
+}
+
 /** omp asked again (or its call closed) since the card was read: nothing more is sent. */
 class OmpCallChanged extends KeyRefused {}
 
@@ -1168,8 +1180,10 @@ async function readKnownPrompt(
   }
 
   // Antigravity's question has a reader (dialogs/agy.ts); its other screens, the folder trust at start among them, stay
-  // with the fallback card and the picker guard, so it is named here and not in SCREEN_READ_AGENTS
-  if (!SCREEN_READ_AGENTS.has(agent) && agent !== "agy") return { prompt: null };
+  // with the fallback card and the picker guard, so it is named here and not in SCREEN_READ_AGENTS; dsh-tui's
+  // ask_user_question has a reader too (dialogs/dsh.ts), read only while herdr says the pane waits on the user, as
+  // its fallback card is: a panel's text on the screen of a dsh that is not asking takes no Enter
+  if (!SCREEN_READ_AGENTS.has(agent) && agent !== "agy" && !(agent === "dsh-tui" && pane.agent_status === "blocked")) return { prompt: null };
   const piTranscript = agent === "pi" ? await piTranscriptPath(paneId).catch(() => null) : null;
   // pi-ask's ask_user form, as the web UI's pi extension reports it: answered through pi-ask, never keys
   if (piTranscript && "path" in piTranscript) {
@@ -1619,6 +1633,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         await keyGuard(paneId, keyAgent, signal);
         // a key-driven card of pi's own goes to pi only while pi holds the pane (piOwnsInput)
         if (parsedPrompt?.responder?.startsWith("pi-") && !(await piOwnsInput(paneId))) throw new PiNotInFront();
+        // dsh-tui's question card goes to dsh only while herdr still reports it waiting on the user: a dsh that died under
+        // the answer can leave its panel on the screen, with the shell after it taking the keys (a picker card at rest
+        // keeps main's keys)
+        if (parsedPrompt?.responder === "dsh-question" && !(await dshAsks(paneId, signal))) throw new DshNotAsking();
         if (ompCall !== undefined && !(await ompCallStillOpen(paneId, pane.cwd ?? "", ompCall, signal))) throw new OmpCallChanged();
       };
       /**
@@ -2074,6 +2092,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const dialog = parsePiDialog(screen, true);
             return dialog?.id === parsed.id && dialog.selectedIndex === cursor && promptTailIsActive(dialog, screen);
           }
+          // dsh-tui's single choice with the cursor on its free-text row has no card (dialogs/dsh.ts): the row itself, empty
+          if (responder === "dsh-question" && cursor === parsed.customMenuIndex) return dshFreeTextRow(screen, parsed, "") === "typed";
           if (shown === null || !(responder === "agy-question" ? agySameQuestion(shown, parsed) : shown.id === parsed.id)) return false;
           return shown.selectedIndex === cursor && ticked(shown)
             && (responder !== "pi-questionnaire-question" || shown.piQuestionnaireInput === undefined);
@@ -2108,6 +2128,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
          */
         const sameQuestion = (shown: ParsedPrompt | null, screen: string, onCursor: boolean, settled: ParsedPrompt | null): boolean => {
           if (interaction) return shown?.responder === responder && interaction.matches(screen);
+          // the row empty before the answer's text, and holding exactly that text before its Enter
+          if (responder === "dsh-question" && cursor === parsed.customMenuIndex) {
+            return dshFreeTextRow(screen, parsed, customTyped ? dshTypedText(body.custom_text ?? "") : "") === "typed";
+          }
           if (responder === "pi-question" || responder === "pi-confirm") {
             const dialog = parsePiDialog(screen, true);
             return dialog?.id === parsed.id && (!onCursor || dialog.selectedIndex === cursor);
@@ -2130,7 +2154,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         let agyWriteInOpened = false;
         const togglesInPlace = (): boolean =>
           (responder === "hermes-question" && body.option_indices !== undefined)
-          || (responder === "agy-question" && parsed.multi_select && !agyWriteInOpened);
+          || (responder === "agy-question" && parsed.multi_select && !agyWriteInOpened)
+          || (responder === "dsh-question" && body.option_indices !== undefined);
         const ticks = new Set(parsed.checkedOptionIndices);
         function ticked(shown: ParsedPrompt): boolean {
           return !togglesInPlace() || (shown.checkedOptionIndices.length === ticks.size && shown.checkedOptionIndices.every((index) => ticks.has(index)));
@@ -2156,7 +2181,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // Letta's search: each key after the first is looked for as the first was, in the picker showing the search
           // the keys before it left (customEditorReady waited for that drawing); a picker closed meanwhile gets none
           const lettaTyping = committed && responder === "letta-model" && body.custom_text !== undefined;
-          if (!committed || togglesInPlace() || lettaTyping) {
+          // dsh-tui's Enter after its typed text: the look before it awaits, so the row is read after that look, with no
+          // await between that read and the write (customEditorReady before it only waited for the text to be drawn)
+          const dshEnter = committed && responder === "dsh-question" && customTyped;
+          if (!committed || togglesInPlace() || lettaTyping || dshEnter) {
             // every key up to the answer's first one that cannot be undone, that one included: the question as asked
             const onCursor = !move && (step.keys?.every((key) => key === KEY.enter || key === KEY.space) ?? false);
             const { written } = await verifyThenSend(look, guardUntil, Date.now() + SETTLE_MS,
@@ -2206,6 +2234,22 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
               if (read && !read.inputUnverified && lettaSearchShown(shown, parsed, draft)) {
                 return asks() && !request.signal.aborted && Date.now() < deadline;
               }
+              await Bun.sleep(50);
+            }
+            return false;
+          }
+          if (responder === "dsh-question") {
+            // the row holds this answer's text and nothing else: words typed there meanwhile would go out with the Enter,
+            // and a question answered or cancelled meanwhile would hand it to dsh-tui's own input box
+            const typed = dshTypedText(draft);
+            while (asks() && !request.signal.aborted && Date.now() < deadline) {
+              const read = await Promise.race([
+                paneRead({ paneId: body.pane_id, source: "detection" }),
+                Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null),
+              ]);
+              if (!read || !asks() || request.signal.aborted || Date.now() >= deadline) return false;
+              const row = dshFreeTextRow(read.text, parsed, typed);
+              if (row !== "typing") return row === "typed";
               await Bun.sleep(50);
             }
             return false;
@@ -2261,9 +2305,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const move = step.keys?.every((key) => key === KEY.up || key === KEY.down || (sideways && (key === KEY.left || key === KEY.right))) ?? false;
             // the asking ended under the answer: no further key, whatever the screen shows
             if (!asks()) return promptChanged();
-            if ((responder === "fallback-gjc-menu" || responder === "pi-ask-question" || responder === "pi-questionnaire-question" || (responder === "agy-question" && agyWriteInOpened)) && body.custom_text !== undefined && committed) {
+            if ((responder === "fallback-gjc-menu" || responder === "pi-ask-question" || responder === "pi-questionnaire-question" || (responder === "agy-question" && agyWriteInOpened) || responder === "dsh-question") && body.custom_text !== undefined && committed) {
               if (!(await customEditorReady(customTyped ? body.custom_text.trim() : ""))) return promptChanged();
-              if (step.text !== undefined) customTyped = true;
             }
             // Letta's search goes in a key at a time, each only into the picker showing the search the keys before it left
             if (responder === "letta-model" && body.custom_text !== undefined && committed && !(await customEditorReady(lettaSearch))) return promptChanged();
@@ -2281,7 +2324,12 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             if (key === null) return promptChanged();
             await sendStep(key, move, index < steps.length - 1);
             if (responder === "agy-question" && body.custom_text !== undefined && !move && key.keys?.includes(KEY.enter)) agyWriteInOpened = true;
-            if (key.text !== undefined) lettaSearch += key.text;
+            // from here the editor holds this answer's text (customEditorReady looks for it before the next key): dsh-tui's
+            // text is its answer's first key that cannot be undone, so no editor check came before it
+            if (key.text !== undefined) {
+              customTyped = true;
+              lettaSearch += key.text;
+            }
             for (const pressed of key.keys ?? []) if (pressed === KEY.backspace) lettaSearch = lettaSearch.slice(0, -1);
             if (move) {
               moved = true;

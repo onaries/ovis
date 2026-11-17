@@ -97,8 +97,9 @@ export async function stage() {
   async function routes(page: any) {
     const scrub = (text: string) => text.split(REAL_HOST).join(HOST);
     // the live event stream cannot be rewritten; the 5 s machines poll carries the same data
-    await page.route("**/api/machines/events", (route: any) => route.abort());
-    await page.route("**/api/machines", async (route: any) => {
+    // by path: the app asks with `?compact_agents=1`, which a glob ending in the path does not match
+    await page.route((url: URL) => url.pathname === "/api/machines/events", (route: any) => route.abort());
+    await page.route((url: URL) => url.pathname === "/api/machines", async (route: any) => {
       try {
         const response = await route.fetch();
         await route.fulfill({ response, body: scrub(await response.text()) });

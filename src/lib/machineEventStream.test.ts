@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { ServerMessage } from "../../shared/protocol.ts";
-import type { MachineEvent } from "../../shared/machines.ts";
+import type { Machine, MachineEvent } from "../../shared/machines.ts";
 import type { EventStreamHandlers } from "./eventStream.ts";
 import { keepMachineEvents, type MachineEventSocket } from "./machineEventStream.ts";
+import { wireMachineEvent, type WireMachineEvent } from "../../shared/compact-agents.ts";
 
 class Socket implements MachineEventSocket {
   machineEventsAvailable: boolean | null = null;
@@ -32,6 +33,8 @@ class Socket implements MachineEventSocket {
 function scenario(socket = new Socket()) {
   const heard: string[] = [];
   const events: MachineEvent[] = [];
+  /** the PCs as the roster has them */
+  const roster = new Map<string, Machine>();
   let fallback: EventStreamHandlers | undefined;
   let fallbackOpens = 0, fallbackStops = 0;
   // the settle deadline runs only when the test says it has passed
@@ -39,13 +42,58 @@ function scenario(socket = new Socket()) {
   const stop = keepMachineEvents(socket, {
     opened: () => { heard.push("open"); }, lost: () => { heard.push("lost"); }, closed: () => { heard.push("closed"); },
     message: (event) => { events.push(event); },
+    previous: (machineId) => roster.get(machineId), unreadable: (machineIds) => { heard.push(`unreadable ${machineIds.join(",")}`); },
   }, (handlers) => { fallback = handlers; fallbackOpens++; return () => { fallbackStops++; }; },
   (run) => { waiting.add(run); return () => { waiting.delete(run); }; });
   const settleDeadline = () => { for (const run of [...waiting]) { waiting.delete(run); run(); } };
-  return { socket, heard, events, stop, settleDeadline, waiting, fallback: () => fallback, counts: () => [fallbackOpens, fallbackStops] };
+  return { socket, heard, events, roster, stop, settleDeadline, waiting, fallback: () => fallback, counts: () => [fallbackOpens, fallbackStops] };
 }
 const event: MachineEvent = { type: "seen", finishes: [] };
 describe("machine notifications over the existing terminal socket", () => {
+  it("restores compact agent rows from either WS or SSE before notifying the roster", () => {
+    const pane = { pane_id: "w1:p1", terminal_id: "terminal", workspace_id: "w1", tab_id: "w1:t1", focused: true, revision: 1, agent_status: "working" as const, cwd: "/project" };
+    const full: MachineEvent = { type: "machines", machines: [{
+      id: "local", name: "PC", kind: "local", enabled: true, state: "connected", error: null,
+      snapshot: { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [pane], agents: [{ ...pane, state_change_seq: 12 }] },
+    }] };
+    const compact = JSON.parse(JSON.stringify(wireMachineEvent(full, true))) as MachineEvent;
+    const tab = scenario(); tab.socket.offer(true);
+    tab.socket.tell({ type: "machine-event", event: compact });
+    expect(tab.events).toEqual([full]);
+    tab.socket.lose(); tab.socket.offer(false);
+    tab.fallback()!.message(new MessageEvent("message", { data: JSON.stringify(compact) }));
+    expect(tab.events).toEqual([full, full]);
+    tab.stop();
+  });
+  it("keeps a PC's last roster when its compact snapshot cannot be read, on either transport, and asks for a full read", () => {
+    const pane = { pane_id: "w1:p1", terminal_id: "terminal", workspace_id: "w1", tab_id: "w1:t1", focused: true, revision: 1, agent_status: "working" as const, cwd: "/project" };
+    const snapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [pane], agents: [{ ...pane, state_change_seq: 12 }] };
+    const local: Machine = { id: "local", name: "PC", kind: "local", enabled: true, state: "connected", error: null, snapshot };
+    const away: Machine = { id: "remote", name: "Away", kind: "ssh", enabled: true, state: "connected", error: null, snapshot: { ...snapshot, version: "last good" } };
+    const { agents: _agents, ...panesOnly } = snapshot;
+    const unreadable = { ...panesOnly, agent_refs: [{ pane_id: "w1:p1", _omit: 12 }] };
+    const broken = JSON.parse(JSON.stringify({ type: "machines", machines: [
+      (wireMachineEvent({ type: "machines", machines: [local] }, true) as { machines: unknown[] }).machines[0], { ...away, snapshot: unreadable },
+    ] })) as WireMachineEvent;
+    const kept: MachineEvent = { type: "machines", machines: [local, away] };
+    const pushed = { type: "machine-message", machine_id: "remote", message: { type: "snapshot", snapshot: unreadable, connection: "c", features: [] } } as unknown as WireMachineEvent;
+    const tab = scenario(); tab.roster.set("remote", away);
+    const after: string[] = [];
+    tab.socket.on((message) => { if (message.type === "machine-event") after.push(message.event.type); });
+    tab.socket.offer(true);
+    tab.socket.tell({ type: "machine-event", event: broken as MachineEvent });
+    tab.socket.tell({ type: "machine-event", event: pushed as MachineEvent });
+    // the socket's other handlers still hear each frame: nothing was thrown out of this one
+    expect(after).toEqual(["machines", "machine-message"]);
+    expect(tab.events).toEqual([kept]);
+    expect(tab.heard).toEqual(["open", "unreadable remote", "unreadable remote"]);
+    tab.socket.lose(); tab.socket.offer(false);
+    tab.fallback()!.message(new MessageEvent("message", { data: JSON.stringify(broken) }));
+    tab.fallback()!.message(new MessageEvent("message", { data: JSON.stringify(pushed) }));
+    expect(tab.events).toEqual([kept, kept]);
+    expect(tab.heard).toEqual(["open", "unreadable remote", "unreadable remote", "lost", "unreadable remote", "unreadable remote"]);
+    tab.stop();
+  });
   it("opens no SSE for twenty browser connections and accepts initial and live events", () => {
     const tabs = Array.from({ length: 20 }, () => scenario());
     for (const tab of tabs) {

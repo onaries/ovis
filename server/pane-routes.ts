@@ -9,7 +9,7 @@ import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneDocuments, paneFiles } from "./files.ts";
 import { FILE_POLICY } from "./file-view.ts";
-import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
+import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, layoutResponse, readJsonObject, requestFault, requestIdContext, setRequestRoute, wordedHeaders } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
 import { copilotRecoverable, unavailableReason } from "./conversation-shared.ts";
 import { MAX_SEARCH_QUERY, searchPattern, type ConversationSearchResponse } from "../shared/conversation-search.ts";
@@ -259,7 +259,10 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         ...(payload.content_revision !== undefined ? { content_revision: payload.content_revision } : {}),
       }));
     } catch (error) {
-      if (error instanceof HerdrError && error.code === "stale_content") return conflictResponse(error.code, error.message);
+      if (error instanceof HerdrError && error.code === "stale_content") {
+        const { code, message } = requestFault(error, "stale_content");
+        return conflictResponse(code, message, wordedHeaders());
+      }
       return errorResponse(error);
     }
   }
@@ -540,7 +543,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (!isPaneDirection(payload.side)) return badRequest("invalid_side", "side must be left, right, up or down");
     try {
       const move = await paneMoveBeside(payload.pane_id, payload.target_pane_id, payload.side);
-      return jsonResponse({ ok: true, changed: move.changed, reason: move.reason } satisfies PaneMoved);
+      return layoutResponse({ ok: true, changed: move.changed, reason: move.reason } satisfies PaneMoved);
     } catch (error) {
       return errorResponse(error);
     }
@@ -573,7 +576,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       if (pathname === "/api/pane/zoom") {
         if (payload.mode !== undefined && payload.mode !== "toggle" && payload.mode !== "on" && payload.mode !== "off") return badRequest("invalid_mode", "mode must be toggle, on or off");
         const zoom = await paneZoom(paneId, payload.mode ?? "toggle");
-        return jsonResponse({ ok: true, zoomed: zoom.zoomed, changed: zoom.changed, reason: zoom.reason } satisfies PaneZoomed);
+        return layoutResponse({ ok: true, zoomed: zoom.zoomed, changed: zoom.changed, reason: zoom.reason } satisfies PaneZoomed);
       }
       if (pathname === "/api/pane/clear") {
         await paneClear(paneId);
@@ -587,7 +590,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const swap = typeof payload.target_pane_id === "string"
           ? await paneSwapWith(paneId, payload.target_pane_id)
           : await paneSwap(paneId, payload.direction as PaneDirection);
-        return jsonResponse({ ok: true, changed: swap.changed, reason: swap.reason, target_pane_id: swap.target_pane_id } satisfies PaneSwapped);
+        return layoutResponse({ ok: true, changed: swap.changed, reason: swap.reason, target_pane_id: swap.target_pane_id } satisfies PaneSwapped);
       }
       if (!isPaneDirection(payload.direction)) return badRequest("invalid_direction", "direction must be left, right, up or down");
       // a share of the split the border belongs to, as herdr counts it, and no more than the
@@ -596,7 +599,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         return badRequest("invalid_amount", "amount must be a number above 0 and at most 0.5");
       }
       const resize = await paneResize(paneId, payload.direction, payload.amount);
-      return jsonResponse({ ok: true, changed: resize.changed, reason: resize.reason } satisfies PaneResized);
+      return layoutResponse({ ok: true, changed: resize.changed, reason: resize.reason } satisfies PaneResized);
     } catch (error) {
       return errorResponse(error);
     }

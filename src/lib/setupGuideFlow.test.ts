@@ -4,7 +4,7 @@ import { AGENT_CATALOG, catalogRow, type AgentCatalogRow, type AgentInstallState
 import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { onSetupGuideRequest, openSetupGuide } from "./setupGuide.ts";
-import { agentRows, alertsFailed, alertsHere, alertsSurfaces, type AlertsFacts, type AlertsHere, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, otherDevice, phoneBoxMode, phoneBoxOpensFirst, phoneBoxStays, phoneWay, preferredAgent, GUIDE_STORAGE_KEY, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupLeft, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
+import { agentRows, alertsFailed, alertsHere, alertsSurfaces, type AlertsFacts, type AlertsHere, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, otherDevice, phoneBoxMode, phoneBoxOpensFirst, phoneBoxStays, phoneWay, preferredAgent, GUIDE_STORAGE_KEY, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupLeft, setupView, signedInAgents, tileState, turnsUsageOn, FIRST_RUN, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
 
 const FRESH: FreshFacts = { workspaces: 0, savedSettings: false, sharedRevision: 0, pairingGate: "open", watching: false };
 
@@ -35,18 +35,19 @@ describe("autoOpen", () => {
 });
 
 describe("guideStep", () => {
-  it("goes from the welcome to the one setup screen, and Settings opens that screen", () => {
-    expect(guideStep(WELCOME, { type: "begin" })).toEqual({ step: "setup" });
-    // the same screen, marked as opened again: it changes no setting by itself
+  it("opens a first run on the setup screen, and Settings opens the same screen marked as opened again", () => {
+    expect(FIRST_RUN).toEqual({ step: "setup" });
     expect(REOPENED).toEqual({ step: "setup", reopened: true });
-    const setup = guideStep(WELCOME, { type: "begin" });
-    expect(guideStep(setup, { type: "begin" })).toBe(setup);
   });
 
-  it("goes back to the welcome from the first step, except when Settings opened it", () => {
-    expect(guideStep(guideStep(WELCOME, { type: "begin" }), { type: "back" })).toBe(WELCOME);
-    expect(guideStep(REOPENED, { type: "back" })).toBe(REOPENED);
-    expect(guideStep(WELCOME, { type: "back" })).toBe(WELCOME);
+  it("forgets the step Setup: N left named once the user moves, and changes nothing else", () => {
+    expect(guideStep({ ...REOPENED, at: "theme" }, { type: "moved" })).toBe(REOPENED);
+    expect(guideStep(FIRST_RUN, { type: "moved" })).toBe(FIRST_RUN);
+  });
+
+  it("resumes a record saved at the welcome, which is gone, at the first step", () => {
+    const saved = JSON.stringify({ status: "open", state: { step: "welcome" } });
+    expect(readGuide({ getItem: () => saved })).toEqual({ status: "open", state: FIRST_RUN });
   });
 });
 
@@ -361,7 +362,7 @@ describe("relayStep", () => {
 
 describe("a reopened guide", () => {
   it("never turns plan usage on by itself: only a first run does", () => {
-    expect(turnsUsageOn(guideStep(WELCOME, { type: "begin" }))).toBe(true);
+    expect(turnsUsageOn(FIRST_RUN)).toBe(true);
     expect(turnsUsageOn(REOPENED)).toBe(false);
   });
 

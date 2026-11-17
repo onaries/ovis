@@ -10,6 +10,11 @@ import { decodeOffer, validateOffer } from "../../shared/relay-offer.ts";
 import { normalizePairCode, PairCodeExpiredError, PairCodeGuest, splitPairCode } from "../../shared/relay-pair-code.ts";
 import { PAIR_CLOSE } from "../../relay/pair-room.ts";
 import { offerFromCode } from "../../src/lib/relay/pairCode.ts";
+import { fetchMachines } from "../../src/lib/api.ts";
+import { openRelayChannel } from "../../src/lib/relay/channel.ts";
+import { openRelayTransport } from "../../src/lib/relay/transport.ts";
+import { nativeTransport, setTransport } from "../../src/lib/transport.ts";
+import type { RelayDevice, RelayDeviceStore } from "../../shared/relay-device.ts";
 import type { RelayOffer } from "../../shared/relay-offer.ts";
 import { MuxEngine } from "../../shared/relay-mux-engine.ts";
 import type { HttpRequest, SessionFrame } from "../../shared/relay-mux-engine.ts";
@@ -1113,7 +1118,7 @@ it.each(["missing HTTP", "missing WS", "wrong"])("machine profile refuses %s pro
   expect(await (await allowed.http("/api/health")).json()).toMatchObject({ machine_profile: { engine: "herdr" } });
 });
 
-it.each(["HTTP", "WS"])("machine profile filters secret-bearing snapshots over %s even when bridge-only was requested", async (surface) => {
+it.each(["HTTP", "WS", "the PC list"])("machine profile filters secret-bearing snapshots over %s even when bridge-only was requested", async (surface) => {
   const dir = mkdtempSync(join(tmpdir(), "ovis-machine-secret-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const config = join(dir, "config.toml");
@@ -1128,6 +1133,7 @@ it.each(["HTTP", "WS"])("machine profile filters secret-bearing snapshots over %
   const peer = await client(f, await f.offer());
   let snapshot: unknown;
   if (surface === "HTTP") snapshot = await (await peer.http("/api/session")).json();
+  else if (surface === "the PC list") snapshot = (await (await peer.http("/api/machines")).json() as { machines: { snapshot: unknown }[] }).machines[0]?.snapshot;
   else {
     const received = deferred<unknown>();
     const stream = peer.mux.openWs({ target: "/ws", protocols: [], headers: [] });
@@ -1164,6 +1170,36 @@ it("machine profile opens no direct listener even when the relay service is give
   expect(bound).toBe(0);
 });
 
+/** A phone's saved pairings, held in memory (the app keeps them in IndexedDB). */
+class MemoryStore implements RelayDeviceStore {
+  saved: RelayDevice | undefined;
+  async get() { return this.saved; }
+  async update(_id: string, change: (current: RelayDevice | undefined) => RelayDevice) { return (this.saved = change(this.saved)); }
+  async list() { return this.saved ? [this.saved] : []; }
+  async remove() { this.saved = undefined; }
+}
+
+it("machine profile lists itself alone, with its terminals, to the app reading its PCs through the relay", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-machine-list-"));
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const made = await workspaceCreate({ cwd: dir, label: "machine-list" });
+  cleanup.push(() => workspaceClose(made.workspace.workspace_id));
+  const f = await machineFixture();
+  await f.start();
+  const offer = await f.offer();
+  // the phone's own transport and PC list read, as the hosted app makes them after its pairing
+  const transport = await openRelayTransport(offer, { store: new MemoryStore(), openChannel: (opened, options) => openRelayChannel(opened, { ...options,
+    socket: (url) => { const target = new URL(url); return new WebSocket(`ws://127.0.0.1:${f.localRelay.port}${target.pathname}${target.search}`); } }) });
+  cleanup.push(() => { setTransport(nativeTransport); transport.close(); });
+  setTransport(transport);
+  const machines = await fetchMachines();
+  // named as the machine names itself, and known by its relay ID, as an ordinary server lists its own PC
+  expect(machines.map(({ id, name, kind, state, error, server_id }) => ({ id, name, kind, state, error, server_id })))
+    .toEqual([{ id: "local", name: hostname(), kind: "local", state: "connected", error: null, server_id: offer.server_id }]);
+  expect(machines[0]!.snapshot?.workspaces.map((workspace) => workspace.workspace_id)).toContain(made.workspace.workspace_id);
+  expect(machines[0]!.snapshot?.panes.map((pane) => pane.pane_id)).toContain(made.root_pane.pane_id);
+});
+
 it("machine profile refuses its closed controls to a device through the relay with its proof", async () => {
   const f = await machineFixture();
   await f.start();
@@ -1184,6 +1220,21 @@ it.each(["an ordinary server", "the machine profile"])("%s refuses pane input to
   const watch = await client(f, offer, false, first.device);
   const response = await watch.http("/api/pane/input", { method: "POST", headers: [["x-herdr-update", "1"]] });
   expect([response.status, (await response.json() as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+});
+
+it("machine profile gives a plugin run's state to a device that drives it and refuses a watch device", async () => {
+  const f = await machineFixture();
+  await f.start();
+  const offer = await f.offer();
+  const drive = await client(f, offer);
+  // a driving device reaches the route (it asks for a run with no log id, which the route itself refuses)
+  const driving = await drive.http("/api/plugin/action");
+  expect([driving.status, (await driving.json() as { error: { code: string } }).error.code]).not.toEqual([403, "read_only"]);
+  f.app.context.services.devices.update(drive.device.id, { role: "watch" });
+  await bounded(drive.closed);
+  const watch = await client(f, offer, false, drive.device);
+  const watching = await watch.http("/api/plugin/action?log_id=x");
+  expect([watching.status, (await watching.json() as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
 });
 
 it("machine profile tells a paired relay device why its classic engine is absent", async () => {

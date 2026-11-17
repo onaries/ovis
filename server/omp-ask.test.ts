@@ -143,6 +143,13 @@ describe("omp Ask cards in the agent's own Markdown (#1644)", () => {
     const globs = card(drawnScreen.slice(0, at) + "Keep *.log and *.tmp?".padEnd(row.length) + drawnScreen.slice(at + row.length));
     const asked = withArgs(open(version), (args) => { args.questions[0]!.question = "Keep *.log and *.tmp?"; });
     expect(ompMarkdownPrompt(globs, asked)).toBe(globs);
+    // a numbered list that skips: omp renumbers it (1, 2), the card draws it as written (1, 3)
+    const list = (shown: string) => card(drawnScreen.slice(0, at) + shown.padEnd(row.length) + drawnScreen.slice(at + row.length));
+    const listed = (question: string) => withArgs(open(version), (args) => { args.questions[0]!.question = question; });
+    const renumbered = list("1. keep 2. drop");
+    expect(ompMarkdownPrompt(renumbered, listed("1. keep\n3. drop"))).toBe(renumbered);
+    // one that counts up is drawn alike by both, and keeps its Markdown
+    expect(ompMarkdownPrompt(renumbered, listed("1. keep\n2. drop"))?.text_format).toBe("markdown");
     // a picture: omp draws its alt text, the card its picture or `!` and its address
     const picture = card(drawnScreen.slice(0, at) + "Use production or staging?".padEnd(row.length) + drawnScreen.slice(at + row.length));
     const pictured = withArgs(open(version), (args) => { args.questions[0]!.question = "Use ![production](/etc/prod.conf) or staging?"; });

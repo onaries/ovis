@@ -202,6 +202,29 @@ namespace Ovis
                     Equal("file", Setup.EnvToken(new[] { Setup.EnvironmentLayer(name => oldOnly.ContainsKey(name) ? oldOnly[name] : null), "OVIS_TOKEN=file\n" }));
                     Equal("", Setup.EnvironmentLayer(name => null));
                 }),
+                Case("install.ps1's compiled server is asked through its run.ps1, which needs no Bun; a checkout through plugin.ts with Bun", () =>
+                {
+                    // install.ps1 (0.5.4 and newer) links %LOCALAPPDATA%\ovis\plugin, which holds herdr-plugin.toml and run.ps1 alone
+                    var linked = @"C:\Users\u\AppData\Local\ovis\plugin";
+                    var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { linked + @"\herdr-plugin.toml", linked + @"\run.ps1" };
+                    Equal("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + linked + @"\run.ps1 status", string.Join(" ", Setup.PluginCommandLine(linked, "status", files.Contains)));
+                    var checkout = @"C:\Users\u\AppData\Roaming\herdr\plugins\github\devswha.ovis-aa47ee43150f";
+                    files.Add(checkout + @"\herdr-plugin.toml");
+                    files.Add(checkout + @"\scripts\plugin.ts");
+                    files.Add(checkout + @"\scripts\plugin.ps1");
+                    Equal("bun " + checkout + @"\scripts\plugin.ts stop", string.Join(" ", Setup.PluginCommandLine(checkout, "stop", files.Contains)));
+                    // a run.ps1 someone left in a linked checkout is not its launcher: plugin.ts still is
+                    files.Add(checkout + @"\run.ps1");
+                    Equal("bun " + checkout + @"\scripts\plugin.ts status", string.Join(" ", Setup.PluginCommandLine(checkout, "status", files.Contains)));
+                }),
+                Case("Start reports a stop that failed, but not one that left another program's reused pid alone", () =>
+                {
+                    // the lines `plugin.ts stop` prints (scripts/plugin.ts)
+                    Equal(false, Setup.StopFailed(0, "stopped Ovis (pid 5472)\n"));
+                    Equal(false, Setup.StopFailed(1, "could not verify the recorded Ovis process; it was left running and its pid file was kept\n"));
+                    Equal(true, Setup.StopFailed(1, "could not stop Ovis: Access is denied.\n"));
+                    Equal(true, Setup.StopFailed(1, null));
+                }),
                 Case("the old id's plugin.ts is told the state dir herdr keeps for it, found as herdr finds it", () =>
                 {
                     var windows = new Dictionary<string, string> { { "LOCALAPPDATA", @"C:\Users\u\AppData\Local" }, { "USERPROFILE", @"C:\Users\u" } };

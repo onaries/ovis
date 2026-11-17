@@ -27,7 +27,7 @@ export function AlertsChecking({ uncheckable, onRetry }: { uncheckable: boolean;
   if (!uncheckable) return <p className="setup-note"><Info aria-hidden="true" />{t("Checking…")}</p>;
   return (
     <>
-      <p className="setup-note"><Info aria-hidden="true" />{t("Could not check alerts with this PC.")}</p>
+      <p className="setup-note"><Info aria-hidden="true" />{t("Couldn't check alerts.")}</p>
       <div className="setup-actions">
         <button type="button" className="btn" onClick={onRetry}><Bell aria-hidden="true" />{t("Try again")}</button>
       </div>

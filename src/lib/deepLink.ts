@@ -100,7 +100,7 @@ export function fileFromLink(link: Pick<AppLink, "file" | "pane">): string | nul
 export function readLink(search: string): AppLink {
   const query = new URLSearchParams(search);
   const view = query.get("view");
-  // herdr's ids hold no hyphen: the first one starts the slug
+  // the first hyphen starts the slug; herdr-core's ids hold hyphens, and resolveLink joins those again
   const ws = named(query.get("ws"));
   const cut = ws?.indexOf("-") ?? -1;
   const settings = currentSettingsPage(named(query.get("settings")));
@@ -185,7 +185,8 @@ export type LinkNote = "pane-closed" | "workspace-closed" | "machine-missing";
  * was handed out again and the slug's workspace is the one meant. Its pane is the link's when it
  * is in that workspace, else the one its row opens. Nothing named and nothing found: no pane.
  */
-export function resolveLink(snapshot: Pick<SessionSnapshot, "workspaces" | "panes" | "layouts">, link: Pick<AppLink, "workspace" | "workspaceSlug" | "pane">): { pane: string | null; workspace: string | null; note: LinkNote | null } {
+export function resolveLink(snapshot: Pick<SessionSnapshot, "workspaces" | "panes" | "layouts">, named: Pick<AppLink, "workspace" | "workspaceSlug" | "pane">): { pane: string | null; workspace: string | null; note: LinkNote | null } {
+  const link = withRosterId(snapshot, named);
   const byId = link.workspace ? snapshot.workspaces.find((candidate) => candidate.workspace_id === link.workspace) : undefined;
   const bySlug = link.workspaceSlug ? snapshot.workspaces.filter((candidate) => slugOf(candidate.label) === link.workspaceSlug) : [];
   const workspace = byId && (!link.workspaceSlug || slugOf(byId.label) === link.workspaceSlug || bySlug.length !== 1) ? byId : bySlug.length === 1 ? bySlug[0] : byId;
@@ -193,6 +194,21 @@ export function resolveLink(snapshot: Pick<SessionSnapshot, "workspaces" | "pane
   if (pane && (!workspace || pane.workspace_id === workspace.workspace_id)) return { pane: pane.pane_id, workspace: pane.workspace_id, note: null };
   if (workspace) return { pane: workspacePane(snapshot, workspace.workspace_id), workspace: workspace.workspace_id, note: link.pane ? "pane-closed" : null };
   return { pane: null, workspace: null, note: link.pane || link.workspace ? "workspace-closed" : null };
+}
+
+/**
+ * The link with the workspace id as the roster holds it. readLink cuts `ws` at its first hyphen,
+ * but herdr-core's ids hold hyphens (`ovis-<uuid>`): when no workspace has the cut id, the whole
+ * value is a workspace's id, or its id followed by the slug. Such an id is never handed out again,
+ * so it alone names the workspace: its slug is dropped, never preferred as a short id's is.
+ */
+function withRosterId<T extends Pick<AppLink, "workspace" | "workspaceSlug">>(snapshot: Pick<SessionSnapshot, "workspaces">, link: T): T {
+  if (!link.workspace || !link.workspaceSlug || snapshot.workspaces.some((candidate) => candidate.workspace_id === link.workspace)) return link;
+  const whole = `${link.workspace}-${link.workspaceSlug}`;
+  const id = snapshot.workspaces.map((candidate) => candidate.workspace_id)
+    .filter((candidate) => whole === candidate || whole.startsWith(`${candidate}-`))
+    .sort((one, other) => other.length - one.length)[0];
+  return id === undefined ? link : { ...link, workspace: id, workspaceSlug: null };
 }
 
 /** Whether going from one place to another is a move the history keeps (another pane or PC). */

@@ -18,13 +18,14 @@
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
 import { AGENT_PICKER_MESSAGE, closeBackslash, closeMention, type createSubmitText, freeAgentInput, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, OMP_REPORT_POLL_MS, OMP_STARTUP_MS, ompStartingUntil, pendingFault, pendingIdentity, pendingText, submitFraming, untilOmpReported } from "./composer.ts";
+import { grokEcho, grokQueue, sendGrokQueuedNow } from "./grok-queue.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
 import type { ClientMessage, HerdrPane, PendingMessage, PendingRemoval, SessionSnapshot } from "../../shared/protocol.ts";
 import { typingGuards } from "../input-guard.ts";
 import { claudeForegroundSession, isClaudeProcess } from "../claude-store.ts";
-import { HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
+import { HerdrError, type HerdrFailureView, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { paneRunsCodex } from "../codex.ts";
 import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexInputFrame, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, piRunsCommand, piListsTemplate, prepareCommandSend, shownInputBox } from "../prompt.ts";
 import { codexRuntimeError } from "../dialogs/codex.ts";
@@ -147,7 +148,9 @@ const FIRST_MESSAGE_RECEIPTS = 8;
  * called through: only a frame or a turn calls them, after `createServer` has returned.
  */
 export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, typedInto = () => 0, submitText, authorizeSocket, clientSnapshot, omo, queueHeld = () => false, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
-  options: { pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string };
+  options: { pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string;
+    /** how failed herdr calls are worded for a client (the machine profile's), unset elsewhere */
+    herdrFailure?: HerdrFailureView };
   clients: Set<Client>;
   attachments: ReadonlyMap<string, AttachmentView>;
   sight: (client: Client, paneId: string) => TerminalSighting;
@@ -778,7 +781,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     } catch (error) {
       return wrote
         ? { ok: false, code: "submit_partial", message: "Text may be in the agent's input box, but native queue key delivery was not confirmed. Check the terminal before sending again." }
-        : { ok: false, ...pendingFault(error) };
+        : { ok: false, ...pendingFault(error, options.herdrFailure) };
     }
   }
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
@@ -986,6 +989,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
+      // Grok queues that same Enter while a turn runs. Only Send now (the steer) then sends
+      // one more Enter, and only while the message is the one row queued (sendGrokQueuedNow); a queued request
+      // typed at once is not a Send now and stays queued behind the turn.
       const sentAt = Date.now();
       // the connection to herdr is awaited, and a task may fire meanwhile: the hold is read once more once connected,
       // right before the key's own write. A key refused there was not sent, and its paste is not confirmed. Not seen: a
@@ -994,6 +1000,32 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let refused = false;
       await paneSendKeys(paneId, [steering && beforeEnter.identity.agent === "claude" ? "ctrl+enter" : "Enter"], undefined, () => allowed() && !(refused = resumed()))
         .catch((error: unknown) => { if (refused) refuseResumed(); throw error; });
+      // the screen after its Enter says whether Grok queued the message, also from a Grok read at rest: another client
+      // can start a turn before the Enter, and in minimal mode herdr does not tell a running turn. Compared with the
+      // queue as read right before that Enter, with this delivery's paste in the prompt
+      if (!automatic && !queued && beforeEnter.identity.agent === "grok") {
+        // the queue Enter already went: every failure here is submit_changed (wrote is set), never enterRefused's
+        // paste left unsent, or a retry would queue the message twice. The terminal's input line does not come here;
+        // a Send now from the terminal view uses this same steer, as the frame does not say which view asked.
+        await sendGrokQueuedNow({
+          message: closeMention(sent),
+          before: { working: beforeEnter.working, queue: grokQueue(beforeEnter.screen), echo: grokEcho(beforeEnter.screen) },
+          delayMs: options.submitDelayMs ?? SUBMIT_DELAY_MS,
+          // pendingContext refuses another terminal, session or process, a blocked or unknown state and a masked prompt
+          look: async () => {
+            const current = await pendingContext(owner, paneId, lease, identity, true, agentOnly);
+            authorizePending(owner, paneId, lease);
+            return { status: current.pane.agent_status, screen: current.screen };
+          },
+          // pendingContext's process and /proc reads come after its screen read: a card or a draft that came up during
+          // them gets no Enter. The window left is this read and the write's own call (herdr has no compare-and-send)
+          lastScreen: async () => (await paneRead({ paneId, source: "detection", format: "text" })).text,
+          sendEnter: async () => {
+            authorizePending(owner, paneId, lease);
+            await paneSendKeys(paneId, ["Enter"], undefined, allowed);
+          },
+        });
+      }
       if (endsOmpStart) forgetOmpStart(paneId);
       // This proves only that Ovis committed Enter to Pi, not that Pi accepted, queued or recorded
       // the message. Keep a non-resendable receipt until the bound JSONL active branch appends it.
@@ -1007,8 +1039,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       watch?.cancel();
       // never retried, and uncertain (dispatchPending): the pane's queue waits behind it for the user
       if (stranded) return { ok: false, code: "pasted_not_sent", message: PASTED_NOT_SENT_MESSAGE };
-      const fault = error instanceof HerdrError && error.code === "submit_changed" ? pendingFault(error)
-        : wrote ? { code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." } : pendingFault(error);
+      const fault = error instanceof HerdrError && error.code === "submit_changed" ? pendingFault(error, options.herdrFailure)
+        : wrote ? { code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." } : pendingFault(error, options.herdrFailure);
       // a menu herdr reports ends with a status event, which drains again. One of Codex's own screens ends with none:
       // the pane is not noted blocked for it (the queue behind this message is tried too, and held the same way)
       const unannounced = !wrote && error instanceof CodexOwnScreenRefusal;
@@ -1031,7 +1063,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         automatic, arrivedAt, (working, restarting) => pending.committing(item, working, restarting), item.message.request_id, false, item.message.agent_only === true, false,
         { withdrawn: () => withdrawn.has(item), waiting: (waits) => pending.sendingWaitsFor(item, waits ? "omp_starting" : undefined) });
     } catch (error) {
-      reply = { ok: false, ...pendingFault(error) };
+      reply = { ok: false, ...pendingFault(error, options.herdrFailure) };
     }
     const code = reply.code ?? "";
     // a first message its page could not type yet stays queued for that page's next attach or turn. One whose
@@ -1083,7 +1115,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       dispatched = true;
       await dispatchPending(item, true, arrivedAt, by);
       takenWithPane(item, arrivedAt);
-    }).catch((error) => console.warn("pending message:", pendingFault(error).code)).finally(() => {
+    }).catch((error) => console.warn("pending message:", pendingFault(error, options.herdrFailure).code)).finally(() => {
       pendingDrains.delete(paneId);
       const again = drainAgain.delete(paneId);
       if (dispatched || again) drainPending(paneId);
@@ -1228,7 +1260,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           const pane = await paneGet(paneId);
           if (pendingIdentity(pane).agent !== "omp" || pane.agent_session?.source === "herdr:omp") return;
         } catch (error) {
-          if (pendingFault(error).code === "pane_not_found") return;
+          if (pendingFault(error, options.herdrFailure).code === "pane_not_found") return;
         }
       }
     })().finally(() => {
@@ -1580,7 +1612,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let framed = { text: message.text, payload: message.payload };
       if (!waits && !native) {
         try { framed = submitFraming(message.text, message.payload, message.typed === true); }
-        catch (error) { const fault = pendingFault(error); result(false, fault.code, fault.message); return; }
+        catch (error) { const fault = pendingFault(error, options.herdrFailure); result(false, fault.code, fault.message); return; }
       }
       const arrivedAt = Date.now();
       try {
@@ -1635,7 +1667,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             // read again after the awaits above: the typing may have come, and ended the wait, meanwhile
             if (typedWhileOmpStarted(message.pane_id)) pending.holdQueued(message.pane_id, TYPED_WHILE_WAITING);
             return { ok: true, pending: item.message };
-          }).catch((error): SubmitReply => ({ ok: false, ...pendingFault(error) })));
+          }).catch((error): SubmitReply => ({ ok: false, ...pendingFault(error, options.herdrFailure) })));
           const answer = await reply;
           const accepted = answer.pending ? pending.get(client, message.pane_id, answer.pending.id)?.message : undefined;
           if (answer.pending && !accepted) replayPendingOutcome(client, message.pane_id, answer.pending.id);
@@ -1696,8 +1728,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             const receiptText = identity === null ? undefined : piReceiptText(identity, framed.text);
             const piAnchor = identity === null ? null : await preparePiReceipt(message.pane_id, identity).catch(() => null);
             sendingAt = new Date().toISOString();
+            // a saved copy's resend is its Send now: a plain Send is not
             await submitText(message.pane_id, framed.text, framed.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.clear_draft,
-              draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true, agentOnly);
+              draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true, agentOnly, message.resend_id !== undefined);
             if (identity !== null && receiptText !== undefined) {
               try { recordPiTyped(client, message.pane_id, message.id, receiptText, identity, piAnchor, reservation, current !== null && piListsTemplate(current.pane, framed.text)); } catch { /* The send succeeded; receipt tracking cannot make it retryable. */ }
             }
@@ -1742,7 +1775,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             try {
               sent = await pending.resend(pane, id, hash, async () => {
                 try { await dispatch(); typedNow = true; return { ok: true }; }
-                catch (error) { return { ok: false, ...pendingFault(error) }; }
+                catch (error) { return { ok: false, ...pendingFault(error, options.herdrFailure) }; }
               }, message.resend_generation);
             } catch (error) {
               // refused before anything was typed (its limit, a reused ID): the receipt stays the copy's
@@ -1781,7 +1814,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           if (!confirmations) { confirmations = new Map(); draftConfirmations.set(client, confirmations); }
           confirmations.set(message.pane_id, { draft: error.draft, identity: error.identity, box: error.box });
         }
-        const fault = pendingFault(error);
+        const fault = pendingFault(error, options.herdrFailure);
         result(false, fault.code, fault.message, undefined, error instanceof InputDraftError ? error.draft : null,
           error instanceof InputDraftError && error.identity && error.box !== null ? shownInputBox(error.box) : null);
       }
@@ -1858,7 +1891,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
                 if (isClient(item.owner)) item.lease = lease!;
                 dispatched = true;
                 return await dispatchPending(item, false, arrivedAt, client);
-              } catch (error) { return { ok: false, ...pendingFault(error) }; }
+              } catch (error) { return { ok: false, ...pendingFault(error, options.herdrFailure) }; }
             }, message.resend_generation, (code) => code === "submit_changed");
           // A saved copy may already have completed this ID on another connection.
           if (!dispatched && pending.get(client, item.paneId, item.message.id) === item && pending.claim(item, false, message.action !== "agent-queue"))
@@ -1873,7 +1906,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         });
         result(answer);
         drainPending(message.pane_id);
-      } catch (error) { result({ ok: false, ...pendingFault(error) }); }
+      } catch (error) { result({ ok: false, ...pendingFault(error, options.herdrFailure) }); }
       return;
     },
   };

@@ -1,6 +1,6 @@
 # Self-hosted CI runner
 
-An ephemeral Docker GitHub Actions runner for this repository's Linux CI/CD jobs. Each container registers, runs exactly one job and exits; the launcher then starts a fresh one. The image includes Bun, Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, `gh`, curl, jq, unzip, xz-utils, OpenSSH (client and server) and iproute2 (`ss`), with no sudo. Jobs detect it with `RUNNER_ENVIRONMENT=self-hosted`.
+An ephemeral Docker GitHub Actions runner for this repository's Linux CI/CD jobs. Each container registers, runs exactly one job and exits; the launcher then starts a fresh one. The image includes Bun, Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, `gh`, curl, jq, unzip, xz-utils, OpenSSH (client and server), iproute2 (`ss`), tmux and procps (`ps`), with no sudo. Jobs detect it with `RUNNER_ENVIRONMENT=self-hosted`.
 
 ## Prerequisites
 
@@ -274,7 +274,8 @@ old; one it cannot even move is emptied where it is, and logged once a day while
 
 `ci.yml`'s Linux jobs of a push go to `["self-hosted","self-hosted-ovis"]` by default, the launcher's
 default label. A same-repository pull request goes there only while at most
-`CI_SELF_HOSTED_CAPACITY` (default 10) minus its four Linux jobs are queued or running on that label,
+`CI_SELF_HOSTED_CAPACITY` (default 10) minus its six Linux jobs (Fast checks, Integration tests and the
+browser jobs: ui-regression and the three parts of the other scripts) are queued or running on that label,
 and GitHub-hosted otherwise. Set the capacity to the number of `self-hosted-ovis` runners you keep
 online. The repository variable overrides the choice:
 
@@ -308,7 +309,7 @@ share `check.ts`'s slots (`CHECK_HOST_MAX_RUNS`) with theirs, so they can wait t
 
 On the maintainer PC the launcher runs as the systemd user unit `ovis-ci-runner.service`
 (`run.sh --repo devswha/ovis --count 4 --labels self-hosted-ovis` from a copy of this directory in
-`~/.local/share/ovis-ci-runner`): four slots let one CI run's four Linux jobs start together, and
+`~/.local/share/ovis-ci-runner`): four slots start four of one CI run's six Linux jobs together, and
 `check.ts`'s shared slots cap its herdr-backed lanes at `ci.yml`'s `CHECK_MAX_RUNS`. Copy the directory again
 after changing these files, on every host whose launcher runs with `--build-cache`. For a change to
 `build-cache-promote.sh` the copy is all it takes: the launcher starts the promoter from that
@@ -362,19 +363,25 @@ After two hardware resets under that load (a data fabric sync flood), it runs `-
 `CHECK_HOST_TEST_SHARDS=4`, `CHECK_HOST_BROWSER_WORKERS=5` and `CHECK_HOST_UNIT_WORKERS=5` until its
 memory is checked.
 
-Memory, not CPU, bounds it. Measured there with three runners and `ci.yml`'s values, the CPU stayed
-over 90% idle while Browser regression (other scripts) held 2-4 GiB with one script's spike to
+Memory, not CPU, bounded it then. Measured there with three runners and `ci.yml`'s values, the CPU
+stayed over 90% idle while Browser regression (other scripts) held 2-4 GiB with one script's spike to
 9.3 GiB, Browser regression (ui-regression) 2.6-4.5 GiB and Integration tests 1.6-2.7 GiB; the
-host peaked at 14.6 of 30 GiB; Fast checks peaked at 0.6 GiB. Those jobs (all but Fast checks)
-run at most `CHECK_HOST_MAX_RUNS` at once, however many runners wait for a slot, so the other
-runners hold only Fast checks and the setup steps before a slot. More browser workers raise that
-spike: with ten, Browser regression (other scripts) reached 14 GiB for about 20 s (its 90th
-percentile stayed near 5.4 GiB) while the host peaked at 20.4 GiB, so the P620 ran eight. With
-four slot jobs and twelve runners busy, the host stayed under 17.2 GiB; a fifth slot job at about
-4 GiB puts it near 21 GiB, about 9 GiB below the total, which holds one browser spike at eight
-workers (about 5-7 GiB above that job's usual 2-4 GiB) but not two at once.
+host peaked at 14.6 of 30 GiB; Fast checks peaked at 0.6 GiB. More browser workers raise that
+spike: with ten, Browser regression (other scripts) reached 14 GiB for about 20 s, so the P620 ran
+eight, and a fifth slot job left about 9 GiB of the 30, room for one browser spike but not two.
 
-A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted.
+The P620 has 184 GiB now. A second host runs pull requests' runners with `CHECK_HOST_MAX_RUNS=3`.
+Every herdr-backed job takes one check slot of its host: Integration tests, Browser regression
+(ui-regression) and each of the three parts of Browser regression (other scripts), five per run, and
+a host runs at most `CHECK_HOST_MAX_RUNS` of them at once, however many runners wait for a slot, so
+the other runners hold only Fast checks and the setup steps before a slot (on the host with three
+slots, a run's parts waited 146 to 278 s for one in two of four runs). Measured on 2026-11-17 on
+this pull request's runs, with six workers per part: one part peaked at 5.6 to 10.2 GiB (the one job
+of six workers before the split peaked at 9.2 GiB), the three parts of one run at 15.2 to 19.0 GiB
+together, and the hosts' available memory never fell below 79.9 GiB on the P620 or 77.8 GiB on the
+second host, so two runs' spikes at once fit on either.
+
+A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted, except `ci.yml`'s Native macOS session identity job, which follows the repository variable `CI_MAC_LABELS` to the self-hosted Mac when it is set ([docs](../../docs/development.md)).
 
 ## Cloud VM runners
 
@@ -412,7 +419,7 @@ vm-runner.sh supervise                              # forever: one container per
 
 ## Security model
 
-This is a public repository. A fork PR's run uses the fork's workflow files and `scripts/ci-runner-route.sh`, so it can choose `runs-on` itself. The runner therefore enforces the boundary: `job-started.sh` runs before every job (`ACTIONS_RUNNER_HOOK_JOB_STARTED`, set in the image, outside the workflow's control) and refuses any job whose event names another head repository (a fork pull request, a deleted head repository, a `workflow_run` of a fork). It fails closed: any exit before it explicitly allows the job, an error of its own included (a missing or unreadable event file, broken JSON, an unset variable), refuses it, and the refusal kills the worker before it logs anything, with SIGPIPE and termination signals ignored, so a closed output cannot stop it halfway. A failing hook alone is not enough: runner v2.338 marks only its "Set up runner" step failed and still runs the job's `if: always()` and `if: failure()` steps. So the hook SIGKILLs the job's `Runner.Worker` before it returns; the job then ends as failed within seconds with no step run and an empty log, and the refusal is written to the container's output (`journalctl --user -u ovis-ci-runner`). Both were checked on a live runner with a refused job: the old exit-only hook ran the `always()` and `failure()` steps, the killing hook ran none. Fork PR runs also need maintainer approval (repository setting: all outside collaborators); never approve one that changes `runs-on`. Containers are ephemeral (`--ephemeral`, `--rm`), unprivileged (`--cap-drop ALL`, `no-new-privileges`, no `--privileged`), have no host mounts but the read-only host caches and no Docker socket, and the image has no sudo. The registration token reaches the container on stdin, never through its environment, so a job cannot read it from `/proc/1/environ`.
+This is a public repository. A fork PR's run uses the fork's workflow files and `scripts/ci-runner-route.sh`, so it can choose `runs-on` itself. The runner therefore enforces the boundary: `job-started.sh` runs before every job (`ACTIONS_RUNNER_HOOK_JOB_STARTED`, set in the image, outside the workflow's control) and refuses any job whose event names another head repository (a fork pull request, a deleted head repository, a `workflow_run` of a fork), or a `pull_request*` or `workflow_run` event that names none. It fails closed: any exit before it explicitly allows the job, an error of its own included (a missing or unreadable event file, broken JSON, an unset variable), refuses it, with SIGPIPE and termination signals ignored, so a closed output cannot stop the refusal halfway. A failing hook alone is not enough: runner v2.338 marks only its "Set up runner" step failed and still runs the job's `if: always()` and `if: failure()` steps (checked on a live runner: the old exit-only hook ran them). So a refusal SIGKILLs the job's `Runner.Worker`, and nothing else within one limit: the runner starts the hook as the worker's direct child, and the hook kills its own parent only when these checks prove that parent the worker. The limit: after the hook's last read of its parent, the worker could exit, be reaped and have its pid handed to a new process before the kill; a shell cannot close that window, as `kill` takes a number. It is still the hook's parent (an orphaned hook's parent is whatever adopted it, which may be a user's systemd manager), its executable is `Runner.Worker` (on Linux by `/proc/<pid>/exe` and its name; on macOS only by the path `ps -o comm=` prints, which any executable file named `Runner.Worker` satisfies), it runs as the hook's user, and its start time is unchanged (on Linux, no later than the hook's). Right before the kill the hook reads that start time and its own parent again; it does not read the executable, name or user again. The job then ends as failed within seconds with no step run and an empty log (checked on a live runner with the earlier hook, which found the worker by its name); as the job's log goes with the worker, the refusal is written to the container's output too (`journalctl --user -u ovis-ci-runner`). When any check fails, the hook kills nothing: it writes the refusal with its own pid and blocks in its step, so no later step starts, until the parent it started under is gone; then it ends by itself. The runner starts the hook directly from the worker, so that parent is the worker, and once it is gone no step can run. A limit the hook cannot close: were a process ever started between the worker and the hook, and did it exit while the worker lives, the worker would finish the step itself and the job's `always()` and `failure()` steps could run, since the hook's parent is then not the proven worker. A cancel or the job's timeout then ends the job without another step, by runner v2.338.2's source (not yet seen on a live runner): the hook's step runs under `always()`, so a cancel leaves the worker in it, and the runner kills the worker itself once the cancel timeout (at least 45 seconds) has passed. A blocked refusal means the hook could not prove its parent the worker, which on these runners points at the runner itself: look at it before its next job. Do not end a blocked hook yourself: while its worker lives, the hook's end would fail its step and run the job's `always()` and `failure()` steps. Cancel the job; nothing else is needed, as the runner then ends the worker and the hook ends once its worker is gone. The hook's tests reach a refusal only where it cannot kill a process they did not start: in a PID namespace of their own, or in a throwaway container of an image that carries the marker `/opt/runner-hooks/ovis-runner-image` (this image has none, so they never run in a live runner's container); anywhere else they skip, and only the test of a job the hook allows runs. CI runs them, its refusals and its kill alike, on every pull request and every push to main in the check "Hook kill tests (container)" (`.github/workflows/hook-kill-tests.yml`, on GitHub's hosted `ubuntu-24.04`): a container of `hook-test.Dockerfile`'s image, which is not this image, started confined (`--init --network none --cap-drop ALL --security-opt no-new-privileges`, the source read-only), whose isolation is printed and checked before any test starts, and which fails on any skip. In that container a blocked hook and its fake parent are left running when the harness returns; they are the harness's own, in the container's own PID namespace, and they end with the container. A person runs them the same way: `docker build -t <image> -f scripts/self-hosted-runner/hook-test.Dockerfile scripts/self-hosted-runner`, then `bun install --frozen-lockfile --ignore-scripts` in a checkout, then `bash scripts/self-hosted-runner/hook-test-container.sh <image> <checkout> <empty directory>`. Fork PR runs also need maintainer approval (repository setting: all outside collaborators); never approve one that changes `runs-on`. Containers are ephemeral (`--ephemeral`, `--rm`), unprivileged (`--cap-drop ALL`, `no-new-privileges`, no `--privileged`), have no host mounts but the read-only host caches and no Docker socket, and the image has no sudo. The registration token reaches the container on stdin, never through its environment, so a job cannot read it from `/proc/1/environ`.
 
 No job reaches another over the network: each slot's container is alone on its docker network, so
 the servers a job's tests keep on its loopback, and the two they bind to every address, answer
@@ -437,3 +444,43 @@ GitHub names as trusted (above), each under the run that built it, which is the 
 restore it: a trusted run's build never reaches another run, main's included. A job can write its
 own outbox (on disk, as its workspace is) and the 16 MiB locks volume, so at worst it makes the jobs
 waiting on a key wait up to five minutes and build themselves.
+
+### Mac runner
+
+`<runner-name>` (labels `self-hosted, macOS, ARM64, self-hosted-ovis-mac`) is a plain GitHub
+Actions runner on the maintainer's test MacBook Air (`ssh eamac`), not this directory's Docker
+launcher: a runner directory (`<runner>` below) run by a LaunchAgent of that Mac's user (`<label>`,
+from the runner's `./svc.sh install`). A fork can name it in `runs-on` as it can name the Linux
+runners, so it runs the same `job-started.sh`, with the same refusals: macOS has no `/proc`, so
+there the hook proves its parent the job's `Runner.Worker` with `/bin/ps` (its parent now, the path
+it was started from, its user and its start time; right before the kill, the start time and its
+parent again, not the path or the user) and writes the
+refusal to the system log (`logger -t ovis-runner-guard`) instead of a container's output. The
+runner starts it with the macOS `/bin/bash` 3.2 and its `jq` (`/usr/bin/jq`); CI's Native macOS
+session identity job runs the test of a job it allows there: on macOS's own bash and jq, only the
+allow path runs in CI. The `ps` path's refusal and kill run in the Linux container of the check
+"Hook kill tests (container)" (Security model), through Linux's procps `ps`. It lets a job through only when its event names no other head repository: a `push`,
+`workflow_dispatch`, `schedule`, `repository_dispatch`, `merge_group` or comment event runs code
+from this repository (a fork's push runs in the fork), and a `pull_request`,
+`pull_request_review` or `pull_request_review_comment` event only when its payload names this
+repository as its head. It refuses `pull_request_target` from a fork too, though that event runs
+the base branch's workflow, since such a workflow may check out the fork's head; and a
+`workflow_run` whose triggering run came from a fork, as it may use that run's artifacts. Each of
+these is refused when its payload names no head repository, and a job with no event name always.
+
+- Install: copy the file to `<runner>/hooks/job-started.sh` (mode 755) and set
+  `ACTIONS_RUNNER_HOOK_JOB_STARTED=<runner>/hooks/job-started.sh` (an absolute path) in the
+  runner's `.env`. The runner reads `.env` at its start (restart the LaunchAgent after changing
+  it: `launchctl kickstart -k gui/$(id -u)/<label>`, while no job runs) and the hook file at
+  every job.
+- Check: the `.env` line, the file's `shasum -a 256` against this one, and a same-repository
+  job's "Set up runner" step, which shows `Runner guard: <event> from devswha/ovis`. Do not run
+  the hook by hand to see a refusal: refusals are tested in isolation (Security model).
+- A blocked refusal on the Mac (its system log says the parent was not proven) holds its job in
+  that step. Cancel the job and do nothing else: the runner ends the worker at least 45 seconds
+  after the cancel, and the hook then ends by itself. Do not end the hook: while the worker lives,
+  its end would fail its step and run the job's `always()` and `failure()` steps.
+- Undo: restore the `.env` and hook file kept before the install, then restart the LaunchAgent.
+
+Fork runs still wait for a maintainer's approval (above); the hook is the second lock, the one a
+fork's own workflow cannot change.

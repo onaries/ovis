@@ -171,6 +171,21 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement?.className), "xterm-helper-textarea", "the jump button leaves focus in the terminal");
   assert.equal(terminalInput.length, inputsBeforeJump, "the jump button sends no input to the program");
 
+  // A switch to the chat and back leaves herdr's view where it was: herdr shares it with its TUI and its other
+  // clients, so only a press on the jump button moves it, and back on the terminal that button is shown over it
+  await pageToEdge(1);
+  await jump.waitFor();
+  const shared = (await paneScrollInfo(paneId))!.offset_from_bottom;
+  await page.keyboard.press("ControlOrMeta+Shift+J");
+  await page.locator('.view-switch .lens-option.is-chat[aria-pressed="true"]').waitFor();
+  await page.keyboard.press("ControlOrMeta+Shift+J");
+  await page.locator('.view-switch .lens-option.is-terminal[aria-pressed="true"]').waitFor();
+  await jump.waitFor();
+  assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, shared, "a switch to the chat and back leaves herdr's shared view where it was");
+  await jump.click();
+  await until(async () => (await paneScrollInfo(paneId))!.offset_from_bottom === 0, "the jump button takes the shared view to the bottom");
+  await jump.waitFor({ state: "detached" });
+
   // The metrics poll: a quiet pane at the bottom backs off, output brings it back, and a view scrolled
   // up into history keeps reading every second, since growing history there may send no output.
   const metricsReads: number[] = [];

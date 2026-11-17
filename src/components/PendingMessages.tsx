@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { ArrowUp, Copy, ListEnd, Pencil, X } from "lucide-react";
 import type { PendingMessageView } from "../lib/pendingMessages.ts";
 import { copyText } from "../lib/clipboard.ts";
-import { openCodeRefusalNote, submitNote } from "../lib/compose.ts";
+import { grokQueueNote, openCodeRefusalNote, submitNote } from "../lib/compose.ts";
 import { useT, type Vars } from "../lib/i18n.ts";
 import "./PendingMessages.css";
 
@@ -41,7 +41,7 @@ export function pendingStatus(message: Pick<PendingMessageView, "state" | "error
   if (message.state === "uncertain") {
     // #511: a paste left in the terminal's input line says where it is
     if (message.error?.code === "pasted_not_sent") return submitNote(message.error.code, message.error.message);
-    return (message.error ? openCodeRefusalNote(message.error.code, message.error.message, t) : null)
+    return (message.error ? openCodeRefusalNote(message.error.code, message.error.message, t) ?? grokQueueNote(message.error.code, message.error.message, t) : null)
       ?? t("Not confirmed. Check the terminal before sending again.");
   }
   return t("Held message — review and send");

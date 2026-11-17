@@ -2,7 +2,9 @@
  * A herdr-core server's terminal history (#2663): its `terminal-history` feature keeps the scrollback in
  * xterm, so the wheel and a phone's swipe scroll back through the history its attach replays first, a
  * replay erases the last one's instead of doubling it, and nothing is typed to the program. herdr's
- * own server keeps none (its TUI does). Demo fixtures only: no herdr, hc or user state.
+ * own server keeps none (its TUI does). A switch from the chat to the terminal shows the newest rows, once,
+ * and the way back to them is drawn so it can be seen over every theme's terminal. Demo fixtures only: no
+ * herdr, hc or user state.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,6 +15,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
+import { SUPPORTED_ENTRIES } from "../src/lib/themes.generated.ts";
 
 interface Frame { type: string; pane_id?: string; data?: string; features?: string[] }
 interface HistoryFixture {
@@ -116,6 +119,12 @@ const scrolledAbove = async (page: Page, viewportY: number, at: { x: number; y: 
   }
 };
 const inputs = (page: Page) => page.evaluate(() => window.historyFixture.inputs);
+const atBottom = (page: Page) => page.waitForFunction(() => {
+  const host = document.querySelector(".pane-frame.is-current .pane-terminal") as (HTMLElement & { outputProbe?: () => { history: History } }) | null;
+  const now = host?.outputProbe?.().history;
+  return now !== undefined && now.viewportY === now.baseY;
+});
+const evidence = process.env["UI_EVIDENCE_DIR"];
 const app = mkdtempSync(join(tmpdir(), "herdr-core-history-demo-"));
 
 try {
@@ -242,6 +251,100 @@ try {
           if (kind === "core") assert.deepEqual(typed, [], "core: scrolling the history types nothing");
           assert.deepEqual(errors, [], `${kind}: no page errors`);
           console.log(`PASS ${kind}: ${kind === "core" ? "wheel, swipe and a replay keep the browser's history" : "no local history"}`);
+        } finally {
+          await context.close();
+        }
+      }
+      // From the chat to the terminal, on an agent's pane: the newest rows show, once per switch, whatever the reader had
+      // left the terminal at; read up again after the switch, the view stays there. And the way back to the bottom is
+      // drawn so it is seen over the terminal: its edge at 3:1 against every theme's terminal background (WCAG 1.4.11)
+      for (const theme of ["dark", "light"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: theme, locale: "en-US" });
+        try {
+          await context.addInitScript((value) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value, alertsOn: false })), theme);
+          const page = await context.newPage();
+          page.setDefaultTimeout(10000);
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`http://127.0.0.1:${server.port}${prefix}?pane=${encodeURIComponent(panes.api)}&view=terminal&server=core`);
+          await page.locator(".conn-live").waitFor();
+          await appFaces(page);
+          await showsNewest(page);
+          await settled(page);
+          const box = (await page.locator(".pane-frame.is-current .pane-terminal").boundingBox())!;
+          const at = { x: box.x + box.width / 2, y: box.y + box.height / 3 };
+          await page.mouse.move(at.x, at.y);
+          const start = (await history(page))!;
+          await page.mouse.wheel(0, -600);
+          await scrolledAbove(page, start.viewportY, at, `${theme}: read up before the switch`);
+          const jump = page.locator(".pane-frame.is-current .terminal-jump-bottom");
+          await jump.waitFor();
+          // each theme's own edge, at rest and under a resting pointer: with no transition still carrying the last one's
+          const still = await page.addStyleTag({ content: "*, *::before, *::after { transition: none !important; }" });
+          const measure = () => page.evaluate(async ({ entries, mode }) => {
+            const root = document.documentElement;
+            const was = { theme: root.dataset["theme"], palette: root.dataset["palette"] };
+            const rgb = (color: string): number[] => {
+              const probe = document.createElement("canvas").getContext("2d")!;
+              probe.fillStyle = color;
+              probe.fillRect(0, 0, 1, 1);
+              return [...probe.getImageData(0, 0, 1, 1).data].slice(0, 3);
+            };
+            const lum = (c: number[]): number => { const [r, g, b] = c.map((v) => v / 255).map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!; };
+            const ratio = (a: string, b: string): number => { const [x, y] = [lum(rgb(a)), lum(rgb(b))].sort((p, q) => q - p); return (x! + 0.05) / (y! + 0.05); };
+            const jump = document.querySelector(".pane-frame.is-current .terminal-jump-bottom")!;
+            const found: { entry: string; edge: number }[] = [];
+            for (const entry of entries.filter((each) => each.mode === mode)) {
+              root.dataset["theme"] = entry.mode;
+              root.dataset["palette"] = entry.id;
+              const edge = getComputedStyle(jump).borderTopColor;
+              const ground = getComputedStyle(root).getPropertyValue("--term-bg").trim();
+              found.push({ entry: `${entry.id} ${entry.mode}`, edge: Math.round(ratio(edge, ground) * 100) / 100 });
+            }
+            root.dataset["theme"] = was.theme;
+            if (was.palette === undefined) delete root.dataset["palette"]; else root.dataset["palette"] = was.palette;
+            return found;
+          }, { entries: SUPPORTED_ENTRIES.map((entry) => ({ id: entry.id, mode: entry.mode })), mode: theme });
+          const resting = await measure();
+          await jump.hover();
+          const hovered = await measure();
+          await page.mouse.move(at.x, at.y);
+          await still.evaluate((node) => node.remove());
+          const contrasts = resting.map((each, index) => ({ entry: each.entry, edge: Math.min(each.edge, hovered[index]!.edge), rest: each.edge, hover: hovered[index]!.edge }));
+          if (evidence) await page.screenshot({ path: join(evidence, `terminal-jump-bottom-1440-${theme}.png`) });
+          // over to the chat and back: the newest rows, and nothing left to jump to
+          await page.locator(".view-switch .lens-option.is-chat").click();
+          await page.locator('.view-switch .lens-option.is-chat[aria-pressed="true"]').waitFor();
+          await page.locator(".view-switch .lens-option.is-terminal").click();
+          await page.locator('.view-switch .lens-option.is-terminal[aria-pressed="true"]').waitFor();
+          await atBottom(page).catch(async (cause: unknown) => { throw new Error(`${theme}: back on the terminal the view is not at its newest rows: ${JSON.stringify(await history(page))}`, { cause }); });
+          await jump.waitFor({ state: "detached" });
+          // once per switch: read up after it, and the view stays where the reader took it
+          const landed = (await history(page))!;
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.wheel(0, -600);
+          await scrolledAbove(page, landed.viewportY, at, `${theme}: read up after the switch`);
+          const readUp = (await history(page))!;
+          await settled(page);
+          assert.equal((await history(page))!.viewportY, readUp.viewportY, `${theme}: after the switch the reader's own scroll stands`);
+          // a selection being made keeps its rows in sight: a switch over and back leaves the view where it was
+          await page.mouse.move(box.x + 40, box.y + box.height / 4);
+          await page.mouse.down();
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 4 + 60, { steps: 6 });
+          await page.mouse.up();
+          const selectionRows = () => page.evaluate(() => document.querySelectorAll(".pane-frame.is-current .xterm-selection div").length);
+          assert.ok(await selectionRows() > 0, `${theme}: a drag selects rows of the history`);
+          await page.locator(".view-switch .lens-option.is-chat").click();
+          await page.locator('.view-switch .lens-option.is-chat[aria-pressed="true"]').waitFor();
+          await page.locator(".view-switch .lens-option.is-terminal").click();
+          await page.locator('.view-switch .lens-option.is-terminal[aria-pressed="true"]').waitFor();
+          await settled(page);
+          assert.ok(await selectionRows() > 0, `${theme}: the selection is still there back on the terminal`);
+          assert.equal((await history(page))!.viewportY, readUp.viewportY, `${theme}: a switch with a selection being made leaves the view on its rows`);
+          const faint = contrasts.filter((each) => each.edge < 3);
+          assert.deepEqual(faint, [], `${theme}: the way to the bottom stands out from the terminal in every theme, at rest and hovered (edge contrast ${JSON.stringify(contrasts)})`);
+          assert.deepEqual(errors, [], `${theme}: no page errors`);
+          console.log(`PASS ${theme}: from the chat back to the terminal shows its newest rows once (not under a selection being made), and the way to the bottom stands out over every theme's terminal (${contrasts.map((each) => `${each.entry} ${each.edge}`).join(", ")})`);
         } finally {
           await context.close();
         }

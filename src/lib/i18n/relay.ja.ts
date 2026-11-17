@@ -101,4 +101,5 @@ export const RELAY_JA: Record<string, string> = {
   "{name} has a new identity": "{name}の識別情報が変わりました",
   "That pairing code no longer works": "このペアリングコードはもう使えません",
   "This pairing link is damaged": "このペアリングリンクは壊れています",
+  "Not now": "今はしない",
 };

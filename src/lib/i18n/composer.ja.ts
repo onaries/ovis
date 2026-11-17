@@ -247,6 +247,8 @@ export const COMPOSER_JA: Record<string, string> = {
   "Question {n}": "質問 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab キーで OpenCode のエージェントが {from} から {to} に切り替わりました。それ以上は入力していません。再送信する前にターミナルを確認してください。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode が別のスキルを添付しました。チャットのテキストはここに残っています。再送信する前にターミナルを確認してください。",
+  "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok のキューで、先に入っている {count} 件の後ろにあります。それらが送られた後に送られます。これ以上は押していません。このコピーは確認用にここに残り、再送信されません。",
+  "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok のキューにあります。Grok の番が来たら送られます。これ以上は押していません。このコピーは確認用にここに残り、再送信されません。",
   // quoting a selection into the composer (lib/chatQuote.ts)
   "Quote": "引用",
   "Quote it in your message": "メッセージに引用",

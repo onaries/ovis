@@ -9,6 +9,7 @@ import * as runtime from "./herdr-core/runtime.ts";
 import * as shellAgent from "./shell-agent.ts";
 import { agentLaunch, dshEffortArgs } from "./agent-launch.ts";
 import { launchedAgents } from "./launched-agents.ts";
+import { requestIdContext, wordHerdrFailures } from "./http.ts";
 
 const ULTRACODE = JSON.stringify({ ultracode: true });
 const PANE = "agent-launch-test-pane";
@@ -238,5 +239,37 @@ describe("agentLaunch", () => {
       machine.mockRestore();
       typed.mockRestore();
     }
+  });
+});
+
+describe("a failed agent start's answer", () => {
+  it("is worded by the request's view of failed herdr calls, and answers as before without one", async () => {
+    const view = () => ({ code: "worded", message: "the view's words" });
+    const start = spyOn(herdr, "agentStart").mockImplementation(async () => { throw new herdr.HerdrError("agent_name_taken", "herdr's own words", true, true); });
+    try {
+      const plain = await agentLaunch(PANE, { kind: "claude", name: "claude-view-test" });
+      expect(plain).toEqual({ agent_started: false, error: { code: "agent_name_taken", message: "herdr's own words" } });
+      const worded = await requestIdContext.run({ id: "r", route: "" }, async () => {
+        wordHerdrFailures(view, (reason) => reason);
+        return agentLaunch(PANE, { kind: "claude", name: "claude-view-test" });
+      });
+      expect(worded).toEqual({ agent_started: false, error: view() });
+    } finally { start.mockRestore(); }
+  });
+});
+
+describe("an agent start that failed in the bridge", () => {
+  it("keeps agent_start_failed in the view's sentence, and its own words without a view", async () => {
+    const view = () => ({ code: "worded", message: "the view's words" });
+    const start = spyOn(herdr, "agentStart").mockImplementation(async () => { throw new TypeError("a fault of the bridge's own"); });
+    try {
+      const plain = await agentLaunch(PANE, { kind: "claude", name: "claude-type-test" });
+      const worded = await requestIdContext.run({ id: "r", route: "" }, async () => {
+        wordHerdrFailures(view, (reason) => reason);
+        return agentLaunch(PANE, { kind: "claude", name: "claude-type-test" });
+      });
+      expect([plain, worded]).toEqual([{ agent_started: false, error: { code: "agent_start_failed", message: "a fault of the bridge's own" } },
+        { agent_started: false, error: { code: "agent_start_failed", message: view().message } }]);
+    } finally { start.mockRestore(); }
   });
 });

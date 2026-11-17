@@ -132,16 +132,26 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
       if (shared && hidden && !observeRef.current && (hidden.cols !== shared.cols || hidden.rows !== shared.rows)) hidden.resize(shared.cols, shared.rows);
       return;
     }
-    if (observeRef.current || fixedGridRef.current) return;
+    // Into the terminal from the chat: the history this browser keeps (a herdr-core server's terminal-history) shows
+    // its newest rows, once per switch, unless a selection is being made in it. herdr's own view is shared with its
+    // other clients (its TUI, other browsers): a lens switch here is no reason to move theirs, so that view stays
+    // where it is and the way to the bottom shows over it (components/TerminalViewportTools.tsx)
+    const landAtBottom = (): void => {
+      const shown = termRef.current;
+      if (shown && !shown.hasSelection()) shown.scrollToBottom();
+    };
+    if (observeRef.current || fixedGridRef.current) { landAtBottom(); return; }
     // the composer's keyboard may still be up as the terminal lens appears: its grid waits for it to go
-    if (keyboardHoldsRef.current(true)) return;
+    if (keyboardHoldsRef.current(true)) { landAtBottom(); return; }
     const term = termRef.current;
     try {
       fitRef.current?.fit();
       fittedRef.current();
     } catch {
+      landAtBottom();
       return;
     }
+    landAtBottom();
     // this runs on every load too, right after the attach: out of use (a reload behind another
     // app), only this grid fits, and the refit takes the pane once the user is here
     const pane = paneRef.current;

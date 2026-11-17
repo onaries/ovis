@@ -50,6 +50,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import sh.ovis.push.AlertProof;
+import sh.ovis.push.OvisMessagingService;
 
 /**
  * Capacitor's activity with the chosen PC as the WebView's first page, as HerdrBridgeViewController
@@ -187,6 +189,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(OvisDirectPlugin.class);
         String link = takeAppLink(getIntent(), savedInstanceState == null);
         if (link != null) openAppLink(link);
+        else openAlert(getIntent(), savedInstanceState == null);
         // the PC's key: its origin, or its scope on the hosted shell's origin for a relay PC. An
         // app link waiting for the connect screen shows that screen first
         String pc = PCStore.link != null ? null : PCStore.current(this);
@@ -857,7 +860,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         String link = takeAppLink(intent, true);
-        if (link != null && openAppLink(link)) {
+        if ((link != null && openAppLink(link)) || openAlert(intent, true)) {
             reopen();
             return;
         }
@@ -899,6 +902,60 @@ public class MainActivity extends BridgeActivity {
         return fresh && !fromRecents ? link : null;
     }
 
+    /**
+     * Opens a tapped alert's pane (PCStore.alertTap). The page of the PC that sent it, already up, is
+     * handed the pane as the browser's worker hands an open window, and keeps what it holds; true
+     * readies another PC on that pane in its chat for the next first load, switching PC. False,
+     * leaving the open page alone, for any other intent, an alert that names no saved PC, one the
+     * system hands back with the activity restored or started from Recents, which was opened before,
+     * and one without this app's proof (AlertProof): this activity is exported, and
+     * another app's alert is a bare launch, which switches nothing and keeps a pairing link waiting.
+     * The alert is taken out of the intent, so it opens once.
+     */
+    private boolean openAlert(Intent intent, boolean fresh) {
+        if (intent == null || !OvisMessagingService.ACTION_OPEN_ALERT.equals(intent.getAction())) return false;
+        boolean own;
+        try {
+            own = AlertProof.own(this, intent);
+            intent.removeExtra(AlertProof.EXTRA);
+        } catch (RuntimeException unreadable) {
+            // another app's intent with an extra of a class this app lacks: Android 8 to 12 unparcel
+            // every extra at the first read and throw, which would crash the app. Its extras go
+            intent.replaceExtras((Bundle) null);
+            own = false;
+        }
+        intent.setAction(Intent.ACTION_MAIN);
+        intent.setData(null);
+        boolean fromRecents = (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
+        if (!own || !fresh || fromRecents) return false;
+        WebView view = bridge == null ? null : bridge.getWebView();
+        String url = view == null ? null : view.getUrl();
+        // the PC's page with its client up: not under the cover of a first load, nor the error page
+        String shown = openingView != null || url == null || url.equals(bridge.getErrorUrl()) ? null : url;
+        PCStore.AlertTap alert = PCStore.alertTap(
+            PCStore.saved(this),
+            PCStore.current(this),
+            shown,
+            intent.getStringExtra(OvisMessagingService.EXTRA_ORIGIN),
+            intent.getStringExtra(OvisMessagingService.EXTRA_SERVER_ID),
+            intent.getStringExtra(OvisMessagingService.EXTRA_MACHINE),
+            intent.getStringExtra(OvisMessagingService.EXTRA_WORKSPACE),
+            intent.getStringExtra(OvisMessagingService.EXTRA_PANE)
+        );
+        if (alert == null) return false;
+        if (alert.selection != null) {
+            // as public/sw.js posts it to the open window, through a page event a page on plain http hears too
+            view.evaluateJavascript(PCStore.selectionScript(alert.selection), null);
+            return false;
+        }
+        // the alert is the newer ask: a pairing link still waiting for the connect screen would show that instead
+        PCStore.link = null;
+        PCStore.open(this, alert.pc, alert.address);
+        PCStore.fail(null, null);
+        PCStore.redirects = 0;
+        return true;
+    }
+
     /** Opens the current PC again from its first page. */
     void retry() {
         PCStore.fail(null, null);
@@ -912,8 +969,49 @@ public class MainActivity extends BridgeActivity {
         reopen();
     }
 
-    /** Starts this activity again, so the next page (a PC, or the connect screen) is a first load. */
+    /**
+     * Told to the page just before it is replaced (reopen): the client then leaves the unsent text it
+     * keeps in memory alone (the panes of a PC that names no herdr lifetime, or text typed before its
+     * herdr was proven) in storage, where its PC's
+     * next page puts it in Recover unsent text (src/lib/paneLifetime.ts, PAGE_LEAVING_EVENT). Any other
+     * page has no listener.
+     */
+    private static final String LEAVING_SCRIPT = "window.dispatchEvent(new Event('ovis-page-leaving'))";
+
+    /** How long a page that does not answer LEAVING_SCRIPT (busy, or gone) holds up its replacement. */
+    private static final long LEAVING_WAIT_MS = 1000;
+
+    /** Whether reopen has begun: the page is being told it leaves, and this activity then ends. */
+    private boolean leaving;
+
+    /**
+     * Starts this activity again, so the next page (a PC, or the connect screen) is a first load. The
+     * page shown is told first (LEAVING_SCRIPT), so a PC switch, an alert's included, keeps its
+     * memory-only unsent text for Recover unsent text; nothing is asked and nothing is sent.
+     */
     void reopen() {
+        if (leaving) return;
+        leaving = true;
+        WebView view = bridge == null ? null : bridge.getWebView();
+        if (view == null) {
+            restart();
+            return;
+        }
+        Runnable once = new Runnable() {
+            private boolean done;
+
+            @Override
+            public void run() {
+                if (done) return;
+                done = true;
+                restart();
+            }
+        };
+        view.evaluateJavascript(LEAVING_SCRIPT, (value) -> once.run());
+        view.postDelayed(once, LEAVING_WAIT_MS);
+    }
+
+    private void restart() {
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
         finish();

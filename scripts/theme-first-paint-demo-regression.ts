@@ -25,6 +25,7 @@ import { themeFor } from "../src/lib/themeFor.ts";
 import { rowFor, type ThemeEntry } from "../src/lib/themes.ts";
 import { isReportableWindowError } from "../src/lib/uncaughtErrors.ts";
 import { chromePath } from "./chrome-path.ts";
+import { unlessGone } from "./response-gone.ts";
 import { buildDemoApp } from "./demo-build.ts";
 
 const repo = join(import.meta.dir, "..");
@@ -262,11 +263,17 @@ async function runCase(item: Case, base: "root" | "demo", url: string, width: "3
     const origin = new URL(url).origin;
     let boot: Record<string, unknown> | null = null;
     let documentCsp: string | null = null;
+    // a read the page's close overtakes is passed over (the checks then miss what it would have set); any other
+    // failure still ends the run
     page.on("response", async (response) => {
       const address = new URL(response.url());
-      if (response.request().isNavigationRequest()) documentCsp = (await response.allHeaders())["content-security-policy"] ?? null;
+      if (response.request().isNavigationRequest()) {
+        const headers = await unlessGone(response, (answer) => answer.allHeaders());
+        if (headers) documentCsp = headers["content-security-policy"] ?? null;
+      }
       if (!/\/assets\/theme-bootstrap-[0-9a-f]{10}\.js$/.test(address.pathname)) return;
-      const body = await response.body();
+      const body = await unlessGone(response, (answer) => answer.body());
+      if (body === undefined) return;
       boot = { url: response.url(), sameOrigin: address.origin === origin, status: response.status(), contentType: response.headers()["content-type"],
         resourceType: response.request().resourceType(), fromServiceWorker: response.fromServiceWorker(), bytes: body.length,
         sha256: createHash("sha256").update(body).digest("hex"), csp: response.headers()["content-security-policy"] ?? null };

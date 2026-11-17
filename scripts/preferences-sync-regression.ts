@@ -19,6 +19,8 @@ const root = mkdtempSync(join(tmpdir(), "herdr-preferences-sync-"));
 const serve = (port: number) => createServer({ port, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), usage: new UsageService(undefined, []) });
 let server = serve(0);
 const origin = `http://127.0.0.1:${server.port}`;
+/** the app's event stream, whatever it asks with (`?compact_agents=1`) */
+const isEventStream = (url: string | URL) => new URL(url).pathname === "/api/machines/events";
 
 interface Opened { context: BrowserContext; page: Page; puts: { settings: Record<string, unknown>; pins?: string[] }[] }
 const mainKey = "ovis:settings";
@@ -40,7 +42,7 @@ async function browserAt(browser: Awaited<ReturnType<typeof chromium.launch>>, o
     window.EventSource = class extends NativeEventSource {
       constructor(url: string | URL, init?: EventSourceInit) {
         super(url, init);
-        if (!String(url).endsWith("/api/machines/events")) return;
+        if (new URL(String(url), location.href).pathname !== "/api/machines/events") return;
         this.addEventListener("error", () => {
           window.dispatchEvent(new Event("preferences-test-stream-lost"));
           // a non-200 answer to its reconnect: the browser never reconnects this one
@@ -121,7 +123,7 @@ const reopenMs: number[] = [];
  * which a loaded PC can stretch past Playwright's 30 s default, so the deadline is named here.
  */
 async function restartServer(pages: readonly Page[]): Promise<void> {
-  const reopened = pages.map((page) => page.waitForResponse((response) => response.url().endsWith("/api/machines/events"), { timeout: 120_000 }));
+  const reopened = pages.map((page) => page.waitForResponse((response) => isEventStream(response.url()), { timeout: 120_000 }));
   const port = server.port;
   const started = Date.now();
   server.stop();
@@ -419,7 +421,7 @@ try {
       assert.equal(e.puts.length, atDisconnect, "a lost event stream cancels the wait for the next save");
       assert.equal(atDisconnect, putsAtStart + 1);
       failing = false;
-      const reopened = [e.page, f.page].map((page) => page.waitForResponse((response) => response.url().endsWith("/api/machines/events"), { timeout: 120_000 }));
+      const reopened = [e.page, f.page].map((page) => page.waitForResponse((response) => isEventStream(response.url()), { timeout: 120_000 }));
       server = serve(port);
       await Promise.all(reopened);
       assert.equal((await nextPut(e)).status(), 200);
@@ -457,7 +459,7 @@ try {
       await mode("Light");
       await quiet();
       assert.equal(e.puts.length, atLoss, "a Retry already answered authorizes no later send while the stream is lost");
-      const reopenedAgain = [e.page, f.page].map((page) => page.waitForResponse((response) => response.url().endsWith("/api/machines/events"), { timeout: 120_000 }));
+      const reopenedAgain = [e.page, f.page].map((page) => page.waitForResponse((response) => isEventStream(response.url()), { timeout: 120_000 }));
       server = serve(portAgain);
       await Promise.all(reopenedAgain);
       assert.equal((await nextPut(e)).status(), 200);
@@ -476,12 +478,12 @@ try {
       /** while set, the page's next stream request waits for it, and says it is asked */
       let streamHold: PromiseWithResolvers<void> | null = null;
       const streamAsked = Promise.withResolvers<void>();
-      await e.context.route("**/api/machines/events", async (route) => {
+      await e.context.route(isEventStream, async (route) => {
         if (streamRefused) { await route.fulfill({ status: 502, body: "Bad Gateway" }); return; }
         if (streamHold !== null) { streamAsked.resolve(); await streamHold.promise; }
         await route.continue();
       });
-      const isStream = (response: Response) => response.url().endsWith("/api/machines/events");
+      const isStream = (response: Response) => isEventStream(response.url());
       const portClosed = await loseStream();
       await e.page.evaluate(() => {
         Reflect.set(window, "__preferencesStreamClosed", new Promise<void>((resolve) => window.addEventListener("preferences-test-stream-closed", () => resolve(), { once: true })));

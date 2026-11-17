@@ -5533,12 +5533,23 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   "Jump to bottom" button floats over the grid's bottom-right corner and sends `pane.scroll`
   offset 0, the one-tap way back to the live bottom now that no scrollbar offers End. It uses
   the chat lens' round button form (`--control-h`, `--touch-target` on coarse pointers,
-  `--radius-pill`, `--shadow-pop`), keeps focus in the terminal, and is hidden at the bottom, in
+  `--radius-pill`, `--shadow-pop`, and the edge `--border-input`, which both share with the chat's
+  **New messages** pill, at rest and under a resting pointer (`.btn`'s hover edge would be the faint
+  one again): the elevated fill alone melts into the terminal's and the chat's surface, while the
+  edge stands at 4:1 or more against every theme's `--term-bg`), keeps focus in the terminal, and is hidden at the bottom, in
   read-only views and while Find owns the viewport. A grown touch input line floats over it.
   On a herdr-core server (`terminal-history`) xterm keeps the history itself, so the same
   button shows whenever xterm's own view is above its bottom, under the same conditions, and
   takes it back with xterm's scrollToBottom. This follows VS Code's integrated terminal,
   whose history scrolls locally and returns to the bottom on demand.
+- A switch from the Chat lens to the Terminal lens shows the terminal's newest rows: the history
+  xterm keeps on a herdr-core server goes to its bottom, once per switch, unless a selection is
+  made in it (any selection left there holds the view), and a scroll after the switch stands. A
+  terminal peek over the chat uncovers the grid the same way: it opens on the newest rows, also
+  when **Open Terminal** opens it again after the reader read up, since its point is the
+  command's screen. herdr's own viewport is not moved by a
+  switch: it is shared with herdr's TUI and its other clients, and moving a shared reading
+  position is left to an explicit Jump to bottom, which the switch shows when that view is up.
 - Mod+Shift+PageUp/PageDown pages the selected pane only, preserving chat composer focus and
   selection. Chat moves instantly by its viewport minus one prose line;
   Terminal uses native viewport rows minus one. A page still

@@ -46,12 +46,13 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
  * What the page sends a pane, as the browser's frame events report it (they can come later than the shell's output on a
  * busy machine), and how many input and keys frames have been heard in all: the page counts what it sends itself
  * (sentByPage), so a check can wait until everything sent so far, an unexpected extra frame included, has been heard.
+ * Awaited before the page's goto: an init script runs only in documents loaded after it is installed.
  */
-function watch(page: Page): { sent: Sent[]; ready: Set<string>; heard: { count: number } } {
+async function watch(page: Page): Promise<{ sent: Sent[]; ready: Set<string>; heard: { count: number } }> {
   const sent: Sent[] = [];
   const ready = new Set<string>();
   const heard = { count: 0 };
-  void page.addInitScript(() => {
+  await page.addInitScript(() => {
     const qa = window as unknown as { sentByPage: number };
     qa.sentByPage = 0;
     const send = WebSocket.prototype.send;
@@ -119,7 +120,7 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
     page.setDefaultTimeout(10_000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const { sent, ready, heard } = watch(page);
+    const { sent, ready, heard } = await watch(page);
     let held: Route | null = null;
     if (item.holdCreate) await page.route("**/api/**tab/create", (route) => { held = route; });
     await page.goto(`${origin}/?pane=${encodeURIComponent(first)}`);
@@ -148,7 +149,9 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
         // later on a busy machine: what the page sent is read once every frame it has sent by now has been heard
         const expected = item.sent;
         // everything the page has sent by now is heard first, an extra frame included, so the comparison sees it
-        const sentByPage = await page.evaluate(() => (window as unknown as { sentByPage: number }).sentByPage);
+        const sentByPage = await page.evaluate(() => (window as unknown as { sentByPage?: number }).sentByPage);
+        // without the counter the wait below could never end: say so at once
+        assert.ok(typeof sentByPage === "number", `${item.name}: the page has no frame counter (window.sentByPage is ${String(sentByPage)}): watch() must install it before the page loads`);
         await until(() => heard.count >= sentByPage, `${item.name}: the page's frames for the new tab are all heard`).catch((error: unknown) => {
           throw new Error(`${(error as Error).message}; expected ${JSON.stringify(expected)}, heard ${JSON.stringify(textOf(sent, second!))}`);
         });
@@ -249,7 +252,7 @@ async function composingAcrossHandOver(browser: Browser, origin: string): Promis
     page.setDefaultTimeout(10_000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const { sent, ready } = watch(page);
+    const { sent, ready } = await watch(page);
     let held: Route | null = null;
     await page.route("**/api/**tab/create", (route) => { held = route; });
     await page.goto(`${origin}/?pane=${encodeURIComponent(first)}`);
@@ -287,7 +290,7 @@ async function ownedPage(browser: Browser, origin: string, label: string) {
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const { sent, ready } = watch(page);
+  const { sent, ready } = await watch(page);
   const held: Route[] = [];
   await page.route("**/api/**tab/create", (route) => { held.push(route); });
   const first = created.root_pane.pane_id;

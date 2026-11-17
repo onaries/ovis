@@ -4,12 +4,14 @@
  * TCP port tells everyone that it is alive and nothing else; its devices come through the relay.
  */
 import { closeSync, constants, type Dirent, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { LOCAL_MACHINE, type Machine, type MachineRoster } from "../shared/machines.ts";
+import type { SessionSnapshot } from "../shared/protocol.ts";
 import { trustRefusal } from "./herdr-core/discovery.ts";
 import { discoverPinnableHerdrSessions, heldHerdrSocketStatus, type HerdrSocketPlace, pinnedHerdrSocketStatus, profileGroups, validHerdrSocket } from "./herdr-discovery.ts";
-import { checkHerdrSockets, herdrSocketPath, ping } from "./herdr/client.ts";
-import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
+import { checkHerdrSockets, HerdrError, herdrSocketPath, ping } from "./herdr/client.ts";
+import { errorResponse, isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { acquireOwnerDirectory, holdForLife, liveOwner, OwnerGuardBusy } from "./owner-guard.ts";
 import { writePrivateState } from "./private-state.ts";
 import { MARKER, markedByProfile } from "./profile-marker.ts";
@@ -57,13 +59,21 @@ function canonical(path: string): string {
 function walkedStateDir(told: string): string {
   const made = mkdirSync(told, { recursive: true, mode: 0o700 });
   const stateDir = realpathSync(told);
-  const stats = statSync(stateDir);
-  const refusal = trustRefusal(stateDir, profileGroups(), true)
-    ?? (stats.uid !== process.getuid?.() ? `${stateDir} belongs to uid ${stats.uid}, not to this account`
-      : (stats.mode & 0o7777) !== 0o700 ? `${stateDir} has mode ${(stats.mode & 0o7777).toString(8).padStart(4, "0")}, not 0700` : null);
+  const refusal = stateDirRefusal(stateDir);
   if (refusal === null) return stateDir;
   if (made !== undefined) for (let dir = resolve(told); ; dir = dirname(dir)) { rmdirSync(dir); if (dir === resolve(made)) break; }
   throw new MachineProfileError(`The machine profile's state folder is not safe to serve from, so no server was started: ${refusal}`);
+}
+
+/**
+ * Why the existing folder `stateDir`, a real path, is not one the profile serves from, or null: the walk from `/`
+ * of walkedStateDir, and the folder this account's own with mode 0700. It makes and changes nothing.
+ */
+export function stateDirRefusal(stateDir: string): string | null {
+  const stats = statSync(stateDir);
+  return trustRefusal(stateDir, profileGroups(), true)
+    ?? (stats.uid !== process.getuid?.() ? `${stateDir} belongs to uid ${stats.uid}, not to this account`
+      : (stats.mode & 0o7777) !== 0o700 ? `${stateDir} has mode ${(stats.mode & 0o7777).toString(8).padStart(4, "0")}, not 0700` : null);
 }
 
 /**
@@ -231,10 +241,94 @@ export async function machineHealth(engine: string, refusal: string | null = eng
   return { machine_profile: { engine, runtime_down: reason !== null, reason }, ...(herdr ? { herdr } : {}) };
 }
 
-/** Refused before optional route handlers, for local owners and devices alike. A device cookie opens nothing here, so none is handed out. */
-export function machineRouteRestricted(path: string): boolean {
+/** What a herdr read that failed answers on the profile while its health gives no reason, and its code for an error of herdr's own. */
+const READ_FAILED = "herdr did not answer this request";
+const READ_FAILED_CODE = "herdr_error";
+
+/**
+ * Codes out of herdr's reply that the profile keeps, each because the app acts on it: `pane_not_found` (nothing was
+ * typed), `stale_content` (the find bar looks again), `agent_blocked` and `agent_not_ready` (the draft stays),
+ * `not_git_worktree` (that workspace is no checkout) and `invalid_request` (the read falls back to recent rows).
+ */
+const KEPT_HERDR_CODES: ReadonlySet<string> = new Set(["pane_not_found", "stale_content", "agent_blocked", "agent_not_ready", "not_git_worktree", "invalid_request"]);
+
+/**
+ * Layout reasons the profile keeps in a move's, swap's, zoom's or resize's answer, each because the app acts on it or
+ * the bridge gives it itself: `same_pane`, `cross_tab`, `not_found` and `no_neighbor` (the app says which), and
+ * `zoomed_tab` and `unchanged` (the bridge's own answers for a move).
+ */
+const KEPT_LAYOUT_REASONS: ReadonlySet<string> = new Set(["same_pane", "cross_tab", "not_found", "no_neighbor", "zoomed_tab", "unchanged"]);
+/** A layout answer's reason on the profile: kept (KEPT_LAYOUT_REASONS), else READ_FAILED_CODE. */
+export const machineLayoutReason = (reason: string): string => KEPT_LAYOUT_REASONS.has(reason) ? reason : READ_FAILED_CODE;
+
+/** The profile's words for a pane herdr could not restore after it restarted: its `restore_error`, and an attach's error. */
+const NOT_RESTORED = "herdr could not restore this pane after it restarted";
+
+/**
+ * A snapshot as the profile gives it to a caller (/api/session, GET /api/machines, the snapshot frame): a pane's
+ * `restore_error` in NOT_RESTORED. It stays set, as the app keys on it; an empty or absent one stays as it is.
+ */
+export function machineSnapshot<S extends Pick<SessionSnapshot, "panes">>(snapshot: S): S {
+  if (!snapshot.panes.some((pane) => pane.restore_error)) return snapshot;
+  return { ...snapshot, panes: snapshot.panes.map((pane) => pane.restore_error ? { ...pane, restore_error: NOT_RESTORED } : pane) };
+}
+
+/**
+ * The one place that words a failed call to herdr on the profile, for every answer and frame: its code when this
+ * server's herdr client made it, or when it is a reply's code the app acts on (KEPT_HERDR_CODES), else
+ * READ_FAILED_CODE; and as its message `reason` (health's, where a route has it), NOT_RESTORED for a pane herdr could
+ * not restore, the outcome the bridge knows (where a pane ended up), or READ_FAILED.
+ */
+export function machineFailure(error: HerdrError, reason: string | null = null): { code: string; message: string } {
+  return { code: error.fromReply && !KEPT_HERDR_CODES.has(error.code) ? READ_FAILED_CODE : error.code,
+    message: reason ?? (error.code === "pane_not_restored" ? NOT_RESTORED : error.outcome ?? READ_FAILED) };
+}
+
+/**
+ * The profile's answer to a herdr read that failed (/api/session, GET /api/machines), never stored: the status
+ * errorResponse gives it, and machineFailure's code and message, with the reason the profile's health gives
+ * (`refusal` as health is handed it). An error that is not herdr's is errorResponse's.
+ */
+export async function machineReadError(error: unknown, engine: string, refusal: string | null | undefined): Promise<Response> {
+  const answer = errorResponse(error);
+  if (!(error instanceof HerdrError)) return answer;
+  const reason = (await machineHealth(engine, refusal)).machine_profile.reason;
+  const { code, message } = machineFailure(error, reason);
+  return jsonResponse({ error: { code, message } }, answer.status, { "cache-control": "no-store" });
+}
+
+/**
+ * Refused before optional route handlers, for local owners and devices alike. A device cookie opens nothing here, so none is
+ * handed out. Of /api/machines only its list is read (GET, machineRoster), and it holds this machine alone.
+ */
+export function machineRouteRestricted(path: string, method: string): boolean {
+  if (path === "/api/machines" && method === "GET") return false;
   return /^\/api\/(?:herdr\/update$|runtime(?:\/|$)|portal(?:\/|$)|fleet(?:\/|$)|machines(?:\/|$)|bridge$|devices\/pair$)/.test(path)
     || path === "/api/relay/direct" && !MACHINE_DIRECT_CARRIER_ENABLED;
+}
+
+/**
+ * GET /api/machines: this machine alone, as an ordinary server lists its own PC (server/machines.ts list()), so the app's
+ * PC list, and the terminals it draws from it, read here what they read everywhere else. Its name is the machine's host
+ * name, as that server and the pairing offer give it; while its engine is down it is listed with the reason its health
+ * gives (`refusal` as health is handed it) and no terminals. A read that fails while the engine answers is that read's
+ * failure, thrown and answered as /api/session answers it (machineReadError), so the app keeps the list it has.
+ * `?verify_source_boot=local` proves this server's own boot, as the manager proves its local PC's
+ * (src/lib/workspaceOrder.ts asks it after a move).
+ */
+export async function machineRoster(url: URL, read: () => Promise<SessionSnapshot>, ids: { bootId: string; serverId: string | undefined },
+  engine: string, refusal: string | null | undefined): Promise<MachineRoster> {
+  const machine: Machine = { id: LOCAL_MACHINE, name: hostname(), kind: "local", enabled: true, state: "connected", error: null, snapshot: null,
+    source_boot_id: ids.bootId, ...(ids.serverId ? { server_id: ids.serverId } : {}) };
+  try { machine.snapshot = await read(); }
+  catch (error) {
+    const reason = error instanceof HerdrError ? (await machineHealth(engine, refusal)).machine_profile.reason : null;
+    if (reason === null) throw error;
+    machine.state = "error";
+    machine.error = reason;
+  }
+  const asked = url.searchParams.getAll("verify_source_boot");
+  return { machines: [machine], ...(asked.length === 1 && asked[0] === LOCAL_MACHINE ? { verified_source_boot: { machine_id: LOCAL_MACHINE, boot_id: ids.bootId } } : {}) };
 }
 
 /** The answer to a caller the profile does not let in, the plain text the terminal socket's client reads included. */

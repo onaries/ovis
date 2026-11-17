@@ -95,8 +95,9 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   prepare the release PR but stops at it. When that PR raises `REMOTE_BUNDLE_VERSION`, the merge
   pass merges nothing touching `server/`, `shared/`, `bun.lock` or `patches/` from its merge until
   the Release run is done.
-- Required checks: Fast checks, Integration and browser, Native Windows install. Resolve review
-  threads before merging (branch protection does not enforce it).
+- Required checks: Fast checks, Integration and browser, Native Windows install,
+  Hook kill tests (container). Resolve review threads before merging (branch protection does
+  not enforce it).
 - The merge pass may merge on a local merge gate instead of waiting for GitHub's runs. On a
   freshly fetched `origin/main` with the PR head merged in (nothing pushed), it runs CI's release
   guards, then four groups side by side, each in a checkout and container of its own of the
@@ -115,9 +116,9 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   whose every failed test ran 2 s or more, or failed on a timeout or a start that never came, is
   rerun once and listed in the comment; any other failure is red. A PR still waits for GitHub's
   checks when it touches what only GitHub's runners check: `app/`, `crates/`, a `.ps1`,
-  `install.*`, `.github/`, `package.json`, `bun.lock`, `patches/`, `scripts/plugin*`, or the
-  files of a test that the Windows or macOS jobs of `ci.yml` run (`server/grok.test.ts` covers
-  `server/grok*`).
+  `install.*`, `.github/`, `package.json`, `bun.lock`, `patches/`, `scripts/plugin*`,
+  `scripts/self-hosted-runner/`, `scripts/self-hosted-runner.test.ts`, or the files of a test
+  that the Windows or macOS jobs of `ci.yml` run (`server/grok.test.ts` covers `server/grok*`).
 - Run `bun run check fast` before every push, and push a PR's commits together: each push to a
   PR cancels its CI run in progress and starts every job again.
 - A handoff or a PR's Validation says which checks ran (`bun run check fast`, `full`, or which

@@ -11,6 +11,7 @@ import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, PI_THINKING_HINT_LINES } from "./pi.
 import { openCodeV1QuestionActive } from "./opencode.ts";
 import { isPiQuestionnaireScreen } from "./pi-questionnaire.ts";
 import { cmdFooterStart } from "./cmd.ts";
+import { dshQuestionActive } from "./dsh.ts";
 
 /**
  * A row of OmO's omo-task widget under the input box (omo-ai plugin/extensions/omo-task.js): a live row
@@ -179,6 +180,8 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // Command Code's permission footer names its keys at the dialog's end and wraps on a narrow
   // pane: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all …`
   if (prompt.responder === "cmd-question") return cmdFooterStart(shown) >= 0;
+  // dsh-tui keeps its context meter and status lines under the panel's hint
+  if (prompt.responder === "dsh-question") return dshQuestionActive(screen);
   // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
   if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
   // Claude's plan: its footer, wrapped or not, ends the screen

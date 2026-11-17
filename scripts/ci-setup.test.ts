@@ -203,7 +203,17 @@ describe("CI cache contract", () => {
     const names = action.runs.steps.map((step) => step.name);
     const seed = names.indexOf("Seed Bun cache from the runner host");
     expect(seed).toBeGreaterThan(names.indexOf("Select workspace-local Bun cache"));
-    expect(action.runs.steps[seed]!.if).toBe("runner.environment == 'self-hosted'");
+    // the Linux runners' image only: the self-hosted Mac has no host cache
+    expect(action.runs.steps[seed]!.if).toBe("runner.environment == 'self-hosted' && runner.os == 'Linux'");
+  });
+
+  it("checks the prepared image on every self-hosted Linux runner, and sets up Bun elsewhere outside the runner account's home", () => {
+    const named = (name: string) => action.runs.steps.find((step) => step.name === name)!;
+    expect(named("Verify prepared self-hosted tools").if).toBe("runner.environment == 'self-hosted' && runner.os == 'Linux'");
+    const setupBun = action.runs.steps.filter((step) => step.uses && actionName(step.uses) === "oven-sh/setup-bun");
+    expect(setupBun.map((step) => step.if)).toEqual(["runner.environment != 'self-hosted'", "runner.environment == 'self-hosted' && runner.os != 'Linux'"]);
+    // setup-bun writes $HOME/.bun/bin: on the self-hosted Mac that is a person's account, so the job's temp folder stands in
+    expect(setupBun[1]!.env).toEqual({ HOME: "${{ runner.temp }}/setup-bun-home" });
   });
 
   it("does not transfer dependency or browser caches over the prepared image", () => {

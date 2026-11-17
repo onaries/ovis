@@ -8,8 +8,8 @@ import { withoutTrailingBreaks } from "../../shared/launch-rules.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { displayWidth, secretPrompt } from "../../shared/secret-prompt.ts";
-import { AGENT_INPUT_DRAFT_MESSAGE, CLAUDE_FOLDED_DRAFT_MESSAGE, NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
-import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, CLAUDE_FOLDED_DRAFT_MESSAGE, GROK_SEND_UNCONFIRMED_MESSAGE, NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
+import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo, faultOf, type HerdrFailureView } from "../herdr/client.ts";
 import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
 import { paneProcessRoots } from "../conversation.ts";
@@ -25,6 +25,7 @@ import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
 import { herdrSkillAttachIo, type SkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
 import { userHome } from "../user-home.ts";
+import { type GrokBeforeSend, grokEcho, grokQueue, sendGrokQueuedNow } from "./grok-queue.ts";
 import { drawsColour, inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
@@ -248,10 +249,9 @@ export function submitFraming(text: string, payload: string, typed: boolean): { 
   return { text: message, payload };
 }
 
-export const pendingFault = (error: unknown) => ({
-  code: error instanceof HerdrError || error instanceof PendingInputError ? error.code : "submit_failed",
-  message: error instanceof Error ? error.message : String(error),
-});
+/** A pending row's or a submit's fault: the bridge's own refusal as it is, any other as faultOf words it by `view` (the machine profile's). */
+export const pendingFault = (error: unknown, view: HerdrFailureView | undefined) => error instanceof PendingInputError
+  ? { code: error.code, message: error.message } : faultOf(error, "submit_failed", view);
 
 /**
  * Hermes' input, refused with input_draft unless hermesInputDraft knows it empty. As claudeBoxReads,
@@ -452,6 +452,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    * through send_text, then Enter SUBMIT_DELAY_MS later; both return once the pane has
    * the bytes, so the pane sees the whole gap. So does a Codex "blocked" only by questions
    * waiting collapsed in its queue: its main prompt still takes the message.
+   *
+   * A working Grok queues that Enter. Only a Send now (`sendNow`: a saved copy's resend) then
+   * sends one more Enter, and only while the message is the one row queued (sendGrokQueuedNow).
+   * A plain Send, an idle Grok, and the terminal's own input line keep the single Enter.
    */
 
   /**
@@ -461,9 +465,11 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    * `sendAnyway`: the user saw the box a refusal naming no draft showed and chose to send: only into
    * the Claude terminal and session that refusal was for (`confirmation` with no draft), and only while
    * the box still shows what they saw or reads empty. Never typed instead of agent.prompt.
+   * `sendNow`: the user's Send now of a saved copy, which may send it ahead of a working Grok's turn.
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {},
-    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false, agentOnly = false): Promise<void> {
+    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false, agentOnly = false,
+    sendNow = false): Promise<void> {
     // before anything reads the pane, types or clears: closeMention and mirrorInput trust this framing
     ({ text, payload } = submitFraming(text, payload, fromTerminal));
     let clearedDraft = false;
@@ -472,6 +478,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
     let beforeScreen: string | undefined;
     // an agent no reader knows whose screen was read for a picker of its own before agent.prompt (freeAgentPicker)
     let pickerAgent: string | undefined;
+    // a Send now to a Grok, whose first Enter only queues while a turn runs (one may start after the status read, from
+    // another client, and minimal mode does not tell): that Grok's terminal and session, which the Enter after it is for
+    // and no other's, and the Grok as read before it
+    let grokSendNow: { target: PendingIdentity; before: GrokBeforeSend } | undefined;
     // herdr's foreground answer read before this send, which the outcome's process binding uses again
     let seen: ProcessInfo | undefined;
     // the send-time screen's history row, once the read alongside delivery confirms it; `noted`: the send it goes on
@@ -496,6 +506,38 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
     };
     /** A write mayType stopped fails with the sender's own refusal (read_only, device_revoked), not herdr's `cancelled`. */
     const refusal = (error: unknown): never => { throw refused ?? error; };
+    /**
+     * Send now's one more Enter for a Grok that queued the message (sendGrokQueuedNow), only on a fresh read of the
+     * Grok terminal and session the send began in. The queue Enter already landed, so a failure here is submit_changed,
+     * never "nothing was typed", or chat would type it again. The terminal's input line never comes here.
+     */
+    const confirmGrokQueue = async (message: string): Promise<void> => {
+      if (fromTerminal || grokSendNow === undefined) return;
+      const { target, before } = grokSendNow;
+      await sendGrokQueuedNow({
+        message,
+        before,
+        delayMs: options.submitDelayMs ?? SUBMIT_DELAY_MS,
+        look: async () => {
+          const latest = await paneGet(paneId);
+          inTime();
+          // a Grok restarted in the pane (another session) has a queue of its own: nothing goes into it
+          const now = pendingIdentity(latest);
+          if (now.agent !== "grok" || now.terminalId !== target.terminalId || now.session !== target.session) {
+            throw new HerdrError("submit_changed", GROK_SEND_UNCONFIRMED_MESSAGE);
+          }
+          const screen = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+          inTime();
+          return { status: latest.agent_status, screen };
+        },
+        // no lastScreen: nothing reaches herdr between this read and the Enter's write. What changes in between, or
+        // during the write's own call, is still not seen: herdr cannot compare and write in one step
+        sendEnter: async () => {
+          inTime();
+          await paneSendKeys(paneId, ["Enter"], undefined, mayType);
+        },
+      });
+    };
     const typed = Date.now() - (lastTyped.get(paneId) ?? 0);
     // fixed wait: herdr holds a lone ESC typed through the attach pty and says nothing when it lets go
     if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
@@ -740,6 +782,16 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           pickerAgent = agent;
           await freeAgentPicker(paneId, agent);
         }
+        // a plain Send queues behind a working Grok's turn, as typing in the terminal does: only Send now goes ahead
+        if (sendNow && agent === "grok" && pane) {
+          const latest = await paneGet(paneId);
+          inTime();
+          if (resolveAgent(latest).agent === "grok") {
+            const screen = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+            inTime();
+            grokSendNow = { target: pendingIdentity(latest), before: { working: latest.agent_status === "working", queue: grokQueue(screen), echo: grokEcho(screen) } };
+          }
+        }
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();
@@ -748,11 +800,16 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           // which agent process got it, read alongside the delivery for the outcome's row, never before it
           bindCommandProcess(paneId, command, seen, pane);
           await delivery;
+          // herdr's prompt already sent the Enter that queues a working Grok's follow-up. A failure
+          // here must not fall through to another paste: the message is already in Grok's queue.
+          await confirmGrokQueue(closeMention(sent));
           noteSubmitted(paneId, sent, recorded(command), sentAt);
           if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);
           return;
         } catch (error) {
           watch?.cancel();
+          // a revoked sender after the queue Enter is submit_changed, not the refusal from before the write
+          if (error instanceof HerdrError && error.code === "submit_changed") throw error;
           if (refused !== undefined) throw refused;
           if (!(error instanceof HerdrError)) throw error;
           if (clearDraft !== undefined || sendAnyway) throw error;
@@ -792,6 +849,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       authorize();
       const sentAt = Date.now();
       await paneSendKeys(paneId, ["Enter"], undefined, mayType).catch(refusal);
+      // a chat fallback that pasted because agent.prompt refused: the same Send now Enter,
+      // and the same submit_changed result when it does not go
+      if (!fromTerminal) await confirmGrokQueue(closeMention(sentText));
       noteSubmitted(paneId, sentText, recorded(command), sentAt);
     } catch (error) {
       if (clearedDraft) {

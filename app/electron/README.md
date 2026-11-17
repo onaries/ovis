@@ -48,6 +48,36 @@ when the Ovis pages have it (Korean, Japanese, Chinese; `src/text.ts`), English 
   default browser. A blank window a page opens for a sign-in sends its address to the default
   browser and closes. Only the microphone (dictation, never the camera), the clipboard,
   notifications and full screen are granted, and only to the server's own pages.
+- **Links to a pane**: another program on the PC shows a pane in the window, instead of a browser
+  tab, with an `ovis://open` link: `ws` (the workspace's id), `pane`, and optionally `view`
+  (`terminal` or `chat`) and `machine` (another PC), as the server's own deep links name them. The
+  window comes forward and selects the pane without reloading, as the address bar's own link does:
+  only once the PC is connected and its list says the pane is in the workspace the link names, and
+  no pane until then;
+  a pane that has closed opens its workspace. A link starts the app when it is not running.
+
+  ```sh
+  open "ovis://open?ws=3&pane=t3&view=terminal"                      # macOS
+  xdg-open "ovis://open?ws=3&pane=t3&view=terminal"                  # Linux (.deb; an AppImage: ./Ovis-linux-x64.AppImage "ovis://open?…")
+  start "" "ovis://open?ws=3&pane=t3&view=terminal"                  # Windows (cmd)
+  ```
+
+  The link is passed on as those four names alone (`src/openLink.ts`): it never sends the window to
+  another address, a file, a dialog or Settings, and one that names no pane does nothing. `ws` may
+  carry the workspace's slug (`3-my-app`), as the address bar writes it: herdr hands its ids out
+  again, and the slug picks the workspace meant, as a deep link's does.
+
+  On Windows the app registers the scheme for the user as it starts, and only while no program has
+  it: the installer registers nothing, so a link is handled only once the app has been started at
+  least once after installing. Removing the app removes the registration only when it still starts
+  that install. An install whose folder was deleted without its uninstaller can leave its
+  registration behind, which the app then does not take over: delete `HKCU\Software\Classes\ovis` and start the app again.
+
+  The scheme is shared by host: `ovis://open` is the desktop app's, `ovis://account/callback` the
+  phone apps' sign-in (`src/lib/account/native.ts`); any other host only brings the window forward.
+  A web page can open the link too, once its browser has asked to open Ovis (and not again, when
+  that was allowed for good): it brings the window forward with a pane selected, and can do
+  nothing else.
 - **Open files**: the core and the server start through `/bin/bash`, which closes every descriptor
   Chromium left open before it becomes the program, so the core (which outlives the app) holds none
   of the app's files or sockets.

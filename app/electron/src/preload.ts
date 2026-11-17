@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { linkHold } from "./openLink.ts";
 
 // the update the app has downloaded (main.ts UpdateLine, or null), for the connection screen and the
 // server's pages alike: main answers only those
@@ -27,6 +28,14 @@ if (location.protocol === "file:") {
     showLogs: () => ipcRenderer.send("ovis:logs"),
   });
 } else {
+  // the pane an ovis:// link names (main.ts openLink, openLink.ts), as a query of the deep link's
+  // names: main tells only its own server's page, as soon as it has loaded, so the one link that
+  // came before the page listens is held for it (openLink.ts linkHold)
+  const links = linkHold();
+  ipcRenderer.on("ovis:open-link", (_event, query: unknown) => links.receive(query));
+  contextBridge.exposeInMainWorld("ovisLink", {
+    onOpen: (listener: (query: string) => void): void => links.onOpen(listener),
+  });
   // the server's pages sign in to the account through the system browser (src/accountSignIn.ts);
   // main answers only its own server's pages, and only while an account service is named
   const named = ipcRenderer.sendSync("ovis:account-service") as { service?: unknown; providers?: unknown } | null;

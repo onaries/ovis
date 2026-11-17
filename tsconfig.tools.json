@@ -86,6 +86,10 @@
     "scripts/inbox-mode-rail-demo-regression.ts",
     "scripts/sheet-outside-tap-demo-regression.ts",
     "scripts/omp-question-compat.ts",
+    "scripts/join/kit.ts",
+    "scripts/join/kit.test.ts",
+    "scripts/join/join.contract.test.ts",
+    "scripts/join/test-world.ts",
     "app/scripts/build-web.ts"
   ],
   "include": []

@@ -1,5 +1,6 @@
 import { expect, it } from "bun:test";
 import { paneStorageId, type Machine } from "../../shared/machines.ts";
+import { composerDraftKey, composerDrafts } from "./composerDraft.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { acknowledgeTerminalDraft, readTerminalDraft, setTerminalDraftSending, terminalDraftSending, terminalDraftVersion, writeTerminalDraft } from "./terminalDraft.ts";
 
@@ -110,6 +111,19 @@ it("keeps a line that holds an API key or token in this page alone, never in sto
   expect(readTerminalDraft(owner)).toBe("");
   expect([...data.values()].some((value) => value.includes(SK))).toBe(false);
   expect(paneLifetimes.unsent().some((item) => item.text.includes(SK))).toBe(false);
+}));
+
+it("carries an older server's unsent draft when the app replaces the page, and nothing of a line that holds a key (#2523)", () => withStorage((data, written) => {
+  // a PC whose snapshots name no herdr lifetime keeps its pane state in this page alone
+  paneLifetimes.observe([{ id: "older", snapshot: { panes: [] } } as unknown as Machine]);
+  const owner = paneStorageId("older", "w1:p1");
+  composerDrafts.set(composerDraftKey(owner), "an ordinary unsent draft");
+  writeTerminalDraft(owner, "export OPENAI_API_KEY=" + SK);
+  // what ovis-page-leaving runs as the app switches PC (MainActivity.reopen)
+  paneLifetimes.carry();
+  expect([...data.values()].some((value) => value.includes("an ordinary unsent draft"))).toBe(true);
+  expect([...data.values()].some((value) => value.includes(SK.slice(0, 7)))).toBe(false);
+  expect(written.some((value) => value.includes(SK.slice(0, 7)))).toBe(false);
 }));
 
 it("takes a key an earlier release stored out of storage, and never leaves it to recovery (#2523)", () => withStorage((data) => {

@@ -610,7 +610,9 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
           return framesOf(page);
         };
         const setup = async (recording: Page): Promise<void> => {
-          if (scenario === "hidden-mount") await recording.route("**/api/machines", async (route) => {
+          // by path: the app asks with `?compact_agents=1`, which a glob ending in the path does not match
+          const isRoster = (url: URL) => url.pathname === "/api/machines";
+          if (scenario === "hidden-mount") await recording.route(isRoster, async (route) => {
             const response = await route.fetch();
             // App deliberately does not load while hidden. Hide after loading starts, but before
             // the roster response can mount a pane; hasFocus alone must not permit an attach.
@@ -620,7 +622,7 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
             });
             await route.fulfill({ response });
           });
-          if (scenario === "mirrored-mount") await recording.route("**/api/machines", async (route) => {
+          if (scenario === "mirrored-mount") await recording.route(isRoster, async (route) => {
             const response = await route.fetch();
             const roster: { machines: Machine[] } = await response.json();
             for (const machine of roster.machines) if (machine.herdr) {

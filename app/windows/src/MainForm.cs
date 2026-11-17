@@ -198,7 +198,7 @@ namespace Ovis
             if (running) Phone(status);
             var buttons = new System.Collections.Generic.List<Button>();
             if (running && status.Origin != null) buttons.Add(Primary(Lang.L("Open in browser", "브라우저에서 열기"), () => Open(status.Origin)));
-            buttons.Add(Button(running ? Lang.L("Restart", "다시 시작") : Lang.L("Start", "시작"), () => model.Restart()));
+            buttons.Add(running ? Button(Lang.L("Restart", "다시 시작"), () => model.Restart()) : Button(Lang.L("Start", "시작"), () => model.Start()));
             buttons.Add(Button(Lang.L("Remove…", "제거…"), ConfirmRemove));
             body.Controls.Add(Buttons(buttons.ToArray()));
         }

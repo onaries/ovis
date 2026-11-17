@@ -11,6 +11,9 @@ import type { PendingInputs } from "../pending-input.ts";
 import type { MachineEventDocument } from "../machine-events.ts";
 import type { ServerMessage } from "../../shared/protocol.ts";
 import type { SharedPreferences } from "../../shared/preferences.ts";
+import type { AgentInfo, HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
+import { expandMachineEvent, type WireMachineEvent } from "../../shared/compact-agents.ts";
+import type { MachineEvent } from "../../shared/machines.ts";
 import { backlog, type Client, connectionData, connectionOf, createConnections, send, setMachineEvents } from "./connections.ts";
 
 function harness({ deviceId, readOnly = false, relay, revokedAlready = false, store, machineEvents, open = false }: { deviceId?: string; readOnly?: boolean; relay?: MachineRelay; revokedAlready?: boolean; store?: DeviceStore; open?: boolean; machineEvents?: MachineEventDocument } = {}) {
@@ -370,6 +373,79 @@ it("ends the machine-event subscription, never the terminal connection, rather t
   expect(backlog(large.client)).toBeLessThan(OUTPUT_HIGH_BYTES + 1024);
   expect(large.log).toEqual([]);
   expect(large.sent).toEqual(["machine-events-ended", "pty-data"]);
+});
+
+it("sends a roster that crosses 64 KiB over seven compact subscriptions while legacy clients keep their fallback", () => {
+  const panes: HerdrPane[] = Array.from({ length: 52 }, (_, index) => ({
+    pane_id: `w1:p${index}`, terminal_id: `terminal-${index}`, workspace_id: "w1", tab_id: `w1:t${index}`,
+    focused: false, agent: "codex", agent_status: "working", revision: 1,
+    cwd: "/work/" + "project/".repeat(15), foreground_cwd: "/work/" + "project/".repeat(15),
+    terminal_title: "Working on a detailed task ".repeat(3), terminal_title_stripped: "Working on a detailed task ".repeat(3),
+  }));
+  const agents: AgentInfo[] = panes.map((pane, index) => ({ ...pane, state_change_seq: index + 1 }));
+  const snapshot: SessionSnapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], panes, agents, layouts: [] };
+  const event: MachineEvent = { type: "machines", machines: [{ id: "local", name: "PC", kind: "local", enabled: true, state: "connected", error: null, snapshot }] };
+  expect(Buffer.byteLength(JSON.stringify({ type: "machine-event", event }))).toBeGreaterThan(OUTPUT_LOW_BYTES);
+  const listeners = new Set<(event: MachineEvent) => void>();
+  const machineEvents: MachineEventDocument = { manager: { subscribe: (listener) => {
+    listeners.add(listener); listener(event); return () => { listeners.delete(listener); };
+  } } };
+  for (let index = 0; index < 7; index++) {
+    const { client } = harness({ machineEvents });
+    const sent: string[] = [];
+    Object.assign(client, { send: (raw: string) => { sent.push(raw); return raw.length; } });
+    setMachineEvents(client, true, true);
+    expect(sent).toHaveLength(1);
+    expect(Buffer.byteLength(sent[0]!)).toBeLessThan(OUTPUT_LOW_BYTES);
+    const frame = JSON.parse(sent[0]!) as { type: string; event: WireMachineEvent };
+    expect(frame.type).toBe("machine-event");
+    expect(expandMachineEvent(frame.event)).toEqual(event);
+    for (const listener of listeners) listener(event);
+    expect(sent.some((raw) => raw.includes('"type":"machine-events-ended"'))).toBe(false);
+    setMachineEvents(client, false);
+  }
+  const legacy = harness({ machineEvents });
+  const legacyFrames: string[] = [];
+  Object.assign(legacy.client, { send: (raw: string) => { legacyFrames.push(raw); return raw.length; } });
+  setMachineEvents(legacy.client, true);
+  expect(legacyFrames.map((raw) => JSON.parse(raw).type)).toEqual(["machine-events-ended"]);
+  expect(listeners.size).toBe(0);
+});
+
+it("sends no client a PC's own agent_refs, so none restores a row or a value this PC's redaction hid", () => {
+  const panes: HerdrPane[] = [{ pane_id: "pA", terminal_id: "tA", workspace_id: "w1", tab_id: "w1:t1", focused: false, revision: 1, agent_status: "idle" }];
+  // a sparse row sharing no value with its pane: nothing is worth compacting, so the snapshot goes out as it came
+  const agents = [{ pane_id: "pA", agent: "codex", agent_status: "working", tokens: { quota: "SECRET" } }] as unknown as AgentInfo[];
+  const snapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes, agents,
+    agent_refs: [{ pane_id: "pA", agent: "codex", agent_status: "done", tokens: { quota: "SECRET" } }] } as SessionSnapshot;
+  const event: MachineEvent = { type: "machines", machines: [{ id: "remote", name: "Away", kind: "ssh", enabled: true, state: "connected", error: null, snapshot }] };
+  const machineEvents: MachineEventDocument = {
+    manager: { subscribe: (listener) => { listener(event); return () => {}; } },
+    herdrSidebar: { get: () => ({ rows: [{ name: "quota", rules: [{ equals: "SECRET", hide: true }] }], by_agent: {} }), subscribe: () => () => {} },
+  };
+  for (const compact of [true, false]) {
+    const { client } = harness({ machineEvents });
+    const sent: string[] = [];
+    Object.assign(client, { send: (raw: string) => { sent.push(raw); return raw.length; } });
+    setMachineEvents(client, true, compact);
+    const roster = sent.find((raw) => raw.includes('"type":"machines"'))!;
+    expect(roster).not.toContain("agent_refs");
+    expect(roster).not.toContain("SECRET");
+    const { event: shown } = JSON.parse(roster) as { event: WireMachineEvent };
+    const restored = expandMachineEvent(shown);
+    expect(restored.type === "machines" && restored.machines[0]!.snapshot!.agents.map((agent) => agent.agent_status)).toEqual(["working"]);
+  }
+});
+
+it("sends a PC's snapshot without agents to a compact client as it came, rather than nothing", () => {
+  const { agents: _agents, ...partial }: SessionSnapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [], agents: [] };
+  const event = { type: "machines", machines: [{ id: "remote", name: "Away", kind: "ssh", enabled: true, state: "connected", error: null, snapshot: partial }] } as unknown as MachineEvent;
+  const machineEvents: MachineEventDocument = { manager: { subscribe: (listener) => { listener(event); return () => {}; } } };
+  const { client } = harness({ machineEvents });
+  const sent: string[] = [];
+  Object.assign(client, { send: (raw: string) => { sent.push(raw); return raw.length; } });
+  setMachineEvents(client, true, true);
+  expect(sent.map((raw) => JSON.parse(raw))).toEqual([{ type: "machine-event", event }]);
 });
 
 it("ends the machine-event subscription, never the terminal connection, when the socket refuses a machine event", () => {

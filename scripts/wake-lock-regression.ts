@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright-core";
 import { openSettingsPage } from "./settings-page.ts";
+import { rosterRead, rosterStream } from "./drained-route.ts";
 
 /** Keep screen on is in Devices and PCs' More settings: opened unless it already is. */
 async function openMoreSettings(page: Page): Promise<void> {
@@ -81,9 +82,10 @@ export async function checkWakeLock(browser: Browser, origin: string, paneId: st
     assert.equal(await toggle.getAttribute("aria-checked"), "true", "unsupported browsers keep the preference without failing");
 
     // A saved opt-in alone must not acquire a lock when the roster contains no pane.
-    await context.route("**/api/machines/events", (route) => route.abort());
-    await context.route("**/api/machines", async (route) => {
-      const response = await route.fetch();
+    await context.route(rosterStream, (route) => route.abort());
+    await context.route(rosterRead, async (route) => {
+      // full rows: a compact roster's agent_refs would name the panes emptied below
+      const response = await route.fetch({ url: `${origin}/api/machines` });
       const body = await response.json();
       for (const machine of body.machines) {
         if (machine.snapshot) machine.snapshot = { ...machine.snapshot, panes: [], workspaces: [], focused_pane_id: null };

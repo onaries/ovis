@@ -1,4 +1,5 @@
 import { subscribeMachineEvents, type MachineEventDocument } from "../machine-events.ts";
+import { wireMachineEvent } from "../../shared/compact-agents.ts";
 /**
  * A browser's WebSocket connection: what the upgrade records on it, what it may do, how a frame is
  * sent to it, the presence beat it sends, and how it ends. Only this module changes a connection's
@@ -48,6 +49,7 @@ export interface SocketData {
 interface ConnectionState {
   closing: boolean;
   stopMachineEvents?: () => void;
+  compactMachineAgents?: boolean;
   revoked: boolean;
   /** revoked because the pairing gate closed on a connection the open LAN had let in */
   gated?: boolean;
@@ -101,10 +103,11 @@ export function connectionOf(client: Client): Readonly<Pick<ConnectionState, "cl
  * instead, and the page takes machine events over SSE until its next connection. The ending notice is a
  * few bytes sent past the budget, so the page always learns of it.
  */
-export function setMachineEvents(client: Client, enabled: boolean): void {
+export function setMachineEvents(client: Client, enabled: boolean, compactAgents = false): void {
   const state = stateOf(client);
   if (!enabled) { state.stopMachineEvents?.(); state.stopMachineEvents = undefined; return; }
   if (state.closing || state.stopMachineEvents || !client.data.machineEvents) return;
+  state.compactMachineAgents = compactAgents;
   let stop: (() => void) | undefined;
   let overflowed = false;
   const end = () => {
@@ -181,7 +184,11 @@ function excusedBytes(client: Client): number {
 export function send(client: Client, message: ServerMessage, overflow?: () => void): number {
   if (stateOf(client).closing) return 0;
   let encoded: string;
-  try { encoded = JSON.stringify(message); } catch { return 0; }
+  try {
+    // Compact the redacted document before measuring the side-channel's transport budget.
+    encoded = JSON.stringify(message.type === "machine-event"
+      ? { ...message, event: wireMachineEvent(message.event, stateOf(client).compactMachineAgents === true) } : message);
+  } catch { return 0; }
   return sendEncoded(client, encoded, overflow);
 }
 

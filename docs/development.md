@@ -120,6 +120,24 @@ Removing that override and restarting restores the WebSocket transport. The SSE 
 available to older clients and bridge/relay consumers. A reconnect negotiates the transport again;
 no terminal input is replayed by this subscription.
 
+New clients request `compact_agents: true` on their `machine-events` subscription and
+`compact_agents=1` on `/api/machines` and `/api/machines/events`. Only these opt-in responses
+replace a snapshot's `agents` with `agent_refs`, and only where that is smaller (otherwise the
+snapshot keeps its `agents`): each row keeps its `pane_id`, agent-only fields
+and overrides, and inherits matching fields from the pane in the same snapshot. `_omit` lists
+optional pane fields that were absent from that agent. Clients restore full agent rows before
+updating application state; a restored row equals the full one after parsing, though its keys may
+come in another order, and the roster compares rows regardless of key order. Order, recency and completion counters, nulls, differing values and
+agents without a pane are preserved: a snapshot with an agent whose pane it does not list goes out
+full. `agent_refs` and a row's `_omit` are the server's alone: those a PC put in its own snapshot
+are removed from every response, compact or not, and clients expand only a snapshot with `agent_refs` and no
+`agents`. A compact snapshot a client cannot read (a reference naming no pane of its snapshot, a
+malformed `_omit`) keeps that PC's last roster, and the client reads the roster again without
+`compact_agents`. Redaction happens before compaction, and WebSocket size
+limits measure the compact frame. Legacy responses and the bridge protocol do not change;
+new clients also accept full rows from older servers. This reduces duplicate data without raising
+the machine-event backlog limit; an even larger roster can still fall back to SSE.
+
 A page takes machine events over SSE whenever its socket does not carry them: a connection that
 has not said whether it does within five seconds, a socket stopped for output (4008, which only
 reconnects on an attach), or a connection whose server sent `machine-events-ended`. Machine events
@@ -828,7 +846,7 @@ job asks `scripts/release-ci-reuse.ts`, which says yes only when all of this hol
   request's run, a manual run and a fork's run never count);
 - it completed with success, on its first attempt or after one rerun;
 - every job of `ci.yml` is in it and passed: a failed, cancelled, skipped or missing job is a no,
-  whatever the three required checks say.
+  whatever ci.yml's three required checks say.
 
 A run still going is waited for, at most 40 minutes (main's run takes 15 to 30) and only while
 none of its jobs has ended without passing. Anything else is a no at once: no run for the commit,
@@ -1223,9 +1241,12 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
     size) run in the layout script, on a fixture of their own, so neither context script nears
     the per-script cap. Each context script prints each helper's elapsed time and stops its owned
     daemon on exit. `bun run test:ui` also runs all six.
-  - **Browser regression (other scripts)** runs every other browser script: six at a time in
-    one job on self-hosted CI, and on hosted CI split over four jobs (`BROWSER_SHARD=k/4`,
-    balanced by `scripts/ci-browser-timings.json`) that run three at a time each.
+  - **Browser regression (other scripts)** runs every other browser script, split over parts
+    (`BROWSER_SHARD=k/n`, balanced by `scripts/ci-browser-timings.json`): three parts on
+    self-hosted CI that run six at a time each (`Browser regression (other scripts 1/3)` and so
+    on), four on hosted CI and five on the VM runners that run three at a time each. Each part
+    uploads its logs as `browser-other-<part>-<run>-<attempt>`. `scripts/pages-gate.test.ts`
+    fails if a script is in no part or in two.
 
   Both browser jobs run `scripts/ci-browser-parallel.ts`, which takes its script list from
   `scripts/ci-browser.sh` (`BROWSER_SCRIPTS` picks from it, `BROWSER_EXCLUDE` leaves scripts out,
@@ -1316,7 +1337,7 @@ pages or credentials.
 
 `ci.yml`'s Linux jobs of a push run on the maintainer PC's runners (labels
 `["self-hosted","self-hosted-ovis"]`) by default. A same-repository pull request goes there too
-while those runners have room for its four Linux jobs, and to `ubuntu-24.04` (with the browser
+while those runners have room for its six Linux jobs, and to `ubuntu-24.04` (with the browser
 checks sharded) when they do not, so neither pool queues while the other sits idle. The workflow
 token cannot list runners, so Detect changes counts room from the Actions API: the repository
 variable `CI_SELF_HOSTED_CAPACITY` (default 10, the PC's `self-hosted-ovis` runners) minus the
@@ -1355,7 +1376,22 @@ request runs, and `"ubuntu-24.04"` keeps only main GitHub-hosted. `CI_SELF_HOSTE
 `"ubuntu-24.04"` still keeps every job hosted. Delete the variable while no reserved runner is online,
 or main's jobs wait for one.
 
-The Windows and macOS jobs, the Rust PTY host job (the runner image has no Rust toolchain),
+`ci.yml`'s Native macOS session identity job can run on the self-hosted Mac `eamac-ovis-mac`
+(labels `self-hosted, macOS, ARM64, self-hosted-ovis-mac`): ci.yml's own same-repository runs off
+`main` take the repository variable `CI_MAC_LABELS`, a JSON label list
+(`["self-hosted","self-hosted-ovis-mac"]`) or the JSON string `"macos-15"`; unset, the job stays on
+`macos-15`. Its `runs-on` sends a fork pull request to `macos-15` before it reads the variable. A
+release never validates there: Release validation calls ci.yml under its own name, and main's run,
+which a Release run may take instead, stays on `macos-15`. One runner takes one job at a time, so
+while the Mac is off or busy the job waits for it: delete the variable to go back to `macos-15`.
+The runner runs jobs as the Mac's own account, so on it `setup-ci` installs Bun under the job's temp
+folder, not that account's `~/.bun`; the prepared-image check and the host's Bun cache are for the
+self-hosted Linux runners alone. Before the variable is set, the Mac runner needs a fork refusal
+that works on macOS: `job-started.sh` finds the job's worker through `/proc`, which macOS lacks.
+Until then, only the repository's approval policy for fork pull request workflows (every outside
+contributor's run waits for a maintainer) keeps a fork's own workflow from naming the Mac's labels.
+
+The other Windows and macOS jobs, the Rust PTY host job (the runner image has no Rust toolchain),
 `remote-bundles.yml`'s other jobs (Rust builds, and the SSH job's `sudo apt-get` and Docker),
 `desktop.yml`, `windows-install.yml` and `windows-terminal-qa.yml` always stay GitHub-hosted.
 
@@ -1387,7 +1423,7 @@ together: `ci.yml` runs each of them through `bun run check` with `CHECK_MAX_RUN
 itself takes ports of the host's loopback and does not count against them. Its image ships Bun,
 Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, the
 checksum-pinned GitHub CLI (`gh`) for deployment and release publishing, curl, jq, unzip,
-xz-utils, OpenSSH (client and server), iproute2 (`ss`) and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
+xz-utils, OpenSSH (client and server), iproute2 (`ss`), tmux, procps (`ps`) and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
 fails on a stale image instead of downloading replacements. Rebuild the image after changing
 its pins; its Bun pin must match `.github/actions/setup-ci/action.yml`, and its Playwright pin
 must match `bun.lock`.
@@ -1414,8 +1450,9 @@ Remote/server/shared/dependency changes also run the existing four-platform bund
 SSH workflow on PRs; its publishing job only runs for `remote-v*` tags. Website publishing
 continues after `main` pushes.
 
-Repository protection should require PRs and all three checks on `main`—**Fast checks**,
-**Integration and browser**, and **Native Windows install** (GitHub App ID `15368`)—including for
+Repository protection should require PRs and all four checks on `main`—**Fast checks**,
+**Integration and browser**, **Native Windows install**, and **Hook kill tests (container)**
+(GitHub App ID `15368`)—including for
 administrators. Branch protection does not require branches to be up to date before merging and
 does not enforce resolved review threads; resolve every review thread before merging anyway, as a
 practice. Force pushes and branch deletion are disabled. Human approvals are optional for this maintainer-led

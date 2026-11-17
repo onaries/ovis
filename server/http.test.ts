@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as herdr from "./herdr/client.ts";
-import { HerdrError } from "./herdr/client.ts";
-import { errorResponse } from "./http.ts";
+import { HerdrError, herdrFault } from "./herdr/client.ts";
+import { errorResponse, layoutResponse, requestFault, requestIdContext, wordHerdrFailures } from "./http.ts";
 import { createServer } from "./index.ts";
 
 describe("errorResponse", () => {
@@ -99,4 +99,29 @@ describe("pane find HTTP validation", () => {
       expect(find).not.toHaveBeenCalled();
     });
   }
+});
+
+describe("a failed herdr call's answer", () => {
+  const failed = () => new HerdrError("connect_failed", "herdr's own words", false, true);
+  it("is the error's own envelope with no view, byte for byte", async () => {
+    const response = errorResponse(failed());
+    expect([response.status, await response.text(), response.headers.get("cache-control")]).toEqual([502, '{"error":{"code":"connect_failed","message":"herdr\'s own words"}}', null]);
+  });
+  it("is the view's words, never stored, for a failed call inside a request that words them", async () => {
+    const view = () => ({ code: "worded", message: "the view's words" });
+    await requestIdContext.run({ id: "r", route: "" }, async () => {
+      wordHerdrFailures(view, (reason) => `worded ${reason}`);
+      const worded = errorResponse(failed());
+      expect([worded.status, await worded.json(), worded.headers.get("cache-control")]).toEqual([502, { error: view() }, "no-store"]);
+      // a refusal the bridge words itself is no failed call: its own words stay
+      expect(await errorResponse(new HerdrError("read_only", "this device can only watch")).json()).toEqual({ error: { code: "read_only", message: "this device can only watch" } });
+      expect(requestFault(failed(), "unused")).toEqual(view());
+      const layout = layoutResponse({ ok: true, changed: false, reason: "herdr's reason" });
+      expect([await layout.json(), layout.headers.get("cache-control")]).toEqual([{ ok: true, changed: false, reason: "worded herdr's reason" }, "no-store"]);
+    });
+    expect(herdrFault(failed(), undefined)).toEqual({ code: "connect_failed", message: "herdr's own words" });
+    // a layout answer with no view is the body as it is
+    const plain = layoutResponse({ ok: true, changed: false, reason: "herdr's reason" });
+    expect([await plain.text(), plain.headers.get("cache-control")]).toEqual(['{"ok":true,"changed":false,"reason":"herdr\'s reason"}', null]);
+  });
 });

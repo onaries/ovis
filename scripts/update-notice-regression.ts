@@ -5,6 +5,7 @@ import type { Browser } from "playwright-core";
 import type { Machine } from "../shared/machines.ts";
 import type { UpdateStatus } from "../shared/update.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { rosterRead, rosterStream } from "./drained-route.ts";
 
 /**
  * The lines under the header, on a phone: a release is installed from its line with one button
@@ -46,8 +47,8 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     const pc: Machine = { id: "qa-pc", name: "QA PC", kind: "ssh", target: { destination: "qa@example.invalid" }, enabled: true, state: "error", error: null, action_required: "update_bridge", snapshot: null };
     let remote: Machine | null = null;
     // The real SSE roster would remove the synthetic PC between these polled snapshots.
-    await context.route("**/api/machines/events", (route) => route.abort());
-    await page.route("**/api/machines", async (route) => {
+    await context.route(rosterStream, (route) => route.abort());
+    await page.route(rosterRead, async (route) => {
       const body = await (await route.fetch()).json() as { machines: Machine[] };
       await route.fulfill({ json: { ...body, machines: remote ? [...body.machines, remote] : body.machines } });
     });

@@ -247,6 +247,8 @@ export const COMPOSER_KO: Record<string, string> = {
   "Question {n}": "질문 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab 키로 OpenCode 에이전트가 {from}에서 {to}(으)로 바뀌었습니다. 더 이상 입력하지 않았습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode가 다른 스킬을 첨부했습니다. 채팅 텍스트는 여기에 남아 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
+  "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok 대기열에서 먼저 대기 중인 {count}개 뒤에 있습니다. 그 메시지들이 보내진 뒤에 보냅니다. 더 이상 누르지 않았습니다. 이 사본은 확인용으로 여기에 남으며 다시 보내지 않습니다.",
+  "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok 대기열에 있습니다. Grok의 차례가 되면 보냅니다. 더 이상 누르지 않았습니다. 이 사본은 확인용으로 여기에 남으며 다시 보내지 않습니다.",
   // quoting a selection into the composer (lib/chatQuote.ts)
   "Quote": "인용",
   "Quote it in your message": "메시지에 인용",

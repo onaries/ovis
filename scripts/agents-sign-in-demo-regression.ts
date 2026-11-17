@@ -157,7 +157,8 @@ try {
         assert.match((await page.evaluate(() => (window as unknown as { cancels: string[] }).cancels))[0]!, /"login":"demo-login-\d+"/, `Escape cancels the running sign-in ${at}`);
         console.log(`PASS closing the dialog stops the sign-in it was following (${at})`);
 
-        // the setup guide offers the first sign-in beside its tiles, for the agent picked
+        // the setup guide offers the first sign-in beside its tiles, for the agent picked, once it knows the sign-ins:
+        // it reads them only after the user's own Continue on the agent step (#3962), so Continue, then Back to it
         // the dialog that just closed steps off its history entry first: a page load asked for before that is dropped
         await sheetEntryLeft(page);
         await page.goto(`${root}&settings=agents`);
@@ -166,6 +167,11 @@ try {
         const guide = page.getByRole("dialog", { name: "Set up Ovis", exact: true });
         await guide.waitFor();
         const guideSignIn = guide.getByRole("button", { name: "Sign in to Claude Code", exact: true });
+        await guide.getByRole("heading", { name: "Pick an agent", exact: true }).waitFor();
+        assert.equal(await guideSignIn.count(), 0, `no sign-in offered before the sign-ins are known ${at}`);
+        await press(guide.locator(".setup-foot").getByRole("button", { name: "Continue", exact: true }));
+        await guide.getByRole("heading", { name: "Pick a look", exact: true }).waitFor();
+        await press(guide.locator(".setup-foot").getByRole("button", { name: "Back", exact: true }));
         await guideSignIn.waitFor();
         await shot("5-guide-sign-in");
         await press(guideSignIn);

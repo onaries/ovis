@@ -5,7 +5,7 @@
  */
 import type { HerdrPane, ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
 import { AttachOutputTail, AttachStartupProbes, isTakeoverExit } from "../attach-output.ts";
-import { checkedHerdrSocket, HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
+import { checkedHerdrSocket, faultOf, HerdrError, type HerdrFailureView, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
 import { CoreAttachSession } from "../herdr-core/attach-session.ts";
 import { coreConnection, HC_MOVED, hcBin } from "../herdr-core/runtime.ts";
 import { capabilities } from "../runtime/capabilities.ts";
@@ -237,7 +237,9 @@ export function paneGrid(snapshot: Pick<SessionSnapshot, "layouts">, pane: Pick<
   return rect ? { width: rect.width, height: rect.height } : null;
 }
 
-export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor }: {
+export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor, herdrFailure }: {
+  /** how a failed herdr call is worded in an error frame (the machine profile's), unset elsewhere */
+  herdrFailure?: HerdrFailureView;
   attachments: Map<string, PaneAttachment>;
   retiringAttachments: Map<string, Promise<void>>;
   terminalAttach: () => Promise<boolean>;
@@ -261,7 +263,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
     // herdr (0.9.3+) could not restore it after a restart: its terminal has no process
     // and an attach would only die with "not found". The client shows the reason instead.
-    if (pane.restore_error) throw new HerdrError("pane_not_restored", pane.restore_error);
+    // herdr's answer about the pane: worded as a failed call where the server words them
+    if (pane.restore_error) throw new HerdrError("pane_not_restored", pane.restore_error, false, true);
     const terminalId = (pane as HerdrPane & { terminal_id?: string }).terminal_id;
     if (!terminalId) throw new HerdrError("no_terminal", `pane ${paneId} has no terminal`);
     // the pane's grid as the operator's layout holds it: an observe connection must
@@ -363,8 +366,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       try {
         attachment.process = start();
       } catch (error) {
-        const message = spawnFailure(paneId, error);
-        broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
+        spawnFailure(paneId, error);
+        const fault = faultOf(error, "command_failed", herdrFailure);
+        broadcast(paneId, { type: "error", code: fault.code, message: fault.message, pane_id: paneId });
         broadcast(paneId, { type: "pty-exit", pane_id: paneId, code: null });
         closeAttachment(paneId);
       }
@@ -609,8 +613,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
             try {
               attachment.process = start();
             } catch (error) {
-              const message = spawnFailure(paneId, error);
-              broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
+              spawnFailure(paneId, error);
+              const fault = faultOf(error, "command_failed", herdrFailure);
+              broadcast(paneId, { type: "error", code: fault.code, message: fault.message, pane_id: paneId });
               finish();
             }
           }, (error: unknown) => {
@@ -784,10 +789,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
   }
 
   /** The attaching client sees the error in-band; the log is the only record the operator gets. */
-  function spawnFailure(paneId: string, error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`terminal attach for pane ${paneId} failed to start: ${message}`);
-    return message;
+  /** The server's log line for an attach that could not start: the error's own words, which stay on this PC. */
+  function spawnFailure(paneId: string, error: unknown): void {
+    console.error(`terminal attach for pane ${paneId} failed to start: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   return { spawnAttachment };

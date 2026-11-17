@@ -25,6 +25,14 @@ describe("renderedClipboardPayload", () => {
     ], { start: "3" })])).toBe('<ol start="3"><li>Done<ul><li>Child</li></ul></li></ol>');
   });
 
+  test("keeps an item's own number, and nothing else an item says", () => {
+    expect(html([element("OL", [
+      element("LI", [text("one")], { value: "1" }),
+      element("LI", [text("four")], { value: "4", onclick: "x" }),
+      element("LI", [text("odd")], { value: "4x" }),
+    ])])).toBe('<ol><li value="1">one</li><li value="4">four</li><li>odd</li></ol>');
+  });
+
   test("keeps code whitespace and leaves out a code block's label, controls and notes", () => {
     const code = "  one\n\n\n  two  ";
     expect(html([element("P", [text("Run this")]), element("DIV", [

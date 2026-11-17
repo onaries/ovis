@@ -9,7 +9,8 @@ export type InlineNode =
   /** `dollar`: written as `$…$`, which a surface that cannot draw it shows again */
   | { type: "math"; value: string; dollar?: true }
   | { type: "strong" | "em" | "del"; children: InlineNode[] }
-  | { type: "link"; href: string; children: InlineNode[] }
+  /** `title`: what `[a](https://x.dev "title")` says of the link, shown when the pointer rests on it */
+  | { type: "link"; href: string; title?: string; children: InlineNode[] }
   /** `![alt](src)`; `fallback` is what a surface that draws no images shows after the `!` */
   | { type: "image"; alt: string; src: string; fallback: InlineNode[]; /** CSS pixels, from an HTML `<img width>` */ width?: number }
   /** a link to a local file (`[report](/repo/out/REPORT.md)`): its label opens the path */
@@ -21,7 +22,19 @@ export interface ListItem {
   checked?: boolean;
   /** what is indented under the item's text, in order: a nested list, a table */
   blocks?: MarkdownBlock[];
+  /**
+   * An ordered item's number as written, when its list's numbers neither count up from the first
+   * nor all repeat it: `1.` then `4.` shows 1 and 4, as typed, where markdown would renumber them
+   * 1 and 2 and change what was said. Absent, so the list counts up from its first number, from a
+   * list that counts up; from one whose first two items share a number (`1.` `1.` …, markdown's way
+   * to let the numbers count), so a `2.` arriving in a streamed reply changes no number already on
+   * screen; and from one holding a number past `LIST_NUMBER_LIMIT`, which the browser cannot draw.
+   */
+  number?: number;
 }
+
+/** The largest list number a browser draws: past a 32-bit integer it ignores `start` and `value`. */
+export const LIST_NUMBER_LIMIT = 2 ** 31 - 1;
 
 export interface ListBlock {
   type: "list";
@@ -187,7 +200,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // so `…/pull/36에서` links the address and leaves the Korean after it as text.
   // What may come before a mark is checked where its opener is found, not with a lookbehind
   // (shared/lookbehind.ts): `$`, `www.`, `_` and `__` after no word, a lone `*` after no `*`
-  const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|\*[^*\n]+\*(?!\*)|_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
+  const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|\*[^*\n]+\*(?!\*)|_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
   // its last part alone, for a `__` that nothing closes as bold: one `_` may still close it
   const emphasis = /_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
   // its bold part alone, for a `*` right after another, where a lone `*` opens nothing
@@ -223,8 +236,24 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   const dollarClose = next(/\$/g);
   const labelEnd = next(/[\]\n]/g);
   const targetEnd = next(/[\s)]/g);
+  // a title after the address's spaces: where it opens, and where each kind of title may close
+  const titleStart = next(/[^ \t]/g);
+  const doubleQuoteEnd = next(/["\n]/g);
+  const singleQuoteEnd = next(/['\n]/g);
+  const parenthesisEnd = next(/[()\n]/g);
   const emphasisClose = next(/_(?![\p{L}\p{N}\p{M}_])/gu, afterNonSpace);
   const strongClose = next(/__(?![\p{L}\p{N}\p{M}_])/gu, afterNonSpace);
+  /** Whether what follows the `(` of an inline link closes it: an address, a title or none, then `)`. */
+  const closesLink = (target: number): boolean => {
+    const end = targetEnd(target);
+    if (!(end > target)) return false;
+    if (source[end] === ")") return true;
+    if (source[end] !== " " && source[end] !== "\t") return false;
+    const open = titleStart(end);
+    const quote = source[open];
+    const close = quote === '"' ? doubleQuoteEnd(open + 1) : quote === "'" ? singleQuoteEnd(open + 1) : quote === "(" ? parenthesisEnd(open + 1) : null;
+    return close !== null && source[close] === (quote === "(" ? ")" : quote) && source[close + 1] === ")";
+  };
   let from = 0;
   for (;;) {
     opener.lastIndex = from;
@@ -243,12 +272,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
       if (/[A-Za-z0-9\\$]/.test(source[start - 1] ?? "") || !(dollarClose(start + 2) < mathBreak(start + 1))) pattern = null;
     } else if (char === "[") {
       const label = labelEnd(start + 1);
-      const target = label + 2;
-      if (!(label > start + 1 && source[label] === "]" && source[label + 1] === "(")) pattern = null;
-      else {
-        const end = targetEnd(target);
-        if (!(end > target && source[end] === ")")) pattern = null;
-      }
+      if (!(label > start + 1 && source[label] === "]" && source[label + 1] === "(" && closesLink(label + 2))) pattern = null;
     } else if (char === "w") {
       if (/[\w.@/-]/.test(source[start - 1] ?? "")) pattern = null;
     } else if (char === "*") {
@@ -268,6 +292,12 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     from = start + match[0].length;
     yield match;
   }
+}
+
+/** The address and title inside an inline link's parentheses, as `inlineMarks` found them: `https://x.dev "title"`. */
+function inlineLink(inside: string): { destination: string; title?: string } {
+  const space = inside.search(/\s/);
+  return space === -1 ? { destination: inside } : { destination: inside.slice(0, space), title: inside.slice(space).trim().slice(1, -1) };
 }
 
 /** Dependency-free inline markdown scanner. Unknown or malformed markup remains text. */
@@ -307,13 +337,15 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
     } else if (token.startsWith("$")) {
       nodes.push({ type: "math", value: token.slice(1, -1), dollar: true });
     } else if (token.startsWith("[")) {
-      const split = token.lastIndexOf("](");
-      const label = token.slice(1, split);
-      const target = token.slice(split + 2, -1);
-      // a label holds no `]`, so no link nests in one: only emphasis counts toward the depth
+      // a label holds no `]`, so the first one ends it (`[a](x "b]")`), and no link nests in one: only
+      // emphasis counts toward the depth
+      const close = token.indexOf("]");
+      const label = token.slice(1, close);
+      const { destination: target, title } = inlineLink(token.slice(close + 2, -1));
       const href = safeMarkdownHref(target) ?? webLikeHref(target);
-      const shown: InlineNode = href !== null ? { type: "link", href, children: parseInline(label, false, depth) }
-        : markdownFileNode(target, parseInline(label, false, depth)) ?? { type: "text", value: label };
+      const children = parseInline(label, false, depth);
+      const shown: InlineNode = href !== null ? (title ? { type: "link", href, title, children } : { type: "link", href, children })
+        : markdownFileNode(target, children) ?? { type: "text", value: label };
       if (image) nodes.push({ type: "image", alt: label, src: target, fallback: [{ type: "text", value: "!" }, shown] });
       else nodes.push(shown);
     } else if (token.startsWith("**") || token.startsWith("__")) {
@@ -389,6 +421,8 @@ function parseList(lines: string[], start: number, visualizations = false): { bl
   const ordered = /\d/.test(first[2] ?? "");
   const number = ordered ? Number.parseInt(first[2] ?? "1", 10) : 1;
   const block: ListBlock = { type: "list", ordered, ...(ordered && number !== 1 ? { start: number } : {}), items: [] };
+  // each item's number as written (ordered lists): kept on the items only when it is not the count
+  const numbers: number[] = [];
   let index = start;
   while (index < lines.length) {
     // between items: blank lines (a loose list, as agents often write one) and an item's own
@@ -449,8 +483,13 @@ function parseList(lines: string[], start: number, visualizations = false): { bl
     }
     if ((match[1] ?? "").length !== baseIndent || /\d/.test(match[2] ?? "") !== ordered) break;
     block.items.push(listItem(match[3] ?? ""));
+    if (ordered) numbers.push(Number.parseInt(match[2] ?? "1", 10));
     index += 1;
   }
+  const counts = numbers.every((written, at) => written === number + at);
+  const lazy = numbers.length > 1 && numbers[1] === number;
+  const drawable = numbers.every((written) => written <= LIST_NUMBER_LIMIT);
+  if (!counts && !lazy && drawable) block.items.forEach((item, at) => { item.number = numbers[at]; });
   return { block, next: index };
 }
 

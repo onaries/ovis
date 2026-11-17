@@ -258,3 +258,25 @@ it("records an abnormal close while running and stays quiet once the server is s
     warn.mockRestore();
   }
 });
+
+it("words an error frame's message by the server's view of failed herdr calls, keeping the frame's own code, and keeps its own without a view", async () => {
+  const view = () => ({ code: "worded", message: "the view's words" });
+  const told: Record<string, { code?: string; message?: string }[]> = {};
+  for (const [name, herdrFailure] of [["view", view], ["none", undefined]] as const) {
+    const handler = createSocket({
+      clients: new Set(), present: new Set(), stopped: () => false, admit: () => true, setRole() {}, watchable: () => true, terminalHistory: () => false, watchPane() {}, unwatchPane() {},
+      end() {}, holdPending() {}, attachments: new Map(), herdrFailure,
+      clientSnapshot: async () => { throw new TypeError("a fault of the bridge's own"); }, herdrLifetime: () => undefined, browserSnapshot: (snapshot) => snapshot, countVisit() {}, drainOutput() {},
+      frames: { resize: () => { throw new TypeError("a fault of the bridge's own"); } } as never,
+    });
+    const frames: { type: string; code?: string; message?: string }[] = [];
+    const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: (raw: string) => { frames.push(JSON.parse(raw)); return raw.length; }, close: () => {} };
+    await handler.open!(client);
+    await handler.message!(client, JSON.stringify({ type: "resize", pane_id: "w1:p1", cols: 80, rows: 24 }));
+    told[name] = frames.filter((frame) => frame.type === "error").map(({ code, message }) => ({ code, message }));
+  }
+  expect(told).toEqual({
+    view: [{ code: "snapshot_failed", message: view().message }, { code: "command_failed", message: view().message }],
+    none: [{ code: "snapshot_failed", message: "a fault of the bridge's own" }, { code: "command_failed", message: "a fault of the bridge's own" }],
+  });
+});

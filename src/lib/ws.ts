@@ -821,7 +821,7 @@ export class HerdrSocket {
   get machineEventsAvailable(): boolean | null { return this.machineEventsOffered; }
 
   setMachineEvents(enabled: boolean): void {
-    if (this.machineEventsOffered) this.send({ type: "machine-events", enabled });
+    if (this.machineEventsOffered) this.send({ type: "machine-events", enabled, compact_agents: true });
   }
 
   on(handler: Handler): () => void {

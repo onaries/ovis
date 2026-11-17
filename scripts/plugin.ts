@@ -25,10 +25,12 @@ import { acquireOwnerDirectory, guardPath, type OwnerLease } from "../server/own
 import { parseBirth, readProcessBirth } from "../server/process-owner.ts";
 import { writeStateDocument } from "../server/state-document.ts";
 import { defaultStateDir } from "../server/update-state.ts";
+import { fleetPreview } from "../server/preview.ts";
+import { stateDirRefusal } from "../server/machine-profile.ts";
 import { COMPILED, entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
 import { version as builtVersion } from "../package.json";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, uptime } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 
@@ -184,6 +186,99 @@ const originOf = (value: number): string => `http://${host === "0.0.0.0" ? "127.
 let origin = originOf(port);
 
 /**
+ * This plugin runs for a machine profile: OVIS_PROFILE=machine under the fleet preview (server/preview.ts), both read
+ * from the plugin's settings as the server it starts gets them (`env`: its environment, then its settings files).
+ */
+const machineProfile = fleetPreview(env) && env["OVIS_PROFILE"] === "machine";
+/** The most a profile's record may hold: its own is one short line (a port, a host and a socket path of at most 100 bytes). */
+const RECORD_MAX_BYTES = 4096;
+/**
+ * How the record is opened, as server/profile-marker.ts opens the profile's marker: never through a link, never waiting
+ * (opening a FIFO for reading would wait for a writer), and never as this process's terminal.
+ */
+const RECORD_OPEN = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0) | (constants.O_NOCTTY ?? 0);
+
+/**
+ * The profile's record at `path`, opened once and asked of that descriptor only: a regular file of at most
+ * RECORD_MAX_BYTES, read to its end and never more than one byte past that. null for anything else.
+ */
+function profileRecord(path: string): unknown {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, RECORD_OPEN);
+    const entry = fstatSync(fd);
+    if (!entry.isFile() || entry.size > RECORD_MAX_BYTES) return null;
+    const bytes = Buffer.alloc(RECORD_MAX_BYTES + 1);
+    let length = 0;
+    for (let read = 1; read > 0 && length < bytes.length; length += read) read = readSync(fd, bytes, length, bytes.length - length, length);
+    if (length > RECORD_MAX_BYTES) return null;
+    return JSON.parse(bytes.toString("utf8", 0, length));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * The machine profile's local owner, when this plugin runs for one (`machineProfile`). The profile records its owner's
+ * unix socket in its state folder (`serve.lock/http.json`, with `door: 1`) and answers only liveness on its TCP port, so
+ * the requests to the server go to that socket, addressed as `http://localhost`, the one Host and Origin it takes
+ * there. The plugin takes the socket only when the state folder passes the profile's own check (server/machine-profile.ts
+ * stateDirRefusal), the record names `serve.sock` in the folder's real path, as the profile names it, and `serve.sock`
+ * is a socket this account owns and no group or other may write to, not a link. Otherwise null, also when the record is
+ * missing, unreadable, larger than RECORD_MAX_BYTES, not a regular file, names no door or another socket, or the folder
+ * is absent: the server then counts as not running (appHealth), and no request goes to it. Without the profile, null at
+ * once, and the requests go to `origin` over TCP. Read until a health check passes (serverDoor): the record is written
+ * once the server listens.
+ */
+function ownerDoor(): string | null {
+  if (!machineProfile) return null;
+  try {
+    // the folder as the profile takes it (server/machine-profile.ts walkedStateDir): its record and its socket are there
+    const dir = realpathSync(APP_STATE_DIR);
+    if (stateDirRefusal(dir) !== null) return null;
+    const record = profileRecord(join(dir, "serve.lock", "http.json")) as { door?: unknown; socket?: unknown } | null;
+    const own = join(dir, "serve.sock");
+    if (typeof record !== "object" || record === null || record.door !== 1 || record.socket !== own) return null;
+    const socket = lstatSync(own);
+    return socket.isSocket() && socket.uid === process.getuid?.() && (socket.mode & 0o022) === 0 ? own : null;
+  } catch { return null; }
+}
+/**
+ * The door of this command: the one its first passing health check went to (appHealth), kept for every later request
+ * of the command, so a command never moves from one door to the other. undefined until a health check passed.
+ */
+let commandDoor: string | null | undefined;
+/** The door a request goes to: the command's (commandDoor), or ownerDoor's answer now while no health check passed. */
+const serverDoor = (): string | null => commandDoor === undefined ? ownerDoor() : commandDoor;
+/** The origin the requests to the server name: `origin`, or `http://localhost` on a machine profile's owner socket. */
+const serverOrigin = (): string => serverDoor() === null ? origin : "http://localhost";
+/**
+ * A request on a machine profile's owner socket (`door`), as given but with no `authorization` header: the profile
+ * takes its owner on that socket itself, and the plugin sends no token there.
+ */
+function ownerFetch(door: string, input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const request = new Request(input, init);
+  request.headers.delete("authorization");
+  return fetch(request, { unix: door });
+}
+/**
+ * What `pair`, `phone` and `phone-setup` say for a machine profile instead of an address, a pairing code or a Tailscale
+ * serve: its TCP port answers liveness only (server/machine-profile.ts machineTcpAnswer), and a phone pairs with it
+ * through the Ovis relay. The commands are named as `add` names its own (OVIS_CLI_NAME, scripts/plugin-link.ts cli).
+ */
+function profileRelayOnly(): string {
+  const cli = env["OVIS_CLI_NAME"] || "ovis";
+  return `A phone reaches this machine profile through the Ovis relay only, not at an address: run ${cli} add to add this machine to your Ovis account, or ${cli} link --code to pair one device.`;
+}
+
+/** One request to the server at `path`: over TCP to `origin`, or on a machine profile's owner socket (`door`, serverDoor). */
+function serverFetch(path: string, init: RequestInit = {}, door = serverDoor()): Promise<Response> {
+  return door === null ? fetch(`${origin}${path}`, init) : ownerFetch(door, `http://localhost${path}`, init);
+}
+
+/**
  * herdr's PATH plus where the one-line installer (install.sh) puts Bun, Node and herdr: herdr may
  * have been started from a shell that has none of them, and the server spawns `node` for every
  * terminal. Appended, so a Node the user chose (nvm, Homebrew) still comes first.
@@ -220,17 +315,36 @@ async function pairingParts(): Promise<{ qr: (text: string) => string; decodeOff
   return { qr, decodeOffer };
 }
 
-async function health(): Promise<boolean> {
+/**
+ * The server's health, when the app answers it; null otherwise. For a machine profile it is asked on the owner socket
+ * only: with no socket the plugin may take (ownerDoor), it is null and nothing is sent, since the profile answers its
+ * TCP port with liveness only. There the answer also counts without `herdr` when it carries `machine_profile` with
+ * `runtime_down` (server/machine-profile.ts machineHealth): the profile runs, and `engineDown` is its reason while its
+ * engine does not answer ("" with none given). Over TCP `engineDown` is always null.
+ */
+async function appHealth(): Promise<{ readonly engineDown: string | null } | null> {
+  // the door the request goes to and the answer is judged by: decided once, and kept for the command once it passes
+  const door = serverDoor();
+  if (machineProfile && door === null) return null;
   try {
-    const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1500) });
-    if (!response.ok) return false;
+    const response = await serverFetch("/api/health", { signal: AbortSignal.timeout(1500) }, door);
+    if (!response.ok) return null;
     // the port may hold another program's 200 (a kept port that went stale): only the app's answer
     // counts, in the shape every release has sent (server/index.ts)
-    const body = await response.json() as { ok?: unknown; herdr?: unknown; auth?: unknown };
-    return body.ok === true && typeof body.herdr === "object" && body.herdr !== null && appAuth(body.auth);
+    const body = await response.json() as { ok?: unknown; herdr?: unknown; auth?: unknown; machine_profile?: unknown };
+    if (body.ok !== true || !appAuth(body.auth)) return null;
+    const profile = door === null ? null : body.machine_profile as { runtime_down?: unknown; reason?: unknown } | null | undefined;
+    const engine = typeof profile === "object" && profile !== null && typeof profile.runtime_down === "boolean" ? profile : null;
+    if ((typeof body.herdr !== "object" || body.herdr === null) && engine === null) return null;
+    commandDoor = door;
+    return { engineDown: engine?.runtime_down === true ? (typeof engine.reason === "string" ? engine.reason : "") : null };
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function health(): Promise<boolean> {
+  return (await appHealth()) !== null;
 }
 
 /** Whether the app holds the port: its bridge health answers without asking herdr. */
@@ -445,8 +559,9 @@ async function settlePort(): Promise<"ready" | "running" | "failed"> {
     if (await health()) return "running";
     await Bun.sleep(250);
   }
-  // the app holds the port but cannot reach herdr: another port would put a second server beside it (#428)
-  if (await appOnPort()) {
+  // the app holds the port but cannot reach herdr: another port would put a second server beside it (#428). A machine
+  // profile answers its TCP port with liveness only, so for one the app found there is another server
+  if (!machineProfile && await appOnPort()) {
     if (await health()) return "running";
     const why = await healthError();
     if (why === null) return "running";
@@ -478,6 +593,11 @@ async function start(): Promise<number> {
   if (await health()) {
     process.stdout.write(`Ovis already running at ${origin}\n`);
     return 0;
+  }
+  // a machine profile is started on its own, not by the managed launcher: nothing is spawned, made or written for it
+  if (machineProfile) {
+    process.stderr.write("This plugin does not start a machine profile. Start it with OVIS_PROFILE=machine, OVIS_PREVIEW=fleet and OVIS_STATE_DIR naming a folder of its own, running ovis-server serve.\n");
+    return 1;
   }
   mkdirSync(REQUESTED_STATE_DIR, { recursive: true });
   const turn = await takeTurn();
@@ -830,6 +950,11 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
  */
 async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<number> {
   if (process.argv.includes("--approve")) return approvePairings();
+  // a code started on a machine profile is entered at no address: no pairing is started for it
+  if (machineProfile) {
+    process.stderr.write(`${profileRelayOnly()}\n`);
+    return 1;
+  }
   const { qr, decodeOffer } = parts ?? await pairingParts();
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
@@ -837,7 +962,7 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
   }
   const headers: Record<string, string> = { "content-type": "application/json", "x-herdr-machine": "1" };
   if ((env["OVIS_TOKEN"] ?? "") !== "") headers["authorization"] = `Bearer ${env["OVIS_TOKEN"]}`;
-  const started = await fetch(`${origin}/api/devices/pair/start`, { method: "POST", headers, body: "{}" });
+  const started = await serverFetch("/api/devices/pair/start", { method: "POST", headers, body: "{}" });
   if (!started.ok) {
     process.stderr.write(`could not start a pairing (${started.status}): ${await started.text()}\n`);
     return 1;
@@ -845,7 +970,7 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
   const { code } = (await started.json()) as { code: string; expires_at: string };
   let url: string | null = null;
   try {
-    const access = (await (await fetch(`${origin}/api/access`, { headers })).json()) as { tailscale: { serving_url: string | null } };
+    const access = (await (await serverFetch("/api/access", { headers })).json()) as { tailscale: { serving_url: string | null } };
     url = access.tailscale.serving_url;
   } catch { /* an older server: the code alone */ }
   const out: string[] = [`Pairing code: ${code.slice(0, 3)} ${code.slice(3)}   (good for 10 minutes, for one device)`];
@@ -856,7 +981,7 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
     out.push("On the other device, open the app's address and enter the code. Settings → Phone, on any signed-in device, shows the address and how to get one.");
   }
   try {
-    const relayResponse = await fetch(`${origin}/api/relay`, { headers, signal: AbortSignal.timeout(5000) });
+    const relayResponse = await serverFetch("/api/relay", { headers, signal: AbortSignal.timeout(5000) });
     if (relayResponse.status !== 404) {
       if (!relayResponse.ok) throw new Error(`relay status request failed (${relayResponse.status})`);
       const relayStatus: unknown = await relayResponse.json();
@@ -864,9 +989,9 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
         throw new Error("invalid relay status response");
       }
       if (relayStatus.phase === "online") {
-        const offerResponse = await fetch(`${origin}/api/relay/offer`, {
+        const offerResponse = await serverFetch("/api/relay/offer", {
           method: "POST",
-          headers: { ...headers, "x-herdr-update": "1", origin },
+          headers: { ...headers, "x-herdr-update": "1", origin: serverOrigin() },
           body: "{}",
           signal: AbortSignal.timeout(5000),
         });
@@ -900,9 +1025,9 @@ async function approvePairings(): Promise<number> {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
     return 1;
   }
-  const headers: Record<string, string> = { "content-type": "application/json", "x-herdr-machine": "1", "x-herdr-update": "1", origin };
+  const headers: Record<string, string> = { "content-type": "application/json", "x-herdr-machine": "1", "x-herdr-update": "1", origin: serverOrigin() };
   if ((env["OVIS_TOKEN"] ?? "") !== "") headers["authorization"] = `Bearer ${env["OVIS_TOKEN"]}`;
-  const listed = await fetch(`${origin}/api/relay/pairings`, { headers });
+  const listed = await serverFetch("/api/relay/pairings", { headers });
   if (!listed.ok) {
     process.stderr.write(`could not read the waiting pairings (${listed.status}): ${await listed.text()}\n`);
     return 1;
@@ -923,13 +1048,13 @@ async function approvePairings(): Promise<number> {
     signal: new AbortController().signal,
     // read again before three digits approve: a request that came since may end in the same three
     list: async () => {
-      const again = await fetch(`${origin}/api/relay/pairings`, { headers, signal: AbortSignal.timeout(15_000) });
+      const again = await serverFetch("/api/relay/pairings", { headers, signal: AbortSignal.timeout(15_000) });
       if (!again.ok) throw new Error(`could not read the waiting pairings (${again.status})`);
       return ((await again.json()) as { pairings: WaitingDevice[] }).pairings;
     },
     decide: async (id, decision) => {
       try {
-        const decided = await fetch(`${origin}/api/relay/pairing`, { method: "POST", headers, body: JSON.stringify({ id, decision }), signal: AbortSignal.timeout(15_000) });
+        const decided = await serverFetch("/api/relay/pairing", { method: "POST", headers, body: JSON.stringify({ id, decision }), signal: AbortSignal.timeout(15_000) });
         return decided.ok ? "taken" : "gone";
       } catch { return "away"; }
     },
@@ -993,8 +1118,11 @@ async function linkCommand(): Promise<number> {
   // hears ends the process where it stands, or leaves it running with nobody to read it: the code stays valid either
   // way. It is heard instead, and stops the run as its signal would
   process.stdout.on("error", halt);
+  // a machine profile's owner calls go to its socket, the door health() passed on (serverDoor), with the origin it takes there
+  const door = serverDoor();
   return linkPc(process.argv.slice(3), {
-    origin, headers, signal: stop.signal,
+    origin: door === null ? origin : "http://localhost", headers, signal: stop.signal,
+    ...(door === null ? {} : { fetch: (input: string | URL | Request, init?: RequestInit) => ownerFetch(door, input, init) }),
     accountService: accountServiceOrigin(env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE),
     // the fleet preview, the command's name and the app the server pairs with, from the settings the server it starts gets
     ...linkSettings(env),
@@ -1017,6 +1145,11 @@ async function linkCommand(): Promise<number> {
  * server nor startup ever calls it.
  */
 async function phone(): Promise<number> {
+  // a machine profile serves no app at its port: no address is shown and Tailscale is not asked or changed
+  if (machineProfile) {
+    process.stdout.write(`${profileRelayOnly()}\n`);
+    return 0;
+  }
   // before `tailscale serve` (see qrDrawer)
   const qr = await qrDrawer();
   const say = (line = "") => process.stdout.write(line + "\n");
@@ -1086,18 +1219,20 @@ async function phone(): Promise<number> {
 async function phoneSetup(): Promise<number> {
   const active = activePluginScript(ROOT, port, APP_STATE_DIR);
   if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) return await handOn(active, ["phone-setup"]);
-  // before the pairing code is asked for (see qrDrawer), and not taken for a failed read of the app below
-  const parts = await pairingParts();
-  process.stdout.write(`Phone setup\n\nApp on this PC: ${link(origin)}\n`);
+  // before the pairing code is asked for (see qrDrawer), and not taken for a failed read of the app below; none for a
+  // machine profile, which shows no address and starts no pairing (profileRelayOnly)
+  const parts = machineProfile ? null : await pairingParts();
+  process.stdout.write(`Phone setup\n\n${parts === null ? profileRelayOnly() : `App on this PC: ${link(origin)}`}\n`);
   let code = 0;
-  if (!(await health())) {
+  if (parts === null) code = 0;
+  else if (!(await health())) {
     process.stdout.write("The app is not running. Run the Start Ovis action, then reopen Phone setup.\n");
     code = 1;
   } else {
     const headers: Record<string, string> = {};
     if (env["OVIS_TOKEN"]) headers["authorization"] = `Bearer ${env["OVIS_TOKEN"]}`;
     try {
-      const response = await fetch(`${origin}/api/access`, { headers, signal: AbortSignal.timeout(5000) });
+      const response = await serverFetch("/api/access", { headers, signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error(`access request failed (${response.status})`);
       const access = await response.json() as RemoteAccess;
       if (!access.tailscale.serving_url) {
@@ -1135,8 +1270,10 @@ function runningVersion(): string | null {
 /** Reporting "down" is not an action failure: herdr logs a nonzero exit as failed. */
 async function status(): Promise<number> {
   const pid = recordedPid();
-  const up = await health();
-  process.stdout.write(`${up ? "running" : "down"} ${origin}${pid === null ? "" : ` (pid ${pid})`}\n`);
+  const answer = await appHealth();
+  process.stdout.write(`${answer !== null ? "running" : "down"} ${origin}${pid === null ? "" : ` (pid ${pid})`}\n`);
+  // a machine profile that runs while its engine does not answer (appHealth)
+  if (typeof answer?.engineDown === "string") process.stdout.write(`engine: down${answer.engineDown === "" ? "" : ` (${answer.engineDown})`}\n`);
   const version = runningVersion();
   if (version !== null) process.stdout.write(`version: ${version}\n`);
   process.stdout.write(`config: ${CONFIG_FILES.length === 0 ? `none (settings go in ${join(CONFIG_DIR, "env")})` : CONFIG_FILES.join(", ")}\n`);

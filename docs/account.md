@@ -1022,3 +1022,6 @@ with "continue only if you started this on your own PC".
   signing and verification.
 - [`shared/account-service-fake.ts`](../shared/account-service-fake.ts): the account service API in
   memory, for tests.
+- [`shared/account-list-entry.ts`](../shared/account-list-entry.ts): the entry format of a signed
+  list ([account-list.md](account-list.md)). No released part of Ovis reads or writes it yet, and
+  nothing on this page uses it.

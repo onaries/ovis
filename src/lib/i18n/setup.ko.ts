@@ -84,4 +84,5 @@ export const SETUP_KO: Record<string, string> = {
   "Opens the first-run guide again, from its first step, to install coding agents on this PC and connect them. What was set up before stays as it is.": "처음 실행 때의 설정 안내를 첫 단계부터 다시 엽니다. 이 PC에 코딩 에이전트를 설치하고 연결하는 과정이며, 이미 해 둔 설정은 그대로 둡니다.",
   "Accounts of providers that none of the agents listed above signs in to, such as Cursor or an agent this PC does not have.": "위 목록의 어느 에이전트도 로그인하지 않는 서비스의 계정입니다. 예를 들어 Cursor나 이 PC에 없는 에이전트의 계정입니다.",
   "Old record": "오래된 기록",
+  "Install another agent ({count})": "다른 에이전트 설치 ({count})",
 };

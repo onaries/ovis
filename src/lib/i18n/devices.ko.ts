@@ -150,7 +150,6 @@ export const DEVICES_KO: Record<string, string> = {
   "Get a pairing code": "페어링 코드 받기",
   "This browser would not copy it. Press and hold the link to copy it.": "이 브라우저가 복사하지 못했습니다. 링크를 길게 눌러 복사하세요.",
   "Hide QR code": "QR 코드 숨기기",
-  "Show QR code": "QR 코드 보기",
   "Connect another device": "다른 기기 연결",
   "Send it this link, or show it the QR code. It opens Ovis there and pairs it with this PC.": "이 링크를 보내거나 QR 코드를 보여 주세요. 그 기기에서 Ovis가 열리고 이 PC와 페어링됩니다.",
   "Scan it with the other device's camera.": "다른 기기의 카메라로 스캔하세요.",
@@ -247,4 +246,9 @@ export const DEVICES_KO: Record<string, string> = {
   "Asking {name}…": "{name}에 요청하는 중…",
   "Approve on another device of your account": "계정의 다른 기기에서 승인하세요",
   "That PC could not be added. Try again.": "그 PC를 추가하지 못했습니다. 다시 시도하세요.",
+  "The relay did not start: {message}": "릴레이를 시작하지 못했습니다: {message}",
+  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "푸시 알림은 HTTPS 또는 localhost가 필요하고, iPhone에서는 홈 화면 앱이어야 합니다.",
+  "Allow notifications in your browser settings, then try again.": "브라우저 설정에서 알림을 허용한 뒤 다시 시도하세요.",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "휴대폰 설정에서 Ovis 알림을 허용한 뒤 다시 시도하세요.",
+  "Could not send the test notification. Try again.": "테스트 알림을 보내지 못했습니다. 다시 시도하세요.",
 };

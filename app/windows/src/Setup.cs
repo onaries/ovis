@@ -159,6 +159,21 @@ namespace Ovis
             return null;
         }
 
+        /// <summary>
+        /// How the app runs one of the plugin's commands, as herdr's actions run it. install.ps1's install of the release's
+        /// compiled server (0.5.4 and newer) links a plugin of a run.ps1 alone, which hands the command to bin\ovis-server.exe
+        /// and needs no Bun; a checkout (herdr's GitHub install, a linked one) runs its scripts\plugin.ts with Bun, whatever
+        /// else its root holds. Asked through plugin.ts alone, the compiled server's status could not run, and one that
+        /// answered showed as not running.
+        /// </summary>
+        public static string[] PluginCommandLine(string root, string command, Func<string, bool> exists)
+        {
+            var script = System.IO.Path.Combine(root, "scripts", "plugin.ts");
+            var run = System.IO.Path.Combine(root, "run.ps1");
+            if (!exists(script) && exists(run)) return new[] { "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", run, command };
+            return new[] { "bun", script, command };
+        }
+
         /// <summary>The `version: X.Y.Z` line of `plugin.ts status`: the release that runs, which may be newer than herdr's checkout.</summary>
         public static string StatusVersion(string output)
         {
@@ -262,6 +277,15 @@ namespace Ovis
         public static bool StoppedServer(string output)
         {
             return (output ?? "").Split('\n').Select(line => line.Trim()).Any(line => line.StartsWith("stopped ", StringComparison.Ordinal) && line.Contains("(pid "));
+        }
+
+        /// <summary>
+        /// A `plugin.ts stop` that failed in a way Start reports: every failure but the one that left alone a recorded pid
+        /// it could not verify as the Ovis server's (another program reused it), which the start then passes over.
+        /// </summary>
+        public static bool StopFailed(int status, string output)
+        {
+            return status != 0 && (output ?? "").IndexOf("could not verify the recorded Ovis process", StringComparison.Ordinal) < 0;
         }
 
         /// <summary>The bridge health's answer is the app's own: `ok: true` with an integer `bridge_protocol` (server/index.ts).</summary>

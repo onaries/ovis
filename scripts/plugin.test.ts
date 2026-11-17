@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { platform, tmpdir, uptime } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 import { COMMAND_ALIASES } from "./plugin-runtime.ts";
 import { herdrStateDir } from "./plugin-state.ts";
@@ -10,6 +10,8 @@ import { quietPort } from "./quiet-port.ts";
 import { readProcessBirth } from "../server/process-owner.ts";
 import { updateStateDir } from "../server/update-state.ts";
 import { exportPublicKey, generateKeyPair } from "../shared/relay-e2ee.ts";
+import { trustRefusal } from "../server/herdr-core/discovery.ts";
+import { profileGroups } from "../server/herdr-discovery.ts";
 import { decodeOffer, encodeOffer } from "../shared/relay-offer.ts";
 
 /**
@@ -25,7 +27,7 @@ async function status(): Promise<{ out: string; err: string; exitCode: number }>
   return run("status");
 }
 
-async function run(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string } = {}): Promise<{ out: string; err: string; exitCode: number }> {
+async function run(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string; timeout?: number } = {}): Promise<{ out: string; err: string; exitCode: number }> {
   const child = launch(command, extra, more);
   const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { out, err, exitCode };
@@ -41,9 +43,9 @@ function launchEnv(extra: Record<string, string | undefined> = {}): Record<strin
   return env;
 }
 
-function launch(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string } = {}) {
-  // `stdin`: what is piped in, which is not a terminal
-  return Bun.spawn(["bun", "scripts/plugin.ts", command, ...more.args ?? []], { cwd: ROOT, env: launchEnv(extra), stdout: "pipe", stderr: "pipe", ...more.stdin === undefined ? {} : { stdin: new Blob([more.stdin]) } });
+function launch(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string; timeout?: number } = {}) {
+  // `stdin`: what is piped in, which is not a terminal; `timeout`: the command is killed after that many ms
+  return Bun.spawn(["bun", "scripts/plugin.ts", command, ...more.args ?? []], { cwd: ROOT, env: launchEnv(extra), stdout: "pipe", stderr: "pipe", ...more.stdin === undefined ? {} : { stdin: new Blob([more.stdin]) }, ...more.timeout === undefined ? {} : { timeout: more.timeout, killSignal: "SIGKILL" } });
 }
 
 beforeEach(() => {
@@ -865,6 +867,445 @@ describe("add and login", () => {
       "",
     ].join("\n"));
   });
+});
+
+/**
+ * A machine profile as the plugin finds it: its local owner on the unix socket its lock records (`serve.lock/http.json`,
+ * `door: 1`), its TCP port answering liveness and nothing else (server/machine-profile.ts machineTcpAnswer).
+ */
+describe.skipIf(platform() === "win32")("a machine profile, under the fleet preview", () => {
+  type Call = { door: "socket" | "tcp"; call: string; host: string | null; origin: string | null };
+  /**
+   * Where a profile's folders are made: in a folder the profile's own walk accepts, the test's temporary folder when it
+   * passes that walk, else the system's sticky /tmp (as server/machine-profile.contract.test.ts does).
+   */
+  const walked = (): string => {
+    const parent = platform() === "win32" || trustRefusal(realpathSync(tmpdir()), profileGroups(), true) === null ? tmpdir() : "/tmp";
+    const home = mkdtempSync(join(parent, "ovis-plugin-profile-"));
+    homes.push(home);
+    return home;
+  };
+  const homes: string[] = [];
+  afterEach(() => { for (const home of homes.splice(0)) { chmodSync(home, 0o700); rmSync(home, { recursive: true, force: true }); } });
+  /** OVIS_TOKEN of every run here: the profile ignores it, and no output names it */
+  const TOKEN = "plugin-profile-test-token";
+  /**
+   * A stand-in profile. `record`: what its lock records beside its port and socket (a string: the record's whole text);
+   * `owner`: its socket's answer to a path instead of the stand-in's own; `at`: where its socket listens instead of
+   * `serve.sock` in the state folder's real path, as a profile names it; `named`: the socket its record names, when not
+   * that one; `tcp`: its TCP port answers health as an ordinary server does, or with this body; `linked`: `serve.sock`
+   * is a link to its socket elsewhere; `folderMode`: the state folder's mode instead of 0700; `parentMode`: the mode of
+   * the folder that holds it. `settings` writes more lines into the plugin's settings file. `bearers` lists, for each
+   * call, its door and whether it carried an `authorization` header. Its state folder is `state` in `home`, made where
+   * the profile's own walk accepts it, and its socket is 0600, as the profile makes them.
+   */
+  function profilePc(record: Record<string, unknown> | string = { door: 1 }, more: { owner?: (path: string) => Response | undefined; at?: string; named?: string; tcp?: true | Record<string, unknown>; linked?: true; folderMode?: number; parentMode?: number } = {}) {
+    const calls: Call[] = [];
+    const bearers: string[] = [];
+    const home = walked();
+    const state = join(home, "state");
+    mkdirSync(join(state, "serve.lock"), { recursive: true, mode: 0o700 });
+    chmodSync(state, 0o700);
+    const own = join(realpathSync(state), "serve.sock");
+    const socket = more.at ?? (more.linked ? join(home, "elsewhere.sock") : own);
+    mkdirSync(dirname(socket), { recursive: true });
+    rmSync(socket, { force: true });
+    const seen = (door: Call["door"], request: Request): string => {
+      const path = new URL(request.url).pathname;
+      calls.push({ door, call: `${request.method} ${path}`, host: request.headers.get("host"), origin: request.headers.get("origin") });
+      bearers.push(`${door} ${request.method} ${path} ${request.headers.has("authorization") ? "with" : "without"} authorization`);
+      return path;
+    };
+    const owner = Bun.serve({ unix: socket, fetch(request) {
+      const path = seen("socket", request);
+      const instead = more.owner?.(path);
+      if (instead !== undefined) return instead;
+      if (path === "/api/health") return Response.json({ ...APP_HEALTH, auth: { required: false, authenticated: true, via: "local", role: "drive" }, machine_profile: { engine: "herdr", runtime_down: false, reason: null } });
+      if (path === "/api/account/status") return Response.json({ account: "acct_1", unlinked: [], removals: [], adds: [], blocked: [] });
+      if (path === "/api/relay/pairings") return Response.json({ pairings: [] });
+      return new Response(null, { status: 404 });
+    } });
+    chmodSync(socket, 0o600);
+    if (more.linked) symlinkSync(socket, own);
+    const tcp = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      if (seen("tcp", request) === "/api/health") return Response.json(more.tcp === undefined ? { ok: true } : more.tcp === true ? APP_HEALTH : more.tcp);
+      return Response.json({ error: { code: "unauthorized", message: "Unauthorized" } }, { status: 401 });
+    } });
+    writeFileSync(join(state, "serve.lock", "http.json"), typeof record === "string" ? record : JSON.stringify({ port: tcp.port, hostname: "127.0.0.1", socket: more.named ?? (more.linked ? own : socket), ...record }));
+    if (more.folderMode !== undefined) chmodSync(state, more.folderMode);
+    if (more.parentMode !== undefined) chmodSync(home, more.parentMode);
+    const settings = (lines = ""): void => writeFileSync(join(configDir, ".env"), `PORT=${tcp.port}\n${lines}`);
+    settings();
+    const env: Record<string, string | undefined> = { HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: state, OVIS_TOKEN: TOKEN, OVIS_PROFILE: "machine", OVIS_PREVIEW: "fleet" };
+    return { calls, bearers, port: tcp.port!, socket, state, home, env, settings, stop: async () => { await owner.stop(true); await tcp.stop(true); } };
+  }
+  /** What a run printed, which names neither the token nor the socket's path */
+  const printed = (pc: { socket: string }, ...runs: { out: string; err: string }[]): string => {
+    const text = runs.map((one) => one.out + one.err).join("");
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(pc.socket);
+    return text;
+  };
+
+  it("is read on its owner socket as http://localhost: status says it runs, add reads its account there, pair --approve its waiting devices", async () => {
+    const pc = profilePc();
+    try {
+      const status = await run("status", pc.env);
+      expect(status.out.split("\n")[0], status.err).toBe(`running http://127.0.0.1:${pc.port}`);
+      const add = await run("add", pc.env);
+      expect([add.out, add.exitCode], add.err).toEqual(["This PC is already in an Ovis account (acct_1).\n", 0]);
+      const approve = await run("pair", pc.env, { args: ["--approve"] });
+      expect([approve.out, approve.exitCode], approve.err).toEqual(["No device is waiting to pair.\n", 0]);
+      printed(pc, status, add, approve);
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([
+      { door: "socket", call: "GET /api/health", host: "localhost", origin: null },
+      { door: "socket", call: "GET /api/health", host: "localhost", origin: null },
+      { door: "socket", call: "GET /api/account/status", host: "localhost", origin: null },
+      { door: "socket", call: "GET /api/health", host: "localhost", origin: null },
+      { door: "socket", call: "GET /api/relay/pairings", host: "localhost", origin: "http://localhost" },
+    ]);
+  }, 30_000);
+
+  it("takes OVIS_PREVIEW and OVIS_PROFILE from the plugin's settings file as from its environment, the file after the environment", async () => {
+    const ways: [string, Record<string, string | undefined>, string, "socket" | "tcp"][] = [
+      ["both in the file only", { OVIS_PREVIEW: undefined, OVIS_PROFILE: undefined }, "OVIS_PREVIEW=fleet\nOVIS_PROFILE=machine\n", "socket"],
+      ["the preview in the file over another value in the environment", { OVIS_PREVIEW: "other" }, "OVIS_PREVIEW=fleet\n", "socket"],
+      ["the preview turned off in the file over fleet in the environment", {}, "OVIS_PREVIEW=\n", "tcp"],
+      ["another profile in the file over machine in the environment", {}, "OVIS_PROFILE=other\n", "tcp"],
+    ];
+    for (const [label, change, lines, door] of ways) {
+      const pc = profilePc();
+      try {
+        pc.settings(lines);
+        const status = await run("status", { ...pc.env, ...change });
+        expect([label, status.out.split("\n")[0]]).toEqual([label, `${door === "socket" ? "running" : "down"} http://127.0.0.1:${pc.port}`]);
+        printed(pc, status);
+      } finally { await pc.stop(); }
+      expect([label, pc.calls.map((call) => call.door)]).toEqual([label, [door]]);
+    }
+  }, 60_000);
+
+  it("is asked on its TCP port when the preview is off or OVIS_PROFILE is not machine; with both, a record that is missing, unreadable, names no door or another socket than its own leaves it not running and asks nothing", async () => {
+    const elsewhere = join(scratch, "elsewhere", "serve.sock");
+    const linked = join(scratch, "linked-state");
+    const ways: [string, Record<string, string | undefined>, Record<string, unknown> | string | null, { at?: string; named?: string }?][] = [
+      ["a live socket outside the state folder", {}, { door: 1 }, { at: elsewhere }],
+      ["a relative path to a live socket", {}, { door: 1 }, { at: elsewhere, named: relative(ROOT, elsewhere) }],
+      ["its own socket named through a link to the state folder", {}, { door: 1 }, { named: join(linked, "serve.sock") }],
+      ["no preview", { OVIS_PREVIEW: undefined }, { door: 1 }],
+      ["a preview list without fleet", { OVIS_PREVIEW: "fleets" }, { door: 1 }],
+      ["no profile", { OVIS_PROFILE: undefined }, { door: 1 }],
+      ["another profile", { OVIS_PROFILE: "machines" }, { door: 1 }],
+      ["no door in its record", {}, {}],
+      ["another door", {}, { door: 2 }],
+      ["a door with no socket", {}, { door: 1, socket: 7 }],
+      ["a record that is not JSON", {}, "{door: 1"],
+      ["no record", {}, null],
+    ];
+    for (const [label, change, record, where] of ways) {
+      const pc = profilePc(record ?? "", where);
+      if (record === null) rmSync(join(pc.state, "serve.lock", "http.json"));
+      rmSync(linked, { force: true });
+      symlinkSync(pc.state, linked);
+      try {
+        const env = { ...pc.env, ...change };
+        const status = await run("status", env);
+        const add = await run("add", env);
+        expect([label, status.out.split("\n")[0], add.err, add.exitCode]).toEqual([label, `down http://127.0.0.1:${pc.port}`, `Ovis is not running at http://127.0.0.1:${pc.port}; start it first\n`, 1]);
+        printed(pc, status, add);
+      } finally { await pc.stop(); }
+      // with both switches the health check goes to the owner socket only: none here, so nothing is asked
+      const both = !("OVIS_PREVIEW" in change) && !("OVIS_PROFILE" in change);
+      expect([label, pc.calls]).toEqual([label, !both ? [
+        { door: "tcp", call: "GET /api/health", host: `127.0.0.1:${pc.port}`, origin: null },
+        { door: "tcp", call: "GET /api/health", host: `127.0.0.1:${pc.port}`, origin: null },
+      ] : []]);
+    }
+  }, 90_000);
+
+  it("takes the health check on the owner socket only: an app answering full health on the TCP port is not taken, and gets no request", async () => {
+    // a state folder that fails the profile's own check, and an ordinary app's full health on the port
+    const pc = profilePc({ door: 1 }, { folderMode: 0o777, tcp: true });
+    try {
+      const status = await run("status", pc.env);
+      const add = await run("add", pc.env);
+      expect([status.out.split("\n")[0], add.err, add.exitCode]).toEqual([`down http://127.0.0.1:${pc.port}`, `Ovis is not running at http://127.0.0.1:${pc.port}; start it first\n`, 1]);
+      printed(pc, status, add);
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([]);
+  }, 30_000);
+
+  it("does not take an app on the PORT it was given for the profile when starting, and starts nothing", async () => {
+    const pc = profilePc({ door: 1 }, { folderMode: 0o777 });
+    const asked: string[] = [];
+    // an ordinary app on the port: bridge health and full health
+    const app = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => {
+      asked.push(`${request.method} ${new URL(request.url).pathname}${new URL(request.url).search}`);
+      return Response.json(new URL(request.url).searchParams.get("scope") === "bridge" ? BRIDGE_HEALTH : APP_HEALTH);
+    } });
+    try {
+      pc.settings();
+      writeFileSync(join(configDir, ".env"), `PORT=${app.port}\n`);
+      const started = await run("start", pc.env);
+      expect([started.exitCode, started.out.includes("already running"), started.err.includes("ovis-server serve")], started.out + started.err).toEqual([1, false, true]);
+      expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
+    } finally { await app.stop(true); await pc.stop(); }
+    expect([asked, pc.calls]).toEqual([[], []]);
+  }, 30_000);
+
+  it.each([
+    ["serve.sock is a link to a socket elsewhere, in a 0700 folder", { linked: true }],
+    ["serve.sock is a link to a socket elsewhere, in a 0777 folder", { linked: true, folderMode: 0o777 }],
+    ["the record and the socket are in a 0777 folder", { folderMode: 0o777 }],
+    ["the record and the socket are in a 0700 folder inside a 0777 folder", { parentMode: 0o777 }],
+  ] as const)("takes no owner socket when %s: the state folder must pass the profile's own check and serve.sock be a socket this account owns, else it is not running", async (_label, how) => {
+    const pc = profilePc({ door: 1 }, how);
+    try {
+      const status = await run("status", pc.env);
+      const add = await run("add", pc.env);
+      expect([status.out.split("\n")[0], add.err, add.exitCode]).toEqual([`down http://127.0.0.1:${pc.port}`, `Ovis is not running at http://127.0.0.1:${pc.port}; start it first\n`, 1]);
+      printed(pc, status, add);
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([]);
+  }, 30_000);
+
+  it("takes its own socket in a state folder that passes the profile's own check", async () => {
+    const pc = profilePc();
+    try {
+      expect((await run("status", pc.env)).out.split("\n")[0]).toBe(`running http://127.0.0.1:${pc.port}`);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health"]);
+  }, 30_000);
+
+  it("does not wait for a writer when the record is a FIFO: status says down at once", async () => {
+    const pc = profilePc();
+    try {
+      const record = join(pc.state, "serve.lock", "http.json");
+      rmSync(record);
+      expect(Bun.spawnSync(["mkfifo", "-m", "600", record]).exitCode).toBe(0);
+      // killed after 20 s, should it wait
+      const status = await run("status", pc.env, { timeout: 20_000 });
+      expect([status.out.split("\n")[0], status.exitCode], status.err).toEqual([`down http://127.0.0.1:${pc.port}`, 0]);
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([]);
+  }, 30_000);
+
+  it("takes no record larger than 4 KiB", async () => {
+    const pc = profilePc();
+    try {
+      // the profile's own record, made longer than the bound by white space after it
+      const own = JSON.stringify({ port: pc.port, hostname: "127.0.0.1", socket: join(realpathSync(pc.state), "serve.sock"), door: 1 });
+      writeFileSync(join(pc.state, "serve.lock", "http.json"), `${own}${" ".repeat(4096)}`);
+      expect((await run("status", pc.env)).out.split("\n")[0]).toBe(`down http://127.0.0.1:${pc.port}`);
+      writeFileSync(join(pc.state, "serve.lock", "http.json"), own);
+      expect((await run("status", pc.env)).out.split("\n")[0]).toBe(`running http://127.0.0.1:${pc.port}`);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health"]);
+  }, 30_000);
+
+  it("keeps the door a command's health check passed on: with the record gone after that, the later requests of pair --approve and add still go to the socket", async () => {
+    let record = "";
+    const pc: ReturnType<typeof profilePc> = profilePc({ door: 1 }, { owner: (path) => {
+      // the record goes as the socket answers health
+      if (path === "/api/health") rmSync(join(pc.state, "serve.lock", "http.json"), { force: true });
+      if (path === "/api/devices/pair/start") return Response.json({ code: "123456", expires_at: new Date(Date.now() + 600_000).toISOString() });
+      return undefined;
+    } });
+    record = readFileSync(join(pc.state, "serve.lock", "http.json"), "utf8");
+    try {
+      for (const [command, args] of [["pair", ["--approve"]], ["add", []]] as const) {
+        writeFileSync(join(pc.state, "serve.lock", "http.json"), record);
+        printed(pc, await run(command, pc.env, { args: [...args] }));
+      }
+    } finally { await pc.stop(); }
+    expect(pc.calls.filter((call) => call.door === "tcp")).toEqual([]);
+    expect(pc.calls.map((call) => call.call)).toEqual([
+      "GET /api/health", "GET /api/relay/pairings",
+      "GET /api/health", "GET /api/account/status",
+    ]);
+  }, 60_000);
+
+  it("sends no token on its owner socket, while the same commands send it over TCP", async () => {
+    const pc = profilePc({ door: 1 }, { tcp: true });
+    try {
+      for (const [command, args] of [["status", []], ["add", []], ["pair", ["--approve"]]] as const) printed(pc, await run(command, pc.env, { args: [...args] }));
+      expect(pc.bearers.filter((call) => call.startsWith("tcp"))).toEqual([]);
+      expect(pc.bearers.filter((call) => call.includes(" with "))).toEqual([]);
+      expect(pc.bearers).toContain("socket GET /api/account/status without authorization");
+      expect(pc.bearers).toContain("socket GET /api/relay/pairings without authorization");
+      // control: no profile, so TCP, where the token goes as before
+      pc.bearers.length = 0;
+      for (const command of ["add", "pair"]) printed(pc, await run(command, { ...pc.env, OVIS_PROFILE: undefined }));
+      expect(pc.bearers).toEqual([
+        "tcp GET /api/health without authorization", "tcp GET /api/account/status with authorization",
+        "tcp GET /api/health without authorization", "tcp POST /api/devices/pair/start with authorization",
+      ]);
+    } finally { await pc.stop(); }
+  }, 30_000);
+
+  it("finds its own socket when OVIS_STATE_DIR names the state folder through a link", async () => {
+    const pc = profilePc();
+    const linked = join(scratch, "linked-state");
+    symlinkSync(pc.state, linked);
+    try {
+      const status = await run("status", { ...pc.env, OVIS_STATE_DIR: linked });
+      expect(status.out.split("\n")[0], status.err).toBe(`running http://127.0.0.1:${pc.port}`);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health"]);
+  }, 30_000);
+
+  /** A profile's health while its engine does not answer (server/machine-profile.ts machineHealth): no `herdr` */
+  const ENGINE_DOWN = { ok: true, auth: { required: false, authenticated: true, via: "local", role: "drive" }, machine_profile: { engine: "herdr", runtime_down: true, reason: "herdr is not running for the selected session" } };
+
+  it("takes a profile whose engine does not answer as running on its owner socket: status says the engine is down, add goes on", async () => {
+    const pc = profilePc({ door: 1 }, { owner: (path) => path === "/api/health" ? Response.json(ENGINE_DOWN) : undefined });
+    try {
+      const status = await run("status", pc.env);
+      expect(status.out.split("\n").slice(0, 2), status.err).toEqual([`running http://127.0.0.1:${pc.port}`, "engine: down (herdr is not running for the selected session)"]);
+      const add = await run("add", pc.env);
+      expect([add.out, add.exitCode], add.err).toEqual(["This PC is already in an Ovis account (acct_1).\n", 0]);
+      printed(pc, status, add);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health", "socket GET /api/health", "socket GET /api/account/status"]);
+  }, 30_000);
+
+  it("does not take that health answer from a TCP port as the app's, with the preview off", async () => {
+    const pc = profilePc({ door: 1 }, { tcp: ENGINE_DOWN });
+    try {
+      const env = { ...pc.env, OVIS_PREVIEW: undefined };
+      const status = await run("status", env);
+      const add = await run("add", env);
+      expect([status.out.split("\n")[0], status.out.includes("engine:"), add.err, add.exitCode]).toEqual([`down http://127.0.0.1:${pc.port}`, false, `Ovis is not running at http://127.0.0.1:${pc.port}; start it first\n`, 1]);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["tcp GET /api/health", "tcp GET /api/health"]);
+  }, 30_000);
+
+  it("finds its record and socket where the profile takes a state folder named through a link and `..`", async () => {
+    const pc = profilePc();
+    // `<link>/..` names the folder that holds the link, as the profile resolves its state folder (realpathSync), not
+    // the parent of the link's target
+    mkdirSync(join(pc.home, "sub", "deeper"), { recursive: true });
+    symlinkSync(join(pc.home, "sub", "deeper"), join(pc.home, "via"));
+    try {
+      const status = await run("status", { ...pc.env, OVIS_STATE_DIR: `${join(pc.home, "via")}/../${basename(pc.state)}` });
+      expect(status.out.split("\n")[0], status.err).toBe(`running http://127.0.0.1:${pc.port}`);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health"]);
+  }, 30_000);
+
+  it("takes its owner socket's refusal as the answer and does not ask the TCP port instead", async () => {
+    const pc = profilePc({ door: 1 }, { owner: () => Response.json({ error: { code: "unauthorized", message: "Unauthorized" } }, { status: 401 }) });
+    try {
+      const status = await run("status", pc.env);
+      const add = await run("add", pc.env);
+      expect([status.out.split("\n")[0], add.err, add.exitCode]).toEqual([`down http://127.0.0.1:${pc.port}`, `Ovis is not running at http://127.0.0.1:${pc.port}; start it first\n`, 1]);
+      printed(pc, status, add);
+    } finally { await pc.stop(); }
+    expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health", "socket GET /api/health"]);
+  }, 30_000);
+
+  /** A profile's owner socket answering pair/start with a code and /api/access with a Tailscale serve command */
+  const pairing = (path: string): Response | undefined => path === "/api/devices/pair/start" ? Response.json({ code: "123456", expires_at: new Date(Date.now() + 600_000).toISOString() })
+    : path === "/api/access" ? Response.json({ tailscale: { state: "running", serving_url: null, serve_command: "tailscale serve --bg --https=7317 http://127.0.0.1:1" } }) : undefined;
+
+  it("pair and phone-setup start no pairing on a running profile and show no address or Tailscale command: they name the relay's commands", async () => {
+    const pc = profilePc({ door: 1 }, { owner: pairing });
+    try {
+      const pair = await run("pair", pc.env);
+      const setup = await run("phone-setup", pc.env);
+      for (const [label, ran, code] of [["pair", pair, 1], ["phone-setup", setup, 0]] as const) {
+        const text = printed(pc, ran);
+        expect([label, ran.exitCode, text.includes("link --code"), text.includes(" add "), text.includes("tailscale serve"), text.includes("open the app's address"), text.includes("Pairing code"), text.includes("App on this PC")]).toEqual([label, code, true, true, false, false, false, false]);
+      }
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([]);
+  }, 30_000);
+
+  it("phone asks and changes nothing of Tailscale for a profile, and names the relay's commands", async () => {
+    const pc = profilePc({ door: 1 }, { owner: pairing });
+    // a Tailscale that runs and serves nothing yet, so `phone` would publish the app; it records every call
+    const calls = join(scratch, "tailscale-calls");
+    writeFileSync(join(scratch, "bin", "tailscale"), `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\ncase "$1 $2" in\n  "status --json") echo '{"BackendState":"Running","Self":{"DNSName":"pc.example.ts.net."}}' ;;\n  "serve status") echo '{}' ;;\nesac\n`);
+    chmodSync(join(scratch, "bin", "tailscale"), 0o755);
+    try {
+      const phone = await run("phone", pc.env);
+      const text = printed(pc, phone);
+      expect([phone.exitCode, text.includes("link --code"), text.includes("tailscale serve"), existsSync(calls)]).toEqual([0, true, false, false]);
+    } finally { await pc.stop(); }
+    expect(pc.calls).toEqual([]);
+  }, 30_000);
+
+  it("start spawns nothing for a profile that does not answer, and exits 1; one that answers is reported running", async () => {
+    // a launcher that marks that it was spawned, under a root of its own
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), `require("node:fs").writeFileSync(${JSON.stringify(join(scratch, "spawned"))}, ""); process.exit(1);\n`);
+    const absent = profilePc("");
+    try {
+      rmSync(join(absent.state, "serve.lock", "http.json"));
+      absent.settings();
+      writeFileSync(join(configDir, ".env"), `PORT=${quietPort()}\n`);
+      const started = await run("start", { ...absent.env, HERDR_PLUGIN_ROOT: root }, { timeout: 20_000 });
+      expect([started.exitCode, started.err.includes("ovis-server serve"), existsSync(join(scratch, "spawned")), existsSync(join(scratch, "state", "server.pid"))], started.out + started.err).toEqual([1, true, false, false]);
+    } finally { await absent.stop(); }
+    expect(absent.calls).toEqual([]);
+    const running = profilePc();
+    try {
+      const started = await run("start", { ...running.env, HERDR_PLUGIN_ROOT: root }, { timeout: 20_000 });
+      expect([started.exitCode, started.out.startsWith("Ovis already running at "), existsSync(join(scratch, "spawned"))], started.err).toEqual([0, true, false]);
+    } finally { await running.stop(); }
+  }, 60_000);
+
+  it("reaches a real machine profile on its owner socket: status says it runs and add reads its account status there, and status says when its herdr is down", async () => {
+    const { createServer } = await import("../server/index.ts");
+    const { RelayService } = await import("../server/relay/service.ts");
+    const { FakeAccountService } = await import("../shared/account-service-fake.ts");
+    const state = join(walked(), "state");
+    mkdirSync(state, { mode: 0o700 });
+    // a herdr that answers the profile's ping (protocol 22), and nothing else, on a socket of this test
+    const herdr = Bun.listen<{ line: string }>({ unix: join(scratch, "herdr.sock"), socket: {
+      open(client) { client.data = { line: "" }; },
+      data(client, chunk) {
+        client.data.line += chunk.toString();
+        if (!client.data.line.includes("\n")) return;
+        const { id, method } = JSON.parse(client.data.line) as { id: string; method: string };
+        if (method === "ping") client.write(`${JSON.stringify({ id, result: { version: "fixture", protocol: 22 } })}\n`);
+      },
+    } });
+    const herdrSocket = process.env["HERDR_SOCKET"];
+    process.env["HERDR_SOCKET"] = join(scratch, "herdr.sock");
+    const account = new FakeAccountService();
+    const server = createServer({ profile: "machine", stateDir: state, port: 0, hostname: "127.0.0.1", tailscaleOwner: null, sidecar: false,
+      relay: new RelayService({ stateDir: state, relay: "wss://relay.invalid" }), accountService: { url: "https://account.test", fetch: account.fetch } });
+    try {
+      // the record serve() writes once it listens: the socket in the state folder's real path (server/machine-profile.ts claimServerState)
+      const socket = join(realpathSync(state), "serve.sock");
+      mkdirSync(join(state, "serve.lock"));
+      writeFileSync(join(state, "serve.lock", "http.json"), JSON.stringify({ port: server.port, hostname: "127.0.0.1", socket, door: 1 }));
+      writeFileSync(join(configDir, ".env"), `PORT=${server.port}\nOVIS_PREVIEW=fleet\nOVIS_PROFILE=machine\n`);
+      const env = { HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: state, OVIS_TOKEN: TOKEN, OVIS_ACCOUNT_SERVICE_URL: "https://account.test" };
+      const status = await run("status", env);
+      expect(status.out.split("\n")[0], status.err).toBe(`running http://127.0.0.1:${server.port}`);
+      // in no account, under the preview, with no terminal: the refusal that follows the account's status, read on the socket
+      const add = await run("add", env, { args: ["--print"] });
+      expect([add.out, add.exitCode], add.err).toEqual(["Adding this PC needs a terminal: the QR code and the code to type are a key to this PC, so they are never written to a pipe, a file or a log. Run ovis add in a terminal (over ssh, run ssh -t).\n", 1]);
+      printed({ socket }, status, add);
+      // its herdr gone: the profile still runs, and says why its engine does not answer
+      herdr.stop(true);
+      rmSync(join(scratch, "herdr.sock"), { force: true });
+      const down = await run("status", env);
+      expect(down.out.split("\n").slice(0, 2), down.err).toEqual([`running http://127.0.0.1:${server.port}`, "engine: down (herdr is not running for the selected session)"]);
+      // control: the same profile with no door in its record is not taken as running (its TCP port is not asked)
+      writeFileSync(join(state, "serve.lock", "http.json"), JSON.stringify({ port: server.port, hostname: "127.0.0.1", socket }));
+      expect((await run("status", env)).out.split("\n")[0]).toBe(`down http://127.0.0.1:${server.port}`);
+    } finally {
+      await server.stop();
+      herdr.stop(true);
+      if (herdrSocket === undefined) delete process.env["HERDR_SOCKET"];
+      else process.env["HERDR_SOCKET"] = herdrSocket;
+    }
+  }, 60_000);
 });
 
 describe("pair --approve", () => {

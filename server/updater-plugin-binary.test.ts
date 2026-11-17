@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,12 +50,42 @@ it("tells a compiled server the installers put in place to run the installer aga
   dirs.push(scratch);
   const root = join(scratch, ".local", "share", "ovis", "releases", "0.5.4-abcd");
   mkdirSync(root, { recursive: true });
+  // the signed manifest the installer checked the binary against stays beside it, and names the version
+  writeFileSync(join(root, "ovis-server.json"), '{\n  "schema": 1,\n  "version": "0.5.4"\n}\n');
   const updater = new Updater({ root, stateDir: join(scratch, "state"), autoUpdate: false, installedBinary: installedBinaryAt(root, true), publish() {}, activate: async () => {} });
   await updater.initialize();
   expect(updater.status.managed).toBe(false);
+  expect(updater.status.current_version).toBe("0.5.4");
   expect(updater.status.blocked_reason).toBe(INSTALLED_BINARY_REASON);
   expect(INSTALLED_BINARY_REASON).toContain("curl -fsSL https://ovis.sh/install.sh | sh");
   expect(INSTALLED_BINARY_REASON).toContain("irm https://ovis.sh/install.ps1 | iex");
+});
+
+it("takes an installed server's version only from a small regular ovis-server.json that names a release's", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "ovis-installed-manifest-"));
+  dirs.push(scratch);
+  const valid = '{"schema":1,"version":"0.5.4"}\n';
+  const versionOf = async (name: string, place: (manifest: string) => void) => {
+    const root = join(scratch, name, ".local", "share", "ovis", "releases", "0.5.4-abcd");
+    mkdirSync(root, { recursive: true });
+    place(join(root, "ovis-server.json"));
+    const updater = new Updater({ root, stateDir: join(scratch, name, "state"), autoUpdate: false, installedBinary: installedBinaryAt(root, true), publish() {}, activate: async () => {} });
+    await updater.initialize();
+    return updater.status.current_version;
+  };
+  // larger than any manifest: read whole, it would bloat the server at every start
+  expect(await versionOf("huge", (manifest) => writeFileSync(manifest, `{"schema":1,"version":"0.5.4","pad":"${"x".repeat(3_000_000)}"}`))).toBeNull();
+  // whatever string the file holds would otherwise be reported as the version
+  expect(await versionOf("garbage", (manifest) => writeFileSync(manifest, '{"schema":1,"version":"<img src=x onerror=alert(1)>"}'))).toBeNull();
+  // a FIFO holds a synchronous read until a writer comes: this one has a writer, so a read that waits takes its version
+  const writers: ReturnType<typeof Bun.spawn>[] = [];
+  try {
+    const fifo = await versionOf("fifo", (manifest) => {
+      if (spawnSync("mkfifo", [manifest]).status === 0) writers.push(Bun.spawn(["sh", "-c", 'printf "%s" "$1" > "$2"', "sh", valid, manifest], { stdout: "ignore", stderr: "ignore" }));
+    });
+    if (writers.length > 0) expect(fifo).toBeNull();
+  } finally { for (const writer of writers) writer.kill(); }
+  expect(await versionOf("release", (manifest) => writeFileSync(manifest, valid))).toBe("0.5.4");
 });
 
 it("knows where the installers put a compiled server, and nothing else for one", () => {

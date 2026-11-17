@@ -6,6 +6,9 @@ import { type ServerMessage, STREAM_COOKIE_PREFIX } from "../shared/protocol.ts"
 import { DEVICE_COOKIE } from "./auth.ts";
 import { createServer } from "./index.ts";
 import { authenticatedWebSocket } from "./remote-websocket.ts";
+import type { Machine } from "../shared/machines.ts";
+import type { SessionSnapshot } from "../shared/protocol.ts";
+import { expandMachine, expandMachineEvent, type WireMachine, type WireMachineEvent } from "../shared/compact-agents.ts";
 
 async function connection(base: string, open?: (url: string) => WebSocket) {
   const frames: ServerMessage[] = [];
@@ -28,6 +31,59 @@ async function connection(base: string, open?: (url: string) => WebSocket) {
 const withHeaders = (headers: Record<string, string>) => (url: string) =>
   new (WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => WebSocket)(url, { headers });
 const pairings = (frames: ServerMessage[]) => frames.filter((frame) => frame.type === "machine-event" && frame.event.type === "device-paired");
+
+it("negotiates compact agents over HTTP, SSE and WS without changing legacy responses or restored rows", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-compact-agents-"));
+  const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "test-token", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const pane = { pane_id: "w1:p1", terminal_id: "terminal", workspace_id: "w1", tab_id: "w1:t1", focused: true, revision: 1, agent_status: "working" as const, cwd: "/fixture/project" };
+  const snapshot: SessionSnapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [pane], agents: [{ ...pane, state_change_seq: 11 }] };
+  const machines: Machine[] = [{ id: "local", name: "PC", kind: "local", enabled: true, state: "connected", error: null, snapshot }];
+  // This server and its state are isolated; no real pane is created or modified.
+  const headers = { authorization: "Bearer test-token" };
+  let client: Awaited<ReturnType<typeof connection>> | undefined;
+  const abort = new AbortController();
+  try {
+    server.context.services.core.machines!.list = () => machines;
+    const legacy = (await (await fetch(base + "/api/machines", { headers })).json()).machines as Machine[];
+    expect(legacy[0]!.snapshot!.agents).toHaveLength(1);
+    expect("agent_refs" in legacy[0]!.snapshot!).toBe(false);
+    const compact = (await (await fetch(base + "/api/machines?compact_agents=1", { headers })).json()).machines as WireMachine[];
+    expect("agent_refs" in compact[0]!.snapshot!).toBe(true);
+    expect(compact.map(expandMachine)).toEqual(legacy);
+    const response = await fetch(base + "/api/machines/events?compact_agents=1", { headers, signal: abort.signal });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder(); let body = "";
+    let sse: WireMachineEvent | undefined;
+    while (!sse) {
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error("stream ended before roster");
+      body += decoder.decode(chunk.value, { stream: true });
+      let end: number;
+      while ((end = body.indexOf("\n\n")) !== -1) {
+        const line = body.slice(0, end); body = body.slice(end + 2);
+        if (!line.startsWith("data: ")) continue;
+        const event = JSON.parse(line.slice(6)) as WireMachineEvent;
+        if (event.type === "machines") { sse = event; break; }
+      }
+    }
+    expect(sse.type === "machines" && "agent_refs" in sse.machines[0]!.snapshot!).toBe(true);
+    expect(expandMachineEvent(sse)).toEqual({ type: "machines", machines: legacy });
+    abort.abort();
+    client = await connection(base);
+    client.socket.send(JSON.stringify({ type: "machine-events", enabled: true, compact_agents: true }));
+    const frame = await client.wait((frame) => frame.type === "machine-event" && frame.event.type === "machines");
+    if (frame.type !== "machine-event") throw new Error("expected roster");
+    const event = frame.event as WireMachineEvent;
+    expect(event.type === "machines" && "agent_refs" in event.machines[0]!.snapshot!).toBe(true);
+    expect(expandMachineEvent(event)).toEqual({ type: "machines", machines: legacy });
+    client.socket.send(JSON.stringify({ type: "machine-events", enabled: false })); await client.fence();
+    const before = client.frames.length;
+    client.socket.send(JSON.stringify({ type: "machine-events", enabled: true })); await client.fence();
+    const full = client.frames.slice(before).find((frame) => frame.type === "machine-event" && frame.event.type === "machines");
+    expect(full?.type === "machine-event" && full.event).toEqual({ type: "machines", machines: legacy });
+  } finally { abort.abort(); client?.socket.close(); server.stop(); rmSync(stateDir, { recursive: true, force: true }); }
+});
 
 it("multiplexes initial documents and live updates onto the existing authenticated socket", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ovis-machine-events-"));

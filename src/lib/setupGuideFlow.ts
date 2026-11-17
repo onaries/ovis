@@ -22,19 +22,17 @@ export interface GuideState {
   at?: "theme" | "phone";
 }
 
-/** I'm new to Ovis; Back from the first step to the welcome; the user left the step the guide was opened at */
-export type GuideEvent = { type: "begin" } | { type: "back" } | { type: "moved" };
+/** the user left the step the guide was opened at */
+export type GuideEvent = { type: "moved" };
 
-export const WELCOME: GuideState = { step: "welcome" };
+/** A first run opens on the agent step, the first real choice, as Orca's opens on its first; Set up later is the way out */
+export const FIRST_RUN: GuideState = { step: "setup" };
 /** Settings → Agents' Open setup guide opens the setup screen itself */
 export const REOPENED: GuideState = { step: "setup", reopened: true };
 
 export function guideStep(state: GuideState, event: GuideEvent): GuideState {
   // a reload resumes where the user is, not at the step Setup: N left named (`at` comes only with a reopened guide)
-  if (event.type === "moved") return state.at === undefined ? state : REOPENED;
-  if (event.type === "begin") return state.step === "welcome" ? { step: "setup" } : state;
-  // a guide opened again from Settings has no welcome to go back to
-  return state.step === "setup" && state.reopened !== true ? WELCOME : state;
+  return event.type === "moved" && state.at !== undefined ? REOPENED : state;
 }
 
 /** Plan usage turns on by itself for a signed-in account on a first run only: a reopened guide leaves the user's choice alone. */
@@ -267,7 +265,8 @@ function readState(value: unknown): GuideState | null {
   if (keys.length === 2 && value["step"] === "setup" && value["reopened"] === true) return REOPENED;
   if (keys.length === 3 && value["step"] === "setup" && value["reopened"] === true && (value["at"] === "theme" || value["at"] === "phone")) return { ...REOPENED, at: value["at"] };
   if (keys.length !== 1) return null;
-  return value["step"] === "welcome" || value["step"] === "setup" ? { step: value["step"] } : null;
+  // a record saved at the welcome, which is gone: the guide resumes at its first step
+  return value["step"] === "welcome" || value["step"] === "setup" ? FIRST_RUN : null;
 }
 
 /** This browser's record of the guide; a damaged one reads as closed, so it never opens by itself on it. */

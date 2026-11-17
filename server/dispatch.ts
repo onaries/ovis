@@ -1,4 +1,4 @@
-import { machineHealth, machineRouteRestricted, machineTcpAnswer, machineUnauthorized } from "./machine-profile.ts";
+import { machineFailure, machineHealth, machineLayoutReason, machineReadError, machineRoster, machineRouteRestricted, machineTcpAnswer, machineUnauthorized } from "./machine-profile.ts";
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
 import { handleAlertWebhookRequest } from "./alert-webhook.ts";
 import { connectionData, type createCore, type SocketData } from "./core/index.ts";
@@ -16,7 +16,7 @@ import { type DeviceStore, handleDeviceRequest, newStreamKey, sameBrowser, strea
 import { handlePreferencesRequest, type PreferenceStore } from "./preferences.ts";
 import { handleSeenRequest, type SeenStore } from "./seen.ts";
 import { remoteAccess } from "./tailscale.ts";
-import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
+import { badRequest, errorResponse, jsonResponse, setRequestRoute, wordedHeaders, wordHerdrFailures } from "./http.ts";
 import { requestOrigin, serveStatic } from "./static.ts";
 import { compressResponse } from "./compress.ts";
 import { handleTasksRequest } from "./tasks-routes.ts";
@@ -156,6 +156,8 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   const { options, hostname, token, bridgeToken, bootId, devices, preferences, herdrSidebar, identityOf, serveOnly, portalGuards, shellAgents, agentDetector, agentOffered, agentInstaller, openCodeState, cliProxyRoutes, usageLogin, usage, voice, browserSnapshot, core, seen, piReader, orderSequence, clientConnectionLog, requestLog, portalStartupResult, portalStartup } = ctx.services;
   const { sidecar, serialize, push, alertWebhook, logPushError, omo, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
   return requestLog.handle(request, async (headers) => {
+  // the machine profile words every failed herdr call of this request itself (machineFailure)
+  if (options.profile === "machine") wordHerdrFailures(machineFailure, machineLayoutReason);
   const startup = portalStartupResult ?? await portalStartup;
   if (!startup.ok) {
     setRequestRoute("startup");
@@ -242,12 +244,13 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     return pathname === "/ws" ? new Response("unauthorized", { status: 401 }) : unauthorizedJson(access.level === "none" ? access.reason : "token_required");
   }
 
-  if (options.profile === "machine" && machineRouteRestricted(pathname)) {
+  if (options.profile === "machine" && machineRouteRestricted(pathname, request.method)) {
     setRequestRoute("machine-profile-refusal");
     return jsonResponse({ error: { code: "machine_profile", message: "This control is unavailable in the machine profile" } }, 409);
   }
-  // a herdr that started after the profile is looked for here too, not only at a health check: a device may read its session first
-  if (options.profile === "machine" && (pathname === "/api/session" || pathname === "/ws")) await options.machineRefusal?.();
+  // a herdr that started after the profile is looked for here too, not only at a health check: a device may read its session
+  // (or its PC list, which holds it) first. What it says is why the engine is down, for that list
+  const engineRefusal = options.profile === "machine" && (pathname === "/api/session" || pathname === "/api/machines" || pathname === "/ws") ? await options.machineRefusal?.() : undefined;
 
   const readOnly = access.level === "full" && access.role === "watch";
   // who started a followed sign-in: only that device (or that signed-in browser) reaches it again
@@ -393,6 +396,15 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     } catch (error) { return errorResponse(error); }
   }
   if (pathname === "/api/machines" || pathname.startsWith("/api/machines/")) {
+    // the machine profile manages no other PC: its list is this machine alone, and every other route here was refused above
+    if (options.profile === "machine") {
+      setRequestRoute("/api/machines");
+      if (!sameOrigin(request)) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
+      try {
+        const roster = await machineRoster(url, async () => browserSnapshot(await clientSnapshot()), { bootId, serverId: ctx.services.relay.serverId() }, options.machineEngine ?? "herdr", engineRefusal);
+        return jsonResponse(roster, 200, { "cache-control": "no-store" });
+      } catch (error) { return machineReadError(error, options.machineEngine ?? "herdr", engineRefusal); }
+    }
     if (!machines) return jsonResponse({ error: { code: "bridge_only", message: "Manage PCs on the connection server" } }, 404);
     // /local aliases preserve every existing endpoint without a self-proxy.
     if (pathname.startsWith("/api/machines/local/")) {
@@ -802,9 +814,10 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     try {
       // another Ovis server reading this PC (its bridge token) applies its own rows; a browser gets this server's
       const snapshot = await clientSnapshot();
-      return jsonResponse({ snapshot: bridgeAuthorized ? snapshot : browserSnapshot(snapshot) });
+      return jsonResponse({ snapshot: bridgeAuthorized ? snapshot : browserSnapshot(snapshot) }, 200, wordedHeaders());
     } catch (error) {
-      return errorResponse(error);
+      // the machine profile answers a failed herdr read with its health's reason
+      return options.profile === "machine" ? machineReadError(error, options.machineEngine ?? "herdr", engineRefusal) : errorResponse(error);
     }
   }
 

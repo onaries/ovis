@@ -60,7 +60,6 @@ export const WORKSPACE_ZH: Record<string, string> = {
   "Claude Code 2.1.284 or later": "Claude Code 2.1.284 或更高版本",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "在任意推理强度下运行动态工作流。需要 Claude Code 2.1.284 或更高版本。",
   "First message": "第一条消息",
-  "Optional": "可选",
   "Sent to {agent} as it starts.": "随 {agent} 启动一起发送。",
   "Queued for {agent}'s first turn: sent once it is ready, shown as a pending message until then.": "排队等待 {agent} 的第一轮：就绪后发送，在此之前显示为待发送消息。",
   "Add {skill} to the message": "把 {skill} 加入消息",

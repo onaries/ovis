@@ -1,10 +1,14 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as herdr from "../herdr/client.ts";
 import * as processStart from "../process-start.ts";
 import * as gjcRuntime from "../gjc-runtime.ts";
 import * as omoModule from "../omo.ts";
 import { connectionData } from "./connections.ts";
 import { createPendingDelivery } from "./pending.ts";
+import { GROK_QUEUED_MESSAGE, GROK_SEND_UNCONFIRMED_MESSAGE, grokQueuedBehindMessage } from "../../shared/submit-outcome.ts";
+import { grokScreen } from "./grok-screen.fake.ts";
 
 afterEach(() => mock.restore());
 
@@ -27,10 +31,15 @@ function delivery(foreground: { pid: number; name: string; argv0?: string; argv?
     return { pane_id: "p", shell_pid: 41000, foreground_processes: [{ argv: [shown.name], ...shown }] } as Awaited<ReturnType<typeof herdr.paneProcessInfo>>;
   });
   spyOn(processStart, "processStartedAtAsync").mockResolvedValue(1000);
-  spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: screen }) as Awaited<ReturnType<typeof herdr.paneRead>>);
-  const hooks: { paste?: () => void } = {};
+  // `hooks.read`: what changes right after a read, which got the screen from before it
+  spyOn(herdr, "paneRead").mockImplementation(async () => {
+    const text = screen;
+    hooks.read?.();
+    return { text } as Awaited<ReturnType<typeof herdr.paneRead>>;
+  });
+  const hooks: { paste?: () => void; keys?: () => void; read?: () => void; submitText?: () => void } = {};
   spyOn(herdr, "paneSendText").mockImplementation(async (_pane, text) => { if (count.atPaste < 0) count.atPaste = count.reads; writes.push(text); hooks.paste?.(); if (afterPaste !== undefined) screen = afterPaste; });
-  spyOn(herdr, "paneSendKeys").mockImplementation(async (_pane, keys) => { if (count.atEnter < 0) count.atEnter = count.reads; writes.push(keys.join(",")); });
+  spyOn(herdr, "paneSendKeys").mockImplementation(async (_pane, keys) => { if (count.atEnter < 0) count.atEnter = count.reads; writes.push(keys.join(",")); hooks.keys?.(); });
   const owner = { data: connectionData({ deviceId: undefined, readOnly: false }), getBufferedAmount: () => 0, send: (value: string) => { frames.push(JSON.parse(value) as Frame); return 1; } };
   owner.data.attached.set("p", { keepSize: false });
   const pane = { pane_id: "p", terminal_id: "p", workspace_id: "w", tab_id: "t", agent, agent_status: status, focused: false, revision: 0 };
@@ -39,11 +48,12 @@ function delivery(foreground: { pid: number; name: string; argv0?: string; argv?
   const serialize = <T,>(_pane: string, run: () => T | Promise<T>): Promise<T> => { const next = tail.catch(() => {}).then(run); tail = next; return next; };
   const pending = createPendingDelivery({
     options: { submitDelayMs: 0 }, clients: new Set([owner]), attachments: new Map(), sight: (() => ({ facts: () => facts, write: () => {} })), serialize,
-    lastTyped: new Map(), submitText: async (_pane: string, text: string) => { submitted.push(text); }, authorizeSocket: () => {},
+    lastTyped: new Map(), submitText: async (_pane: string, text: string) => { submitted.push(text); hooks.submitText?.(); }, authorizeSocket: () => {},
     clientSnapshot: async () => ({ panes: [pane] }), omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 1000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   } as unknown as Parameters<typeof createPendingDelivery>[0]);
-  const submit = (id: number, delivery: "immediate" | "queue" | "hold", text = "> backup.txt\nkeep it") => pending.pendingFrames.submit(owner as never,
-    { type: "submit", id, pane_id: "p", text, payload: delivery === "immediate" ? "> backup.txt\rkeep it" : "unused", delivery, agent_only: true } as never);
+  // `extra`: more of the frame, as a saved copy's resend_id
+  const submit = (id: number, delivery: "immediate" | "queue" | "hold", text = "> backup.txt\nkeep it", extra: Record<string, unknown> = {}) => pending.pendingFrames.submit(owner as never,
+    { type: "submit", id, pane_id: "p", text, payload: delivery === "immediate" ? "> backup.txt\rkeep it" : "unused", delivery, agent_only: true, ...extra } as never);
   const sendNow = (id: number, pendingId: string) => pending.pendingFrames["pending-action"](owner as never, { type: "pending-action", id, pane_id: "p", pending_id: pendingId, action: "steer" } as never);
   const result = (type: string, id: number) => frames.find((frame) => frame.type === type && frame.id === id);
   const setStatus = (next: string) => { pane.agent_status = next; pending.pending.status("p", next as never); pending.drainPending("p"); };
@@ -75,6 +85,169 @@ it("sends an agent-only Send now to Codex in front, paste and Enter (control)", 
   const held = d.result("submit-result", 1) as unknown as { pending: { id: string } };
   await d.sendNow(2, held.pending.id);
   expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: true });
+});
+
+/**
+ * A stand-in Grok on the delivery's screen, drawn as Grok 1.0.77 draws it (grok-screen.fake.ts) and driven by its writes:
+ * Enter on the pasted prompt queues it during a turn, Enter on the empty prompt sends the top queued row now, Enter on
+ * its approval card answers it. `queued`: what the user queued before; `onQueued`: what changes right after the Enter
+ * that queued the held message; `minimal`: minimal mode, where herdr reads `done` while Grok works.
+ */
+function grokStandIn(d: ReturnType<typeof delivery>, options: { queued?: string[]; output?: string[]; minimal?: boolean; onQueued?: (state: StandInGrok) => void } = {}) {
+  const state: StandInGrok = { output: options.output ?? ["word1 word2 word3"], card: false, prompt: "", queue: [...options.queued ?? []], sent: [] };
+  const working = () => options.minimal === true || d.pane.agent_status === "working";
+  let queuedOnce = false;
+  const draw = () => d.screen(grokScreen({ ...state, status: working() ? "working" : d.pane.agent_status, minimal: options.minimal === true }));
+  d.hooks.paste = () => { state.prompt = "> backup.txt\nkeep it"; draw(); };
+  d.hooks.keys = () => {
+    if (state.card) { state.card = false; state.sent.push("<card answered>"); }
+    else if (state.prompt !== "") {
+      if (working()) state.queue.push(state.prompt);
+      else state.sent.push(state.prompt);
+      state.prompt = "";
+      if (!queuedOnce) { queuedOnce = true; options.onQueued?.(state); }
+    } else {
+      const top = state.queue.shift();
+      if (top !== undefined) state.sent.push(top);
+    }
+    draw();
+  };
+  draw();
+  return state;
+}
+type StandInGrok = { output: string[]; card: boolean; prompt: string; queue: string[]; sent: string[] };
+
+const held = (d: ReturnType<typeof delivery>) => (d.result("submit-result", 1) as unknown as { pending: { id: string } }).pending.id;
+
+it("sends a working Grok's Send now with the Enter that queues it and the Enter that sends that queue", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  const grok = grokStandIn(d);
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter", "Enter"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: true });
+  expect(grok.sent).toEqual(["> backup.txt\nkeep it"]);
+});
+
+it("presses nothing into Grok's approval card at Send now, the card in place of its prompt", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  const grok = grokStandIn(d, { onQueued: (state) => { state.card = true; } });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.sent).toEqual([]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed" });
+});
+
+it("presses nothing at Send now and leaves it unconfirmed when no queued row is drawn while herdr reports Grok working", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  // Grok took the message at once: nothing is queued, while its output quotes a queued row, indented as output is
+  const grok = grokStandIn(d, { output: ["#1 > backup.txt (+1 line)"], onQueued: (state) => { state.sent.push(state.queue.pop()!); } });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.sent).toEqual(["> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed" });
+});
+
+it("presses nothing at Send now to a minimal-mode Grok, read as done while it works, and says the message is queued", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "done", undefined, "grok");
+  const grok = grokStandIn(d, { minimal: true });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.queue).toEqual(["> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed", message: GROK_QUEUED_MESSAGE });
+});
+
+it("presses nothing at Send now while Grok's prompt holds text typed in the terminal", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  const grok = grokStandIn(d, { onQueued: (state) => { state.prompt = "half-typed note to grok"; } });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.sent).toEqual([]);
+  expect(grok.prompt).toBe("half-typed note to grok");
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed" });
+});
+
+it("presses nothing at Send now into Grok's approval card drawn right after the read the Enter was decided on", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  // Grok 1.0.77's recorded approval card, whose selected `2 (●) Yes, proceed` an Enter would answer
+  const card = readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/grok-1.0.77/permission-119.txt"), "utf8");
+  // drawn right after the second read after the queueing Enter, which confirms the first and decides the Enter
+  let reads = 0;
+  const grok = grokStandIn(d, { onQueued: () => { d.hooks.read = () => { if (++reads < 2) return; d.hooks.read = undefined; d.screen(card); }; } });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.queue).toEqual(["> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed", message: GROK_SEND_UNCONFIRMED_MESSAGE });
+});
+
+it("sends Send now with one more Enter when another client started Grok's turn after the read before its Enter", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "idle", undefined, "grok");
+  const grok = grokStandIn(d);
+  const keys = d.hooks.keys!;
+  d.hooks.keys = () => { d.pane.agent_status = "working"; d.hooks.keys = keys; keys(); };
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter", "Enter"]);
+  expect(grok.sent).toEqual(["> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: true });
+});
+
+it("reports a working Grok's Send now as unconfirmed when the read after its queue Enter fails", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  d.hooks.keys = () => { d.pane.agent_status = "blocked"; };
+  await d.submit(1, "hold");
+  const held = d.result("submit-result", 1) as unknown as { pending: { id: string } };
+  await d.sendNow(2, held.pending.id);
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed" });
+  expect(JSON.stringify(d.result("pending-result", 2))).not.toContain("input line");
+});
+
+it("leaves a working Grok's Send now queued behind the rows the user queued before it, and says so", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  const grok = grokStandIn(d, { queued: ["row A", "row B"] });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.sent).toEqual([]);
+  expect(grok.queue).toEqual(["row A", "row B", "> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 2)).toMatchObject({ ok: false, code: "submit_changed", message: grokQueuedBehindMessage(2) });
+});
+
+it("types nothing for a second Send now of a row a working Grok kept in its queue", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  const grok = grokStandIn(d, { queued: ["row A"] });
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  await d.sendNow(3, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.queue).toEqual(["row A", "> backup.txt\nkeep it"]);
+  expect(d.result("pending-result", 3)).toMatchObject({ ok: false, code: "pending_uncertain" });
+});
+
+it("types nothing for a second Send now of a saved copy a working Grok kept in its queue", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "working", undefined, "grok");
+  d.hooks.submitText = () => { throw new herdr.HerdrError("submit_changed", grokQueuedBehindMessage(1)); };
+  await d.submit(1, "immediate", undefined, { resend_id: "copy-1", resend_generation: 0 });
+  await d.submit(2, "immediate", undefined, { resend_id: "copy-1", resend_generation: 0 });
+  expect(d.submitted).toHaveLength(1);
+  expect(d.result("submit-result", 1)).toMatchObject({ ok: false, code: "submit_changed", message: grokQueuedBehindMessage(1) });
+  expect(d.result("submit-result", 2)).toMatchObject({ ok: false, code: "pending_uncertain" });
+});
+
+it("sends an idle Grok's Send now with one Enter", async () => {
+  const d = delivery({ pid: 41001, name: "grok" }, "idle", undefined, "grok");
+  const grok = grokStandIn(d);
+  await d.submit(1, "hold");
+  await d.sendNow(2, held(d));
+  expect(d.writes).toEqual(["\u001b[200~> backup.txt\nkeep it\u001b[201~", "Enter"]);
+  expect(grok.sent).toEqual(["> backup.txt\nkeep it"]);
   expect(d.result("pending-result", 2)).toMatchObject({ ok: true });
 });
 

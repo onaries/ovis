@@ -130,10 +130,17 @@ jobs:
     name: Native macOS session identity
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: macos-15
+    # mac: fork pull requests stay on macos-15; ci.yml's own same-repository runs off main take the repository variable
+    # CI_MAC_LABELS (a JSON label list such as ["self-hosted","self-hosted-ovis-mac"]), macos-15 while it is unset. A release
+    # never validates on the Mac: a workflow that calls ci.yml (Release validation) runs under its own name, and main's
+    # run, which a Release run may take in place of its own, stays on macos-15 (scripts/release-ci-reuse.test.ts)
+    runs-on: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '"macos-15"') }}
     timeout-minutes: 5
     env:
       HERDR_TEST_MODE: unit
+      # claude-store.test.ts skips two session-identity tests when a Claude config dir is exported; a self-hosted
+      # runner's environment must not turn them off
+      CLAUDE_CONFIG_DIR: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -149,6 +156,13 @@ jobs:
         if: needs.changes.outputs.draft != 'true'
       - run: bun test ./server/claude-store.test.ts ./server/process-start.test.ts ./server/darwin-process.test.ts ./server/herdr-discovery.test.ts ./server/remote-entry.test.ts ./server/grok.test.ts ./server/omp-images.test.ts ./scripts/install-herdr-core.test.ts
         if: needs.changes.outputs.draft != 'true'
+      # The Mac runner's job-started.sh (scripts/self-hosted-runner/README.md "Mac runner") under macOS's bash and
+      # jq: the job it allows, alone. Its refusals may kill and run only isolated, never on this host: in the Linux
+      # container of the check "Hook kill tests (container)" (hook-kill-tests.yml), through procps ps.
+      # A step of its own, as -t would filter the files above too.
+      - name: Runner job-started hook allows a job on macOS
+        if: needs.changes.outputs.draft != 'true'
+        run: bun test ./scripts/self-hosted-runner.test.ts -t 'job-started hook runs a job from this repository'
   rust-pty-host:
     # The Rust PTY host (crates/pty-sidecar) is the default where it is installed or built, and its
     # PtySession checks skip without a build. The self-hosted runners have no Rust toolchain, so this job always runs on
@@ -403,13 +417,15 @@ jobs:
     runs-on: ${{ fromJSON(needs.changes.outputs.linux) }}
     # A hosted runner has 4 CPUs: one job running every script there took about 28 minutes, and
     # frame-timing checks failed under the load. So hosted runs split the scripts over four jobs
-    # (scripts/ci-browser-parallel.ts's BROWSER_SHARD); a self-hosted run keeps one job. The cloud VM
-    # runners (label ovis-vm, 4 vCPUs each, scripts/self-hosted-runner/vm-runner.sh) are hosted-sized:
-    # five jobs there, so no shard waits past the longest script for long.
+    # (scripts/ci-browser-parallel.ts's BROWSER_SHARD). On the self-hosted PC one job of six workers
+    # took about 20 minutes, the whole run's length; three parts of six workers each end near the
+    # longest single script (sidebar-filter-demo, about 7 minutes). The cloud VM runners (label
+    # ovis-vm, 4 vCPUs each, scripts/self-hosted-runner/vm-runner.sh) are hosted-sized: five jobs
+    # there, so no shard waits past the longest script for long.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(contains(needs.changes.outputs.linux, 'ovis-vm') && '[1,2,3,4,5]' || contains(needs.changes.outputs.linux, 'self-hosted') && '[1]' || '[1,2,3,4]') }}
+        shard: ${{ fromJSON(contains(needs.changes.outputs.linux, 'ovis-vm') && '[1,2,3,4,5]' || contains(needs.changes.outputs.linux, 'self-hosted') && '[1,2,3]' || '[1,2,3,4]') }}
     # a wait for a slot counts against it
     timeout-minutes: 50
     env:

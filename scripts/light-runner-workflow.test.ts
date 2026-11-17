@@ -12,6 +12,10 @@ const LIGHT = `\${{ ${FORK_GUARD} || fromJSON(github.ref == 'refs/heads/main' &&
 const ROUTED = "${{ fromJSON(needs.changes.outputs.linux) }}";
 // Fast checks: the Linux jobs' runner, or CI_FAST_SELF_HOSTED_LABELS only when those name ovis-vm (never a fork's)
 const ROUTED_FAST = "${{ fromJSON(needs.changes.outputs.fast) }}";
+// ci.yml's macOS session job: a fork stays on macos-15, ci.yml's own same-repository runs off main take CI_MAC_LABELS (the
+// self-hosted Mac), macos-15 while it is unset (releases: scripts/release-ci-reuse.test.ts)
+const MAC_FORK_GUARD = "github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15'";
+const MAC = `\${{ ${MAC_FORK_GUARD} || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '"macos-15"') }}`;
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 
 const dir = join(root, ".github/workflows");
@@ -44,6 +48,7 @@ function forkSafe(job: Job & { strategy?: { matrix?: { include?: { os?: unknown 
   if (typeof runsOn !== "string") return null;
   if (HOSTED.test(runsOn)) return "hosted";
   if (runsOn === LIGHT) return "light";
+  if (runsOn === MAC) return "mac";
   if (runsOn === ROUTED) return "routed";
   if (runsOn === ROUTED_FAST) return "routed (fast)";
   if (runsOn === "${{ matrix.os }}") {
@@ -59,6 +64,18 @@ describe("self-hosted runners and fork pull requests", () => {
   test("the light runner expression sends fork pull requests to ubuntu-24.04 before reading any variable", () => {
     expect(LIGHT.indexOf(FORK_GUARD)).toBe(4);
     expect(LIGHT.indexOf("vars.")).toBeGreaterThan(LIGHT.indexOf(FORK_GUARD));
+  });
+
+  test("ci.yml's macOS session job keeps forks on macos-15 and stays there while CI_MAC_LABELS is unset", () => {
+    const ci = workflows.find(({ name }) => name === "ci.yml")!.workflow;
+    expect(ci.jobs["macos-session"]!["runs-on"]).toBe(MAC);
+    // an exported Claude config dir on a self-hosted runner would skip two of its session-identity tests
+    expect((ci.jobs["macos-session"] as Job & { env?: Record<string, string> }).env?.["CLAUDE_CONFIG_DIR"]).toBe("");
+    expect(MAC.indexOf(MAC_FORK_GUARD)).toBe(4);
+    expect(MAC.indexOf("vars.")).toBeGreaterThan(MAC.indexOf(MAC_FORK_GUARD));
+    // the fork label and the unset variable's fallback are both the hosted image
+    expect(/'([^']+)'$/.exec(MAC_FORK_GUARD)![1]).toMatch(HOSTED);
+    expect(JSON.parse(/vars\.CI_MAC_LABELS \|\| '([^']+)'\)/.exec(MAC)![1]!)).toMatch(HOSTED);
   });
 
   test("ci.yml's routed Linux label comes from scripts/ci-runner-route.sh", () => {

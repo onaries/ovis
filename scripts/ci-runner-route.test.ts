@@ -96,12 +96,12 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
 
     it("goes to the self-hosted runners while they have room for its jobs", () => {
       expect(routed({ ...pr, FAKE_GH: actions({}) })).toEqual(ovis);
-      // 6 of 10 busy leaves exactly the 4 Linux jobs one run needs
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(4) }, queued: { 2: waiting(2) } }) })).toEqual(ovis);
+      // 4 of 10 busy leaves exactly the 6 Linux jobs one run needs
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(2) }, queued: { 2: waiting(2) } }) })).toEqual(ovis);
     });
 
     it("goes hosted when queued and running jobs leave too little room", () => {
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(4), 3: [...running(1), ...waiting(1)] }, queued: { 2: waiting(1) } }) }))
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(2), 3: [...running(1), ...waiting(1)] }, queued: { 2: waiting(1) } }) }))
         .toBe("ubuntu-24.04");
       // stops asking once the runners are known to be full: run 2's jobs are never read
       const full = actions({ in_progress: { 1: running(7), 2: running(1) } });
@@ -118,7 +118,7 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
         { status: "completed", labels: ovis },
         { status: "completed", labels: ovis },
       ];
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...others, ...running(5, ["Self-Hosted", "self-hosted-ovis"])] } }) }))
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...others, ...running(4, ["Self-Hosted", "self-hosted-ovis"])] } }) }))
         .toEqual(ovis);
       expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...others, ...running(7)] } }) })).toBe("ubuntu-24.04");
       // a job asking for fewer labels can take those runners too
@@ -130,8 +130,8 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     it("leaves the light jobs out of the count", () => {
       const light = ["Detect changes", "herdr-core live contract", "Integration and browser", "Pull request title", "bundle-windows"]
         .map((name): Job => ({ status: "in_progress", labels: ovis, name }));
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(6), ...light] } }) })).toEqual(ovis);
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(6), { status: "in_progress", labels: ovis, name: "Fast checks" }] } }) }))
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(4), ...light] } }) })).toEqual(ovis);
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(4), { status: "in_progress", labels: ovis, name: "Fast checks" }] } }) }))
         .toBe("ubuntu-24.04");
     });
 
@@ -148,11 +148,11 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     });
 
     it("takes the capacity from CI_SELF_HOSTED_CAPACITY", () => {
-      expect(routed({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: "4" })).toEqual(ovis);
-      expect(routed({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: "3" })).toBe("ubuntu-24.04");
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(10) } }), SELF_HOSTED_CAPACITY: "14" })).toEqual(ovis);
+      expect(routed({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: "6" })).toEqual(ovis);
+      expect(routed({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: "5" })).toBe("ubuntu-24.04");
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(8) } }), SELF_HOSTED_CAPACITY: "14" })).toEqual(ovis);
       expect(routed({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: "08" })).toEqual(ovis);
-      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(6) } }), SELF_HOSTED_CAPACITY: "010" })).toEqual(ovis);
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(4) } }), SELF_HOSTED_CAPACITY: "010" })).toEqual(ovis);
       for (const value of ["ten", "-1", "4.5", "99999999999999999999"]) {
         const result = route({ ...pr, FAKE_GH: actions({}), SELF_HOSTED_CAPACITY: value });
         expect(result.status).toBe(1);
@@ -172,8 +172,8 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     });
 
     it("asks again when one read fails, and counts what it then reads once", () => {
-      // 12 running of 16 leave room for the run's 4 jobs; each part counted twice would leave none
-      const flaky = actions({ in_progress: { 1: running(6) }, queued: { 2: running(6) } });
+      // 10 running of 16 leave room for the run's 6 jobs; each part counted twice would leave none
+      const flaky = actions({ in_progress: { 1: running(5) }, queued: { 2: running(5) } });
       for (const file of ["in_progress", "jobs-1", "jobs-2"]) writeFileSync(join(flaky, `fail-${file}`), "");
       expect(routed({ ...pr, SELF_HOSTED_CAPACITY: "16", FAKE_GH: flaky })).toEqual(JSON.parse('["self-hosted","self-hosted-ovis"]'));
     });
@@ -344,5 +344,48 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("::error::");
     }
+  });
+
+  describe("Browser regression (other scripts)'s parts", () => {
+    type CiJob = { "runs-on"?: unknown; strategy?: { matrix?: { shard?: string } } };
+    const ci = Bun.YAML.parse(readFileSync(fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url)), "utf8")) as { jobs: Record<string, CiJob> };
+    const shard = ci.jobs["browser-other"]!.strategy!.matrix!.shard!;
+    const branches = [...shard.matchAll(/contains\(needs\.changes\.outputs\.linux, '([^']+)'\) && '(\[[\d,]*\])'/g)].map((match) => ({ label: match[1]!, parts: match[2]! }));
+    const otherwise = /\|\| '(\[[\d,]*\])'\) \}\}$/.exec(shard)![1]!;
+    /** The parts ci.yml's matrix gives for the `linux=` output the route printed (contains() compares strings, ignoring case). */
+    const parts = (env: Record<string, string>): number[] => {
+      const linux = route(env).stdout.split("\n")[0]!.slice("linux=".length).toLowerCase();
+      return JSON.parse(branches.find(({ label }) => linux.includes(label.toLowerCase()))?.parts ?? otherwise) as number[];
+    };
+
+    it("reads the whole matrix expression", () => {
+      expect(`\${{ fromJSON(${branches.map(({ label, parts }) => `contains(needs.changes.outputs.linux, '${label}') && '${parts}' || `).join("")}'${otherwise}') }}`).toBe(shard);
+    });
+
+    it("are the four hosted shards for a fork pull request, whatever the variables say", () => {
+      const vm = '["self-hosted","ovis-vm"]';
+      for (const env of [
+        { EVENT_NAME: "pull_request", HEAD_REPO: "someone/fork" },
+        { EVENT_NAME: "pull_request", HEAD_REPO: "someone/fork", CONFIGURED_LABELS: labels, REQUESTED_LABELS: labels, LINUX_LABELS: vm, FAST_LABELS: vm },
+        { EVENT_NAME: "pull_request_target", HEAD_REPO: "someone/fork", CONFIGURED_LABELS: labels },
+      ]) {
+        expect(parts(env)).toEqual([1, 2, 3, 4]);
+      }
+    });
+
+    it("are three on the self-hosted PC, four hosted and five on the VM runners", () => {
+      expect(parts({ EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({}) })).toEqual([1, 2, 3]);
+      expect(parts({ EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: '["self-hosted","self-hosted-ovis-main"]' })).toEqual([1, 2, 3]);
+      expect(parts({ EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({ in_progress: { 1: running(5) } }) })).toEqual([1, 2, 3, 4]);
+      expect(parts({ EVENT_NAME: "push", REF: "refs/heads/topic", LINUX_LABELS: '["self-hosted","ovis-vm"]' })).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it("count in the route's room for one run: every routed Linux job, the matrix job as its self-hosted parts", () => {
+      const routedJobs = Object.entries(ci.jobs).filter(([, job]) => job["runs-on"] === "${{ fromJSON(needs.changes.outputs.linux) }}" || job["runs-on"] === "${{ fromJSON(needs.changes.outputs.fast) }}");
+      const selfHosted = parts({ EVENT_NAME: "pull_request", HEAD_REPO: repo, FAKE_GH: actions({}) }).length;
+      const needed = routedJobs.reduce((sum, [id]) => sum + (id === "browser-other" ? selfHosted : 1), 0);
+      expect(routedJobs.map(([id]) => id).sort()).toEqual(["browser-main", "browser-other", "fast", "integration"]);
+      expect(Number(/^linux_jobs=(\d+)$/m.exec(readFileSync(script, "utf8"))![1])).toBe(needed);
+    });
   });
 });

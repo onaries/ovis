@@ -60,7 +60,6 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Claude Code 2.1.284 or later": "Claude Code 2.1.284 以降",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "どの推論レベルでも動的ワークフローを実行します。Claude Code 2.1.284 以降が必要です。",
   "First message": "最初のメッセージ",
-  "Optional": "任意",
   "Sent to {agent} as it starts.": "{agent} の起動時に一緒に送ります。",
   "Queued for {agent}'s first turn: sent once it is ready, shown as a pending message until then.": "{agent} の最初のターン用にキューに入れます。準備ができたら送信し、それまでは保留中のメッセージとして表示されます。",
   "Add {skill} to the message": "メッセージに {skill} を追加",

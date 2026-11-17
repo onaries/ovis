@@ -84,4 +84,5 @@ export const SETUP_JA: Record<string, string> = {
   "Opens the first-run guide again, from its first step, to install coding agents on this PC and connect them. What was set up before stays as it is.": "初回のセットアップガイドを最初のステップからもう一度開きます。この PC にコーディングエージェントをインストールして接続するための手順で、すでに設定した内容はそのまま残ります。",
   "Accounts of providers that none of the agents listed above signs in to, such as Cursor or an agent this PC does not have.": "上の一覧のどのエージェントもサインインしていないサービスのアカウントです。たとえば Cursor や、この PC にないエージェントのアカウントです。",
   "Old record": "古い記録",
+  "Install another agent ({count})": "別のエージェントをインストール ({count})",
 };

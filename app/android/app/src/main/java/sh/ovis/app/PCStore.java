@@ -69,6 +69,135 @@ final class PCStore {
         return hostedShell && scope.matches() ? "https://app.ovis.sh/s/" + scope.group(1) + "/" : null;
     }
 
+    private static final Pattern SERVER_ID = Pattern.compile("[0-9a-f]{32}");
+
+    /**
+     * Where a tapped alert opens (OvisMessagingService): {the saved PC's key, the address of its pane},
+     * as the browser's worker opens it (public/sw.js notificationclick), or null when the alert names
+     * no pane or no saved PC, and the app opens as it was. The PC is the one the alert's endpoint was
+     * made for (`origin`, the push module's key for it) when that origin is a saved PC; a relay PC,
+     * which shares the hosted shell's origin with every other, is named by its relay ID (`serverId`)
+     * instead. Its pane rides in the scope's fragment there, as the hosted shell's host never hears it.
+     */
+    static String[] alertLink(List<String> saved, String origin, String serverId, String machine, String workspace, String pane) {
+        if (pane == null || pane.isEmpty()) return null;
+        String query = "machine=" + encoded(machine == null || machine.isEmpty() ? "local" : machine)
+            + (workspace == null || workspace.isEmpty() ? "" : "&ws=" + encoded(workspace))
+            + "&pane=" + encoded(pane) + "&view=chat";
+        String key = origin(origin);
+        // the hosted shell's own origin is every relay PC's, and "Your PCs" when that is saved: never the PC itself
+        if (key != null && saved.contains(key) && !scoped(key) && !sameOrigin(key, "https://app.ovis.sh")) return new String[] { key, key + "/?" + query };
+        if (serverId != null && SERVER_ID.matcher(serverId).matches()) {
+            String scope = "https://app.ovis.sh/s/" + serverId + "/";
+            // an endpoint kept for the hosted shell, or none found: then the relay ID alone names the PC
+            if (saved.contains(scope) && (key == null || sameOrigin(key, scope))) return new String[] { scope, scope + "#" + query };
+        }
+        return null;
+    }
+
+    /** What a tapped alert does (alertTap): hand the open page `selection`, or open `pc` at `address` as a first load. */
+    static final class AlertTap {
+        final String pc;
+        final String address;
+        final String selection;
+
+        private AlertTap(String pc, String address, String selection) {
+            this.pc = pc;
+            this.address = address;
+            this.selection = selection;
+        }
+    }
+
+    /**
+     * What a tapped alert does (MainActivity.openAlert), or null when it names no pane or no saved PC
+     * (alertLink) and the app stays as it was. When its PC is the one whose page is shown (`current`;
+     * `shown`, the WebView's address once the client is up, else null) and that page is the app
+     * (appPage), `selection` is the message the browser's worker posts to an open window
+     * (public/sw.js notificationclick "select-pane"), for the page to take as
+     * src/lib/notificationTarget.ts does, so nothing reloads. For another saved PC, its page not up,
+     * or a page of it that is not the app (a markdown reader, which holds no input and would not hear
+     * the message), `pc` opens at `address` as a first load, as switching PC does.
+     */
+    static AlertTap alertTap(List<String> saved, String current, String shown, String origin, String serverId, String machine, String workspace, String pane) {
+        String[] link = alertLink(saved, origin, serverId, machine, workspace, pane);
+        if (link == null) return null;
+        if (!link[0].equals(current) || shown == null || !belongs(shown, current) || !appPage(shown, current)) return new AlertTap(link[0], link[1], null);
+        try {
+            JSONObject selection = new JSONObject()
+                .put("type", "select-pane")
+                .put("pane_id", pane)
+                .put("machine_id", machine == null || machine.isEmpty() ? "local" : machine)
+                .put("view", "chat");
+            if (workspace != null && !workspace.isEmpty()) selection.put("workspace_id", workspace);
+            return new AlertTap(link[0], null, selection.toString());
+        } catch (JSONException never) {
+            throw new IllegalStateException(never);
+        }
+    }
+
+    /**
+     * Whether `url`, a page of the PC `key`, runs the app and so takes a "select-pane", by the rule of
+     * public/sw.js isAppWindow: not under /api/ nor /ws, not a file (a last path part with an
+     * extension, other than index.html), and not a markdown reader (a `read` that is not blank in its
+     * query, or for a relay PC in its fragment when it has no query, as src/lib/pageQuery.ts reads it).
+     */
+    static boolean appPage(String url, String key) {
+        URI uri;
+        try {
+            uri = new URI(url);
+        } catch (URISyntaxException notAnAddress) {
+            return false;
+        }
+        String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+        if (path.startsWith("/api/") || path.equals("/ws")) return false;
+        String last = path.substring(path.lastIndexOf('/') + 1);
+        if (last.contains(".") && !last.equals("index.html")) return false;
+        String search = uri.getRawQuery();
+        String fragment = uri.getRawFragment();
+        boolean fromFragment = scoped(key) && (search == null || search.isEmpty()) && fragment != null && !fragment.isEmpty();
+        String read = queryValue(fromFragment ? fragment : search, "read");
+        // blank as JavaScript's trim() sees it
+        return read == null || read.replaceAll("[\\s\\p{Z}\\uFEFF]", "").isEmpty();
+    }
+
+    /** The first value of `name` in `query` (a raw query, `?` optional), decoded as URLSearchParams decodes it, or null. */
+    private static String queryValue(String query, String name) {
+        if (query == null) return null;
+        for (String pair : (query.startsWith("?") ? query.substring(1) : query).split("&")) {
+            int equals = pair.indexOf('=');
+            if (formDecoded(equals < 0 ? pair : pair.substring(0, equals)).equals(name)) return formDecoded(equals < 0 ? "" : pair.substring(equals + 1));
+        }
+        return null;
+    }
+
+    /** `text` with `+` as a space and its percent escapes read as UTF-8; as it is when an escape is malformed. */
+    private static String formDecoded(String text) {
+        String spaced = text.replace('+', ' ');
+        String decoded = percentDecoded(spaced);
+        return decoded == null ? spaced : decoded;
+    }
+
+    /**
+     * The script MainActivity runs in the open page with an AlertTap's `selection`, which goes in as a
+     * JSON value, never as code. It is dispatched on the page's window as "ovis-select-pane"
+     * (SELECT_PANE_EVENT in src/lib/notificationTarget.ts), which a page on plain http, with no
+     * navigator.serviceWorker, hears too; that page cancels it. An older page does not, and gets it
+     * as public/sw.js posts it, on navigator.serviceWorker, where it has one. Taken once either way.
+     */
+    static String selectionScript(String selection) {
+        return "(() => { const data = " + selection + "; "
+            + "if (window.dispatchEvent(new MessageEvent('ovis-select-pane', { data, cancelable: true }))) { "
+            + "const worker = navigator.serviceWorker; if (worker) worker.dispatchEvent(new MessageEvent('message', { data })); } })()";
+    }
+
+    private static String encoded(String text) {
+        try {
+            return java.net.URLEncoder.encode(text, "UTF-8").replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException never) {
+            throw new IllegalStateException(never);
+        }
+    }
+
     /**
      * Whether an app link is one to pair from: the PC's scope alone or with its pairing offer, which
      * the connect screen checks as it does a scanned QR code (app/web/shell.js relayLink). Any other

@@ -150,7 +150,6 @@ export const DEVICES_JA: Record<string, string> = {
   "Get a pairing code": "ペアリングコードを取得",
   "This browser would not copy it. Press and hold the link to copy it.": "このブラウザではコピーできませんでした。リンクを長押ししてコピーしてください。",
   "Hide QR code": "QR コードを隠す",
-  "Show QR code": "QR コードを表示",
   "Connect another device": "ほかのデバイスを接続",
   "Send it this link, or show it the QR code. It opens Ovis there and pairs it with this PC.": "このリンクを送るか、QR コードを見せてください。そのデバイスで Ovis が開き、この PC とペアリングされます。",
   "Scan it with the other device's camera.": "ほかのデバイスのカメラでスキャンしてください。",
@@ -247,4 +246,9 @@ export const DEVICES_JA: Record<string, string> = {
   "Asking {name}…": "{name}に依頼中…",
   "Approve on another device of your account": "アカウントの別のデバイスで承認してください",
   "That PC could not be added. Try again.": "そのPCを追加できませんでした。もう一度お試しください。",
+  "The relay did not start: {message}": "リレーを開始できませんでした: {message}",
+  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "プッシュ通知には HTTPS または localhost が必要です。iPhone ではホーム画面に追加したアプリを使ってください。",
+  "Allow notifications in your browser settings, then try again.": "ブラウザーの設定で通知を許可してから、もう一度お試しください。",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "スマートフォンの設定で Ovis の通知を許可してから、もう一度お試しください。",
+  "Could not send the test notification. Try again.": "テスト通知を送信できませんでした。もう一度お試しください。",
 };

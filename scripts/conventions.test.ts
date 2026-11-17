@@ -20,7 +20,7 @@ describe("imports", () => {
       const code = stripComments(read(file));
       return [...code.matchAll(SPECIFIER)].flatMap((match) => {
         const specifier = match[1] ?? match[2] ?? match[3]!;
-        const bad = specifier.startsWith("@shared/") || (specifier.startsWith(".") && !/\.(?:ts|tsx|mjs|js|css|json|md|svg|png|woff2|html|txt)(?:\?[\w&=-]*)?$/.test(specifier));
+        const bad = specifier.startsWith("@shared/") || (specifier.startsWith(".") && !/\.(?:ts|tsx|mjs|js|css|json|md|svg|png|woff2|html|txt|sh)(?:\?[\w&=-]*)?$/.test(specifier));
         return bad ? [`${file}:${lineOf(code, match.index)}: ${specifier}`] : [];
       });
     });

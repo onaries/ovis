@@ -16,6 +16,7 @@ import { checkForUpdates, debInstallCommand, downloadsUpdate, nextOffer, NO_OFFE
 import { extractedAppDir, othersRunFrom } from "./appimage.ts";
 import { desktopLocale, desktopText } from "./text.ts";
 import { hideWindow } from "./windowClose.ts";
+import { argvLinkQuery, LINK_SCHEME, openLinkQuery, tellsLink } from "./openLink.ts";
 
 type StepState = "pending" | "ok" | "failed";
 export interface Status {
@@ -80,6 +81,8 @@ let awakeBlocker: number | null = null;
 let awakeWorking = 0;
 /** the tray's and the menu bar's words, in the app's language once it is ready (app.getLocale()) */
 let text = desktopText("en");
+/** the pane an `ovis://open` link names (openLink.ts), as its query: told to the server's page once it shows */
+let pendingLink: string | null = null;
 
 const accountService = accountServiceOf(process.env);
 
@@ -116,6 +119,23 @@ function showWindow(): void {
   if (!window) createWindow();
   window!.show();
   window!.focus();
+}
+
+/** An `ovis://open` link: the window comes forward and its page selects the link's pane, now or once the server's page has loaded. */
+function openLink(query: string): void {
+  pendingLink = query;
+  if (!app.isReady()) return;
+  showWindow();
+  tellLink();
+}
+
+/** To the server's page alone, once it has loaded (openLink.ts tellsLink); preload.ts holds it until the page listens. */
+function tellLink(loaded = false): void {
+  const contents = window?.webContents;
+  const page = contents ? { ours: ours(contents.getURL()), loadingMainFrame: contents.isLoadingMainFrame() } : null;
+  if (!contents || !tellsLink(pendingLink, page, loaded)) return;
+  contents.send("ovis:open-link", pendingLink);
+  pendingLink = null;
 }
 
 function lifecycle(task: () => Promise<void>): Promise<void> {
@@ -242,6 +262,7 @@ function createWindow(): void {
   });
   window.on("closed", () => { window = null; cancelHide = null; });
   guard(window.webContents);
+  window.webContents.on("did-finish-load", () => tellLink(true));
   void window.loadFile(connectPage);
 }
 
@@ -559,7 +580,19 @@ async function startUpdates(): Promise<void> {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", showWindow);
+  // a second start shows the window, on the pane of the link it was handed (Windows, Linux)
+  app.on("second-instance", (_event, argv) => {
+    const query = argvLinkQuery(argv);
+    if (query !== null) openLink(query);
+    else showWindow();
+  });
+  // a Mac hands a link to the running app, or to one it starts for it before it is ready
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    const query = openLinkQuery(url);
+    if (query !== null) openLink(query);
+    else if (app.isReady()) showWindow();
+  });
   ipcMain.handle("ovis:status", () => status);
   ipcMain.on("ovis:retry", (event) => {
     if (event.senderFrame?.url.startsWith("file:")) void (server ? restart() : start());
@@ -629,6 +662,15 @@ if (!app.requestSingleInstanceLock()) {
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => app.quit());
   void app.whenReady().then(() => {
     text = desktopText(desktopLocale(app.getLocale()));
+    // Windows opens a link by starting the app with it: the installer does not register the scheme, so
+    // the app does (a Mac's Info.plist and Linux's .desktop file name it: electron-builder.yml `protocols`),
+    // and only while no program has it: another program's ovis:// stays its own, and this app's own
+    // registration needs no writing again. The `--` ends Chromium's switches, so a link is never read as
+    // one. The uninstaller removes the registration only when it starts this install (windows/installer.nsh)
+    if (app.isPackaged && process.platform === "win32" && !app.getApplicationNameForProtocol(`${LINK_SCHEME}://`)) {
+      app.setAsDefaultProtocolClient(LINK_SCHEME, process.execPath, ["--"]);
+    }
+    pendingLink ??= argvLinkQuery(process.argv);
     allowPermissions();
     createMenu();
     createWindow();

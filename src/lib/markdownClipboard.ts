@@ -35,6 +35,9 @@ function richHtml(node: ClipboardNode): string {
   if (node.tag === "A" && href && /^(https?:\/\/|mailto:)/i.test(href)) attributes = ` href="${escapeHtml(href)}"`;
   const start = attr(node, "start");
   if (node.tag === "OL" && start && /^\d+$/.test(start)) attributes = ` start="${start}"`;
+  // an item written with its own number (Markdown.tsx) keeps it in the copy
+  const value = attr(node, "value");
+  if (node.tag === "LI" && value && /^\d+$/.test(value)) attributes = ` value="${value}"`;
   return node.tag === "BR" || node.tag === "HR" ? `<${tag}>` : `<${tag}${attributes}>${content}</${tag}>`;
 }
 

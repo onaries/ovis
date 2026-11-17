@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
-import type { Browser, Page } from "playwright-core";
+import type { Browser, Page, Response } from "playwright-core";
 
 const quoted = (path: string): string => `'${path.replaceAll("'", "'\\''")}'`;
 const unbracket = (text: string): string => text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "");
@@ -48,14 +48,21 @@ async function openPhone(browser: Browser, origin: string, pane: string, attach:
 /** picks `files` through the picker `open` raises, and resolves to the stored paths in pick order */
 async function pick(page: Page, open: () => Promise<void>, files: Array<{ name: string; mimeType: string; buffer: Buffer }>): Promise<string[]> {
   const stored: string[] = [];
-  const responses = new Promise<void>((resolve) => {
-    page.on("response", async (response) => {
+  // a wrong answer fails the pick where it is awaited, not the run from a handler; once every file is stored the
+  // listener leaves, so no later answer (the next picks', the held upload's) is read as the page closes
+  const responses = new Promise<void>((resolve, reject) => {
+    const heard = async (response: Response): Promise<void> => {
       if (!response.url().endsWith("/api/pane/image") || response.request().method() !== "POST") return;
-      assert.equal(response.status(), 200);
-      stored.push(((await response.json()) as { path: string }).path);
-      if (stored.length === files.length) resolve();
-    });
+      try {
+        assert.equal(response.status(), 200);
+        stored.push(((await response.json()) as { path: string }).path);
+      } catch (error) { page.off("response", heard); reject(error); return; }
+      if (stored.length === files.length) { page.off("response", heard); resolve(); }
+    };
+    page.on("response", heard);
   });
+  // a rejection is reported at `await responses` below, not as an unhandled one if it comes before that await
+  responses.catch(() => {});
   const chooser = page.waitForEvent("filechooser");
   await open();
   const picker = await chooser;
@@ -123,9 +130,10 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   await page.locator(".terminal-input").waitFor({ state: "detached" });
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => { release = resolve; });
-  const reached = new Promise<void>((resolve) => {
-    void page.route("**/api/pane/image", async (route) => { resolve(); await held; await route.continue(); });
-  });
+  let arrived: () => void = () => {};
+  const reached = new Promise<void>((resolve) => { arrived = resolve; });
+  // installed before the click that uploads, so the upload cannot pass before the route holds it
+  await page.route("**/api/pane/image", async (route) => { arrived(); await held; await route.continue(); });
   const chooser = page.waitForEvent("filechooser");
   await key.click();
   await (await chooser).setFiles([{ name: "slow.txt", mimeType: "text/plain", buffer: Buffer.from("slow\n") }]);
@@ -135,7 +143,11 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   const quiet = sent.length;
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/pane/image"));
   release();
-  await (await answered).finished();
+  const heldAnswer = await answered;
+  await heldAnswer.finished();
+  // the upload stored its file as any other: it is a stored answer, not a refused one, that must type nothing
+  assert.equal(heldAnswer.status(), 200, "the held upload is stored");
+  assert.equal(typeof ((await heldAnswer.json()) as { path?: unknown }).path, "string", "the held upload answers its stored path");
   await page.unroute("**/api/pane/image");
   // the paste would follow the stored answer within a frame: two frames after it, nothing went
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

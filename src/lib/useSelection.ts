@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatc
 import { paneStorageId, type Machine } from "../../shared/machines.ts";
 import { fetchSession } from "./api.ts";
 import { fileFromLink, resolveLink, type AppLink, type LinkNote } from "./deepLink.ts";
-import { machineGone, notificationLanding, notificationTargetFromSearch, sameLink, onNotificationTarget, type NotificationTarget } from "./notificationTarget.ts";
+import { linkLanding, machineGone, notificationLanding, notificationTargetFromSearch, sameLink, onNotificationTarget, type NotificationTarget } from "./notificationTarget.ts";
 import { pageSearch } from "./pageQuery.ts";
 import type { TerminalPeek } from "./terminalPeek.ts";
 import { markSelection, type SelectionMark } from "./selectionMark.ts";
@@ -221,8 +221,14 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
         let cancelled = false;
         void fetchSession(selectedMachineId).then((current) => ({ current, confirmed: resolveLink(current, linked) }), () => null).then((read) => {
           if (cancelled || pendingLink.current !== linked) return;
-          // a failed read is not evidence that anything closed: the link settles without a word
-          if (read === null) { land({ pane: null, workspace: null, note: null }); return; }
+          // A failed read is not evidence that anything closed: a pane still selected stays, and the
+          // link settles without a word. A link that left nothing selected while it waited lands as
+          // the cached roster says, still without a word, so the window is never left empty.
+          if (read === null) {
+            if (selectedPaneId !== null) { land({ pane: null, workspace: null, note: null }); return; }
+            if (!land({ ...landed, note: null })) setSelectedPaneId(fallback(snapshot));
+            return;
+          }
           const { current, confirmed } = read;
           if (land(confirmed)) return;
           // as below: nothing selected takes the fallback, a selection that has gone takes it as auto-selected
@@ -290,7 +296,7 @@ export function useSelectPane({ pendingLink, pendingFile, setLinkLanded, selecti
   return { selectPane };
 }
 
-export function useNotificationTargets({ machinesRef, selectTargetRef, selectionHint, pendingLink, pendingFile, setLinkLanded, linkSince, rosterSeq, setLinkTick, load }: {
+export function useNotificationTargets({ machinesRef, selectTargetRef, selectionHint, pendingLink, pendingFile, setLinkLanded, linkSince, rosterSeq, setLinkTick, load, onLinkWait }: {
   machinesRef: RefObject<Machine[]>;
   selectTargetRef: RefObject<SelectTarget>;
   selectionHint: RefObject<SelectionHint>;
@@ -301,12 +307,33 @@ export function useNotificationTargets({ machinesRef, selectTargetRef, selection
   rosterSeq: RefObject<number>;
   setLinkTick: Dispatch<SetStateAction<number>>;
   load: () => Promise<void>;
+  /** told when a desktop link waits with no pane selected: what covers the pane gives way to it, as for a Back (lib/useAddressBar.ts) */
+  onLinkWait?: () => void;
 }) {
+  const onLinkWaitRef = useRef(onLinkWait); onLinkWaitRef.current = onLinkWait;
   // a tapped notification focuses this window and names the pane (public/sw.js). A pane not known
   // yet waits as a link does (this also keeps a cold start's link, which the worker names again
   // once the page is up), and so does one on a PC this roster lacks: a roster asked for now says
   // whether it was removed (the [machines] effect below) or set up since this one was read
   const takeNotificationTarget = useCallback((target: NotificationTarget): void => {
+    const wait = (link: AppLink, stale: boolean): void => {
+      pendingLink.current = link; pendingFile.current = null; setLinkLanded(false);
+      linkSince.current = rosterSeq.current;
+      setLinkTick((tick) => tick + 1);
+      if (stale) void load();
+    };
+    // a desktop link lands as the address's own link does: its pane once the roster says it is the
+    // link's, and until then no pane at all, only its PC, so nothing draws or attaches a pane it may not mean
+    if (target.link) {
+      const link = target.link;
+      const landing = linkLanding(machinesRef.current, link);
+      if (landing.kind === "select") { selectTargetRef.current(link.machine, landing.pane, link.view ?? undefined); return; }
+      if (sameLink(pendingLink.current, link)) return;
+      selectTargetRef.current(link.machine, null);
+      onLinkWaitRef.current?.();
+      wait(link, landing.stale);
+      return;
+    }
     const landing = notificationLanding(machinesRef.current, target);
     if (landing.kind === "select") {
       selectTargetRef.current(target.machine_id, target.pane_id, target.view);
@@ -316,10 +343,7 @@ export function useNotificationTargets({ machinesRef, selectTargetRef, selection
     // the worker names one tap twice, before and after focus: the second leaves the first's lookup be
     if (sameLink(pendingLink.current, landing.link)) return;
     selectTargetRef.current(target.machine_id, target.pane_id, target.view);
-    pendingLink.current = landing.link; pendingFile.current = null; setLinkLanded(false);
-    linkSince.current = rosterSeq.current;
-    setLinkTick((tick) => tick + 1);
-    if (landing.stale) void load();
+    wait(landing.link, landing.stale);
   }, [load]);
   // the tab's own alerts shown without a worker (lib/notifications.ts) land the same way
   const takeNotificationTargetRef = useRef(takeNotificationTarget); takeNotificationTargetRef.current = takeNotificationTarget;

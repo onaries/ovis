@@ -39,4 +39,6 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "com.google.firebase:firebase-messaging:26.0.1"
     testImplementation "junit:junit:$junitVersion"
+    // android.jar's org.json throws in JVM unit tests; PushStore keeps each PC's endpoint as JSON
+    testImplementation "org.json:json:20240303"
 }

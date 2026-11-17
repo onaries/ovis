@@ -104,10 +104,15 @@ process.stdin.on("data", chunk => {
     await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
     await field.waitFor({ state: "detached" });
     /** The fixture took one line of that many characters, Enter counted. */
-    const accepted = async (value: string): Promise<void> => {
+    const accepted = async (value: string, never = "Masked input never reached fixture"): Promise<void> => {
+      // the file's content, not its existence: writeFileSync makes the file empty before it writes the count
+      const expected = String(`${value}\r`.length);
       const deadline = Date.now() + 5000;
-      while (!existsSync(result)) { if (Date.now() > deadline) throw new Error("Masked input never reached fixture"); await Bun.sleep(25); }
-      assert.equal(readFileSync(result, "utf8"), String(`${value}\r`.length));
+      let took: string | null = null;
+      while ((took = existsSync(result) ? readFileSync(result, "utf8") : null) !== expected) {
+        if (Date.now() > deadline) throw new Error(`${never}: it took ${took === null ? "nothing" : JSON.stringify(took)}, not ${expected} characters`);
+        await Bun.sleep(25);
+      }
     };
     await accepted("fixture-secret");
     assert.deepEqual(sent, ["secret"]);
@@ -222,14 +227,12 @@ process.stdin.on("data", chunk => {
           // A desktop answers the prompt in the grid itself, as in any terminal (#1031): the keys go
           // to the program while the masked input stands by. Regression: on a build that disables
           // stdin for the prompt, the fixture never gets them.
+          // the count left by below-secret, as long as this one, would pass for it
+          rmSync(result, { force: true });
           await view.locator(".pane-terminal .xterm-screen").click();
           await view.keyboard.type("typed-secret");
           await view.keyboard.press("Enter");
-          const typedBy = Date.now() + 5000;
-          while (readFileSync(result, "utf8") !== String("typed-secret\r".length)) {
-            if (Date.now() > typedBy) throw new Error("regression: the grid did not take the typed secret while the masked input was up");
-            await Bun.sleep(25);
-          }
+          await accepted("typed-secret", "regression: the grid did not take the typed secret while the masked input was up");
           await masked.waitFor({ state: "detached" });
           // control: typed into the pty only, never into a draft or the page
           assert.equal(await view.evaluate(() => JSON.stringify({ ...localStorage }).includes("typed-secret")), false);

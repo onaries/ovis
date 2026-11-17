@@ -90,7 +90,7 @@ try {
         }
 
         // the hints: the first beside the pane's Chat | Terminal switch, its count, Next; the keyboard stays where it was
-        const hint = page.getByRole("dialog", { name: "Chat and Terminal show the same agent", exact: true });
+        const hint = page.getByRole("dialog", { name: "Chat or Terminal", exact: true });
         await hint.waitFor();
         await settled(page);
         assert.equal(await hint.locator(".first-hint-count").innerText(), "1/3", `the first hint counts itself ${at}`);
@@ -102,12 +102,12 @@ try {
         // Next from the keyboard: the next hint's Next takes the focus, so Enter goes on advancing
         await hint.getByRole("button", { name: "Next", exact: true }).focus();
         await page.keyboard.press("Enter");
-        const second = page.getByRole("dialog", { name: "Agents that wait for you come first", exact: true });
+        const second = page.getByRole("dialog", { name: "Waiting agents first", exact: true });
         await second.waitFor();
         await settled(page);
         const agentsBox = (await page.locator(".agents-sidebar > .agent-section-toggle").boundingBox())!;
         assert.ok((await second.boundingBox())!.x >= agentsBox.x + agentsBox.width, `the second hint sits beside the Agents section ${at}`);
-        assert.equal(await page.evaluate(() => document.activeElement?.closest(".first-hint")?.querySelector("h2")?.textContent ?? null), "Agents that wait for you come first", `Next from the keyboard keeps the focus in the hints ${at}`);
+        assert.equal(await page.evaluate(() => document.activeElement?.closest(".first-hint")?.querySelector("h2")?.textContent ?? null), "Waiting agents first", `Next from the keyboard keeps the focus in the hints ${at}`);
         await shot("2-hint-agents");
         // Escape from inside the hint closes them for good; a reload brings none
         await second.getByRole("button", { name: "Next", exact: true }).focus();
@@ -124,7 +124,7 @@ try {
         await shot("3-setup-row");
         await row.click();
         const dialog = page.getByRole("dialog", { name: DIALOG, exact: true });
-        await dialog.getByRole("heading", { name: "Stay in touch with your agents", exact: true }).waitFor();
+        await dialog.getByRole("heading", { name: "Stay in touch", exact: true }).waitFor();
         await settled(page);
         await shot("4-reopened-at-phone");
         await page.keyboard.press("Escape");

@@ -247,6 +247,8 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Question {n}": "问题 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab 键将 OpenCode 的 Agent 从 {from} 切换为 {to}。未继续输入。请先检查终端，再重新发送。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode 附加了另一个 Skill。聊天文本仍保留在这里。请先检查终端，再重新发送。",
+  "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.": "已在 Grok 的队列中，排在之前的 {count} 条之后；它们发送后才会发送。未再按任何键。此副本保留在这里供查看，不会再次发送。",
+  "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.": "已在 Grok 的队列中，轮到时 Grok 会发送。未再按任何键。此副本保留在这里供查看，不会再次发送。",
   // quoting a selection into the composer (lib/chatQuote.ts)
   "Quote": "引用",
   "Quote it in your message": "引用到消息中",

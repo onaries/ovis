@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Machine } from "../../shared/machines.ts";
 import type { HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { ComposerDraftStore } from "./composerDraft.ts";
+import { DRAFT_TTL_MS } from "./draft.ts";
 import { PaneLifetimes, UNSENT_UNDO_WINDOW_MS, type UndoTimers } from "./paneLifetime.ts";
 import { PendingMessageStore } from "./pendingMessages.ts";
 import { messageWithComments } from "./replyComments.ts";
@@ -150,6 +151,87 @@ describe("pane state per herdr lifetime", () => {
     lifetimes.observe([pc("local", "herdr-a")], title);
     expect(lifetimes.paneStorage.getItem(DRAFT)).toBeNull();
     expect(lifetimes.unsent().map(({ kind, text }) => ({ kind, text }))).toEqual([{ kind: "message", text: "typed under an older bridge" }]);
+  });
+
+  it("leaves an older bridge's pane state to recovery in the next page when the app replaces this one, never sent, taken once", () => {
+    const storage = new MemoryStorage();
+    const HELD = "ovis:terminal-draft:remote:pc2:w1%3Ap1";
+    const leaving = page(storage);
+    leaving.observe([pc("local", undefined), pc("pc2", undefined)], title);
+    leaving.paneStorage.setItem(DRAFT, "typed under an older bridge");
+    leaving.paneStorage.setItem("ovis:terminal-line:w1:p1", "git status");
+    leaving.paneStorage.setItem(HELD, JSON.stringify({ text: "echo ", at: 1_000 }));
+    // a tapped alert switches the app to another PC: the page is replaced
+    leaving.carry();
+    expect(storage.getItem(DRAFT)).toBeNull();
+
+    // back on the PC, whose server still names no herdr: nothing proves it is the herdr the text was typed under
+    const back = page(storage);
+    const drafts = new ComposerDraftStore(() => back.paneStorage);
+    back.onRetire((machineId) => drafts.forget(machineId));
+    back.observe([pc("local", undefined)], title);
+    expect(drafts.read(DRAFT)).toEqual({ text: "", sending: false });
+    expect(back.paneStorage.getItem("ovis:terminal-line:w1:p1")).toBeNull();
+    expect(back.unsent().map(({ machine_id, kind, text }) => ({ machine_id, kind, text })).sort((x, y) => x.kind.localeCompare(y.kind))).toEqual([
+      { machine_id: "local", kind: "line", text: "git status" },
+      { machine_id: "local", kind: "message", text: "typed under an older bridge" },
+    ]);
+    // what another PC kept waits for that PC's next page, and is taken once
+    back.observe([pc("pc2", "herdr-a")], title);
+    expect(back.paneStorage.getItem(HELD)).toBeNull();
+    expect(back.unsent().filter((item) => item.machine_id === "pc2").map(({ kind, text }) => ({ kind, text }))).toEqual([{ kind: "held", text: "echo " }]);
+    expect([...storage.data.keys()].filter((key) => key.startsWith("ovis:pane-carried:"))).toEqual([]);
+    const again = page(storage);
+    again.observe([pc("local", undefined), pc("pc2", undefined)], title);
+    expect(again.unsent()).toHaveLength(3);
+  });
+
+  it("never puts a carried draft into the pane that reuses its ID after herdr was replaced under a PC naming no herdr", () => {
+    const storage = new MemoryStorage();
+    const leaving = page(storage);
+    leaving.observe([pc("local", undefined, [pane("w1:p1", "claude on repo-a")])], title);
+    leaving.paneStorage.setItem(DRAFT, "rm -rf build and redeploy repo-a");
+    leaving.carry();
+    // herdr restarted meanwhile: w1:p1 is another program now, and the snapshot still names no herdr
+    const back = page(storage);
+    const drafts = new ComposerDraftStore(() => back.paneStorage);
+    back.onRetire((machineId) => drafts.forget(machineId));
+    back.observe([pc("local", undefined, [pane("w1:p1", "codex on repo-b")])], title);
+    expect(drafts.read(DRAFT).text).toBe("");
+    expect(back.unsent().map(({ pane_id, kind, text }) => ({ pane_id, kind, text }))).toEqual([{ pane_id: "w1:p1", kind: "message", text: "rm -rf build and redeploy repo-a" }]);
+  });
+
+  it("brings a carried message an older bridge took with no receipt back once, in recovery, never in the reused pane id (#2172)", () => {
+    const storage = new MemoryStorage();
+    const leaving = page(storage);
+    const pending = new PendingMessageStore(() => leaving.paneStorage, leaving);
+    leaving.onRetire((machineId) => pending.forget(machineId));
+    leaving.observe([pc("local", undefined)], title);
+    pending.keepUnconfirmed("w1:p1", "deploy the fix");
+    leaving.carry();
+    const back = page(storage);
+    const after = new PendingMessageStore(() => back.paneStorage, back);
+    back.onRetire((machineId) => after.forget(machineId));
+    back.observe([pc("local", undefined)], title);
+    expect(after.read("w1:p1")).toEqual([]);
+    expect(back.unsent().map(({ pane_id, kind, text }) => ({ pane_id, kind, text }))).toEqual([{ pane_id: "w1:p1", kind: "pending", text: "deploy the fix" }]);
+  });
+
+  it("keeps no held input past its age in the carry, when the page leaves or when the next one takes it", () => {
+    const storage = new MemoryStorage();
+    const carried = (): string => storage.getItem("ovis:pane-carried:") ?? "";
+    const leaving = page(storage);
+    leaving.observe([pc("local", undefined), pc("pc2", undefined)], title);
+    leaving.paneStorage.setItem("ovis:terminal-draft:w1:p1", JSON.stringify({ text: "typed a day ago", at: 1_000 - DRAFT_TTL_MS - 1 }));
+    leaving.paneStorage.setItem("ovis:terminal-draft:remote:pc2:w1%3Ap1", JSON.stringify({ text: "typed just now", at: 1_000 }));
+    leaving.carry();
+    expect(carried()).not.toContain("typed a day ago");
+    expect(carried()).toContain("typed just now");
+    // the next page opens a day later, on another PC: what waits for pc2 has expired meanwhile
+    const later = new PaneLifetimes(() => storage, () => 1_001 + DRAFT_TTL_MS, () => `id-${++ids}`);
+    later.observe([pc("local", undefined)], title);
+    expect(storage.getItem("ovis:pane-carried:")).toBeNull();
+    expect(later.unsent()).toEqual([]);
   });
 
   it("leaves the stored state alone in a page that is behind another tab, and keeps that page's own typing for recovery", () => {

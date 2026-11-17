@@ -101,4 +101,5 @@ export const RELAY_KO: Record<string, string> = {
   "{name} has a new identity": "{name}의 신원이 바뀌었습니다",
   "That pairing code no longer works": "그 페어링 코드는 더 이상 쓸 수 없습니다",
   "This pairing link is damaged": "이 페어링 링크는 손상되었습니다",
+  "Not now": "나중에",
 };

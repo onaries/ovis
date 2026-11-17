@@ -1206,7 +1206,11 @@ const demoDevices: PairedDevice[] = DEVICE_STATE === "empty" ? [] : [
   // `relay`: a device paired through the relay under this browser's own name, as Connect a phone's same-name hint reads it
   ...(DEVICE_STATE === "relay" ? [{ id: "9a7e5c3b1d2f4068", label: deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0), role: "drive" as const, created_at: ago(5 * 24 * 60), last_seen_at: ago(40), current: false, via_relay: true as const }] : []),
 ];
-const demoAuth: HealthAuth = DEVICE_STATE === "watch" ? { required: false, authenticated: true, via: "device", role: "watch" } : { required: false, authenticated: true };
+// `?demo_via=device`: this browser is a paired device; `?demo_via=local`: it is on the PC itself, as a real server says
+// there (the setup guide's Wi-Fi and Tailscale QR codes then make a pairing code)
+const DEMO_VIA = new URLSearchParams(location.search).get("demo_via");
+const DEMO_VIA_DEVICE = DEMO_VIA === "device";
+const demoAuth: HealthAuth = DEVICE_STATE === "watch" ? { required: false, authenticated: true, via: "device", role: "watch" } : DEMO_VIA_DEVICE ? { required: false, authenticated: true, via: "device" } : DEMO_VIA === "local" ? { required: false, authenticated: true, via: "local" } : { required: false, authenticated: true };
 let demoPairings = 0;
 // what a server answers when the registry write fails (server/http.ts): a log reference, nothing more
 const registryUnwritable = () => error("internal_error", "internal error (d3m0f41l0001)", 500);
@@ -1260,6 +1264,7 @@ const DEMO_RELAY_PUBLIC_KEY = btoa(String.fromCharCode(...Array.from({ length: 3
 const DEMO_RELAY_PARAM = new URLSearchParams(location.search).get("demo_relay");
 const DEMO_RELAY_PASS = new URLSearchParams(location.search).get("demo_relay_pass");
 let demoRelayOnline = DEMO_RELAY_PARAM === "on" || DEMO_RELAY_PASS !== null;
+let demoRelayStartError: string | null = null;
 let demoRelayIdentities = 1;
 const demoRelayServerId = (): string => `${demoRelayIdentities.toString(16).padStart(4, "0")}5e1f1d0ff3ab1e0ff3ab1e5e1f1d`;
 /** direct connections on the PC's network: on by default; the demo listens nowhere, and names a made-up home address while the relay is on */
@@ -1282,7 +1287,7 @@ const demoRelayStatus = (): RelayStatus => {
   return {
     phase: !demoRelayOnline ? "off" : refused ? "error" : "online",
     relay: DEMO_RELAY, app: DEMO_RELAY_APP, sessions: 0, blocked: null,
-    error: refused ? "The Ovis relay needs an Ovis account." : null,
+    error: refused ? "The Ovis relay needs an Ovis account." : demoRelayStartError,
     direct: { on: demoRelayDirect, carriers: demoRelayDirect && demoRelayOnline ? ["ws://192.168.0.10:7319"] : [] },
     ...(pass ? { pass } : {}),
   };
@@ -1429,7 +1434,13 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
       demoRelayDirect = body.on;
       return json(demoRelayStatus(), 200, { "cache-control": "no-store" });
     }
-    if (path === "/api/relay/start") demoRelayOnline = true;
+    // `?demo_relay_hold=1`: the relay's start waits until the page calls releaseDemoRelayStart() (a test holds it to see the
+    // setup guide keep its other ways while the relay starts)
+    if (path === "/api/relay/start" && new URLSearchParams(location.search).get("demo_relay_hold") === "1") {
+      await new Promise<void>((done) => { (globalThis as { releaseDemoRelayStart?: () => void }).releaseDemoRelayStart = done; });
+    }
+    // `?demo_relay_fail=1`: the relay does not start (the setup guide's error state)
+    if (path === "/api/relay/start") { if (new URLSearchParams(location.search).get("demo_relay_fail") === "1") demoRelayStartError = "Could not reach relay.ovis.sh."; else demoRelayOnline = true; }
     else if (path === "/api/relay/stop") demoRelayOnline = false;
     // a new identity: the offers made so far name a PC that no longer exists; the link stays as it was
     else demoRelayIdentities += 1;
@@ -1437,7 +1448,13 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   }
   if (path === "/api/portal/start" || path === "/api/portal/stop" || path === "/api/portal/invite") return error("portal_unsupported", "The demo opens no public address.", 409);
   if (path === "/api/herdr-ui") return json({ copy_on_select: true, keys: resolveHerdrKeys(undefined) }, 200, { "cache-control": "no-store" });
-  if (path === "/api/access") return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
+  if (path === "/api/access") {
+    // `?demo_tailscale=command|missing`: Tailscale runs but does not serve this PC yet, or is not installed
+    const tailscale = new URLSearchParams(location.search).get("demo_tailscale");
+    if (tailscale === "missing") return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "missing", dns_name: null, serving_url: null, serve_command: null, serve_url: null } });
+    if (tailscale === "command") return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: null, serve_command: "tailscale serve --bg --https=443 http://127.0.0.1:7317", serve_url: "https://workstation.example.ts.net" } });
+    return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
+  }
   if (path === "/api/system") return json(systemReport(), 200, { "cache-control": "no-store" });
   if (path === "/api/usage") {
     const report = usageReport();

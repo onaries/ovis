@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,17 +10,21 @@ import { root, runScript } from "./shell-workflow-rules.ts";
 import { files, read } from "./source-scan.ts";
 
 // GitHub's answers for devswha/ovis, cut down to the fields the check reads: main's push run of
-// c99017754 (the 0.5.1 release commit) and its ten jobs, in the order GitHub listed them.
+// c99017754 (the 0.5.1 release commit) and its jobs, in the order GitHub listed them. The matrix
+// job was one job on the self-hosted PC then; it runs there in three parts now, listed in its place.
 const REPO = "devswha/ovis";
 const SHA = "c99017754cb330143589afb2f74473828b86615e";
 const RUN = 42426987381;
 const commit = { repository: REPO, sha: SHA };
-const SELF_HOSTED = [
+const ONE_JOB = "Browser regression (other scripts)";
+/** `names` with the matrix job's one job as the three parts the self-hosted PC runs. */
+const split = (names: string[]): string[] => names.flatMap((name) => (name === ONE_JOB ? [1, 2, 3].map((part) => `${ONE_JOB.slice(0, -1)} ${part}/3)`) : [name]));
+const SELF_HOSTED = split([
   "Detect changes", "herdr-core live contract", "Browser regression (ui-regression)", "Native macOS session identity",
-  "Browser regression (other scripts)", "Integration tests", "Native Windows install", "Fast checks", "Rust PTY host", "Integration and browser",
-];
+  ONE_JOB, "Integration tests", "Native Windows install", "Fast checks", "Rust PTY host", "Integration and browser",
+]);
 /** The same run on GitHub's runners, where the matrix job is four (as Release's own validate listed them). */
-const HOSTED = [...SELF_HOSTED.filter((name) => name !== "Browser regression (other scripts)"), ...[3, 4, 1, 2].map((shard) => `Browser regression (other scripts ${shard}/4)`)];
+const HOSTED = [...SELF_HOSTED.filter((name) => !name.startsWith("Browser regression (other scripts ")), ...[3, 4, 1, 2].map((shard) => `Browser regression (other scripts ${shard}/4)`)];
 
 type Fields = Record<string, unknown>;
 const listedRun = (over: Fields = {}): Fields => ({
@@ -175,7 +179,7 @@ describe("the run's jobs", () => {
     for (const answer of [null, undefined, [], {}, { jobs: [] }, { total_count: 10 }, { total_count: "0", jobs: [] }, { total_count: 0, jobs: {} }]) {
       expect(jobsFinding(answer, completed, commit)).toEqual({ answer: "no", why: `GitHub's list of the jobs of run ${RUN} is not { total_count, jobs }` });
     }
-    expect(jobsFinding({ total_count: 104, jobs: passed(SELF_HOSTED).jobs }, completed, commit)).toEqual({ answer: "no", why: `GitHub listed 10 of the 104 jobs of run ${RUN}` });
+    expect(jobsFinding({ total_count: 104, jobs: passed(SELF_HOSTED).jobs }, completed, commit)).toEqual({ answer: "no", why: `GitHub listed 12 of the 104 jobs of run ${RUN}` });
     expect(jobsFinding({ total_count: 9, jobs: passed(SELF_HOSTED).jobs }, completed, commit).answer).toBe("no");
     for (const entry of [null, "job", { ...listedJob("Fast checks"), name: undefined }, { ...listedJob("Fast checks"), status: undefined }, { ...listedJob("Fast checks"), conclusion: undefined }, { ...listedJob("Fast checks"), conclusion: 0 }]) {
       expect(jobsFinding(jobs([...passed(SELF_HOSTED).jobs.slice(1), entry]), completed, commit)).toEqual({ answer: "no", why: `a job of run ${RUN} has no name, status or conclusion` });
@@ -206,33 +210,37 @@ describe("the run's jobs", () => {
 });
 
 describe("job names", () => {
-  const fixed = SELF_HOSTED.filter((name) => name !== "Browser regression (other scripts)");
+  const fixed = SELF_HOSTED.filter((name) => !name.startsWith("Browser regression (other scripts "));
   const shards = (...list: string[]) => [...fixed, ...list.map((shard) => `Browser regression (other scripts${shard})`)];
 
   it("lists the names GitHub gives ci.yml's jobs", () => {
-    expect([...CI_JOBS, ...matrixJobs(1)].sort()).toEqual([...SELF_HOSTED].sort());
+    expect([...CI_JOBS, ...matrixJobs(3)].sort()).toEqual([...SELF_HOSTED].sort());
     expect([...CI_JOBS, ...matrixJobs(4)].sort()).toEqual([...HOSTED].sort());
     expect(matrixJobs(1)).toEqual(["Browser regression (other scripts)"]);
+    expect(matrixJobs(3)).toEqual([1, 2, 3].map((shard) => `Browser regression (other scripts ${shard}/3)`));
     expect(matrixJobs(4)).toEqual([1, 2, 3, 4].map((shard) => `Browser regression (other scripts ${shard}/4)`));
     // the checks a merge requires
     for (const required of ["Fast checks", "Integration and browser", "Native Windows install"]) expect(CI_JOBS).toContain(required);
   });
 
-  it("takes the matrix job alone, or every shard of four", () => {
-    expect(namesProblem(shards(""))).toBeNull();
+  it("takes every part of three, four or five", () => {
+    expect(namesProblem(shards(" 1/3", " 2/3", " 3/3"))).toBeNull();
+    expect(namesProblem(shards(" 3/3", " 1/3", " 2/3"))).toBeNull();
     expect(namesProblem(shards(" 1/4", " 2/4", " 3/4", " 4/4"))).toBeNull();
     expect(namesProblem(shards(" 1/5", " 2/5", " 3/5", " 4/5", " 5/5"))).toBeNull();
     expect(namesProblem(shards(" 4/4", " 2/4", " 1/4", " 3/4").reverse())).toBeNull();
   });
 
   it("refuses shards that are incomplete, mixed, doubled or of another size", () => {
-    const neither = `the jobs are not ci.yml's ("Browser regression (other scripts)" is neither one job nor all of 1/4 to 4/4 nor all of 1/5 to 5/5)`;
+    const neither = `the jobs are not ci.yml's ("Browser regression (other scripts)" is neither all of 1/3 to 3/3 nor all of 1/4 to 4/4 nor all of 1/5 to 5/5)`;
     expect(namesProblem(shards())).toBe(neither);
     expect(namesProblem(shards(" 1/4", " 2/4", " 3/4"))).toBe(neither);
     expect(namesProblem(shards(" 2/4", " 3/4", " 4/4"))).toBe(neither);
-    expect(namesProblem(shards("", " 1/4", " 2/4", " 3/4", " 4/4"))).toBe(neither);
-    expect(namesProblem(shards("", " 1/4"))).toBe(neither);
-    for (const list of [[" 1/4", " 2/4", " 3/4", " 4/4", " 4/4"], ["", ""], [" 1/2", " 2/2"], [" 1/3", " 2/3", " 3/3"], [" 1/4", " 2/4", " 3/4", " 4/4", " 5/4"], [" 0/4", " 1/4", " 2/4", " 3/4"], [" 1/1"], ["  1/4", " 2/4", " 3/4", " 4/4"]]) {
+    expect(namesProblem(shards(" 1/3", " 2/3"))).toBe(neither);
+    expect(namesProblem(shards(" 1/3", " 2/3", " 3/3", " 1/4", " 2/4", " 3/4", " 4/4"))).toBe(neither);
+    expect(namesProblem(shards(" 3/3", " 1/4"))).toBe(neither);
+    // the one job a run listed before the self-hosted PC ran three parts: no run of this ci.yml lists it
+    for (const list of [[""], ["", " 1/3", " 2/3", " 3/3"], [" 1/3", " 2/3", " 3/3", " 3/3"], [" 1/4", " 2/4", " 3/4", " 4/4", " 4/4"], ["", ""], [" 1/2", " 2/2"], [" 1/4", " 2/4", " 3/4", " 4/4", " 5/4"], [" 0/4", " 1/4", " 2/4", " 3/4"], [" 1/1"], ["  1/4", " 2/4", " 3/4", " 4/4"]]) {
       expect(namesProblem(shards(...list))).toStartWith("the jobs are not ci.yml's (not ci.yml's, or there twice: ");
     }
   });
@@ -660,8 +668,8 @@ describe("runs of devswha/ovis", () => {
     expect(real(RUN, SHA, "completed", "success", 1, all(SELF_HOSTED))).toEqual(yes);
   });
 
-  it("takes 42754144490, green on its second attempt: GitHub lists that attempt's ten jobs", () => {
-    const order = ["Browser regression (ui-regression)", "Detect changes", "Integration tests", "Rust PTY host", "Browser regression (other scripts)", "Native macOS session identity", "herdr-core live contract", "Fast checks", "Native Windows install", "Integration and browser"];
+  it("takes 42754144490, green on its second attempt: GitHub lists that attempt's jobs", () => {
+    const order = split(["Browser regression (ui-regression)", "Detect changes", "Integration tests", "Rust PTY host", ONE_JOB, "Native macOS session identity", "herdr-core live contract", "Fast checks", "Native Windows install", "Integration and browser"]);
     expect(real(42754144490, "6cb6f6c787e6d02b55dfed36173cf9db5c7599c5", "completed", "success", 2, all(order))).toEqual({ answer: "yes", run: 42754144490 });
   });
 
@@ -670,7 +678,7 @@ describe("runs of devswha/ovis", () => {
   });
 
   it("refuses 42632441834: the three required checks passed, the macOS job was cancelled", () => {
-    const order = ["Detect changes", "Native Windows install", "Native macOS session identity", "Integration tests", "Browser regression (other scripts)", "Fast checks", "Rust PTY host", "herdr-core live contract", "Browser regression (ui-regression)", "Integration and browser"];
+    const order = split(["Detect changes", "Native Windows install", "Native macOS session identity", "Integration tests", ONE_JOB, "Fast checks", "Rust PTY host", "herdr-core live contract", "Browser regression (ui-regression)", "Integration and browser"]);
     const listed = all(order, { "Native macOS session identity": "cancelled" });
     const sha = "2d6f32a1a29dc712815be26a7a0f4fb8ae9d6ea3";
     expect(real(42632441834, sha, "completed", "failure", 1, listed)).toEqual({ answer: "no", why: `main's run 42632441834 ended "failure"`, failed: true });
@@ -703,7 +711,7 @@ describe("ci.yml", () => {
     expect(names.filter((name) => name.includes("${{")), UPDATE).toEqual([CI_MATRIX_JOB]);
   });
 
-  it("has one matrix job, of one, four or five shards", () => {
+  it("has one matrix job, of three, four or five parts", () => {
     const matrix = Object.values(ci.jobs).filter((job) => job.strategy !== undefined);
     expect(matrix.map((job) => job.name), UPDATE).toEqual([CI_MATRIX_JOB]);
     expect(Object.keys(matrix[0]!.strategy!.matrix!), UPDATE).toEqual(["shard"]);
@@ -743,6 +751,9 @@ describe("ci.yml", () => {
     "jobs.changes.runs-on": LIGHT,
     "jobs.herdr-core-live.runs-on": LIGHT,
     "jobs.integration-browser.runs-on": LIGHT,
+    // the macOS session job's guard against a fork's pull request (scripts/light-runner-workflow.test.ts): a push and a
+    // Release run carry none, and both then stay on macos-15 (the test below)
+    "jobs.macos-session.runs-on": "${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"') }}",
     // the runner of the Linux jobs (scripts/ci-runner-route.sh): the self-hosted PC for a push,
     // GitHub's for the Release run's own call. The jobs and their steps are the same on either;
     // the unit tests the self-hosted runner skips run in release-validate.yml's own Fast checks, on
@@ -760,6 +771,16 @@ describe("ci.yml", () => {
     // step again
     "jobs.fast.steps.Release guards.env.BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
   };
+
+  it("never validates a release on the self-hosted Mac: CI_MAC_LABELS reaches neither a Release run nor main's run", () => {
+    // A Release run calls ci.yml under its own workflow name, with its caller's event, and may take main's push run in
+    // place of its own: the variable is read only in ci.yml's own runs off main, so both stay on GitHub's macos-15.
+    const dir = join(root, ".github/workflows");
+    const reads = readdirSync(dir).filter((name) => name.endsWith(".yml"))
+      .flatMap((name) => readFileSync(join(dir, name), "utf8").split("\n").filter((line) => line.includes("CI_MAC_LABELS") && !line.trimStart().startsWith("#")).map((line) => `${name}: ${line.trim()}`));
+    expect(reads).toEqual([`ci.yml: runs-on: ${String((ci.jobs["macos-session"] as CiJob & { "runs-on"?: string })["runs-on"])}`]);
+    expect(reads[0]).toContain("fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"')");
+  });
 
   it("reads the event and the run's inputs only where a push run may differ from Release's own", () => {
     const EVENT = /\bgithub\.event\w*|\bgithub\s*\[|\(\s*github\s*\)|\binputs\b/;
@@ -802,6 +823,9 @@ describe("ci.yml", () => {
     "scripts/self-hosted-runner/job-started.sh",
     // tests that hand the variables to the code above and to pr-title.yml's script, and read none themselves
     "scripts/build-cache.test.ts", "scripts/check-report.test.ts", "scripts/check.test.ts", "scripts/pr-title.test.ts", "scripts/self-hosted-runner.test.ts",
+    // the job-started hook's test harness: started only by the hook's tests, it hands the hook an event path;
+    // no workflow starts it, and it decides nothing about what a run does
+    "scripts/self-hosted-runner/hook-test-harness.sh",
   ];
 
   it("reads the event from the runner's environment only where a push run may differ from Release's own", () => {

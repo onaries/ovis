@@ -1,4 +1,5 @@
 import { apiFetch } from "./api-request-id.ts";
+import { CompactAgentsError, expandMachine, type WireMachine } from "../../shared/compact-agents.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { AlertWebhookSave, AlertWebhookView } from "../../shared/alert-webhook.ts";
 import type { SeenFinish, SeenPresentation } from "../../shared/seen.ts";
@@ -1681,10 +1682,16 @@ export async function fetchPushSubscriptionStatus(subscription: PushSubscription
 }
 
 export function fetchBridgeHealth(): Promise<BridgeHealth> { return getJson("/api/health?scope=bridge"); }
-export async function fetchMachines(signal?: AbortSignal): Promise<Machine[]> {
-  const response = await apiFetch("/api/machines", { signal });
+/** The roster, its compact agent rows restored; `full` asks for full rows, which a compact one that cannot be read falls back to. */
+export async function fetchMachines(signal?: AbortSignal, full = false): Promise<Machine[]> {
+  const response = await apiFetch(full ? "/api/machines" : "/api/machines?compact_agents=1", { signal });
   if (!response.ok) throw await errorFrom("/api/machines", response);
-  return ((await response.json()) as { machines: Machine[] }).machines;
+  if (full) return ((await response.json()) as { machines: Machine[] }).machines;
+  const { machines } = (await response.json()) as { machines: WireMachine[] };
+  try { return machines.map(expandMachine); } catch (error) {
+    if (error instanceof CompactAgentsError) return fetchMachines(signal, true);
+    throw error;
+  }
 }
 /**
  * GET /api/machines?verify_source_boot: the roster, and the boot id of the server behind `machineId`

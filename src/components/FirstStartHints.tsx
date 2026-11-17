@@ -55,9 +55,9 @@ export function FirstStartHints({ active }: { active: boolean }) {
   // Next pressed from the keyboard: the next hint's Next takes the focus, as the old card goes with its anchor
   const refocus = useRef(false);
   const hints = [
-    { title: t("Chat and Terminal show the same agent"), text: t("Terminal is the agent's real screen. Chat shows the same work as a conversation.") },
-    { title: t("Agents that wait for you come first"), text: t("A waiting agent is marked here, whichever workspace it is in.") },
-    { title: t("Start another agent"), text: t("A new workspace runs an agent in a folder you choose.") },
+    { title: t("Chat or Terminal"), text: t("Same agent, two views.") },
+    { title: t("Waiting agents first"), text: t("From every workspace.") },
+    { title: t("Start another agent"), text: t("Pick a folder to start in.") },
   ];
   // where the sidebar is drawn beside the pane: up to 768px it is a closed drawer (MachineSidebar.tsx DRAWER_QUERY)
   const wide = useMediaQuery("(min-width: 769px)");

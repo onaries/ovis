@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { failureSite, scriptOutcome, selectBrowserScripts, serialBrowserScripts } from "./ci-browser-parallel.ts";
+import { failureSite, scriptOutcome, selectBrowserScripts, serialBrowserScripts, shardScripts } from "./ci-browser-parallel.ts";
 
 const pages = readFileSync(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8");
 const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -233,6 +233,24 @@ describe("Browser lane script lists", () => {
     const all = shards.flat();
     expect(all.length).toBe(serial.length);
     expect([...all].sort()).toEqual([...serial].sort());
+  });
+
+  it("runs each of browser-other's scripts in exactly one of its parts, for every number of parts its matrix gives", () => {
+    const job = ciJob("browser-other");
+    const selected = selectBrowserScripts(serial, env(job, "BROWSER_SCRIPTS"), env(job, "BROWSER_EXCLUDE"));
+    const timings = JSON.parse(readFileSync(new URL("./ci-browser-timings.json", import.meta.url), "utf8")) as Record<string, number>;
+    const sizes = [...env(job, "shard")!.matchAll(/'\[([\d,]*)\]'/g)].map((match) => match[1]!.split(",").map(Number));
+    // the self-hosted PC's three parts, the hosted four and the VM runners' five
+    expect(sizes.map((list) => list.length).sort()).toEqual([3, 4, 5]);
+    for (const list of sizes) {
+      expect(list).toEqual(list.map((_, index) => index + 1));
+      const parts = list.map((part) => shardScripts(selected, timings, `${part}/${list.length}`));
+      const times = new Map<string, number>();
+      for (const script of parts.flat()) times.set(script, (times.get(script) ?? 0) + 1);
+      expect(selected.filter((script) => times.get(script) !== 1), `${list.length} parts: in no part or in two`).toEqual([]);
+      expect(parts.flat().length).toBe(selected.length);
+      for (const part of parts) expect(part.length).toBeGreaterThan(0);
+    }
   });
 
   it("runs every herdr-backed lane under a shared check slot that it waits for", () => {

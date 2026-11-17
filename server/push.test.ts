@@ -11,7 +11,7 @@ import type { AgentStatus, HerdrPane, InteractivePrompt, SessionSnapshot } from 
 import { CompletionTracker } from "./completion.ts";
 import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
 import { DeviceStore } from "./devices.ts";
-import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
+import { createPushService, handlePushRequest, parseSubscription, RELAY_MAX_BODY_BYTES, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { privateStateFs } from "./private-state.ts";
 import { parseInteractivePrompt } from "./prompt.ts";
@@ -54,10 +54,15 @@ function deferred() {
   return { promise, resolve };
 }
 
+/** The phone app's subscription: the endpoint the push relay hands it (push-relay POST /v1/push/<id>), on the fake. */
+function relaySubscription() {
+  return { ...fake.subscription, endpoint: fake.subscription.endpoint.replace(/\/push\/[^/]+$/, `/v1/push/${crypto.randomUUID()}`) };
+}
+
 /** Alerts go out at once, and each status change is awaited until its alert went out. */
-function subscribed(options: Partial<Parameters<typeof createPushService>[0]> = {}): PushService {
+function subscribed(options: Partial<Parameters<typeof createPushService>[0]> = {}, subscription = fake.subscription): PushService {
   const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 }, ...options });
-  push.subscribe(fake.subscription);
+  push.subscribe(subscription);
   const onStatus = push.onStatus;
   push.onStatus = async (...args) => {
     await onStatus(...args);
@@ -300,6 +305,53 @@ describe("push delivery", () => {
       tag: "herdr-pane-w1:p1",
       kind: "ended",
     });
+  });
+
+  it("names the PC in a pane alert, by the endpoint it went to and its relay ID, for the phone app's tap", async () => {
+    const serverId = "0123456789abcdef0123456789abcdef";
+    const app = relaySubscription();
+    const push = subscribed({ serverId: () => serverId }, app);
+    push.seed([pane("w1:p1", "working", "claude: fix the build")]);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received[0]!.payload).toMatchObject({ pane_id: "w1:p1", endpoint: app.endpoint, server_id: serverId });
+    // the test push is about no pane: nothing to open, so it names no PC
+    fake.received.length = 0;
+    await push.sendTest(app.endpoint);
+    expect(fake.received[0]!.payload).not.toHaveProperty("endpoint");
+    expect(fake.received[0]!.payload).not.toHaveProperty("server_id");
+  });
+
+  it("never names the PC to a browser, whose worker knows it by its own scope", async () => {
+    const push = subscribed({ serverId: () => "0123456789abcdef0123456789abcdef" });
+    push.seed([pane("w1:p1", "working", "claude: fix the build")]);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+    expect(fake.received[0]!.payload).not.toHaveProperty("endpoint");
+    expect(fake.received[0]!.payload).not.toHaveProperty("server_id");
+  });
+
+  it("sends a relay alert without naming the PC when that would take it past what the relay passes on", async () => {
+    let delivered = 0;
+    const app = relaySubscription();
+    const push = subscribed({ serverId: () => "0123456789abcdef0123456789abcdef", onAlertDelivered: () => { delivered += 1; } }, app);
+    const sent = spyOn(globalThis, "fetch");
+    try {
+      // the relay takes a 2,790-character title without the fields, about 2,660 with them on this endpoint
+      for (const [length, named] of [[2600, true], [2740, false]] as const) {
+        sent.mockClear();
+        fake.received.length = 0;
+        push.seed([pane("w1:p1", "working", "x".repeat(length))]);
+        await push.onStatus("w1:p1", "working");
+        await push.onStatus("w1:p1", "blocked");
+        const payload = fake.received[0]!.payload;
+        expect(payload.title).toBe("x".repeat(length));
+        expect(payload.endpoint).toBe(named ? app.endpoint : undefined);
+        expect(payload.server_id).toBe(named ? "0123456789abcdef0123456789abcdef" : undefined);
+        const [[, init]] = sent.mock.calls as unknown as [[string, { body: Uint8Array }]];
+        expect(init.body.byteLength).toBeLessThanOrEqual(RELAY_MAX_BODY_BYTES);
+      }
+    } finally { sent.mockRestore(); }
+    expect(delivered).toBe(2);
   });
 
   it("counts a pane alert a device took, never the test push or one the push service refused", async () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
+import { RELAY_MAX_BODY_BYTES } from "../server/push.ts";
 import {
   DEVICE_RATE_LIMIT, ENDPOINTS_PER_TOKEN, ENDPOINT_TTL_SECONDS, FALLBACK_BODY, RATE_LIMIT, RATE_WINDOW_SECONDS,
   expire, handle, readRegistration, verifyVapid, type Env,
@@ -426,6 +427,16 @@ describe("push relay: pushes", () => {
     expect(r.calls).toEqual([]);
     expect(r.rows()[0]!["window_count"]).toBe(0);
     expect((await r.handle(request)).status).toBe(201);
+  });
+
+  test("passes on a body of the size a PC counts on (server/push.ts RELAY_MAX_BODY_BYTES), and refuses one byte more", async () => {
+    const endpoint = await register(r);
+    const { headers } = pushRequest(endpoint);
+    const send = (size: number) => r.handle(new Request(endpoint, { method: "POST", headers, body: new Uint8Array(size) }));
+    expect((await send(RELAY_MAX_BODY_BYTES + 1)).status).toBe(413);
+    expect(r.calls).toEqual([]);
+    expect((await send(RELAY_MAX_BODY_BYTES)).status).toBe(201);
+    expect(r.calls).toHaveLength(1);
   });
 
   test("an unknown endpoint is 404, like any other path", async () => {

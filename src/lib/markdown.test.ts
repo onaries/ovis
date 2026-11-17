@@ -273,6 +273,44 @@ describe("inline markdown", () => {
     expect(parseInline("`https://example.com/x`")).toEqual([{ type: "code", value: "https://example.com/x" }]);
   });
 
+  it("reads a link's title, in quotes or parentheses, after its address (#3987)", () => {
+    expect(parseInline('This is a [link with title](https://www.google.com "Click to go to google").')).toEqual([
+      { type: "text", value: "This is a " },
+      { type: "link", href: "https://www.google.com", title: "Click to go to google", children: [{ type: "text", value: "link with title" }] },
+      { type: "text", value: "." },
+    ]);
+    expect(parseInline("[a](https://a.dev 'single') [b](https://b.dev \t(parens))")).toEqual([
+      { type: "link", href: "https://a.dev", title: "single", children: [{ type: "text", value: "a" }] },
+      { type: "text", value: " " },
+      { type: "link", href: "https://b.dev", title: "parens", children: [{ type: "text", value: "b" }] },
+    ]);
+    // a link written in the title is the title's text, and an empty title is none
+    expect(parseInline('[a](https://a.dev "see [b](https://b.dev)")')).toEqual([
+      { type: "link", href: "https://a.dev", title: "see [b](https://b.dev)", children: [{ type: "text", value: "a" }] },
+    ]);
+    expect(parseInline('[a](https://a.dev "")')).toEqual([{ type: "link", href: "https://a.dev", children: [{ type: "text", value: "a" }] }]);
+    // a file link and an image read their address the same way
+    expect(parseInline('[report](out/REPORT.md "the report")')).toEqual([{ type: "file", path: "out/REPORT.md", children: [{ type: "text", value: "report" }] }]);
+    expect(parseInline('![chart](img/a.png "Q3")')[0]).toMatchObject({ type: "image", alt: "chart", src: "img/a.png" });
+    // a title that never closes, or anything after it, makes no link of the bracket
+    for (const line of ['[a](https://a.dev "open)', '[a](https://a.dev "t" x)', "[a](https://a.dev (t)x)", '[a](https://a.dev\n"t")', '[a](https://a.dev "t\nu")', "[a](https://a.dev (t\n))"]) {
+      expect(parseInline(line).filter((node) => node.type === "link"), line).toEqual([{ type: "link", href: "https://a.dev", children: [{ type: "text", value: "https://a.dev" }] }]);
+    }
+  });
+
+  it("shows a link's title when the pointer rests on it", () => {
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    try {
+      const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: '[docs](https://docs.dev "Read the docs") [plain](https://plain.dev)' }) }));
+      expect(html).toContain('<a href="https://docs.dev" target="_blank" rel="noopener noreferrer" title="Read the docs"><span>docs</span></a>');
+      expect(html).toContain('<a href="https://plain.dev" target="_blank" rel="noopener noreferrer"><span>plain</span></a>');
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
   it("parses inline code, bold, italic, and strikethrough", () => {
     expect(parseInline("`code` **bold** *italic* ~~gone~~").map((node) => node.type)).toEqual([
       "code", "text", "strong", "text", "em", "text", "del",
@@ -570,6 +608,8 @@ describe("text no one wrote by hand", () => {
     const searches = new Set([
       /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g,
       /\n/g, /}/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
+      // a link's title
+      /[^ \t]/g, /["\n]/g, /['\n]/g, /[()\n]/g,
       /_(?![\p{L}\p{N}\p{M}_])/gu,
       /__(?![\p{L}\p{N}\p{M}_])/gu,
       // Only the single-underscore token can succeed in the last fixture; trying the bold
@@ -615,8 +655,12 @@ describe("text no one wrote by hand", () => {
     // a label closed with an address that is not, and a `__` that only a `_` closes
     for (const count of [4_000, 40_000]) expect(counted("[a](b".repeat(count))).toHaveLength(1);
     for (const count of [3_000, 30_000]) expect(counted("__a b_ ".repeat(count))).toHaveLength(count * 2);
+    // a title that never closes, or closes on no `)`
+    for (const part of ['[a](b "', "[a](b '", "[a](b (", '[a](b  "c"', "[a](b (c)"]) {
+      for (const count of [1_000, 10_000]) expect(counted(part.repeat(count))).toEqual([{ type: "text", value: part.repeat(count) }]);
+    }
     // the marks are the ones it found as one pattern, searching the whole line
-    const asBefore = /(`[^`\n]+`|\\\(.+?\\\)|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/gu;
+    const asBefore = /(`[^`\n]+`|\\\(.+?\\\)|\[[^\]\n]+\]\([^\s)]+(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/gu;
     const found = (marks: Iterable<RegExpMatchArray>): string => [...marks].map((mark) => `${mark.index}:${mark[0]}`).join("\n");
     const lines = everyLine(["_", "a", " ", "[", "](", ")", "\\(", "\\)", "\n"], 5);
     expect(lines.length).toBeGreaterThan(66_000);
@@ -627,7 +671,18 @@ describe("text no one wrote by hand", () => {
       if (marks !== "") marked += 1;
     }
     expect(marked).toBeGreaterThan(1000);
-  });
+    // and so are a link's titles
+    let titled = 0;
+    const titles = everyLine(["[a](b", " ", '"', "'", "(", ")"], 6);
+    expect(titles.length).toBeGreaterThan(55_000);
+    for (const line of titles) {
+      const marks = found(inlineMarks(line));
+      expect(`${line}: ${marks}`).toBe(`${line}: ${found(line.matchAll(asBefore))}`);
+      if (/^\d+:\[a\]\(b .*\)$/m.test(marks)) titled += 1;
+    }
+    expect(titled).toBeGreaterThan(40);
+    // it counts searches, not time: with titles it runs past bun's 5 s on a loaded host
+  }, 20_000);
 
   it("reads a line of dollars that never closes in linear time", () => {
     for (const part of ["$a ", "$5 ", "$a\\$", " $a$b"]) linear((size) => part.repeat(size / part.length), 200_000, (line) => parseInline(line));
@@ -705,6 +760,41 @@ describe("numbered lists as agents write them", () => {
     }
   };
   const lists = (source: string) => parseMarkdown(source).map((block) => block.type === "list" ? { start: block.start ?? 1, items: block.items.length } : block.type);
+
+  it("shows an ordered list's numbers as written when they skip, and counts up a list written all one number", () => {
+    const numbers = (source: string) => {
+      const block = parseMarkdown(source)[0];
+      return block?.type === "list" ? block.items.map((item) => item.number ?? null) : null;
+    };
+    // what was typed: 1 and 4 mean options one and four, not one and two
+    expect(numbers("1. Let's try moge3\n4. Sam would be nice")).toEqual([1, 4]);
+    expect(numbers("2. b\n1. a")).toEqual([2, 1]);
+    expect(numbers("1. a\n2. b\n5. e")).toEqual([1, 2, 5]);
+    // counting up, from any start, or all one number (markdown's own way to count): nothing to keep
+    expect(numbers("1. a\n2. b\n3. c")).toEqual([null, null, null]);
+    expect(numbers("3. c\n4. d")).toEqual([null, null]);
+    expect(numbers("1. a\n1. b\n1. c")).toEqual([null, null, null]);
+    // a list begun all one number counts up however it goes on: while a reply streams, a `2.` after
+    // `1.` `1.` `1.` changes no number already drawn (1, 2, 3, then 4)
+    expect(numbers("1. a\n1. b\n1. c\n2. d")).toEqual([null, null, null, null]);
+    // a list that counts up before it skips keeps the numbers it drew: only the new item differs
+    expect(numbers("1. a\n2. b\n3. c")).toEqual([null, null, null]);
+    expect(numbers("1. a\n2. b\n3. c\n5. e")).toEqual([1, 2, 3, 5]);
+    expect(numbers("- a\n- b")).toEqual([null, null]);
+    // a nested list keeps its own numbers apart from its parent's
+    const parent = parseMarkdown("1. a\n   3. x\n   7. y\n2. b")[0];
+    expect(parent?.type === "list" && parent.items.map((item) => item.number ?? null)).toEqual([null, null]);
+    const nested = parent?.type === "list" ? parent.items[0]?.blocks?.[0] : undefined;
+    expect(nested?.type === "list" && nested.items.map((item) => item.number)).toEqual([3, 7]);
+    // drawn with each item's own number, and indented for the widest of them
+    const html = render("1. a\n12. b");
+    expect(html).toContain('<li value="1"><span>a</span></li><li value="12"><span>b</span></li>');
+    expect(html).toMatch(/--markdown-list-digits:2/);
+    expect(render("1. a\n2. b")).not.toContain("value=");
+    // past a 32-bit integer the browser ignores `start` and `value`: such a list counts up from 1, as before
+    expect(numbers("3000000000. a\n1. b")).toEqual([null, null]);
+    expect(render("1. a\n100000000000000000000. b")).not.toContain("value=");
+  });
 
   it("tells the list how many digits its widest number has, as the browser numbers it (#1993)", () => {
     const digits = (source: string) => render(source).match(/--markdown-list-digits:(\d+)/)?.[1] ?? null;

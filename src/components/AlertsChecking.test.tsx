@@ -40,7 +40,7 @@ describe("the guide's alerts while the PC's record is not in", () => {
     act(() => { jest.advanceTimersByTime(ALERTS_CHECK_GIVE_UP_MS - 1); });
     expect(text()).toBe("Checking…");
     act(() => { jest.advanceTimersByTime(1); });
-    expect(text()).toBe("Could not check alerts with this PC.");
+    expect(text()).toBe("Couldn't check alerts.");
     const button = renderer!.root.findByType("button");
     act(() => { button.props.onClick(); });
     expect(retries).toBe(1);

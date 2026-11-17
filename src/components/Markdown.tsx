@@ -2,7 +2,7 @@ import { Visualization } from "./Visualization.tsx";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { BookOpen, Check, Copy, ImageOff, Maximize2 } from "lucide-react";
 
-import { foldCode, mathNestsTooDeep, parseInline, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../../shared/markdown.ts";
+import { foldCode, mathNestsTooDeep, parseInline, parseMarkdown, type InlineNode, LIST_NUMBER_LIMIT, type ListBlock, type MarkdownBlock } from "../../shared/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { CodeFileName, FilePathLink } from "./FilePathLink.tsx";
 import { fileUriPath } from "../../shared/fileUri.ts";
@@ -343,7 +343,7 @@ function Inline({ nodes, interactive = true, standalone = false }: { nodes: Inli
       case "strong": return <strong key={key}><Inline nodes={node.children} interactive={interactive} /></strong>;
       case "em": return <em key={key}><Inline nodes={node.children} interactive={interactive} /></em>;
       case "del": return <del key={key}><Inline nodes={node.children} interactive={interactive} /></del>;
-      case "link": return <a key={key} href={node.href} target="_blank" rel="noopener noreferrer" onClick={webClick(node.href)}><Inline nodes={node.children} interactive={false} standalone={standalone} /></a>;
+      case "link": return <a key={key} href={node.href} target="_blank" rel="noopener noreferrer" title={node.title} onClick={webClick(node.href)}><Inline nodes={node.children} interactive={false} standalone={standalone} /></a>;
       // the label opens the file; where nothing can open one, the path shows after it, as Codex's terminal does
       case "file": {
         const label = <Inline nodes={node.children} interactive={false} />;
@@ -360,14 +360,18 @@ function List({ block }: { block: ListBlock }) {
   const Tag = block.ordered ? "ol" : "ul";
   // the widest number's digits: its marker sets the list's indent (ChatView.css). The browser counts
   // from 1 when `start` is past a 32-bit integer, so such a start sets no wider indent
-  const first = block.start !== undefined && block.start <= 2 ** 31 - 1 ? block.start : 1;
-  const digits = block.ordered ? String(first + block.items.length - 1).length : 1;
+  const first = block.start !== undefined && block.start <= LIST_NUMBER_LIMIT ? block.start : 1;
+  // an item may keep the number it was written with (shared/markdown.ts ListItem.number); a loop,
+  // not a spread into Math.max, which throws past some tens of thousands of arguments
+  let widest = first + block.items.length - 1;
+  if (block.ordered) for (const item of block.items) if (item.number !== undefined && item.number > widest) widest = item.number;
+  const digits = block.ordered ? String(widest).length : 1;
   const t = useT();
   const id = useId();
   return (
     <Tag className="markdown-list" start={block.ordered ? block.start : undefined} style={digits > 1 ? { "--markdown-list-digits": digits } as CSSProperties : undefined}>
       {block.items.map((item, index) => (
-        <li key={index} className={item.checked === undefined ? undefined : "markdown-task"}>
+        <li key={index} value={block.ordered ? item.number : undefined} className={item.checked === undefined ? undefined : "markdown-task"}>
           {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
               not an <input>: a disabled checkbox is greyed by the browser and ignores the accent. It is
               named by the item's text, or, with none (`- [ ]`), as an empty task */}

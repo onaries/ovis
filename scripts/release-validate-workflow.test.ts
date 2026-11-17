@@ -313,7 +313,7 @@ describe.skipIf(process.platform === "win32")("the reuse job's answer", () => {
     total_count: 1,
     workflow_runs: [{ id: RUN, path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: SHA, status: "completed", conclusion, run_attempt: 1, repository: { full_name: REPO }, head_repository: { full_name: REPO } }],
   });
-  const names = [...CI_JOBS, ...matrixJobs(1)];
+  const names = [...CI_JOBS, ...matrixJobs(3)];
   const passed = { total_count: names.length, jobs: names.map((name) => ({ name, run_id: RUN, run_attempt: 1, head_sha: SHA, status: "completed", conclusion: "success" })) };
 
   test("with the script itself: a green run of main is a yes, a failed one and a GitHub that fails are a no", async () => {

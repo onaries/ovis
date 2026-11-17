@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { GROK_QUEUED_MESSAGE, grokQueuedBehindMessage } from "../../shared/submit-outcome.ts";
 import { translate } from "../lib/i18n.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { PendingMessages } from "./PendingMessages.tsx";
@@ -50,6 +51,18 @@ describe("a pending row's refusal note", () => {
     const html = render("submit_changed", message, [language], true, "uncertain");
     expect(html).toContain(expected);
     expect(html).not.toContain(translate(language, "Not confirmed. Check the terminal before sending again."));
+  });
+
+  it.each((["en", "ko", "ja", "zh"] as const).flatMap((language) => [[language, "behind"], [language, "queued"]] as const))("says a Send now Grok kept in its queue is there, not unsent, and offers no second Send now, in %s (%s)", (language, kind) => {
+    const message = kind === "behind" ? grokQueuedBehindMessage(2) : GROK_QUEUED_MESSAGE;
+    const note = kind === "behind"
+      ? translate(language, "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.", { count: 2 })
+      : translate(language, "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.");
+    const expected = renderToStaticMarkup(createElement("span", null, note)).slice("<span>".length, -"</span>".length);
+    const html = render("submit_changed", message, [language], true, "uncertain");
+    expect(html).toContain(expected);
+    expect(html).not.toContain(translate(language, "Not confirmed. Check the terminal before sending again."));
+    expect(html).not.toContain("pending-message-send");
   });
 
   it("says a held-input refusal in the reader's language, not the raw English reason", () => {

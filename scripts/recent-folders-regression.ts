@@ -64,8 +64,9 @@ try {
             }
           }, { theme, project });
           await context.route("**/api/agents", (route) => route.fulfill({ json: { agents: [{ kind: "codex", label: "Codex" }] } }));
-          await context.route("**/api/machines/events", (route) => route.abort());
-          await context.route("**/api/machines", async (route) => {
+          // by path: the app asks with `?compact_agents=1`, which a glob ending in the path does not match
+          await context.route((url) => url.pathname === "/api/machines/events", (route) => route.abort());
+          await context.route((url) => url.pathname === "/api/machines", async (route) => {
             const response = await route.fetch();
             const body: { machines: Machine[] } = await response.json();
             const local = body.machines.find((machine) => machine.id === "local");

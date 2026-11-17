@@ -4,11 +4,13 @@ export class SnapshotRequests {
 
   invalidate(): void { this.revision++; }
 
-  async read<T>(load: () => Promise<T>, commit: (value: T) => void): Promise<void> {
+  /** superseded: the value of a read something overtook, for what only this read can bring */
+  async read<T>(load: () => Promise<T>, commit: (value: T) => void, superseded?: (value: T) => void): Promise<void> {
     const revision = ++this.revision;
     try {
       const value = await load();
       if (revision === this.revision) commit(value);
+      else superseded?.(value);
     } catch (error) {
       if (revision === this.revision) throw error;
     }

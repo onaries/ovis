@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Browser, type Locator } from "playwright-core";
+import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { appFaces } from "./app-faces.ts";
 import { buildDemoApp } from "./demo-build.ts";
@@ -17,7 +17,8 @@ import { chromePath } from "./chrome-path.ts";
 // in the default face a bullet list keeps its 20px indent. The marker is measured as the browser
 // draws it: its text in its own computed font. The omp pane's conversation answers TURNS; all
 // files and HTTP traffic stay in this disposable, loopback-only app and no herdr session is
-// opened. Screenshots go to UI_EVIDENCE_DIR when it is set.
+// opened. Screenshots go to UI_EVIDENCE_DIR when it is set. The user's own message numbers its
+// list as typed, skipping (1, 4): its markers read 1 and 4, not 1 and 2, and fit their indent too.
 const app = mkdtempSync(join(tmpdir(), "herdr-chat-list-markers-demo-"));
 const evidence = process.env["UI_EVIDENCE_DIR"] || null;
 if (evidence !== null) mkdirSync(evidence, { recursive: true });
@@ -30,7 +31,7 @@ const REPLY = [
   "Bullets:", "", "- a bullet", "- another", "  - nested under it",
 ].join("\n");
 const TURNS = [
-  { role: "user", ts: "2026-10-28T10:00:00.000Z", parts: [{ kind: "text", text: "Number them" }] },
+  { role: "user", ts: "2026-10-28T10:00:00.000Z", parts: [{ kind: "text", text: "Number them\n\n1. Let's try the first\n4. The fourth would be nice too" }] },
   { role: "assistant", ts: "2026-10-28T10:00:05.000Z", parts: [{ kind: "text", text: REPLY }] },
 ];
 
@@ -41,31 +42,59 @@ const CASES = [
 ] as const;
 
 interface Marker { list: number; text: string; width: number; indent: number; font: string }
-/** Every marker of the transcript's lists: the text the browser draws for it, its width in its own font, and its list's indent. */
-const markers = (scope: Locator): Promise<Marker[]> => scope.locator(".markdown-list").evaluateAll((lists) => {
-  const bullets: Record<string, string> = { disc: "\u2022 ", circle: "\u25e6 ", square: "\u25aa " };
-  const found: Marker[] = [];
-  lists.forEach((list, index) => {
-    const indent = parseFloat(getComputedStyle(list).paddingLeft);
-    const start = list instanceof HTMLOListElement ? list.start : 1;
-    [...list.children].forEach((item, position) => {
-      const marker = getComputedStyle(item, "::marker");
-      const type = getComputedStyle(item).listStyleType;
-      const text = type === "decimal" ? `${start + position}. ` : bullets[type];
-      if (text === undefined) throw new Error(`no marker text for list-style-type ${type}`);
-      const probe = document.createElement("span");
-      probe.style.cssText = "position: absolute; visibility: hidden; white-space: pre";
-      for (const property of ["font-family", "font-size", "font-weight", "font-style", "font-stretch", "font-variant-numeric", "letter-spacing"]) {
-        probe.style.setProperty(property, marker.getPropertyValue(property));
-      }
-      probe.textContent = text;
-      document.body.append(probe);
-      found.push({ list: index, text, width: probe.getBoundingClientRect().width, indent, font: `${marker.fontSize} ${marker.fontFamily}` });
-      probe.remove();
-    });
+/**
+ * Every marker of the transcript's lists: the text the browser draws for it, as its accessibility
+ * tree names the marker (so an item's own `value`, or the count from the list's `start`, is read as
+ * drawn, not worked out here), its width in its own font, and its list's indent.
+ */
+async function markers(page: Page, scope: Locator): Promise<Marker[]> {
+  const count = await scope.locator(".markdown-list").evaluateAll((lists) => {
+    let at = 0;
+    for (const list of lists) for (const item of list.children) item.setAttribute("data-marker-at", String(at++));
+    return at;
   });
-  return found;
-});
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { root } = await cdp.send("DOM.getDocument", { depth: -1 });
+    const { nodeIds } = await cdp.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector: "[data-marker-at]" });
+    const at = new Map<number, number>();
+    for (const nodeId of nodeIds) {
+      const { node } = await cdp.send("DOM.describeNode", { nodeId });
+      const attributes = node.attributes ?? [];
+      at.set(node.backendNodeId, Number(attributes[attributes.indexOf("data-marker-at") + 1]));
+    }
+    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+    const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+    const texts: string[] = Array.from({ length: count }, () => "");
+    for (const node of nodes) {
+      if (node.role?.value !== "ListMarker") continue;
+      const item = node.parentId === undefined ? undefined : byId.get(node.parentId);
+      const index = item?.backendDOMNodeId === undefined ? undefined : at.get(item.backendDOMNodeId);
+      if (index !== undefined) texts[index] = String(node.name?.value ?? "");
+    }
+    assert.ok(texts.every((text) => text !== ""), "every item's marker is named in the accessibility tree");
+    return await scope.locator(".markdown-list").evaluateAll((lists, drawn) => {
+      const found: Marker[] = [];
+      lists.forEach((list, index) => {
+        const indent = parseFloat(getComputedStyle(list).paddingLeft);
+        for (const item of list.children) {
+          const marker = getComputedStyle(item, "::marker");
+          const text = drawn[Number(item.getAttribute("data-marker-at"))]!;
+          const probe = document.createElement("span");
+          probe.style.cssText = "position: absolute; visibility: hidden; white-space: pre";
+          for (const property of ["font-family", "font-size", "font-weight", "font-style", "font-stretch", "font-variant-numeric", "letter-spacing"]) {
+            probe.style.setProperty(property, marker.getPropertyValue(property));
+          }
+          probe.textContent = text;
+          document.body.append(probe);
+          found.push({ list: index, text, width: probe.getBoundingClientRect().width, indent, font: `${marker.fontSize} ${marker.fontFamily}` });
+          probe.remove();
+        }
+      });
+      return found;
+    }, texts);
+  } finally { await cdp.detach(); }
+}
 
 async function prepareDemo(): Promise<void> {
   await buildDemoApp(app);
@@ -109,8 +138,10 @@ async function check(browser: Browser, origin: string, width: number, testCase: 
     await scope.getByText("a hundred", { exact: true }).waitFor();
     await appFaces(page);
 
-    const found = await markers(scope);
-    assert.equal(found.length, 3 + 5 + 2 + 3, `${testCase.name} ${width}px: every item of the reply's lists is drawn`);
+    const found = await markers(page, scope);
+    assert.equal(found.length, 2 + 3 + 5 + 2 + 3, `${testCase.name} ${width}px: every item of the message's and the reply's lists is drawn`);
+    assert.deepEqual(found.filter((marker) => marker.list === 0).map((marker) => marker.text.trim()), ["1.", "4."],
+      `${testCase.name} ${width}px: the user's skipping list keeps the numbers typed`);
     if (testCase.name !== "default") assert.match(found[0]!.font, /monospace/, `${testCase.name} ${width}px: the markers are drawn in the Chat font`);
     const clipped = found.filter((marker) => marker.width > marker.indent + 0.5);
     assert.deepEqual(clipped, [], `${testCase.name} ${width}px: every marker fits inside its list's indent`);

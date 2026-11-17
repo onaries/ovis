@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,36 +9,165 @@ import { DEFAULT_LOCK_PORT, MAX_RUNS_LIMIT, applyHostLimits, maxRuns, ticketPort
 
 const script = fileURLToPath(new URL("./self-hosted-runner/run.sh", import.meta.url));
 const jobStarted = fileURLToPath(new URL("./self-hosted-runner/job-started.sh", import.meta.url));
+const hookHarness = fileURLToPath(new URL("./self-hosted-runner/hook-test-harness.sh", import.meta.url));
 
-/** Runs the hook as the runner does, under a process named Runner.Worker (a copy of bash) that goes on after it. */
-function runJobStarted(eventName: string, payload: unknown, event: { raw?: string; path?: "missing" | "directory" | "unset"; repository?: "unset"; closedOutput?: boolean } = {}) {
+/**
+ * Runs the hook on this host, for jobs it allows only, under a parent that can never pass its proof of the worker:
+ * a copy of bash (on macOS a symlink to it) named not-the-worker. The hook may kill only its direct parent, and only
+ * when that parent's executable is Runner.Worker: /proc/<pid>/exe and the name on Linux, the path ps prints on macOS,
+ * all of which name this file. So a refusal nobody meant here blocks and kills nothing, and the test fails at its
+ * 5 s timeout, which ends the parent spawnSync holds and nothing else. Every refusal the tests mean runs in
+ * runHookIsolated.
+ */
+function runJobStarted(eventName: string, payload: unknown) {
   const tempDir = mkdtempSync(join(tmpdir(), "herdr-runner-hook-test-"));
   try {
-    let eventPath: string | undefined = join(tempDir, "event.json");
-    writeFileSync(eventPath, event.raw ?? JSON.stringify(payload));
-    if (event.path === "missing") eventPath = join(tempDir, "no-such-event.json");
-    if (event.path === "directory") eventPath = tempDir;
-    if (event.path === "unset") eventPath = undefined;
-    const worker = join(tempDir, "Runner.Worker");
-    copyFileSync(spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim(), worker);
-    chmodSync(worker, 0o755);
-    // closedOutput: the hook's stdout and stderr are a pipe nobody reads any more (a FIFO whose only
-    // reader is closed before the hook starts), so its first write, even an error message, raises SIGPIPE
-    const hook = event.closedOutput
-      ? 'mkfifo "$1" && exec 4<>"$1" 5>"$1" 4<&- && bash "$0" >&5 2>&5; echo "next step ran"'
-      : 'bash "$0"; echo "next step ran"';
-    const result = spawnSync(worker, ["-c", hook, jobStarted, join(tempDir, "output.fifo")], {
+    const eventPath = join(tempDir, "event.json");
+    writeFileSync(eventPath, JSON.stringify(payload));
+    const parent = join(tempDir, "not-the-worker");
+    const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim();
+    // macOS kills a copy of its signed /bin/bash at once
+    if (process.platform === "darwin") symlinkSync(bash, parent);
+    else {
+      copyFileSync(bash, parent);
+      chmodSync(parent, 0o755);
+    }
+    const result = spawnSync(parent, ["-c", 'bash "$0"; echo "next step ran"', jobStarted], {
       encoding: "utf8",
       timeout: 5_000,
-      env: {
-        PATH: process.env.PATH ?? "",
-        GITHUB_EVENT_NAME: eventName,
-        ...(event.repository === "unset" ? {} : { GITHUB_REPOSITORY: "devswha/ovis" }),
-        ...(eventPath === undefined ? {} : { GITHUB_EVENT_PATH: eventPath }),
-      },
+      env: { PATH: process.env.PATH ?? "", GITHUB_EVENT_NAME: eventName, GITHUB_REPOSITORY: "devswha/ovis", GITHUB_EVENT_PATH: eventPath },
     });
     expect(result.error).toBeUndefined();
     return result;
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * How hook-test-harness.sh is started for each guard it checks itself. namespace: a PID namespace of its own
+ * (--kill-child ends it with unshare). container: a container of an image that carries the marker
+ * (hook-test.Dockerfile's), the harness made a child
+ * subreaper first, so the orphans of its subtree come to it.
+ */
+const HARNESS_LAUNCH = {
+  namespace: () => ["unshare", "--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "--kill-child", "bash", hookHarness, randomBytes(16).toString("hex")],
+  container: () => ["python3", "-c", "import ctypes, os, sys\nif ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) != 0: sys.exit(97)\nos.execv('/bin/bash', ['bash', *sys.argv[1:]])", hookHarness, "container"],
+} as const;
+type Isolation = keyof typeof HARNESS_LAUNCH;
+
+/**
+ * Where the hook's kill tests may run here: the first guard hook-test-harness.sh proves from inside, starting
+ * nothing before it. Any failure (no unshare, a namespace refused, no marker) only moves to the next guard
+ * or skips them, with every reason: never a reason to run them anywhere else.
+ */
+function probeIsolation(): { ok: true; mode: Isolation } | { ok: false; reason: string } {
+  if (process.platform !== "linux") return { ok: false, reason: `no PID namespace or runner container on ${process.platform}` };
+  const reasons: string[] = [];
+  for (const mode of ["namespace", "container"] as const) {
+    const tempDir = mkdtempSync(join(tmpdir(), "herdr-runner-hook-probe-"));
+    try {
+      const [command, ...args] = HARNESS_LAUNCH[mode]();
+      const probe = spawnSync(command!, [...args, "probe"], { encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH ?? "", HARNESS_DIR: tempDir } });
+      if (probe.status === 0 && probe.stdout.trim() === "isolated") return { ok: true, mode };
+      reasons.push(`${mode}: ${(probe.stderr || probe.error?.message || `exit ${probe.status}`).trim()}`);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+  return { ok: false, reason: reasons.join("; ") };
+}
+
+/**
+ * The process that starts the hook (hook-test-harness.sh): the worker; the worker with a shell between them;
+ * the worker named systemd; a process named systemd that calls itself Runner.Worker; any other name; a parent
+ * that ends after the hook's start, before its refusal; or a process named systemd that ends once the hook says
+ * it blocks.
+ */
+type HookParent = "worker" | "nested" | "renamed" | "posing" | "gone" | "leaves" | `named:${string}`;
+
+/**
+ * What answers the hook's ps where it finds no /proc, as on macOS: procps itself, or a stub that fails, prints
+ * nothing, or names the parent like the worker but not quite. The hook is then a copy whose one line naming
+ * /proc and ps names a missing directory and that ps.
+ */
+type HookPs = "procps" | "fails" | "silent" | "lookalike";
+
+/**
+ * Runs the hook under hook-test-harness.sh behind the guard `mode`, which reports what happened: the
+ * parent's exit status (137: SIGKILL) or whether it still runs, whether the hook ended or blocks, whether the
+ * step after it ran, whether the decoys (another Runner.Worker, a Runner.Worker2) live, and whether every process
+ * above the harness still runs. `output` is what the hook wrote; `pidOne` what it wrote to PID 1's stderr (in a
+ * namespace, the harness's own; in a container, the container's output, which the test cannot see); `logged` what it sent to
+ * `logger` (the Mac's system log); `psCalls` every ps it ran.
+ */
+async function runHookIsolated(
+  mode: Isolation,
+  eventName: string,
+  payload: unknown,
+  event: { raw?: string; path?: "missing" | "directory" | "unset"; repository?: "unset"; closedOutput?: boolean; noJq?: boolean; parent?: HookParent; ps?: HookPs } = {},
+) {
+  const tempDir = mkdtempSync(join(tmpdir(), "herdr-runner-hook-test-"));
+  try {
+    const eventFile = join(tempDir, "event.json");
+    writeFileSync(eventFile, event.raw ?? JSON.stringify(payload));
+    let eventPath: string | undefined = event.parent === "gone" ? join(tempDir, "event.fifo") : eventFile;
+    if (event.path === "missing") eventPath = join(tempDir, "no-such-event.json");
+    if (event.path === "directory") eventPath = tempDir;
+    if (event.path === "unset") eventPath = undefined;
+    const bin = join(tempDir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "logger"), `#!/bin/sh\nprintf '%s\\n' "$*" >>'${tempDir}/logger.log'\n`, { mode: 0o755 });
+    // the hook's bash, alone, where jq is missing
+    if (event.noJq) symlinkSync(spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim(), join(bin, "bash"));
+    let hook = jobStarted;
+    if (event.ps) {
+      const answer = {
+        procps: 'exec /bin/ps "$@"\n',
+        fails: "exit 1\n",
+        silent: "exit 0\n",
+        lookalike: 'case "$*" in *comm=*) echo /x/bin/Runner.Worker2;; *) exec /bin/ps "$@";; esac\n',
+      }[event.ps];
+      writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf '%s\\n' "$*" >>'${tempDir}/ps.log'\n${answer}`, { mode: 0o755 });
+      const text = readFileSync(jobStarted, "utf8");
+      const seam = "\nproc=/proc ps=/bin/ps\n";
+      expect(text.split(seam).length).toBe(2);
+      hook = join(tempDir, "job-started.sh");
+      writeFileSync(hook, text.replace(seam, `\nproc='${tempDir}/no-proc' ps='${bin}/ps'\n`));
+    }
+    const harness = Bun.spawn([...HARNESS_LAUNCH[mode](), event.parent ?? "worker", event.closedOutput ? "closed" : "open"], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        HARNESS_DIR: tempDir,
+        HOOK: hook,
+        HOOK_PATH: event.noJq ? bin : `${bin}${delimiter}${process.env.PATH ?? ""}`,
+        GITHUB_EVENT_NAME: eventName,
+        // in a runner container the refusal also reaches the container's output: named as a test's
+        GITHUB_RUN_ID: "job-started-test",
+        ...(event.repository === "unset" ? {} : { GITHUB_REPOSITORY: "devswha/ovis" }),
+        ...(eventPath === undefined ? {} : { GITHUB_EVENT_PATH: eventPath }),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+      killSignal: "SIGKILL",
+    });
+    const [stdout, stderr, status] = await Promise.all([new Response(harness.stdout).text(), new Response(harness.stderr).text(), harness.exited]);
+    const report = /^report (.*)$/m.exec(stdout)?.[1];
+    if (status !== 0 || report === undefined) throw new Error(`hook-test-harness.sh exited ${status}: ${stdout}${stderr}`);
+    const fields = new Map(report.split(" ").map((field) => [field.slice(0, field.indexOf("=")), field.slice(field.indexOf("=") + 1)]));
+    const read = (name: string) => (existsSync(join(tempDir, name)) ? readFileSync(join(tempDir, name), "utf8") : "");
+    return {
+      parent: fields.get("parent"),
+      hook: fields.get("hook"),
+      nextStepRan: fields.get("next") === "ran",
+      decoys: fields.get("decoys"),
+      above: fields.get("above"),
+      output: read("output"),
+      pidOne: stderr,
+      logged: read("logger.log"),
+      psCalls: read("ps.log"),
+    };
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1037,57 +1167,189 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   });
 });
 
-// the runner image is Linux, and the hook finds the worker through /proc
-describe.skipIf(process.platform !== "linux")("self-hosted runner job-started hook", () => {
+// The hook as the runner runs it. Only a job it allows runs on the host: every refusal may kill, so every test that
+// can reach one runs isolated (runHookIsolated: a PID namespace of its own or a container of an image that carries the
+// marker, hook-test.Dockerfile's), or not at all.
+describe.skipIf(process.platform === "win32")("self-hosted runner job-started hook", () => {
   it("runs a job from this repository", () => {
+    // without jq the hook would refuse (and, under runJobStarted's parent, block): fail before it starts
+    expect(Bun.which("jq")).not.toBeNull();
     for (const [event, payload] of [
       ["push", { ref: "refs/heads/main" }],
+      ["workflow_dispatch", { inputs: {} }],
+      ["schedule", { schedule: "0 3 * * *" }],
+      ["merge_group", { merge_group: { head_sha: "abc" } }],
       ["pull_request", { pull_request: { head: { repo: { full_name: "devswha/ovis" } } } }],
+      ["pull_request_review", { pull_request: { head: { repo: { full_name: "devswha/ovis" } } } }],
       ["workflow_run", { workflow_run: { head_repository: { full_name: "devswha/ovis" } } }],
+      ["issue_comment", { issue: { number: 1 }, comment: { id: 2 } }],
     ] as const) {
       const result = runJobStarted(event, payload);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("next step ran");
     }
   });
+});
 
-  it("refuses a job carrying another repository's code before it runs", () => {
+const isolation = probeIsolation();
+if (!isolation.ok) console.warn(`job-started hook kill tests skipped, as they run only in a PID namespace of their own or a container of an image that carries the marker (hook-test.Dockerfile): ${isolation.reason}`);
+
+// The runner image is Linux, where the hook proves its parent through /proc; the Mac runner (README "Mac runner")
+// runs the same file, which asks ps there: the copies with { ps } run that path here, on Linux.
+describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", () => {
+  const mode = isolation.ok ? isolation.mode : "namespace";
+  const runHook = (eventName: string, payload: unknown, event?: Parameters<typeof runHookIsolated>[3]) => runHookIsolated(mode, eventName, payload, event);
+  const fork = { pull_request: { head: { repo: { full_name: "someone/ovis" } } } };
+  type Run = Awaited<ReturnType<typeof runHookIsolated>>;
+
+  /** A refused job: its worker SIGKILLed before the next step, nothing else dead, the refusal said where it is kept. */
+  function expectKilled(run: Run, output: "said" | "closed" = "said") {
+    // a failing hook alone would let `if: always()` steps run: the worker itself is killed
+    expect(run.parent).toBe("137");
+    expect(run.nextStepRan).toBe(false);
+    expect(run.decoys).toBe("alive");
+    expect(run.above).toBe("alive");
+    // a closed output takes the refusal with it: the kill alone is the evidence there
+    if (output === "said") {
+      expect(run.output).toContain("::error::");
+      // Linux writes it to PID 1's output (a container's), never to logger
+      if (mode === "namespace") expect(run.pidOne).toContain("[job-started] ");
+      expect(run.logged).toBe("");
+    }
+  }
+
+  /** A refusal whose parent is not proven the worker: nothing killed, the hook blocks in its step, no step after it. */
+  function expectBlocked(run: Run) {
+    expect(run.hook).toBe("blocked");
+    expect(run.parent).toBe("running");
+    expect(run.nextStepRan).toBe(false);
+    expect(run.decoys).toBe("alive");
+    expect(run.above).toBe("alive");
+    expect(run.output).toContain("::error::");
+  }
+
+  it("refuses a job carrying another repository's code before it runs", async () => {
+    const named = (fullName: unknown) => ({ pull_request: { head: { repo: { full_name: fullName } } } });
     for (const [event, payload] of [
-      ["pull_request", { pull_request: { head: { repo: { full_name: "someone/ovis" } } } }],
-      ["pull_request_target", { pull_request: { head: { repo: { full_name: "someone/ovis" } } } }],
+      ["pull_request", fork],
+      ["pull_request_target", fork],
+      ["pull_request_review", fork],
+      ["pull_request_review_comment", fork],
       ["pull_request", { pull_request: { head: { repo: null } } }],
       ["workflow_run", { workflow_run: { head_repository: { full_name: "someone/ovis" } } }],
+      ["workflow_run", { workflow_run: { head_repository: null } }],
+      // only this repository's name, exactly: no other case, space, look-alike letter or character
+      ["pull_request", named("Devswha/Ovis")],
+      ["pull_request", named("devswha/ovis ")],
+      ["pull_request", named("devswha/\u043evis")],
+      ["pull_request", named("devswha/ovis\u200b")],
+      ["pull_request", named("devswha/ovis\n")],
+      ["pull_request", named(12345)],
+      ["pull_request", named({ name: "devswha/ovis" })],
     ] as const) {
-      const result = runJobStarted(event, payload);
-      // a failing hook alone would let `if: always()` steps run: the worker itself is killed
-      expect(result.signal).toBe("SIGKILL");
-      expect(result.stdout).toContain("::error::");
-      expect(result.stdout).not.toContain("next step ran");
+      expectKilled(await runHook(event, payload));
     }
-  });
+  }, 60_000);
 
-  it("refuses a job it cannot check: fails closed on an unreadable or broken event", () => {
+  it("refuses a job it cannot check: fails closed on an unreadable or broken event", async () => {
     const forkless = { ref: "refs/heads/main" };
     for (const event of [
       { path: "missing" },
       { path: "directory" },
       { path: "unset" },
+      { raw: "" },
       { raw: '{"pull_request": {"head":' },
       { raw: "not json" },
+      { raw: "[]" },
+      { raw: '"devswha/ovis"' },
       { raw: '{"pull_request": "someone/ovis"}' },
+      // two documents: the second one alone would pass
+      { raw: `${JSON.stringify(fork)}\n${JSON.stringify(forkless)}` },
       { repository: "unset" },
+      { noJq: true },
       { path: "missing", closedOutput: true },
       // the shell's own `${VAR:?}` message on a closed stderr
       { path: "unset", closedOutput: true },
       { repository: "unset", closedOutput: true },
     ] as const) {
-      const result = runJobStarted("push", forkless, event);
-      expect(result.signal).toBe("SIGKILL");
-      // a closed output takes the refusal with it: the kill alone is the evidence there
-      if (!("closedOutput" in event)) expect(result.stdout).toContain("::error::");
-      expect(result.stdout).not.toContain("next step ran");
+      expectKilled(await runHook("push", forkless, event), "closedOutput" in event ? "closed" : "said");
     }
-  });
+  }, 60_000);
+
+  it("refuses an event that must name its head repository and does not, never taking it for this one's", async () => {
+    for (const [event, payload] of [
+      ["pull_request", {}],
+      ["pull_request", { pull_request: {} }],
+      ["pull_request", { action: "opened", number: 1 }],
+      ["pull_request_target", {}],
+      ["pull_request_review", {}],
+      ["pull_request_review_comment", {}],
+      ["workflow_run", {}],
+      ["workflow_run", { workflow_run: {} }],
+      ["issue_comment", {}],
+      ["issue_comment", { comment: { id: 2 } }],
+      // no event name: the runner always sets one
+      ["", { ref: "refs/heads/main" }],
+    ] as const) {
+      expectKilled(await runHook(event, payload));
+    }
+  }, 60_000);
+
+  it("proves its parent the worker through ps where there is no /proc, as on the Mac", async () => {
+    const run = await runHook("pull_request", fork, { ps: "procps" });
+    expect(run.parent).toBe("137");
+    expect(run.nextStepRan).toBe(false);
+    expect(run.decoys).toBe("alive");
+    expect(run.above).toBe("alive");
+    expect(run.output).toContain("::error::");
+    expect(run.psCalls).not.toBe("");
+    // with no /proc, the refusal goes to the system log
+    expect(run.logged).toContain("-t ovis-runner-guard");
+  }, 60_000);
+
+  it("blocks and kills nothing when its parent is not proven to be the worker", async () => {
+    const runs = await Promise.all(
+      (
+        [
+          // a live parent that is not the worker, as when a user's systemd manager adopted an earlier version of the hook
+          { parent: "named:systemd" },
+          { parent: "named:Runner.Worker2" },
+          { parent: "named:Runner.Worke" },
+          // the worker is an ancestor, not the parent: never walked to
+          { parent: "nested" },
+          // a name is not an executable: both must be Runner.Worker
+          { parent: "renamed" },
+          { parent: "posing" },
+          // without /proc: ps fails, prints nothing, or names the parent like the worker but not quite
+          { ps: "fails" },
+          { ps: "silent" },
+          { ps: "lookalike" },
+        ] as const
+      ).map((event) => runHook("pull_request", fork, event)),
+    );
+    for (const run of runs) expectBlocked(run);
+  }, 60_000);
+
+  /** A blocked refusal whose parent has ended: the hook ends too, having killed nothing; nothing waits on it any more. */
+  function expectEndedAfterBlock(run: Run) {
+    expect(run.output).toContain("this hook blocks (pid ");
+    expect(run.hook).toBe("ended");
+    // the parent ended by itself, with status 0
+    expect(run.parent).toBe("0");
+    expect(run.nextStepRan).toBe(false);
+    expect(run.decoys).toBe("alive");
+    expect(run.above).toBe("alive");
+  }
+
+  it("kills nothing when its parent ends before the refusal, whatever adopted it, and ends", async () => {
+    // the parent ends after the hook started: its `$PPID` names a pid that is gone
+    expectEndedAfterBlock(await runHook("pull_request", fork, { parent: "gone" }));
+  }, 60_000);
+
+  it("ends a block once the parent it started under is gone, killing nothing", async () => {
+    // a parent that is not the worker lives through the refusal, then ends
+    expectEndedAfterBlock(await runHook("pull_request", fork, { parent: "leaves" }));
+  }, 60_000);
 });
 
 describe.skipIf(process.platform === "win32")("build cache promotion", () => {

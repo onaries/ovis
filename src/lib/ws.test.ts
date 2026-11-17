@@ -3070,7 +3070,7 @@ it("forgets machine event capability on disconnect before a replacement subscrib
   socket.receive({ type: "features", features: ["machine-events"], connection: "c" });
   expect(client.machineEventsAvailable).toBe(true);
   client.setMachineEvents(true);
-  expect(socket.sent.filter((frame) => frame.type === "machine-events")).toEqual([{ type: "machine-events", enabled: true }]);
+  expect(socket.sent.filter((frame) => frame.type === "machine-events")).toEqual([{ type: "machine-events", enabled: true, compact_agents: true }]);
   socket.disconnect();
   expect(client.machineEventsAvailable).toBeNull();
   client.close();

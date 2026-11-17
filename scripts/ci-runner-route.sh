@@ -32,9 +32,10 @@ if [[ ("$event" == pull_request || ("$event" == push && "${REF:-}" == refs/heads
 fi
 main_configured="${MAIN_LABELS:-}"
 capacity="${SELF_HOSTED_CAPACITY:-}"
-# the ci.yml jobs that run on the chosen Linux runner when it is self-hosted (Browser regression
-# has one shard there): Fast checks, Integration and both Browser regression jobs
-linux_jobs=4
+# the ci.yml jobs that run on the chosen Linux runner when it is self-hosted: Fast checks,
+# Integration, Browser regression (ui-regression) and the three parts of Browser regression (other
+# scripts) (scripts/ci-runner-route.test.ts holds this to ci.yml)
+linux_jobs=6
 
 choose_labels() {
   local source="$1" value="$2" compact

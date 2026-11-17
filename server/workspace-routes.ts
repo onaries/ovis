@@ -13,7 +13,7 @@ import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
 import { createDirectory, expandedDirectory, listDirectories } from "./directories.ts";
 import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
-import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
+import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, requestFault, setRequestRoute, wordedHeaders } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
 import { PullRequestError, mergeInputOf, mergePullRequest, pullRequestLog, pullRequestView } from "./pull-request.ts";
 import { repoDiffResponse } from "./repo-diff.ts";
@@ -75,11 +75,14 @@ function envFault(env: unknown): string | null {
   return null;
 }
 
-/** a create request's first message the bridge could not queue for the agent that did start: its own refusal */
-const notQueued = (error: unknown): { error: { code: string; message: string } } => ({ error: {
-  code: typeof (error as { code?: unknown } | null)?.code === "string" ? (error as { code: string }).code : "first_message_not_queued",
-  message: error instanceof Error ? error.message : String(error),
-} });
+/**
+ * a create request's first message the bridge could not queue for the agent that did start: a refusal of the bridge's
+ * own (a code of its own) as it is, any other fault as this request words it (requestFault)
+ */
+const notQueued = (error: unknown): { error: { code: string; message: string } } => {
+  const own = error instanceof HerdrError ? undefined : (error as { code?: unknown } | null)?.code;
+  return { error: typeof own === "string" ? { code: own, message: error instanceof Error ? error.message : String(error) } : requestFault(error, "first_message_not_queued") };
+};
 
 /** The answer for a workspace route, or null when the path is not one. */
 export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<ServerContext, "timeout">, broadcastAll: (message: ServerMessage) => void,
@@ -249,7 +252,8 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         })
         : null;
       broadcastAll({ type: "session-changed" });
-      return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...launched, ...(typeof payload.first_message === "string" ? { first_message: firstMessage } : {}) });
+      // an agent that did not start, or a first message not queued, is said as this request words it (requestFault)
+      return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...launched, ...(typeof payload.first_message === "string" ? { first_message: firstMessage } : {}) }, 200, wordedHeaders());
     } catch (error) {
       return errorResponse(error);
     }
@@ -298,7 +302,8 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         entries.push({ workspace_id: workspaceId, error: { status: refused.status, code: body.error.code, message: body.error.message } });
       }
     }
-    return jsonResponse({ entries });
+    // an entry may carry a read herdr refused, as errorResponse words it for this request
+    return jsonResponse({ entries }, 200, wordedHeaders());
   }
 
   if (pathname === "/api/worktree/remove") {
@@ -385,7 +390,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         path: opened.worktree.path,
         branch: opened.worktree.branch,
         ...launched,
-      });
+      }, 200, wordedHeaders());
     } catch (error) {
       // git's own words for a branch that has no commit yet (a folder just `git init`ed): with no
       // base named there is nothing to check out from, which the dialog says in its own words

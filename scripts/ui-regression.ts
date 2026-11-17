@@ -14,7 +14,7 @@ import type { PluginActionsResponse } from "../shared/plugins.ts";
 import { offeredPluginActions } from "../src/lib/paletteSearch.ts";
 import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
 import { alertsOffMarked, alertsState, runMoreItem } from "./header-more.ts";
-import { routeDrained } from "./drained-route.ts";
+import { rosterRead, rosterStream, routeDrained } from "./drained-route.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkTerminalAttach } from "./terminal-attach-regression.ts";
@@ -390,7 +390,7 @@ try {
     let pollChosen = false;
     let pollCaptured = false;
     let pollFinished = false;
-    const unrouteHeldPoll = await routeDrained(page, "**/api/machines", async (route) => {
+    const unrouteHeldPoll = await routeDrained(page, rosterRead, async (route) => {
       // Hold only the stale read; later refreshes pass through without pending route handlers.
       if (pollChosen) { await route.continue(); return; }
       pollChosen = true;
@@ -476,8 +476,8 @@ try {
     let offlineEvidence: BrowserEvidenceSession | undefined;
     try {
       await offlineContext.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", alertsOn: false })));
-      await offlineContext.route("**/api/machines", (route) => route.fulfill({ json: { machines: offlineMachines } }));
-      await offlineContext.route("**/api/machines/events", (route) => route.fulfill({
+      await offlineContext.route(rosterRead, (route) => route.fulfill({ json: { machines: offlineMachines } }));
+      await offlineContext.route(rosterStream, (route) => route.fulfill({
         contentType: "text/event-stream", body: `retry: 60000\ndata: ${JSON.stringify({ type: "machines", machines: offlineMachines })}\n\n`,
       }));
       await offlineContext.routeWebSocket(/\/ws(?:\?|$)/, (socket) => socket.close({ code: 1000, reason: "Offline cached roster" }));
@@ -516,7 +516,7 @@ try {
 
     // a turn that ended on work still running in the background reads BG, not DONE: drawn in the sidebar, and read in the composer
     let backgroundPeer: "working" | "done" | "blocked" | "idle" | null = null;
-    const unrouteBackground = await routeDrained(page, "**/api/machines", async (route) => {
+    const unrouteBackground = await routeDrained(page, rosterRead, async (route) => {
       const response = await route.fetch();
       const body = await response.json() as { machines: { snapshot?: SessionSnapshot }[] };
       for (const machine of body.machines) {
@@ -628,12 +628,12 @@ try {
     // then carries the planned roster once and stays quiet (a reconnect waits an hour), so the only
     // roster the page gets is the planned one. A page already loaded keeps the stream it has.
     const planned = async (target: typeof page, { events = false } = {}): Promise<() => Promise<void>> => {
-      const unrouteMachines = await routeDrained(target, "**/api/machines", async (route) => {
+      const unrouteMachines = await routeDrained(target, rosterRead, async (route) => {
         const response = await route.fetch();
         await route.fulfill({ response, json: withPlan(await response.json() as Roster) });
       });
       if (events) {
-        await target.route("**/api/machines/events", async (route) => {
+        await target.route(rosterStream, async (route) => {
           const response = await route.fetch({ url: `${origin}/api/machines` });
           const roster = withPlan(await response.json() as Roster);
           await route.fulfill({ status: 200, contentType: "text/event-stream", body: `retry: 3600000\ndata: ${JSON.stringify({ type: "machines", machines: roster.machines })}\n\n` });

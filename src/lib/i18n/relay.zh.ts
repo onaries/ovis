@@ -101,4 +101,5 @@ export const RELAY_ZH: Record<string, string> = {
   "{name} has a new identity": "{name} 的身份已更改",
   "That pairing code no longer works": "该配对码已失效",
   "This pairing link is damaged": "此配对链接已损坏",
+  "Not now": "暂不",
 };

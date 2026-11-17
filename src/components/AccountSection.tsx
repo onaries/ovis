@@ -7,7 +7,7 @@
  * the providers the service says it offers get a button. Elsewhere, and with the account off, none
  * of this.
  */
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { AccountLimits } from "../../shared/protocol.ts";
 import { AddPcWaitOver, closeAddWindow, keepAddPcWaiting, listThisPc, onAddPcWaiting, pagePc, pcAnswers, readAddPcWaiting, reopenAddWindow, thisPcInNoAccount, thisPcMembership, type AddPcWaiting, type ListedPc } from "../lib/account/addThisPc.ts";
@@ -188,12 +188,12 @@ let relistOnItsWay: { readonly until: number; readonly listed: Promise<ListedPc>
  * when that gets no answer; a listing no press began is dropped when its screen goes, and the window it opened for
  * nobody is closed. A sign-in whose button said nothing of adding lists and opens nothing: it gets the offer.
  * The relay is never turned on without a press. Nothing else is listed or opened without one. A device that only
- * watches this PC can list nothing, and is shown nothing. Two copies of this screen may be mounted at once (Settings over the
- * welcome): they share the wait their tab keeps, whichever of them began it, one that stops it stops the
+ * watches this PC can list nothing, and is shown nothing. Two copies of this screen may be mounted at once (two Settings
+ * pages): they share the wait their tab keeps, whichever of them began it, one that stops it stops the
  * other, and the PC is listed again once for both.
  */
 export function AddThisPc({ relayAbove = true, service, signedInHere, onListed }: {
-  /** Settings has the relay's switch above; the welcome does not */
+  /** Settings has the relay's switch above */
   relayAbove?: boolean;
   /** this PC was just listed in the account, or a wait for it was taken up: the account's list is no longer the one read before */
   onListed?: () => void;
@@ -316,7 +316,7 @@ export function AddThisPc({ relayAbove = true, service, signedInHere, onListed }
   const starts = useRef(0);
   /** how often Stop waiting was pressed in this copy */
   const stops = useRef(0);
-  // a copy that shows the button takes up the wait another copy of this screen begins (Settings over the welcome):
+  // a copy that shows the button takes up the wait another copy of this screen begins:
   // closing that one then leaves this one waiting, and saying when the PC was added
   const idle = offering(state);
   useEffect(() => {
@@ -625,7 +625,7 @@ export function AddThisPc({ relayAbove = true, service, signedInHere, onListed }
    * the button back. Turning the relay on closes a device gate still open, which would shut out a browser in
    * only because nothing is paired yet (auth via "open"). The PC refuses such a browser its account
    * (server/dispatch.ts, owner_only), so this button is never offered to one; should how this browser is in
-   * have changed since, it pairs itself first, as the welcome's relay button does (SetupGuide), and the relay
+   * have changed since, it pairs itself first, as the setup guide's relay button does (SetupGuide), and the relay
    * is not started when that, or reading how this browser is in, fails.
    */
   const startRelayAndAdd = (account: string): void => {
@@ -780,15 +780,9 @@ const pcServiceHere = (): string | null => desktopAccount() === null && !inNativ
 /** the account service this page signs in with: the desktop app's, or the one a PC's page names; null for none */
 export const accountServiceHere = (): string | null => desktopAccount()?.service ?? pcServiceHere();
 
-/**
- * The first-run welcome's sign-in (components/SetupGuide.tsx): the same sign-in in a box of its own,
- * with the guide's own line above it and its Not now below; once signed in, Add this PC.
- */
-export interface WelcomeAccount { lead: ReactNode; later: ReactNode }
-
 /** `onAccount`: the page lists the account's PCs itself (My devices), so this group does not */
-export function AccountSection({ onAccount, welcome, recheck = 0 }: {
-  onAccount?: (state: AccountState) => void; welcome?: WelcomeAccount;
+export function AccountSection({ onAccount, recheck = 0 }: {
+  onAccount?: (state: AccountState) => void;
   /** bumped to ask the account service again now, and read the sign-in again (Settings bumps it when Add a connection opens, and once its relay tab signed in) */
   recheck?: number;
 } = {}) {
@@ -1213,20 +1207,6 @@ export function AccountSection({ onAccount, welcome, recheck = 0 }: {
       )}
     </>
   );
-
-  if (welcome !== undefined) {
-    // signed out, the buttons wait for the service's own list: the build's fallback could offer one it lacks
-    if (view.kind === "loading" || (view.kind === "signed-out" && offer === null)) return null;
-    return (
-      <div className="setup-signin">
-        {view.kind === "signed-in"
-          ? <><p className="setup-signin-done" role="status">{t("Signed in with {provider}", { provider: PROVIDER_NAMES[view.provider] })}</p><AddThisPc relayAbove={false} signedInHere={takeSignedInHere} /></>
-          : <>{welcome.lead}{signInParts}</>}
-        {/* signed out only: a sign-in under way ends with its own Cancel, never folded away unnoticed by Not now */}
-        {view.kind === "signed-out" && welcome.later}
-      </div>
-    );
-  }
 
   return (
     <SettingsGroup title={t("Account")} section="account" keepNote note={view.kind === "signed-out" ? t("Sign in to use this PC from your phone and your other PCs.|account group") : undefined}>

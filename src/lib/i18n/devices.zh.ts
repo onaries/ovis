@@ -150,7 +150,6 @@ export const DEVICES_ZH: Record<string, string> = {
   "Get a pairing code": "获取配对码",
   "This browser would not copy it. Press and hold the link to copy it.": "此浏览器无法复制。请长按链接进行复制。",
   "Hide QR code": "隐藏二维码",
-  "Show QR code": "显示二维码",
   "Connect another device": "连接其他设备",
   "Send it this link, or show it the QR code. It opens Ovis there and pairs it with this PC.": "把此链接发给它，或让它扫描二维码。它会在那台设备上打开 Ovis 并与这台电脑配对。",
   "Scan it with the other device's camera.": "用另一台设备的相机扫描。",
@@ -247,4 +246,9 @@ export const DEVICES_ZH: Record<string, string> = {
   "Asking {name}…": "正在请求 {name}…",
   "Approve on another device of your account": "请在你账户的另一台设备上批准",
   "That PC could not be added. Try again.": "无法添加那台 PC。请重试。",
+  "The relay did not start: {message}": "中继未能启动：{message}",
+  "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "推送通知需要 HTTPS 或 localhost。在 iPhone 上请使用添加到主屏幕的应用。",
+  "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "请在手机的设置中允许 Ovis 的通知，然后重试。",
+  "Could not send the test notification. Try again.": "无法发送测试通知。请重试。",
 };

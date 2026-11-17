@@ -7,15 +7,18 @@
 .setup-dialog {
   --setup-w: 1200px;
   --setup-h: 675px;
+  --setup-min-h: 440px;
   --setup-head-h: 56px;
   --setup-foot-h: 64px;
   width: min(100%, var(--setup-w));
 }
 
+/* as tall as its step, within the 16:9 frame: a step with little to show is no half-empty card */
 @media (min-width: 641px) {
   .setup-dialog {
-    height: min(100%, var(--setup-h));
-    max-height: none;
+    height: auto;
+    min-height: min(100%, var(--setup-min-h));
+    max-height: min(100%, var(--setup-h));
   }
 }
 
@@ -47,73 +50,6 @@
   width: var(--space-6);
   height: var(--space-6);
   border-radius: var(--radius-sm);
-}
-
-/* the head's list of steps: a number in a ring, the current one filled, a done one checked */
-.setup-steps {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.setup-steps li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
-.setup-steps li[aria-current="step"] {
-  color: var(--text-strong);
-  font-weight: var(--fw-selected);
-}
-
-.setup-steps-mark {
-  display: grid;
-  place-items: center;
-  width: var(--space-5);
-  height: var(--space-5);
-  border: var(--hairline) solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.setup-steps li[aria-current="step"] .setup-steps-mark {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-text);
-}
-
-.setup-steps li.is-done .setup-steps-mark {
-  border-color: var(--status-done);
-  color: var(--status-done);
-}
-
-.setup-steps-mark svg {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
-}
-
-/* a narrow head keeps the numbers and drops the words */
-@media (max-width: 640px) {
-  .setup-steps {
-    gap: var(--space-2);
-  }
-
-  .setup-steps-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
 }
 
 /* the close glyph, not its hover box, ends on the body's gutter */
@@ -576,28 +512,6 @@
   }
 }
 
-/* the welcome's sign-in: the account's buttons, Not now under them */
-.setup-signin {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--bg-panel);
-}
-
-.setup-signin > .settings-item {
-  align-self: stretch;
-}
-
-.setup-signin-done {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--fs-md);
-}
-
 /* the big choices: I'm new, I've used Ovis before */
 .setup-choices {
   display: flex;
@@ -883,3 +797,412 @@
 
 /* Sign in to an installed Claude Code or Codex, under the tiles */
 .setup-sign-in .setup-link { margin-inline-start: var(--space-1); }
+
+/* the phone's side of the step: everything in view at once, no scroll inside the dialog */
+.setup-side-phone {
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+
+
+
+.setup-store[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--hairline) var(--accent);
+}
+
+
+
+
+.setup-badge {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+
+
+.setup-stores {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.setup-store {
+  display: inline-flex;
+  padding: 2px;
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  cursor: pointer;
+}
+
+.setup-store img {
+  display: block;
+  width: auto;
+  height: 32px;
+}
+
+/* Google's badge artwork carries its own clear space: drawn taller, its badge matches the App Store's */
+.setup-store img[src*="google-play"] {
+  height: 46px;
+  margin-block: -7px;
+}
+
+.setup-method-area {
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
+.setup-method-area > .setup-muted,
+.setup-method-area > .setup-note {
+  margin: 0;
+}
+
+.setup-qr-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.setup-qr-panel > .qr {
+  flex: none;
+}
+
+.setup-qr-panel-text {
+  display: flex;
+  flex: 1 1 12em;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.setup-qr-panel-text strong {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+.setup-qr-scan {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.setup-qr-address {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.setup-qr-address code {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.setup-method-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.setup-method-step .setup-text {
+  margin: 0;
+}
+
+/* the relay in the step: no box of its own, the QR code and its one line side by side */
+.setup-method-area .setup-phone-relay {
+  gap: var(--space-2);
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.setup-relay-tight .relay-pairing {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.setup-relay-tight .relay-pairing > .qr {
+  flex: none;
+  width: 168px;
+  height: 168px;
+}
+
+/* the QR code's view: its one line only (the countdown and the rest wait behind Other ways) */
+.setup-relay-tight:not(.is-more) .relay-pairing-text > :not(.settings-label, .relay-error) {
+  display: none;
+}
+
+.setup-relay-tight.is-more .relay-pairing > .qr,
+.setup-relay-tight.is-more .relay-pairing-text > .settings-label,
+.setup-relay-tight.is-more .relay-pairing-text > .settings-description {
+  display: none;
+}
+
+.setup-relay-tight .relay-pairing-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.setup-relay-tight .relay-pairing-text > * {
+  margin: 0;
+}
+
+/* the other ways: their buttons side by side, wrapping when narrow; this PC's ID on its own line */
+.setup-relay-tight.is-more .relay-pairing-text {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.setup-relay-tight.is-more .relay-pairing-text > :not(.phone-actions) {
+  flex: 1 1 100%;
+}
+
+.setup-relay-tight .phone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.setup-relay-more {
+  margin-top: var(--space-2);
+}
+
+/* variant B: a numbered path */
+.setup-path {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-path > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.setup-path > .setup-path-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.setup-path-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.setup-path-num {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+}
+
+.setup-path-tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.setup-path-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: calc(-1 * var(--hairline));
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.setup-path-tab svg {
+  width: 16px;
+  height: 16px;
+}
+
+.setup-path-optional {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+}
+
+.setup-path-hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+/* held while the relay starts */
+.setup-path-tab[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity, 0.5);
+}
+
+.setup-path-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-strong);
+}
+
+/* the alerts half: a sample alert and where alerts go */
+.setup-alert-sample {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 26em;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
+}
+
+.setup-alert-sample-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+}
+
+.setup-alert-sample-title {
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+}
+
+.setup-alert-sample-time {
+  align-self: flex-start;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.setup-alert-where {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.setup-alert-where li {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.setup-alert-where .setup-label {
+  flex: 0 0 7em;
+}
+
+@media (max-width: 640px) {
+  .setup-qr-panel,
+  .setup-relay-tight .relay-pairing {
+    flex-wrap: wrap;
+  }
+
+  /* the three tabs stay one row, as three equal columns: the icon, the name, the pill under it */
+  .setup-path-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .setup-path-tab {
+    flex-direction: column;
+    justify-content: flex-start;
+    padding-inline: var(--space-1);
+    text-align: center;
+  }
+}
+
+/* the head's step bar, as Orca's: thin segments and n / N */
+.setup-steps-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.setup-steps-bar .setup-steps {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-steps-bar .setup-steps > li {
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.setup-steps-bar .setup-steps > li.is-done {
+  background: var(--text-dim);
+}
+
+.setup-steps-bar .setup-steps > li.is-current {
+  width: 40px;
+  background: var(--text-strong);
+}
+
+.setup-steps-count {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-foot > .setup-later {
+  margin-inline-end: auto;
+  color: var(--text-dim);
+}
+
+/* only Set up later sits at the far left: Start now stays with Back and Continue */
+.setup-foot > .setup-later ~ .btn-ghost {
+  margin-inline-end: 0;
+}
+
+/* on a phone only n / N: the title beside it keeps its room in every language */
+@media (max-width: 640px) {
+  .setup-steps-bar .setup-steps {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}

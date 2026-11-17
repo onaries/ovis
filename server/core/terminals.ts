@@ -3,6 +3,7 @@
  * still being created, the one whose process is still exiting, and the output each client is
  * sent. The pane's agent conversation is watched while a client that shows the pane asks for it.
  */
+import type { HerdrFailureView } from "../herdr/client.ts";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.ts";
 import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
 import { ConversationMonitor } from "../conversation-monitor.ts";
@@ -63,7 +64,9 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
  * is called through one, as the connections are built after the terminals.
  */
 export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, transcriptChanged, inputReady, end }: {
-  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string; museData?: string };
+  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string; museData?: string;
+    /** how a failed herdr call is worded in an error frame (the machine profile's), unset elsewhere */
+    herdrFailure?: HerdrFailureView };
   clients: Set<Client>;
   stopped: () => boolean;
   terminalAttach: () => Promise<boolean>;
@@ -159,7 +162,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     for (const client of attachment.clients) send(client, message);
   }
 
-  const { spawnAttachment } = createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped: stopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor });
+  const { spawnAttachment } = createSpawnAttachment({ herdrFailure: options.herdrFailure, attachments, retiringAttachments, terminalAttach, isStopped: stopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor });
 
   function closeAttachment(paneId: string): void {
     const attachment = attachments.get(paneId);

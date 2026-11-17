@@ -84,4 +84,5 @@ export const SETUP_ZH: Record<string, string> = {
   "Opens the first-run guide again, from its first step, to install coding agents on this PC and connect them. What was set up before stays as it is.": "从第一步重新打开首次运行时的设置向导，用于在此 PC 上安装并连接编程 Agent。之前已完成的设置保持不变。",
   "Accounts of providers that none of the agents listed above signs in to, such as Cursor or an agent this PC does not have.": "上方列出的 Agent 都不登录的服务的账号，例如 Cursor，或此 PC 上没有的 Agent 的账号。",
   "Old record": "旧记录",
+  "Install another agent ({count})": "安装其他代理（{count}）",
 };

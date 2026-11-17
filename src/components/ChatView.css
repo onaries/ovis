@@ -1461,8 +1461,11 @@ ol.markdown-list {
 
 .chat-empty p { margin: 0; font-size: var(--fs-sm); }
 
+/* the way back to the end, here and over a terminal (TerminalViewportTools.css): an elevated pill would melt into
+   the surface under it, so its edge is the one a field's is (--border-input), seen at 3:1 on every theme */
 .chat-new-messages {
   position: sticky;
+  border-color: var(--border-input);
   z-index: var(--z-popover);
   bottom: calc(var(--space-2) + var(--composer-over, 0px));
   left: 50%;
@@ -1472,6 +1475,11 @@ ol.markdown-list {
 }
 
 .chat-new-messages svg { width: var(--icon-size); height: var(--icon-size); }
+
+/* a resting pointer fills it as a .btn is filled, and keeps its edge (.btn's hover edge is the faint --border-strong) */
+@media (hover: hover) {
+  .chat-new-messages:hover:not(:disabled) { border-color: var(--border-input); }
+}
 
 /* chat mode is ONE surface: the stack, the transcript and the composer region all sit on
    --bg; the only card is the composer's input box, on the same column as the transcript */

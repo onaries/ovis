@@ -17,7 +17,7 @@ const CHANGED = "That PC offers another release now than the one shown. Look at 
 
 type Endpoint = { url: string; token: string };
 /** a release version as its updater tells it (`0.4.18`, or a beta `0.5.0-beta.2`), or null */
-const releaseVersion = (value: unknown): string | null => typeof value === "string" && /^\d{1,6}\.\d{1,6}\.\d{1,6}(-beta\.\d{1,6})?$/.test(value) ? value : null;
+export const releaseVersion = (value: unknown): string | null => typeof value === "string" && /^\d{1,6}\.\d{1,6}\.\d{1,6}(-beta\.\d{1,6})?$/.test(value) ? value : null;
 /** another PC's own words, kept to one short line */
 const words = (value: unknown): string | null => typeof value === "string" && value.trim() !== "" ? value.trim().replace(/\s+/g, " ").slice(0, 300) : null;
 const installing = (status: Partial<UpdateStatus> | null): boolean => status?.phase === "building" || status?.phase === "restarting";

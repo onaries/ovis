@@ -177,7 +177,7 @@ function cardBlock(block: MarkdownBlock): string {
     // (src/components/Markdown.tsx), not the code omp shows (#2233)
     case "code": return block.language === "mermaid" || block.language === "math" || block.language.toLowerCase() === "svg" ? undrawn() : block.value;
     case "list": return block.items.map((item, index) => item.checked !== undefined ? undrawn()
-      : `${block.ordered ? `${(block.start ?? 1) + index}. ` : "- "}${cardInline(item.content, true)}\n${(item.blocks ?? []).map(cardBlock).join("\n")}`).join("\n");
+      : `${block.ordered ? `${item.number ?? (block.start ?? 1) + index}. ` : "- "}${cardInline(item.content, true)}\n${(item.blocks ?? []).map(cardBlock).join("\n")}`).join("\n");
     default: return undrawn();
   }
 }

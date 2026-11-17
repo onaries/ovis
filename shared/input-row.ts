@@ -364,10 +364,10 @@ export const agyInputRow: InputRowRecognizer = (screen) => {
 // ---- Grok -----------------------------------------------------------------------------------------
 
 /**
- * Grok: the bottom-most `│ ❯ │` row empty, `Ctrl+.:shortcuts` in the last two rows, and no modal on
- * screen (`Esc close`, `F2/Esc close`, `Esc:cancel`, a `┌─ … ─` title). A modal drawn across the row
- * leaves box characters in it. The Agent Dashboard has its own field (`Enter:create` in its footer)
- * and /history's search reads `│ ?`.
+ * Grok: the bottom-most `│ ❯ │` row empty with every row of the box under it (a draft's later lines, Grok 1.0.77),
+ * `Ctrl+.:shortcuts` in the last two rows, and no modal on screen (`Esc close`, `F2/Esc close`, `Esc:cancel`, a
+ * `┌─ … ─` title). A modal drawn across the row leaves box characters in it. The Agent Dashboard has its own
+ * field (`Enter:create` in its footer) and /history's search reads `│ ?`.
  */
 export const grokInputRow: InputRowRecognizer = (screen) => {
   const rows = filled(screen);
@@ -378,7 +378,9 @@ export const grokInputRow: InputRowRecognizer = (screen) => {
   const lastTwo = rows.slice(-2).map(text);
   if (lastTwo.join(" ").includes("Enter:create") || /^\s*│ \?/.test(text(at))) return "gone";
   if (/[│└┘┌┐]/.test(body)) return "covered";
-  if (body !== "") return "draft";
+  const bottom = rows.find((index) => index > at && /^\s*╰/.test(text(index)));
+  const lines = rows.filter((index) => index > at && bottom !== undefined && index < bottom).map((index) => text(index).replace(/^\s*│/, "").replace(/│\s*$/, "").trim());
+  if (body !== "" || lines.some((line) => line !== "")) return "draft";
   const modal = screen.rows.some((row) => row.text.includes("Esc close") || row.text.includes("F2/Esc close")
     || row.text.includes("Esc:cancel") || /┌─ .* ─/.test(row.text));
   return modal || !lastTwo.some((row) => row.includes("Ctrl+.:shortcuts")) ? "covered" : "ready";

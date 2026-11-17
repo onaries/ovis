@@ -14,6 +14,12 @@ extraResources:
   - from: ../assets/icon-only.png
     to: icon.png
 icon: ../assets/icon-only.png
+# ovis://open?ws=…&pane=…&view=… shows that pane in the window (src/openLink.ts): the Mac's Info.plist
+# and the Linux .desktop file name the scheme; Windows registers it as the app starts (src/main.ts)
+protocols:
+  - name: Ovis
+    schemes:
+      - ovis
 npmRebuild: false
 # the installers' names carry no version (Ovis-linux-x64.AppImage, Ovis-linux-x64.deb, Ovis-mac-arm64.dmg, Ovis-win-x64.exe)
 # so releases/latest/download/<name> always links the newest: scripts/build.ts sets artifactName per build

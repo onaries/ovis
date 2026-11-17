@@ -45,3 +45,6 @@ export function hideSetupRow(storage: HintsStorage): void {
 export function browserStorage(): Storage | null {
   try { return window.localStorage; } catch { return null; }
 }
+
+/** This browser's user pressed Continue on the setup guide's agent step: only then may the guide read the plan usage. */
+export const USAGE_ARMED_KEY = "ovis:setup-usage-armed";

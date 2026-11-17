@@ -288,20 +288,57 @@ namespace Ovis
             await (plugin == null ? Install() : Update());
         }
 
+        /// <summary>
+        /// Start, pressed on a screen that showed the server stopped. The PC is read again first: a server that runs by now
+        /// (started from herdr or a terminal since the window looked) is left to the people using it, and a stopped one is
+        /// started by the plugin's own start, which leaves a server that answers alone and waits for a start under way. A
+        /// recorded process that lives but does not answer is one that start refuses when it is Ovis's: the plugin's stop
+        /// ends it first, and a stop that fails is shown as Restart shows it. Only a pid the stop could not verify as Ovis's
+        /// (another program reused it) is no failure: the stop leaves it alone and the start passes over it.
+        /// </summary>
+        public async Task Start()
+        {
+            Retry = Start;
+            await Refresh();
+            if (Phase != Phase.Installed || (Status != null && Status.Running)) return;
+            ClearLog();
+            // the words main showed for Start, which went through Restart
+            Set(Phase.Working, Lang.L("Restarting…", "다시 시작하는 중…"));
+            if (plugin != null && Status != null && Status.Pid != null && await HerdrRunning())
+            {
+                var stop = await PluginCommand(plugin, "stop", Append);
+                if (Setup.StopFailed(stop.Status, stop.Output))
+                {
+                    Fail(Lang.L("Could not stop the Ovis server.", "Ovis 서버를 멈추지 못했습니다."));
+                    return;
+                }
+            }
+            await StartServer();
+        }
+
         public async Task Restart()
         {
             Retry = Restart;
             ClearLog();
             Set(Phase.Working, Lang.L("Restarting…", "다시 시작하는 중…"));
+            // the start waits until the old server has exited: started before, it would find that one
+            // answering and leave nothing running once it goes
+            if (plugin != null && await HerdrRunning() && !await Stop(plugin))
+            {
+                Fail(Lang.L("Could not stop the Ovis server.", "Ovis 서버를 멈추지 못했습니다."));
+                return;
+            }
+            await StartServer();
+        }
+
+        /// <summary>
+        /// The server started the way herdr starts it: the plugin's start-windows action while herdr runs, else herdr's
+        /// server (set to start at login first), whose startup hook starts it. Then it waits for it and reads the PC again.
+        /// </summary>
+        private async Task StartServer()
+        {
             if (plugin != null && await HerdrRunning())
             {
-                // the start waits until the old server has exited: started before, it would find that one
-                // answering and leave nothing running once it goes
-                if (!await Stop(plugin))
-                {
-                    Fail(Lang.L("Could not stop the Ovis server.", "Ovis 서버를 멈추지 못했습니다."));
-                    return;
-                }
                 if ((await Run.Program("herdr", new[] { "plugin", "action", "invoke", plugin.Id + ".start-windows" }, Append)).Status != 0)
                 {
                     Fail(Lang.L("Could not start the Ovis server.", "Ovis 서버를 시작하지 못했습니다."));
@@ -380,23 +417,25 @@ namespace Ovis
         }
 
         /// <summary>
-        /// The plugin's plugin.ts, run here as herdr runs its actions: told the state dir herdr keeps for the plugin. Releases
-        /// under the old id from before 0.4.13 look for their server's pid there only when told, and in ~/.local/state
+        /// The plugin's own command (Setup.PluginCommandLine), run here as herdr runs its actions: told the state dir herdr
+        /// keeps for the plugin. Releases under the old id from before 0.4.13 look for their server's pid there only when told, and in ~/.local/state
         /// otherwise, where they find none: their stop ended nothing, so a server that outlived herdr kept the old
         /// checkout's files open for the move's uninstall, and their status named no pid. Every release under the new id
         /// finds herdr's dir itself, and keeps its own for a server started by hand from the checkout.
         /// </summary>
         private static async Task<RunResult> PluginCommand(Plugin plugin, string command, Action<string> onLine, bool keepStderr = true, int limitSeconds = 120)
         {
-            var words = new[] { PluginScript(plugin), command };
-            if (plugin.Id != Links.LegacyPluginId) return await Run.Program("bun", words, onLine, keepStderr, limitSeconds);
+            var line = Setup.PluginCommandLine(plugin.Root, command, System.IO.File.Exists);
+            var program = line[0];
+            var words = line.Skip(1).ToArray();
+            if (plugin.Id != Links.LegacyPluginId) return await Run.Program(program, words, onLine, keepStderr, limitSeconds);
             // the child takes this process's environment when it starts; the app's steps run one at a time
             var given = Environment.GetEnvironmentVariable("HERDR_PLUGIN_STATE_DIR");
             Environment.SetEnvironmentVariable("HERDR_PLUGIN_STATE_DIR", Setup.HerdrPluginStateDir(plugin.Id, Environment.GetEnvironmentVariable));
             RunResult result;
             try
             {
-                result = await Run.Program("bun", words, onLine, keepStderr, limitSeconds);
+                result = await Run.Program(program, words, onLine, keepStderr, limitSeconds);
             }
             finally
             {
@@ -404,18 +443,13 @@ namespace Ovis
             }
             // a server started by hand from the checkout keeps its pid in its own dir, which the given one hides: a stop
             // that found none there asks the way it did before
-            if (command == "stop" && result.Status == 0 && !Setup.StoppedServer(result.Output)) return await Run.Program("bun", words, onLine, keepStderr, limitSeconds);
+            if (command == "stop" && result.Status == 0 && !Setup.StoppedServer(result.Output)) return await Run.Program(program, words, onLine, keepStderr, limitSeconds);
             return result;
         }
 
         private static string[] PowerShell(string command)
         {
             return Setup.PowerShellArguments(command);
-        }
-
-        private static string PluginScript(Plugin plugin)
-        {
-            return System.IO.Path.Combine(plugin.Root, "scripts", "plugin.ts");
         }
 
         /// <summary>herdr's plugin list names the plugin's checkout; releases up to 0.4.13 name it by the old id.</summary>

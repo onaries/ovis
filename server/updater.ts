@@ -4,6 +4,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdt
 import { basename, dirname, join, resolve } from "node:path";
 import { CHECKOUT_CHANGED_REASON, noInstalledNotes, readUpdateChannel, type UpdateChannel, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
+import { releaseVersion } from "./pc-update.ts";
 import { releaseIn } from "./update-state.ts";
 
 export interface Release {
@@ -117,6 +118,16 @@ function packageVersion(directory: string): string | null {
   try {
     const version = (JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as { version?: unknown }).version;
     return typeof version === "string" ? version : null;
+  } catch { return null; }
+}
+
+/**
+ * The version of the signed ovis-server.json the installers keep beside an installed compiled server, when it is a
+ * release's: read as a release's notes are (a bounded regular file, so a FIFO or a huge file cannot hold startup).
+ */
+function manifestVersion(directory: string): string | null {
+  try {
+    return releaseVersion((JSON.parse(readNotesFile(join(directory, "ovis-server.json"))) as { version?: unknown }).version);
   } catch { return null; }
 }
 
@@ -289,7 +300,7 @@ export class Updater {
       return this.release;
     }
     if (this.options.installedBinary) {
-      this.patch({ managed: false, blocked_reason: INSTALLED_BINARY_REASON });
+      this.patch({ managed: false, current_version: manifestVersion(this.options.root), blocked_reason: INSTALLED_BINARY_REASON });
       return this.release;
     }
     try {

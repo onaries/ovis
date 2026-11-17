@@ -2,15 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchDevices, fetchPreferences } from "./api.ts";
 import { onSetupGuideRequest } from "./setupGuide.ts";
-import { autoOpen, otherDevice, GUIDE_STORAGE_KEY, guideStep, readGuide, readSignedIn, REOPENED, saveGuide, WELCOME, type GuideEvent, type GuideState } from "./setupGuideFlow.ts";
+import { autoOpen, otherDevice, GUIDE_STORAGE_KEY, guideStep, readGuide, readSignedIn, REOPENED, saveGuide, FIRST_RUN, type GuideEvent, type GuideState } from "./setupGuideFlow.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
-import { setupRowOn } from "./firstHints.ts";
+import { setupRowOn, USAGE_ARMED_KEY } from "./firstHints.ts";
 
 const storage = (): Storage | null => {
   try { return window.localStorage; } catch { return null; }
 };
 
 export interface SetupGuideFacts {
+  /** the plan usage setting: turned off, the guide's remembered Continue goes (USAGE_ARMED_KEY) */
+  showUsage?: boolean;
   /** the app is in (past the access gate) */
   enabled: boolean;
   /** this PC's workspaces once the roster has them; null before */
@@ -27,7 +29,14 @@ export interface SetupGuideFacts {
  * workspace, an alert, the tab the guide opened): the guide steps aside, still mounted, for it. The
  * app's own fallback pick of a first pane is no pick, and leaves it in front.
  */
-export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: SetupGuideFacts) {
+export function useSetupGuide({ enabled, workspaces, pairingGate, watching, showUsage = false }: SetupGuideFacts) {
+  // plan usage turned off (here, in Settings or on another device): the guide's remembered Continue is forgotten, so a
+  // guide opened again reads no usage before its Continue is pressed again
+  const usageWas = useRef(showUsage);
+  useEffect(() => {
+    if (usageWas.current && !showUsage) { try { storage()?.removeItem(USAGE_ARMED_KEY); } catch { /* nothing kept */ } }
+    usageWas.current = showUsage;
+  }, [showUsage]);
   // read before this page saves anything: a save made by the guide itself must not count
   const [savedSettings] = useState(() => { try { return storage()?.getItem(SETTINGS_STORAGE_KEY) != null; } catch { return true; } });
   const [record] = useState(() => { const store = storage(); return store === null ? null : readGuide(store); });
@@ -62,7 +71,7 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
     if (workspaces === null || sharedRevision === null) return;
     decided.current = true;
     setSettled(true);
-    if (autoOpen({ workspaces, savedSettings, sharedRevision, pairingGate, watching })) { openedHere.current = true; setGuide(WELCOME); }
+    if (autoOpen({ workspaces, savedSettings, sharedRevision, pairingGate, watching })) { openedHere.current = true; setGuide(FIRST_RUN); }
   }, [enabled, workspaces, sharedRevision, pairingGate, watching, savedSettings]);
 
   useEffect(() => {
@@ -147,12 +156,14 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching }: Se
  * them afresh. Closing the guide stops it: no retry reads again, and no late answer turns usage on
  * over a choice made since in Settings.
  */
-export function useSignedInUsage(ready: readonly string[], read: (refresh: boolean) => Promise<readonly string[]>, showing: boolean, turnOn: () => void): readonly string[] {
-  const [signedIn, setSignedIn] = useState<readonly string[]>([]);
+export function useSignedInUsage(ready: readonly string[], read: (refresh: boolean) => Promise<readonly string[]>, showing: boolean, turnOn: () => void, enabled = true): readonly string[] | null {
+  // null until a read answers: the sign-ins are not known, and nothing may be said about them
+  const [signedIn, setSignedIn] = useState<readonly string[] | null>(null);
   const shown = useRef(showing);
   shown.current = showing;
   const readyKey = ready.join(",");
-  useEffect(() => readSignedIn(
+  // nothing is read, nor turned on, until the caller says so (the guide: after the user's own press on the agent step)
+  useEffect(() => !enabled ? undefined : readSignedIn(
     // an agent signed in just now: read the accounts afresh, not what the server last saw
     () => read(readyKey !== ""),
     (agents) => {
@@ -160,7 +171,7 @@ export function useSignedInUsage(ready: readonly string[], read: (refresh: boole
       if (agents.length > 0 && !shown.current) { shown.current = true; turnOn(); }
     },
     (run, ms) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); },
-  ), [readyKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  ), [readyKey, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   return signedIn;
 }
 
