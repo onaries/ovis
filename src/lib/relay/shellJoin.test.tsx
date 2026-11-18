@@ -8,7 +8,7 @@ import type { MyPc } from "../account/myPcs.ts";
 import { memoryAccountStore } from "../account/store.ts";
 import { SettingsProvider } from "../settings.ts";
 import { nativeTransport, setTransport } from "../transport.ts";
-import type { RelayDeviceStore } from "./device.ts";
+import type { ShellDeviceStore } from "./device.ts";
 import { mountRelayShell } from "./shell.tsx";
 import { createShellTestPage } from "./shell.test.tsx";
 import type { RelayShellMount } from "./shellState.ts";
@@ -16,7 +16,6 @@ import type { RelayShellMount } from "./shellState.ts";
 describe("explicit dashboard pairing consent", () => {
   let browser: ReturnType<typeof createShellTestPage>;
   beforeEach(() => { browser = createShellTestPage(); browser.setVisibility("hidden"); });
-  /** the globals a test that draws the shell with the test renderer sets beyond the page's, put back after it */
   const drawn = new Map<string, PropertyDescriptor | undefined>();
   afterEach(() => {
     setTransport(nativeTransport); browser.dispose();
@@ -24,10 +23,6 @@ describe("explicit dashboard pairing consent", () => {
     drawn.clear();
   });
 
-  /**
-   * A shell that opened the dashboard's sheet for one PC and arrived on its page: the PC asks to compare 123456, and
-   * `approved` settles once the comparison is approved (the opening then ends, as no pairing finishes here)
-   */
   const arrive = async (mode: "new" | "join") => {
     const identity = generateKeyPair();
     const pc: MyPc = {
@@ -44,10 +39,9 @@ describe("explicit dashboard pairing consent", () => {
       render(node.props.children);
     };
     const current = (): RelayShellProps => { if (!props) throw new TypeError("Missing shell props"); return props; };
-    /** settles once the shell shows a state of `kind` (subscribe before the action that leads there) */
     const until = (kind: RelayShellProps["state"]["kind"]): Promise<void> => new Promise((resolve) => { shown = () => { if (current().state.kind === kind) { shown = undefined; resolve(); } }; });
-    const store: RelayDeviceStore = {
-      get: async () => undefined, list: async () => [], remove: async () => {},
+    const store: ShellDeviceStore = {
+      get: async () => undefined, list: async () => [], remove: async () => {}, removeRow: async () => false,
       update: async () => { throw new TypeError("Pairing has not been approved by the PC"); },
     };
     const compared = Promise.withResolvers<void>(), approved = Promise.withResolvers<void>();
@@ -105,7 +99,6 @@ describe("explicit dashboard pairing consent", () => {
 
   it("draws Ask to join on the continued sheet's typed comparison, and a Try again after it fails asks to join again", async () => {
     const { current, until } = await arrive("new");
-    // the test renderer draws no DOM: the sheet portals into a body whose nodes stand in for every element
     const node = () => ({ isConnected: true, focus() {}, contains: () => false, querySelectorAll: () => [], closest: () => null, addEventListener() {}, removeEventListener() {} });
     const globals = { IS_REACT_ACT_ENVIRONMENT: true, HTMLElement: class { isConnected = true; focus(): void {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) };
     for (const [key, value] of Object.entries(globals)) { drawn.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, value }); }

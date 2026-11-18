@@ -11,6 +11,11 @@ export function relayFallback(relay: string, regional: readonly string[] = REGIO
 export const GLOBAL_APP = "https://app.ovis.sh";
 export const REGIONAL_APPS: Readonly<Record<string, string>> = { "wss://relay-ap.ovis.sh": "https://app-ap.ovis.sh" };
 
+/**
+ * Only a link with a pairing
+ * code moves, since a phone keeps a PC's key in the origin it paired on and a saved PC has none in
+ * the other; the native apps, which allow `app.ovis.sh` only, stay.
+ */
 export function regionalAppUrl(location: { origin: string; pathname: string; hash: string }, nativeApp: boolean): string | null {
   if (nativeApp || location.origin !== GLOBAL_APP || !location.hash.startsWith("#offer=") || !/^\/s\/[0-9a-f]{32}\/$/.test(location.pathname)) return null;
   try {
@@ -35,6 +40,11 @@ export async function regionalAppReady(app: string, fetcher: typeof fetch = fetc
   } catch { return false; }
 }
 
+/**
+ * The relay a phone saves for a PC that named `hints` in AUTH_OK (the preferred one first): only
+ * one of Ovis's own relays, and only in place of one of Ovis's own, so a self-hosted relay is never
+ * traded and a PC can only move its phones between Ovis's relays.
+ */
 export function hintedRelay(saved: string, hints: readonly string[] | undefined, regional: readonly string[] = REGIONAL_RELAYS): string {
   const ours = (relay: string): boolean => relay === GLOBAL_RELAY || regional.includes(relay);
   const preferred = hints?.[0];

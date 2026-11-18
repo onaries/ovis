@@ -1,3 +1,14 @@
+/**
+ * The agents Ovis can install for a user: every supported coding agent and the always-on
+ * assistants, each with the vendor's own install command per platform, copied from the vendor's
+ * current docs (`sources`, with the date they were read), what the command needs on the PC, how to
+ * tell it is installed, and how it is signed in to afterwards.
+ *
+ * Only a vendor's own command is listed: its own installer script on its own HTTPS address
+ * (`url_prefixes`), or its own package (`packages`). shared/agent-catalog.test.ts holds every
+ * command to both lists; a command that fetches anything else, or a package of another name,
+ * fails it. A platform without an official command has none, and `no_install` says why.
+ */
 import type { UsageProviderId } from "./usage.ts";
 
 export type CatalogPlatform = "macos" | "linux" | "windows";
@@ -160,6 +171,7 @@ export function catalogPlatform(platform: string): CatalogPlatform | null {
 
 const VERSION = /\d+\.\d+(?:\.\d+)?/;
 
+/** The first dotted version in what a version flag printed ("codex-cli 0.163.0", "omp/18.8.7", "2.1.311 (Claude Code)"). */
 export function parseVersion(output: string): string | null {
   return VERSION.exec(output)?.[0] ?? null;
 }
@@ -175,7 +187,9 @@ export function meetsMinVersion(version: string, min: string): boolean {
   return true;
 }
 
+/** Every address a command names, whatever its scheme: a quote, a pipe, a semicolon or a bracket ends one. */
 const URL_IN_COMMAND = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'|;)]+/gi;
+/** The package managers a catalog command may install with, and the packages each install names (npm takes several at once). */
 const PACKAGE_INSTALLS: readonly (readonly [string, RegExp])[] = [
   ["npm", /\bnpm[ \t]+(?:install|i)[ \t]+-g((?:[ \t]+[^\s&|;]+)+)/g],
   ["brew", /\bbrew\s+install\s+(?:--cask\s+)?(\S+)/g],
@@ -184,6 +198,12 @@ const PACKAGE_INSTALLS: readonly (readonly [string, RegExp])[] = [
   ["pipx", /\bpipx\s+install\s+(\S+)/g],
 ];
 const npmName = (spec: string): string => spec.startsWith("@") ? `@${spec.slice(1).split("@")[0]}` : spec.split("@")[0]!;
+/**
+ * Every command the catalog may hold, as "platform|command", byte for byte. A command is accepted
+ * only when it is in this list exactly: nothing parses shell, so nothing can be added before or
+ * after it, and no version, argument or space can change. Changing or adding a command means
+ * changing it here too, after reading the vendor's page (docs/agent-catalog.md).
+ */
 export const APPROVED_COMMANDS: ReadonlySet<string> = new Set([
   "macos|curl -fsSL https://claude.ai/install.sh | bash",
   "macos|brew install --cask claude-code",
@@ -255,8 +275,16 @@ export const APPROVED_COMMANDS: ReadonlySet<string> = new Set([
   "linux|npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
 ]);
 
+/** An allowed address: HTTPS, a host, and a path on it, so a prefix can never stand for a whole host. */
 const HTTPS_URL_WITH_PATH = /^https:\/\/[a-z0-9.-]+\/\S+$/;
 
+/**
+ * Why an entry's commands are not the vendor's own, one line each; none when they are. Every command
+ * must be in APPROVED_COMMANDS for its platform, byte for byte. As a second, consistency check, every
+ * address it names must be HTTPS under one of `url_prefixes`, every package it installs must be in
+ * `packages`, and it must not use sudo. The catalog's test holds every entry to it, and the install
+ * flow checks a command again before it types it.
+ */
 export function commandProblems(entry: AgentCatalogEntry): string[] {
   const problems: string[] = [];
   for (const prefix of entry.url_prefixes) if (!HTTPS_URL_WITH_PATH.test(prefix)) problems.push(`${entry.id}: ${prefix} is not an HTTPS address with a path`);
@@ -276,6 +304,7 @@ export function commandProblems(entry: AgentCatalogEntry): string[] {
       for (const [manager, pattern] of PACKAGE_INSTALLS) {
         for (const match of command.matchAll(pattern)) {
           for (const spec of match[1]!.trim().split(/[ \t]+/)) {
+            // a flag after the packages (--ignore-scripts, --prefix) changes what the install does
             if (spec.startsWith("-")) { at(`passes ${manager} ${spec}, which the vendor's command does not`); continue; }
             installs++;
             const name = manager === "npm" ? npmName(spec) : spec;
@@ -937,6 +966,7 @@ const CATALOG_ENTRIES: readonly AgentCatalogEntry[] = [
     ],
     // dsh-tui first: Debian's distributed shell is a /usr/bin/dsh too
     detect: { binaries: ["dsh-tui"], needs: ["dsh"], version_args: ["--version"], unreliable_on: { windows: DSH_WINDOWS } },
+    // Sign in opens dsh-tui itself: the key goes into its own first-run prompt; Ovis has no field that asks for it
     sign_in: { provider: null, command: null, in_agent: "on its first start: a DeepSeek API key from https://platform.deepseek.com/api_keys typed into its own prompt, or an OpenAI- or Anthropic-compatible provider", api_keys: ["DEEPSEEK_API_KEY"], required: true },
     after_install: ["It needs a model before it can work: a DeepSeek API key (https://platform.deepseek.com/api_keys) or an OpenAI- or Anthropic-compatible provider, entered in dsh-tui's own first-run prompt: Ovis does not ask for the key."],
     min_version: null,

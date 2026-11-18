@@ -39,7 +39,6 @@ function args(part: Tool): Record<string, unknown> {
   try { return record(JSON.parse(part.input)); } catch { return {}; }
 }
 
-/** The operations of one `todo` / `todo_write` call: `ops: [...]`, or the call itself as one. */
 function operations(input: Record<string, unknown>): Record<string, unknown>[] {
   return Array.isArray(input["ops"]) ? input["ops"].map(record) : [input];
 }
@@ -55,9 +54,8 @@ function phases(list: unknown): TodoItem[] {
 }
 
 /**
- * The whole list one todo call leaves, or null when it cannot be read. A whole-list tool's list is
- * its input (`todos` / `plan`); an operations tool's is only its answer: an `init` input is one
- * operation, not the list as it stands, so it is never read as one.
+ * A whole-list tool's list is its input (`todos` / `plan`); an operations tool's is only its answer:
+ * an `init` input is one operation, not the list as it stands, so it is never read as one.
  */
 export function todoSnapshot(part: Tool): TodoItem[] | null {
   const kind = toolKind(part.name);
@@ -72,7 +70,6 @@ export function todoSnapshot(part: Tool): TodoItem[] | null {
   for (const entry of list) {
     const fields = record(entry);
     const label = text(fields[kind === "whole" ? "content" : "step"]);
-    // one entry without words makes the list unreadable, not shorter
     if (label === null) return null;
     const status = fields["status"];
     // opencode's `todowrite` also sends `cancelled`: an item given up, drawn as dropped
@@ -81,7 +78,6 @@ export function todoSnapshot(part: Tool): TodoItem[] | null {
   return items;
 }
 
-/** One line for a todo call in the work block, instead of its raw input. */
 export function todoCallSummary(part: Tool): string | null {
   const kind = toolKind(part.name);
   if (kind === null) return null;

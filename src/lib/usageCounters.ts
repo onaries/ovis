@@ -20,7 +20,6 @@ import type { PaneView } from "./actions.ts";
 import { changeTelemetry, fetchTelemetry, onTelemetryStatus } from "./api.ts";
 import { SHEET_QUERY } from "./sheets.ts";
 
-/** how long a batch waits before it is told, unless the page is hidden first */
 export const FLUSH_MS = 60_000;
 
 interface Pending { add: Partial<Record<TelemetryCounter, number>>; shown: Set<TelemetryShown>; keys: string[]; day: string | null }
@@ -28,7 +27,6 @@ interface Pending { add: Partial<Record<TelemetryCounter, number>>; shown: Set<T
 export interface UsageCountersOptions {
   /** whether this build counts at all (COUNTS_ON): off, nothing is kept, asked or told */
   on: boolean;
-  /** tells the server one width's batch; `keepalive` when the page is going away */
   send: (counts: TelemetryCountsChange, keepalive: boolean) => Promise<TelemetryStatus | null>;
   status: () => Promise<TelemetryStatus | null>;
   narrow: () => boolean;
@@ -46,7 +44,6 @@ export function countingAllowed(status: TelemetryStatus | null): boolean {
 }
 
 export function createUsageCounters(options: UsageCountersOptions) {
-  /** null until the page has heard the server's word; then whether it counts */
   let allowed: boolean | null = null;
   /** the server refused a batch (a device that can only watch): no later answer turns counting on for this page */
   let refused = false;
@@ -55,7 +52,6 @@ export function createUsageCounters(options: UsageCountersOptions) {
   let asking = false;
   const empty = (): Pending => ({ add: {}, shown: new Set(), keys: [], day: null });
   const today = (): string => new Date(options.now()).toISOString().slice(0, 10);
-  /** the width's batch for today: one kept from a day that has ended goes first, under its own day */
   const batchFor = (width: TelemetryWidth): Pending => {
     const day = today();
     const batch = pending[width];
@@ -64,9 +60,7 @@ export function createUsageCounters(options: UsageCountersOptions) {
     return pending[width];
   };
   const pending: Record<TelemetryWidth, Pending> = { narrow: empty(), wide: empty() };
-  /** controls told (or on their way) as shown, by UTC day and width; a batch that is lost takes its own back out */
   const toldShownByDayAndWidth = new Set<string>();
-  /** controls drawn now, each with how many places draw it: told again on a new day or width while they stay */
   const drawn = new Map<TelemetryShown, number>();
   const forget = (keys: readonly string[]): void => { for (const key of keys) toldShownByDayAndWidth.delete(key); };
   let cancelTimer: (() => void) | null = null;
@@ -84,7 +78,6 @@ export function createUsageCounters(options: UsageCountersOptions) {
     }
     allowed = countingAllowed(status);
     if (!allowed) drop();
-    // drawn before the server's word came, or before a new generation: told now
     else if (was !== true || renewed) reshow();
   };
   const ask = (): void => {
@@ -106,7 +99,6 @@ export function createUsageCounters(options: UsageCountersOptions) {
     return allowed === true;
   };
 
-  /** a control drawn now, told as shown unless it already was today at this width */
   const markShown = (name: TelemetryShown): void => {
     const width = options.narrow() ? "narrow" : "wide";
     const key = `${new Date(options.now()).toISOString().slice(0, 10)}:${width}:${name}`;
@@ -117,12 +109,10 @@ export function createUsageCounters(options: UsageCountersOptions) {
     batch.keys.push(key);
     schedule();
   };
-  /** every control still drawn, for a day or a width that has not had it yet */
   const reshow = (): void => { if (ready()) for (const name of drawn.keys()) markShown(name); };
 
   function flush(keepalive: boolean): void {
     if (allowed !== true || refused) { drop(); return; }
-    // what is still drawn goes with this batch, so the timer it may arm is the one cleared here
     reshow();
     cancelTimer?.();
     cancelTimer = null;
@@ -141,7 +131,6 @@ export function createUsageCounters(options: UsageCountersOptions) {
   }
 
   return {
-    /** the page's server said where counting stands (any answer of GET or POST /api/telemetry) */
     heard,
     count(name: TelemetryCounter): void {
       if (!ready()) return;
@@ -149,17 +138,11 @@ export function createUsageCounters(options: UsageCountersOptions) {
       batch.add[name] = (batch.add[name] ?? 0) + 1;
       schedule();
     },
-    /** a control that is not always drawn was drawn: told once a day per width */
     shown(name: TelemetryShown): void {
       if (ready()) markShown(name);
     },
-    /**
-     * A control that is not always drawn is drawn from now until the returned undo: told as shown now, and again
-     * on each new day or width while it stays (with the next batch, on return to the page or a change of width)
-     */
     draw(name: TelemetryShown): () => void {
       drawn.set(name, (drawn.get(name) ?? 0) + 1);
-      // the undo exists before anything that could fail: a control gone is never told as still drawn
       const undo = () => {
         const left = (drawn.get(name) ?? 1) - 1;
         if (left > 0) drawn.set(name, left); else drawn.delete(name);
@@ -167,7 +150,6 @@ export function createUsageCounters(options: UsageCountersOptions) {
       if (ready()) tally(() => markShown(name));
       return undo;
     },
-    /** the page came back, or its width crossed SHEET_QUERY: the controls drawn now, for a day or width not told yet */
     reshow,
     /**
      * A chat/terminal switch a person asked for, on a pane of `machineId` running `agent`, counted under
@@ -215,7 +197,6 @@ export function useShownCount(name: TelemetryShown, drawn: boolean, machineId: s
   }, [name, drawn, machineId]);
 }
 
-/** The ways into the agent inbox and out of it, each counted (`inbox_enter`, `inbox_leave`) wherever a person asked. */
 export function useCountedInboxWays(enter: () => void, leave: () => void): { enter: () => void; leave: () => void } {
   return {
     enter: useCallback(() => { tally(() => usageCounters.count("inbox_enter")); enter(); }, [enter]),
@@ -234,16 +215,10 @@ export function actionUse(action: TelemetryAction, source: TelemetryActionSource
   return `${action}_by_${source}`;
 }
 
-/**
- * Which counted actions would do something now, as App knows it (actionUse's `can`): no split, close or Files with
- * nothing offered, no new tab in the agent inbox (its list or its mode) or with no workspace to add it to, and no
- * sidebar in the mode.
- */
 export function actionsCan(now: { split: boolean; closePane: boolean; files: boolean; inboxShown: boolean; inMode: boolean; tabTarget: boolean }): Partial<Record<TelemetryAction, boolean>> {
   return { split: now.split, close_pane: now.closePane, files: now.files, new_tab: !now.inboxShown && !now.inMode && now.tabTarget, sidebar: !now.inMode };
 }
 
-/** A count that never stands in the way of what was pressed: a failure is logged, and the action goes on. */
 export function tally(count: () => void): void {
   try { count(); } catch (error) { console.error("usage counts", error); }
 }

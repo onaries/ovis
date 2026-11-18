@@ -54,6 +54,7 @@ describe("Noise NK reference vectors", () => {
   });
   for (const vector of vectors.vectors) {
     it(`matches the real ciphertexts from ${vector.source}`, () => {
+      // Given fixed keys and prologues from the upstream third-party fixture.
       expect(vector.name).toBe(NOISE_NK_PROTOCOL_NAME);
       const localStatic = keyPair(vector.resp_static);
       expect(hex(localStatic.publicKey)).toBe(vector.init_remote_static);
@@ -186,6 +187,7 @@ it("refuses a legacy-only daemon when the client omits minimumMode", async () =>
   });
   const daemonResult = await daemonOpening;
   expect(daemonResult.error).toBeInstanceOf(Error);
+  // Then no application data is sent and the client closes before opening.
   expect(client.isOpen()).toBe(false);
   expect(link.client.closes).toEqual([PROTECTED_HANDSHAKE_FAILED_CLOSE_CODE]);
   expect(received).toEqual([]);
@@ -380,6 +382,7 @@ it("bounds the bytes queued by all handshakes together and releases them on clos
 });
 
 for (const direction of ["client", "daemon"] as const) {
+  // "text bytes": a text frame whose data arrives as an ArrayBuffer, as a Node carrier delivers it.
   for (const kind of ["binary", "text", "text bytes"] as const) {
     it(`refuses a ${kind} carrier message to the ${direction} past the frame limit without decoding it`, async () => {
       const session = await connected();
@@ -397,6 +400,7 @@ for (const direction of ["client", "daemon"] as const) {
       if (!atLimit || !past) throw new Error("No records captured");
       await incoming.deliver(atLimit);
       expect(session.received[direction]).toHaveLength(1);
+      // When the larger one arrives, then it is never decoded: a decoded valid record would be delivered.
       await incoming.deliver(past);
       expect(session.received[direction]).toHaveLength(1);
       expect(session[direction].isOpen()).toBe(false);
@@ -486,6 +490,7 @@ for (const direction of ["client", "daemon"] as const) {
       let hostile: Uint8Array;
       switch (attack) {
         case "replayed": {
+          // A ciphertext from another authenticated session must fail on fresh keys.
           const old = await connected(keys);
           const oldOutgoing = direction === "client" ? old.link.daemon : old.link.client;
           const oldSender = direction === "client" ? old.daemon : old.client;
@@ -514,6 +519,8 @@ for (const direction of ["client", "daemon"] as const) {
           break;
         }
       }
+      // When the hostile relay forwards corruption, then close is immediate and
+      // neither partial nor complete plaintext from that record is delivered.
       await incoming.deliver(record(hostile));
       expect(session[direction].isOpen()).toBe(false);
       expect(incoming.closes).toEqual([direction === "client" ? PROTECTED_RECORD_FAILED_CLOSE_CODE : 1011]);
@@ -532,6 +539,7 @@ for (const direction of ["client", "daemon"] as const) {
     expect(session.received[direction]).toEqual([payload]);
     const captured = outgoing.sent.at(-1);
     if (!captured) throw new Error("No record captured");
+    // When the relay repeats it, then the counter rejects it without redelivery.
     await incoming.deliver(captured);
     expect(session[direction].isOpen()).toBe(false);
     expect(incoming.closes).toEqual([direction === "client" ? PROTECTED_RECORD_FAILED_CLOSE_CODE : 1011]);

@@ -43,10 +43,8 @@ it.skipIf(process.platform === "win32")("judges what it reads by the descriptor 
   const path = join(dir, MARKER);
   writeFileSync(join(dir, "seen.json"), marker);
   expect(Bun.spawnSync(["mkfifo", path]).exitCode).toBe(0);
-  // a look by name answers what it saw before the name became a FIFO: the profile's own small file
   const seen = fs.lstatSync(join(dir, "seen.json"));
   const look = spyOn(fs, "lstatSync").mockImplementation((() => seen) as never);
-  // and the FIFO gives whoever reads it the marker's bytes
   const writer = Bun.spawn(["sh", "-c", `printf '%s' '${marker}' > "$0"`, path], { stdout: "ignore", stderr: "ignore" });
   try { expect(markedByProfile(path)).toBe(false); }
   finally {

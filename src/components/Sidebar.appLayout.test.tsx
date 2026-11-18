@@ -15,7 +15,6 @@ import { ReorderCoordinator } from "../lib/workspaceOrder.ts";
 import { RowMenu } from "./RowMenu.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
-/** herdr's TUI server, a herdr-core PC the Herdr app lays out, and one whose layout Ovis keeps (lib/machineContext.tsx) */
 const TUI = appLayoutOf({ version: "0.9.5", protocol: 22 });
 const APP_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core" });
 const OVIS_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core", layout: { rename: true, split: true, move: true, arrange: true, worktrees: true } });
@@ -29,7 +28,6 @@ const roster = (workspaces: WorkspaceInfo[]): SessionSnapshot => ({
   panes: workspaces.map((w) => ({ pane_id: `${w.workspace_id}:p`, workspace_id: w.workspace_id, tab_id: w.active_tab_id, terminal_id: `${w.workspace_id}:term`, revision: 1, focused: false, agent_status: "idle" })),
 });
 const actions = new Proxy({}, { get: () => () => {} }) as AppActions;
-// the test renderer draws no DOM: a node stands in for every element, connected and measurable, so a row's ⋯ menu can open
 const node = (): HTMLElement => ({
   isConnected: true, offsetWidth: 200, offsetHeight: 100, dataset: {},
   getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }),
@@ -58,7 +56,6 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     define("localStorage", storage);
     define("navigator", { languages: ["en-US"], platform: "Linux" });
     define("window", { localStorage: storage, matchMedia: () => media, innerWidth: 1280, innerHeight: 800, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout, clearTimeout });
-    // the portal RowMenu draws into needs an element (nodeType 1) the test renderer can append to, with the node mock its refs read
     define("document", { visibilityState: "visible", activeElement: null, querySelectorAll: () => [], body: { nodeType: 1, children: [], createNodeMock: node }, documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } }, querySelector: () => null, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) });
     define("getComputedStyle", () => ({ getPropertyValue: () => "" }));
     pinsBefore = currentSidebarPins();
@@ -125,15 +122,12 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
       await act(async () => renderer?.unmount());
     };
     try {
-      // the group as it was: Close group goes
       await confirmAfter(roster(group));
       expect(closes).toEqual([{ workspace_id: "root", close_group: true }]);
-      // a worktree opened and locked from another browser while the confirmation was open: nothing is closed
       closes.length = 0;
       stored.set("ovis:settings", JSON.stringify({ agentLocks: true, lockedAgents: ["local:late:p"] }));
       setSidebarPins(["local:late:p"]);
       await confirmAfter(roster([...group, workspace("late", worktree(true))]));
-      // a new worktree that is not locked still was not in the group the user agreed to close
       stored.set("ovis:settings", JSON.stringify({}));
       setSidebarPins([]);
       await confirmAfter(roster([...group, workspace("late", worktree(true))]));
@@ -196,7 +190,6 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
         await act(async () => (renderer!.root.findByType(RowMenu).props.items as { id: string; run: () => void }[]).find((item) => item.id === "new-tab")!.run());
       } finally { counting.mockRestore(); }
       expect(opened).toEqual([{ machineId: "local", workspaceId: "b" }]);
-      // counted as the workspace menu's New tab, with the PC it is for (usageCounters.paneUse counts this PC's alone)
       expect(told).toEqual(["new_tab_by_menu@local"]);
       await act(async () => renderer!.unmount());
       renderer = undefined;
@@ -227,7 +220,6 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
 
   it("unfolds a workspace whose fold outlived its agents when New tab with agent… makes a new one there", async () => {
     stored.set("ovis:sidebar-agent-tree", "true");
-    // folded while it had an agent; that agent has gone, the saved fold stayed
     stored.set("ovis:workspace-agents-folded:local", JSON.stringify(["a"]));
     const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ error: "not_found" }, { status: 404 }), { preconnect: globalThis.fetch.preconnect }));
     try {
@@ -256,7 +248,6 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
       await menuOf("a");
       await act(async () => { (renderer!.root.findByType(RowMenu).props.items as { id: string; run: () => void }[]).find((item) => item.id === "new-tab")!.run(); renderer!.root.findByType(RowMenu).props.onClose(); });
       expect(opened).toEqual([{ machineId: "local", workspaceId: "a" }]);
-      // the saved fold is gone, so clearing the filter does not hide the new agent again
       expect(stored.get("ovis:workspace-agents-folded:local")).toBe(JSON.stringify([]));
     } finally {
       fetch.mockRestore();
@@ -275,10 +266,8 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     expect(stored.get("ovis:workspace-agents-folded:local")).toBe(JSON.stringify(["a"]));
     expect((await menuOf("a")).filter((id) => id === "fold")).toEqual(["fold"]);
     expect(fold().label).toBe("Expand");
-    // a tab made from the folded row's menu unfolds it, so the new agent is in sight (#3772)
     await act(async () => { (renderer!.root.findByType(RowMenu).props.items as { id: string; run: () => void }[]).find((item) => item.id === "new-tab")!.run(); renderer!.root.findByType(RowMenu).props.onClose(); });
     expect(stored.get("ovis:workspace-agents-folded:local")).toBe(JSON.stringify([]));
-    // a repository's row keeps its one fold, its worktrees', which takes its agents with it
     expect((await menuOf("root")).filter((id) => id === "fold")).toEqual(["fold"]);
     fetch.mockRestore();
   });
@@ -320,7 +309,6 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     }
   });
 
-  /** workspace a's listing, or herdr's refusal, as the list route and the branch poll's inventory (#2661) answer it */
   const answerFor = (url: string, refusal: { code: string; message: string } | null): Response => {
     const listing = { source: { repo_key: "r", source_checkout_path: "/test-project" }, worktrees: [{ path: "/test-project", branch: "main", is_detached: false, open_workspace_id: "a" }] };
     if (url.startsWith("/api/worktree/inventory?")) return Response.json({ entries: [{ workspace_id: "a", ...(refusal ? { error: { status: 404, ...refusal } } : { listing }) }] });
@@ -369,12 +357,10 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     try {
       await draw(roster([workspace("a")]), TUI, true);
       await settle();
-      // asked once whether it is a repository, then once by the branch poll
       expect(asked()).toBe(2);
       checkout = false;
       await act(async () => { jest.advanceTimersByTime(30_000); });
       await settle();
-      // the next poll is refused
       const afterRefusal = asked();
       expect(afterRefusal).toBe(3);
       for (let poll = 0; poll < 3; poll++) {

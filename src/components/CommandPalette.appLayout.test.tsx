@@ -9,7 +9,6 @@ import { AppLayoutContext, appLayoutOf, type LayoutOffer } from "../lib/machineC
 import { SettingsProvider } from "../lib/settings.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 
-/** herdr's TUI server, a herdr-core PC the Herdr app lays out, and one whose layout Ovis keeps (lib/machineContext.tsx) */
 const TUI = appLayoutOf({ version: "0.9.5", protocol: 22 });
 const APP_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core" });
 const OVIS_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core", layout: { rename: true, split: true, move: true, arrange: true, worktrees: true } });
@@ -17,7 +16,6 @@ const workspace = (id: string, tabs: number): WorkspaceInfo =>
   ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, tab_count: tabs, pane_count: tabs, focused: false, agent_status: "idle", worktree: null });
 const pane = (id: string, workspaceId: string, tabId: string): PaneInfo =>
   ({ pane_id: id, workspace_id: workspaceId, tab_id: tabId, terminal_id: `${id}:term`, revision: 1, focused: false, agent_status: "idle" });
-// w1's tab holds two panes (a zoom means something there); w2's tab holds one (it can move to w1)
 const snapshot: SessionSnapshot = {
   protocol: 22, version: "test", agents: [], workspaces: [workspace("w1", 1), workspace("w2", 1)],
   tabs: [
@@ -32,7 +30,6 @@ const snapshot: SessionSnapshot = {
   }],
 };
 const machines: Machine[] = [{ id: "local", name: "Host", kind: "local", enabled: true, state: "connected", error: null, snapshot }];
-// App's actions on each PC: split and zoom as the PC offers them (lib/layoutActions.ts, tested there)
 const actionsOf = (offer: LayoutOffer, own: Partial<AppActions> = {}) => new Proxy({ splitPane: offer.split ? () => {} : null, zoomPane: offer.arrange ? () => {} : null, enableNotifications: null, openFiles: null, lock: null, openLocalPage: null, inboxMode: null, closeTab: null, ...own }, { get: (own, key) => key in own ? own[key as keyof typeof own] : () => {} }) as unknown as AppActions;
 const LAYOUT_ROWS = ["Rename tab", "Split pane right", "Split pane down", "Split pane right and open it", "Split pane down and open it", "Zoom pane"];
 
@@ -40,7 +37,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   const stored = new Map<string, string>();
   let renderer: ReactTestRenderer | undefined;
-  // a cramped screen's height query (CRAMPED_QUERY) holds: a lone tab draws no row there
   let phone = false;
 
   beforeEach(() => {
@@ -52,7 +48,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     const media = (query: string) => ({ get matches() { return phone && query.includes("max-height"); }, addEventListener() {}, removeEventListener() {} });
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     define("IS_REACT_ACT_ENVIRONMENT", true);
-    // the test renderer draws no DOM: nothing is an element, so the focus trap finds nothing to hold
     define("HTMLElement", class HTMLElement {});
     define("localStorage", storage);
     define("navigator", { languages: ["en-US"], platform: "Linux" });
@@ -88,7 +83,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
   it("keeps the footer's path line when a settings action replaces a pane under the pointer", async () => {
     await rows(TUI, "p1", "theme");
     const path = () => renderer!.root.findByProps({ className: "palette-footer-path" });
-    // This fixture's pane has no cwd either: the empty path still reserves the second line.
     expect(path().children).toEqual([]);
     const settings = renderer!.root.findByProps({ "data-section": "settings-pages" });
     const first = settings.findAllByProps({ role: "option" })[0]!;
@@ -102,7 +96,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     const closing = actionsOf(TUI, { closePane: () => { closes += 1; } });
     expect(await rows(TUI, "p1", ">close pane", closing)).toEqual(["Close pane"]);
     expect(await rows(TUI, "p1", ">close pane", actionsOf(TUI, { closePane: null }))).toEqual([]);
-    // Files (or Settings) is open under the palette: an aria-modal surface that is not the palette's own
     (document as unknown as { querySelectorAll: () => unknown[] }).querySelectorAll = () => [{}];
     expect(await rows(TUI, "p1", ">close pane", closing)).toEqual([]);
     expect(closes).toBe(0);
@@ -146,7 +139,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     await act(async () => renderer!.root.find((node) => node.props.id === "palette-item-0").props.onClick());
     const out = actionsOf(TUI, { inboxMode: { on: true, go: () => { went.push("out"); } } });
     expect(await rows(TUI, "p1", ">back to ovis", out, snapshot, false, true)).toEqual(["Back to Ovis"]);
-    // the way back is drawn with the app's own mark here as at the column's foot and in a phone's More: one glyph for it
     const glyphs = renderer!.root.find((node) => node.props.id === "palette-item-0").findAll((node) => node.type === "img");
     expect(glyphs.map((node) => node.props.className)).toEqual(["ovis-mark"]);
     await act(async () => renderer!.root.find((node) => node.props.id === "palette-item-0").props.onClick());
@@ -167,16 +159,13 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     expect(listed[0]).toBe("Open localhost:8448/#/repository");
     await act(async () => renderer!.root.find((node) => node.props.id === "palette-item-0").props.onClick());
     expect(opened).toEqual(["http://localhost:8448/#/repository"]);
-    // the app's own port is the app, not a page beside it
     expect(await rows(TUI, "p1", "localhost:7317", pages)).not.toContain("Open localhost:7317");
-    // off by default: Web links open in a new tab, and the palette offers no page
     expect(await rows(TUI, "p1", "localhost:8448")).not.toContain("Open localhost:8448");
     expect(await rows(TUI, "p1", ">")).not.toContain("Open a page on this PC…");
   });
 
   const checkout = (linked: boolean): SessionSnapshot => ({ ...snapshot, workspaces: [{ ...workspace("w1", 1), worktree: { repo_key: "r", repo_name: "r", repo_root: "/r", checkout_path: linked ? "/r-wt" : "/r", is_linked_worktree: linked } }, workspace("w2", 1)] });
   const workspaceRows = ["New worktree", "Open worktree…", "Earlier sessions…"];
-  // the PC answers what the palette reads as it opens: no plugins, and no unmarked folder is a repository
   const answering = () => spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => String(input).includes("worktree/list")
     ? Response.json({ error: { code: "not_a_repository", message: "not a repository" } }, { status: 400 })
     : Response.json({ plugins: [] }), globalThis.fetch));
@@ -205,7 +194,6 @@ describe("the command palette on a PC the Herdr app lays out", () => {
   });
 
   it("lists them for a repository's folder herdr did not mark, as the sidebar's row menu does once git answers for it", async () => {
-    // git answers for w1's folder and refuses w2's, as GET /api/worktree/list does
     const fetched = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => String(input).includes("workspace_id=w1")
       ? Response.json({ worktrees: [] })
       : Response.json({ error: { code: "not_a_repository", message: "not a repository" } }, { status: 400 }), globalThis.fetch));

@@ -8,12 +8,11 @@
  * ignored (one browser clipboard); an empty or `?` payload is a clipboard QUERY,
  * which we do not answer. Anything above MAX_OSC52_BYTES is dropped: clipboard
  * writes are user-visible side effects and a runaway paste loop must not wedge the
- * tab. Pure logic, DOM-free (see osc52.test.ts).
+ * tab.
  */
 
 export const MAX_OSC52_BYTES = 100 * 1024;
 
-/** The decoded text, or null when the payload is a query, malformed or oversized. */
 export function parseOsc52(payload: string): string | null {
   const separator = payload.indexOf(";");
   if (separator < 0) return null;
@@ -25,7 +24,7 @@ export function parseOsc52(payload: string): string | null {
   try {
     bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
   } catch {
-    return null; // invalid base64
+    return null;
   }
   if (bytes.byteLength > MAX_OSC52_BYTES) return null;
   return new TextDecoder().decode(bytes);

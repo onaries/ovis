@@ -1,8 +1,3 @@
-// The links that let a tester join the phone app tests on the beta pages (/beta/, /zh/beta/,
-// /ja/beta/, /ko/beta/). The phone apps are on the App Store and Google Play, so their sections are
-// shown as shipped; each page ships its TestFlight line (upcoming iPhone builds) hidden, and this
-// shows it once its link is set below, so no tester meets a link that leads nowhere. scripts/ovis-site.test.ts checks each link's shape. It also runs the install commands'
-// Copy buttons and the language picker in the header.
 (() => {
   const BETA_LINKS = {
     // iPhone: the public link of the "Ovis Beta" TestFlight group,
@@ -50,7 +45,6 @@
       }
       button.textContent = status.textContent = ok ? copied : failed;
       clearTimeout(timer);
-      // emptied with the button, so the next copy is announced again
       timer = setTimeout(() => { button.textContent = label; status.textContent = ""; }, 2000);
     });
   }

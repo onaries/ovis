@@ -39,14 +39,12 @@ beforeEach(async () => {
   grabs = 0;
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, window: win, document: doc, HTMLElement: Element, setTimeout: (run: () => void) => { timers.push(run); return 0; } });
   await act(async () => { renderer = create(createElement(Guard)); });
-  // the person is back in the app: the page has to be given the focus anew
   await act(async () => doc.fire("focusin", true, { target: field }));
 });
 
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   renderer = undefined;
-  // the guard asks for the focus once more after the blur event: that runs while the page is still there
   for (const late of timers.splice(0)) late();
   for (const [name, descriptor] of saved) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor);
@@ -56,7 +54,6 @@ afterEach(async () => {
 
 /** The frame has the focus and the window lost it: what a browser reports when the focus goes into a page. */
 const intoPage = async (): Promise<void> => { doc.activeElement = frame; await act(async () => win.fire("blur", false)); };
-/** A Tab as the window hears it on the way up: one its target stopped (the terminal's) never gets here. */
 const tab = async (defaultPrevented = false): Promise<void> => { await act(async () => win.fire("keydown", false, { key: "Tab", defaultPrevented })); };
 
 test("a page that takes the focus by itself loses its scripts, and the focus goes back", async () => {
@@ -74,7 +71,6 @@ test("a Tab from the control before the page puts the focus in it", async () => 
 });
 
 test("a Tab the terminal kept for itself does not let the page take the focus", async () => {
-  // the terminal stops its Tab, so no listener on the way up hears it; one in the capture phase would
   await act(async () => win.fire("keydown", true, { key: "Tab", defaultPrevented: false }));
   await intoPage();
   expect(grabs).toBe(1);

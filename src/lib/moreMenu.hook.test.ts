@@ -32,23 +32,18 @@ describe("useMoreMenu", () => {
   };
 
   it("closes a More whose button left the document, and keeps one whose button stands", async () => {
-    // Given More open from a button that is in the document.
     const button = { isConnected: true };
     const anchor = button as unknown as HTMLElement;
     await draw(0);
     await act(async () => { menu.setMore({ anchor }); });
 
-    // When the app draws again with the button in place.
     await draw(1);
 
-    // Then More stays open.
     expect(menu.more?.anchor).toBe(anchor);
 
-    // When the thread the button stood over closes under it (a system Back in the inbox mode's wide layout).
     button.isConnected = false;
     await draw(2);
 
-    // Then More goes with its button.
     expect(menu.more).toBeNull();
   });
 });

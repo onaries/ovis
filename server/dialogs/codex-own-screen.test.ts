@@ -51,7 +51,6 @@ describe("codexOwnScreenOpen", () => {
       "  enter default · s session · esc back",
       "  enter apply · s session · esc back",
       "  space toggle · ←/→ reorder · enter save · esc cancel",
-      // wrapped by a 40-column pane
       "  space toggle · ←/→ reorder · enter\n  save · esc cancel",
       "  enter submit · esc back",
       "  enter continue · esc cancel",
@@ -62,15 +61,12 @@ describe("codexOwnScreenOpen", () => {
       "  enter select · alt+x back",
       "  enter select · ctrl-g back",
       "  space toggle · enter save · alt-x save/close",
-      // /keymap waiting for the new key: a sentence, also wrapped by a narrow pane
       "  Remap Shortcut\n  Current: esc\n  Press the new key now. Esc cancels.",
       "  Remap Shortcut\n  Current: esc\n  Press the new key now. Esc\n  cancels.",
       // Codex 0.162 and before
       "  Press enter to select · esc to go back",
       "  Press enter to confirm or esc to go back",
-      // a pager: its keys, then the one that closes it on a row of its own
       " ↑/↓ to scroll · pgup/pgdn to page · home/end to jump\n q close",
-      // the keys cut by a narrow pane: the last row alone tells
       " ↑/↓ to scroll · pgup/pgdn to page · hom\n q close",
       // 0.167: items apart by spaces alone, two rows of keys, a key that does two things, wrapped inside its words
       "  ? help  esc back  ↑/↓ move  enter open  n new",
@@ -94,7 +90,6 @@ describe("codexOwnScreenOpen", () => {
       "Browsing · esc back",
       "Browsing · esc",
     ]) expect(codexOwnScreenOpen(under("  Some list", "› 1. First", "  2. Second", footer)), footer).toBeTrue();
-    // the prompt browser's footer begins its row, so a line of the transcript ending in `·` over it is no status line
     expect(codexOwnScreenOpen(["› earlier prompt", "  note ·", "Browsing · esc back"].join("\n")), "under a line ending in ·").toBeTrue();
     // the same browser under the composer, the footer where the hint row was (the `prompt_navigation` snapshot in
     // Codex 0.167.1's own tests, codex-rs/tui/src/app/snapshots)
@@ -110,7 +105,6 @@ describe("codexOwnScreenOpen", () => {
     expect(codexOwnScreenOpen(["d - use /", "feedback", "if", "something", "went wrong", "Browsing"].join("\n"))).toBeTrue();
     // rows are measured in columns: four flags are eight of them, in sixteen code units
     expect(codexOwnScreenOpen(["› hello", "🇺🇸🇺🇸🇺🇸🇺🇸", "Browsing"].join("\n"))).toBeTrue();
-    // a wider screen whose last row is the word: there the footer would say more
     expect(codexOwnScreenOpen(under("• The view was called", "  Browsing"))).toBeFalse();
     expect(codexOwnScreenOpen(at15.replace("went wrong", "went wrong, as the log above shows"))).toBeFalse();
   });
@@ -124,7 +118,6 @@ describe("codexOwnScreenOpen", () => {
       "working": under("• Working (3s • esc to interrupt)", "", COMPOSER),
       "with a message queued": under("• Messages to be submitted after next tool call (press esc to interrupt and send immediately)", "  ↳ and then", COMPOSER),
       "after one Escape": under("› Ask Codex to do anything", "  esc again to edit previous message"),
-      // words that only end like /keymap's sentence
       "a status line ending in such words": under("› Ask Codex to do anything", "  GPT-6.1-Sol default · /tmp/proj · Esc cancels."),
       "a hyphenated word that begins like a chord": under("› Ask Codex to do anything", "  alt-text back"),
       "with its shortcuts shown, as 0.167 ends them": under("  /keymap customize", "› Ask Codex to do anything", "  GPT-6.1-Sol default · /tmp/proj", "  ? / esc close"),
@@ -137,12 +130,9 @@ describe("codexOwnScreenOpen", () => {
       "under an answer that quotes a list's footer": under("• Run /model. You will see:", "  enter select · esc back", "", COMPOSER),
       "with a draft that quotes one": under("› the footer said", "  enter select · esc back", "  GPT-6-Astra default fast · main"),
       "with a draft of the prompt browser's footer": under("› Browsing · ↵ rewind · esc back", "  GPT-6-Astra default fast · main"),
-      // a thread or a folder named like a key hint is an item of the status line, beside the model
       "a status line naming a thread like a hint": under("› Ask Codex to do anything", "  GPT-6-Astra default · main · esc back"),
-      // and one a narrow pane cut at its `·` goes on in the next row, which is no footer of its own
       "a status line wrapped before such a name": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  esc cancel"),
       "a status line wrapped before a name that leaves nothing": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  enter save"),
-      // a thread named like the prompt browser's footer, or like its label alone, is the status line's end too
       "a status line wrapped before a name like the prompt browser's footer": under("› Ask Codex to do anything", "  GPT-6-Astra ultra · /fixture ·", "  Browsing · esc back"),
       "a narrow status line wrapped before the prompt browser's label": ["› hi", "  GPT-6 ·", "  main ·", "  Browsing"].join("\n"),
       "an empty screen": "",

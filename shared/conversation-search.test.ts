@@ -60,6 +60,9 @@ describe("searchableText", () => {
   });
 
   it("reads a long line of brackets that never close in one pass", () => {
+    // read as a pattern, 20,000 such characters took 0.4 s and twice as many four times that: these
+    // lines of 200,000 took from 4 to 36 s each, and in one pass they take a few milliseconds.
+    // The timeout is the bound: a test that returns after it has failed
     for (const line of ["[".repeat(200_000), `${"[".repeat(200_000)}]`, "![".repeat(100_000), "[a](".repeat(50_000)]) {
       expect(searchableText(user(line)) === line).toBe(true);
       expect(searchTurns([user(`needle ${line}`)], searchPattern("needle")!)).toHaveLength(1);
@@ -141,6 +144,7 @@ describe("searchedTurnChanged", () => {
       + line("2026-10-01T00:00:02Z", "event_msg", { type: "user_message", message: "try again" })
       + line("2026-10-01T00:00:03Z", "event_msg", { type: "agent_message", message: "Second: the deploy script passes." }));
     const turns = parser.snapshot();
+    // Codex dates both answers by the task's start
     expect(turns[1]!.ts).toBe(turns[3]!.ts);
     const [second, first] = searchTurns(turns, searchPattern("deploy script")!).filter((match) => match.role === "assistant");
     expect(turns.filter((turn) => searchedTurnChanged(turn, first!))).toEqual([turns[1]!]);
@@ -247,6 +251,8 @@ describe("pickedTurn", () => {
       { kind: "tool", name: "exec_command", summary: "git status", input: '{"cmd":"git status"}', output: "clean" }, { kind: "text", text }] });
     const apple = searchTurns([tooled("APPLE result")], searchPattern("apple")!)[0]!;
     expect(pickedTurn([tooled("APPLE result"), user("again"), tooled("BANANA result")], apple)).toBe(0);
+    // the searched answer's words became a progress note (Codex pairs its event later): it still holds
+    // them, so neither opens
     const noted: ConversationTurn = { ...bananas, parts: [{ kind: "text", text: `${lead} BANANAS`, phase: "commentary" }] };
     expect(pickedTurn([noted, user("again"), bananas], picked)).toBe("several");
     const link = searchTurns([answer(`${lead} deploy [docs`)], searchPattern("deploy")!)[0]!;
@@ -256,6 +262,7 @@ describe("pickedTurn", () => {
   });
 
   it("opens the one of answers of its time sharing their name and the matched words that says what was searched", () => {
+    // Codex dates both answers by the task's start: one name, and both hold the matched words
     const lead = "x".repeat(90);
     const turns = [answer(`${lead} first way`), user("again"), answer(`${lead} second way`)];
     const [second, first] = searchTurns(turns, searchPattern("way")!);
@@ -349,6 +356,8 @@ describe("pickSettled", () => {
   const said = (text: string, ts: string): ConversationTurn => ({ role: "assistant", ts, parts: [{ kind: "text", text }] });
 
   it("reads on past a later answer that took a grown answer's name until the grown one is read", () => {
+    // the answer was searched while it said only its first words, then went on; the user steered and
+    // the next answer, dated by the task's start (Codex) as well, began with those words
     const task = "2026-10-01T00:01:00Z";
     const match = searchTurns([user("check the deploy", task), said("The deploy script", task)], searchPattern("deploy script")!)[0]!;
     const turns = [user("list the files", "2026-10-01T00:00:00Z"), said("Done.", "2026-10-01T00:00:00Z"),

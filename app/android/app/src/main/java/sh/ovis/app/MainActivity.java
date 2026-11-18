@@ -53,16 +53,7 @@ import java.util.Set;
 import sh.ovis.push.AlertProof;
 import sh.ovis.push.OvisMessagingService;
 
-/**
- * Capacitor's activity with the chosen PC as the WebView's first page, as HerdrBridgeViewController
- * does on iOS: opening or leaving a PC starts the activity again (reopen), so the next page is a
- * first load too.
- */
 public class MainActivity extends BridgeActivity {
-    /**
-     * Sends the page's theme-color (the client keeps it at its top bar's color, the app's own pages
-     * at theirs) to OvisBars, now and whenever it changes, so the system bars match the page.
-     */
     private static final String BAR_COLOR_SCRIPT =
         "(() => {" +
         "  if (window !== window.top) return;" +
@@ -77,10 +68,8 @@ public class MainActivity extends BridgeActivity {
         "  else apply();" +
         "})();";
 
-    /** Whether the page itself (not a picture or a frame in it) failed since it started. */
     private boolean pageFailed;
 
-    /** Whether a page has shown in this activity: from then on a user could have followed a link from it. */
     private boolean pageShown;
 
     /**
@@ -94,10 +83,8 @@ public class MainActivity extends BridgeActivity {
     /** The origin the sign-in is on, so each of its steps is judged against the one before (PCStore.refusedHop). */
     private volatile String signInAt;
 
-    /** The page's theme-color the system bars took, put back after a configuration change. */
     private Integer barColor;
 
-    /** Covers the WebView, blank until the PC answers: which PC is opening, and Change PC (showOpening). */
     private View openingView;
 
     /**
@@ -107,26 +94,20 @@ public class MainActivity extends BridgeActivity {
      */
     private final Handler answerTimer = new Handler(Looper.getMainLooper());
 
-    /** What has arrived from the PC being opened, and when (null before the cover shows). */
     private OpeningWatch watch;
 
-    /** The cover's spinner, its line and its Keep waiting, which change with the open's stage. */
     private ProgressBar openingSpinner;
     private TextView openingText;
     private Button openingKeep;
     private Button openingRetry;
 
-    /** The cover's bar once the PC has answered: how much of the page's files has come, when their sizes are known. */
     private ProgressBar openingBar;
 
-    /** The PC being opened, and the sum of its page's file sizes (0 unknown, -1 not asked yet), from PAGE_SCRIPT. */
     private String openingPc;
     private long pageBytes = -1;
 
-    /** Whether the PC's page and all it starts with have loaded: a stall after that is the client not starting, which waiting does not help. */
     private boolean pageLoaded;
 
-    /** How often the PC's page, once shown, is asked whether the client is up: the cover lifts within this of its first frame. */
     private static final long PAGE_POLL_MS = 200;
 
     /**
@@ -152,14 +133,12 @@ public class MainActivity extends BridgeActivity {
         "  return JSON.stringify({ client: root ? !root.querySelector(':scope > .boot') && !loading : loading ? false : null, size: window.__ovisOpeningSize ?? -1 });" +
         "})()";
 
-    /** The PC's name or address, as the cover names it, and its host:port, as the error page's reason names it. */
     private String openingLabel;
     private String openingHost;
 
     /** Whether the app gave up on the first page: the load it dropped may still report its end. */
     private boolean gaveUp;
 
-    /** Whether a page of the PC has been checked for being Ovis (PCStore.check) in this activity. */
     private boolean checked;
 
     /**
@@ -175,7 +154,6 @@ public class MainActivity extends BridgeActivity {
                 view.goBack();
                 return;
             }
-            // the page stepped off that entry itself a moment ago: this Back is the system's after all
             setEnabled(false);
             getOnBackPressedDispatcher().onBackPressed();
         }
@@ -190,8 +168,6 @@ public class MainActivity extends BridgeActivity {
         String link = takeAppLink(getIntent(), savedInstanceState == null);
         if (link != null) openAppLink(link);
         else openAlert(getIntent(), savedInstanceState == null);
-        // the PC's key: its origin, or its scope on the hosted shell's origin for a relay PC. An
-        // app link waiting for the connect screen shows that screen first
         String pc = PCStore.link != null ? null : PCStore.current(this);
         String origin = pc == null ? null : PCStore.origin(pc);
         String host = origin == null ? null : Uri.parse(origin).getHost();
@@ -228,8 +204,6 @@ public class MainActivity extends BridgeActivity {
         String appOrigin = bridge.getScheme() + "://" + bridge.getHost();
         getOnBackPressedDispatcher().addCallback(this, pageBack);
         if (host == null) {
-            // before a PC is chosen the pages are the app's own: Back closes what the demo has open,
-            // and goes from the demo to the connect screen
             bridge.setWebViewClient(
                 new BridgeWebViewClient(bridge) {
                     @Override
@@ -295,7 +269,6 @@ public class MainActivity extends BridgeActivity {
                                 return true;
                             }
                         }
-                        // the sign-in's steps in the WebView, judged one by one
                         if (
                             signingIn &&
                             request.isForMainFrame() &&
@@ -328,7 +301,6 @@ public class MainActivity extends BridgeActivity {
                             try {
                                 startActivity(browse);
                             } catch (ActivityNotFoundException noBrowser) {
-                                // nothing to open it with: the link does nothing, Ovis stays
                             }
                             return true;
                         }
@@ -372,7 +344,6 @@ public class MainActivity extends BridgeActivity {
                     @Override
                     public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                         if (request.isForMainFrame()) {
-                            // the load dropped at the time limit, which the error page already explains
                             if (gaveUp && !pageShown) return;
                             pageFailed = true;
                             PCStore.fail(String.valueOf(error.getDescription()), null);
@@ -412,7 +383,6 @@ public class MainActivity extends BridgeActivity {
                         // loading spinner, for minutes on a slow link
                         pageShown = true;
                         if (url == null || !PCStore.belongs(url, pc)) hideOpening();
-                        // from here the cover lifts as soon as the client is up, not at the next tick
                         else answerTimer.post(MainActivity.this::pollPage);
                     }
 
@@ -422,7 +392,6 @@ public class MainActivity extends BridgeActivity {
                         // only a page of this very PC (its scheme, host and port, and its scope for a relay PC) counts
                         String url = webView.getUrl();
                         if (pageFailed || url == null || !PCStore.belongs(url, pc)) return;
-                        // the PC's page is up: a pairing link has done its work
                         signingIn = false;
                         PCStore.pendingStart = null;
                         PCStore.fail(null, null);
@@ -439,18 +408,13 @@ public class MainActivity extends BridgeActivity {
     /**
      * Keeps the PC `pc`, whose page `url` has loaded, unless it is not Ovis: a web server that is not
      * Ovis would otherwise be saved and opened at every start, with no Change PC and Back closing the
-     * app. That page gives way to the error page, which has Change PC, and the PC is not kept (one
-     * kept before stays in the list until forgotten). Only an answer that shows it is not Ovis (its
-     * page loads, its /api/health is not Ovis's) counts: a PC that could not be asked, or answered
-     * the question with 403 or 502, is kept as before, also when the activity ended meanwhile. A relay PC (a scope on the hosted app) is the hosted
-     * app's, which the connect screen checked (relayLink in app/web/shell.js).
+     * app.
      */
     private void keepIfOvis(String pc, String url) {
         if (PCStore.scoped(pc)) {
             PCStore.remember(this, pc);
             return;
         }
-        // once per activity: the PC's later pages are the same server
         if (checked) return;
         checked = true;
         String cookies = CookieManager.getInstance().getCookie(url);
@@ -459,7 +423,6 @@ public class MainActivity extends BridgeActivity {
         new Thread(() -> {
             PCStore.Check found = PCStore.check(url, cookies, PCStore.ANSWER_SECONDS * 1000L);
             if (!found.kind.equals("not-ovis")) {
-                // the check may outlive this activity: a PC forgotten meanwhile stays forgotten
                 PCStore.rememberUnlessForgotten(app, pc, since);
                 return;
             }
@@ -475,14 +438,6 @@ public class MainActivity extends BridgeActivity {
         return "ko".equals(Locale.getDefault().getLanguage());
     }
 
-    /**
-     * Covers the WebView until the PC's page shows (onPageCommitVisible): which PC is opening, and
-     * Change PC, so an address that does not answer never leaves a blank screen. When nothing at all
-     * has arrived after ANSWER_SECONDS the app stops waiting and the error page says so, with Try
-     * again. A PC that answers over a slow link is never cut off while bytes arrive: the cover says
-     * the connection is slow and how much has come, and after STALL_MS with nothing more it offers
-     * Keep waiting (OpeningWatch).
-     */
     private void showOpening(String pc) {
         String origin = PCStore.origin(pc);
         String label = PCStore.names(this).optString(pc, "");
@@ -545,7 +500,6 @@ public class MainActivity extends BridgeActivity {
         stack.addView(change);
         FrameLayout cover = new FrameLayout(this);
         cover.setBackgroundColor(Color.parseColor("#12100e"));
-        // taps stop here, not on the blank WebView under it
         cover.setClickable(true);
         cover.addView(stack, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
         addContentView(cover, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -562,7 +516,6 @@ public class MainActivity extends BridgeActivity {
         answerTimer.postDelayed(this::watchOpening, 1000);
     }
 
-    /** Each second while the cover is up and the app is in front: what arrived, and what the cover says (OpeningWatch). */
     private void watchOpening() {
         if (openingView == null || isFinishing() || isDestroyed()) return;
         long now = SystemClock.elapsedRealtime();
@@ -584,14 +537,12 @@ public class MainActivity extends BridgeActivity {
         answerTimer.postDelayed(this::watchOpening, 1000);
     }
 
-    /** Every PAGE_POLL_MS once the PC's page is shown, while the cover is up and the app in front: is the client up yet. */
     private void pollPage() {
         if (openingView == null || isFinishing() || isDestroyed()) return;
         askPage();
         answerTimer.postDelayed(this::pollPage, PAGE_POLL_MS);
     }
 
-    /** Asks the PC's page, once it has answered, whether the client is up and how big its files are (PAGE_SCRIPT). */
     private void askPage() {
         WebView view = bridge.getWebView();
         String url = view.getUrl();
@@ -602,10 +553,8 @@ public class MainActivity extends BridgeActivity {
                 org.json.JSONObject page = new org.json.JSONObject(new org.json.JSONArray("[" + value + "]").getString(0));
                 long size = page.optLong("size", -1);
                 if (size >= 0) pageBytes = size;
-                // the client drew its first frame, or this page is not the client: the cover goes
                 if (page.isNull("client") ? pageShown : page.optBoolean("client")) hideOpening();
             } catch (org.json.JSONException unreadable) {
-                // a page that answered something else: asked again in a second
             }
         });
     }
@@ -613,7 +562,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
-        // the cover's tick stops in the background (onStop); back in front it looks again at once
         if (openingView != null && watch != null) {
             answerTimer.removeCallbacksAndMessages(null);
             answerTimer.post(this::watchOpening);
@@ -627,7 +575,6 @@ public class MainActivity extends BridgeActivity {
         super.onStop();
     }
 
-    /** The cover's line, spinner and Keep waiting for the open's stage now. */
     private void showStage() {
         if (openingView == null) return;
         OpeningWatch.Stage stage = watch.stage(SystemClock.elapsedRealtime());
@@ -642,7 +589,6 @@ public class MainActivity extends BridgeActivity {
         if (stage == OpeningWatch.Stage.SLOW) {
             text = (ko ? "연결이 느립니다. " + openingLabel + " 여는 중…" : "Slow connection. Still opening " + openingLabel + "…") + amount;
         } else if (stage == OpeningWatch.Stage.STALLED && pageLoaded) {
-            // everything arrived, and the client still did not start: nothing more is coming
             text = ko
                 ? openingLabel + "의 페이지는 받았지만 앱이 시작되지 않았습니다."
                 : "The page from " + openingLabel + " arrived, but the app did not start.";
@@ -655,7 +601,6 @@ public class MainActivity extends BridgeActivity {
             text = ko ? openingLabel + " 여는 중…" : "Opening " + openingLabel + "…";
         }
         openingText.setText(text);
-        // the spinner until the PC answers; then the bar, filling when the page's sizes are known
         boolean bar = watch.isAnswered() && stage != OpeningWatch.Stage.STALLED;
         openingBar.setVisibility(bar ? View.VISIBLE : View.GONE);
         openingBar.setIndeterminate(permille < 0);
@@ -665,11 +610,6 @@ public class MainActivity extends BridgeActivity {
         openingRetry.setVisibility(stage == OpeningWatch.Stage.STALLED ? View.VISIBLE : View.GONE);
     }
 
-    /**
-     * How long the cover waits: what is left of the limit the connect screen's check started
-     * (PCStore.answerBy), at least PAGE_FLOOR_MS, or ANSWER_SECONDS for an open that started here (a
-     * saved PC at launch, Try again, a redirect to Ovis). The limit is taken once.
-     */
     private static long answerDelay() {
         long by = PCStore.answerBy;
         PCStore.answerBy = 0;
@@ -704,10 +644,6 @@ public class MainActivity extends BridgeActivity {
         pageBack.setEnabled(view.canGoBack() && PCStore.pageTakesBack(here, before, place));
     }
 
-    /**
-     * Lets the pages of `origins` color the status and navigation bars with their theme-color.
-     * Without it the bars keep the app's dark background and light icons.
-     */
     private void followThemeColor(Set<String> origins) {
         if (
             !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
@@ -727,7 +663,7 @@ public class MainActivity extends BridgeActivity {
             );
             WebViewCompat.addDocumentStartJavaScript(bridge.getWebView(), BAR_COLOR_SCRIPT, origins);
         } catch (IllegalArgumentException rejectedOrigin) {
-            return; // Keep the default bars when WebView rejects an origin rule.
+            return;
         }
         bridge.getWebView().evaluateJavascript(BAR_COLOR_SCRIPT, null);
     }
@@ -759,8 +695,6 @@ public class MainActivity extends BridgeActivity {
                 Math.min(buttons.right, under.right),
                 keyboard ? 0 : Math.min(buttons.bottom, under.bottom)
             );
-            // the strip shows the window's background: the page's theme-color once it has sent one
-            // (paintBars), the app's dark background before
             view.setPadding(clear.left, 0, clear.right, clear.bottom);
             if (clear.equals(Insets.NONE)) return insets;
             return new WindowInsetsCompat.Builder(insets).setInsets(bars, Insets.subtract(under, clear)).build();
@@ -815,7 +749,6 @@ public class MainActivity extends BridgeActivity {
             String ovis = tooMany ? null : PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, path);
             String insecure = tooMany ? null : PCStore.refusedHop(from, target, ovis, path);
             runOnUiThread(() -> {
-                // after the time limit the error page has the screen: a late answer changes nothing
                 if (isFinishing() || isDestroyed() || gaveUp) return;
                 if (tooMany) {
                     PCStore.fail("Too many redirects", null);
@@ -844,7 +777,7 @@ public class MainActivity extends BridgeActivity {
     /**
      * Whether the sign-in's next step, to `url`, is refused: over public plain http, or from https to
      * http (PCStore.refusedHop). The way back to the PC itself is never refused, as the user chose its
-     * address. A refused step ends the sign-in on the error page. Any thread.
+     * address.
      */
     private boolean refuseSignInStep(String url, String pc) {
         if (PCStore.belongs(url, pc)) return false;
@@ -856,7 +789,6 @@ public class MainActivity extends BridgeActivity {
         return true;
     }
 
-    /** An app link while the app runs: the connect screen opens it, whatever page is showing. */
     @Override
     protected void onNewIntent(Intent intent) {
         String link = takeAppLink(intent, true);
@@ -868,8 +800,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Readies an app link for the next first load, or answers false and leaves the open page alone. A
-     * link to pair from waits for the connect screen (PCStore.link); a view of a PC (a file, a pane)
+     * A link to pair from waits for the connect screen (PCStore.link); a view of a PC (a file, a pane)
      * opens that PC at that view when the app has it saved, as the browser would have; for any other
      * PC the app has nothing to show.
      */
@@ -903,14 +834,10 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Opens a tapped alert's pane (PCStore.alertTap). The page of the PC that sent it, already up, is
-     * handed the pane as the browser's worker hands an open window, and keeps what it holds; true
-     * readies another PC on that pane in its chat for the next first load, switching PC. False,
-     * leaving the open page alone, for any other intent, an alert that names no saved PC, one the
+     * False, leaving the open page alone, for any other intent, an alert that names no saved PC, one the
      * system hands back with the activity restored or started from Recents, which was opened before,
      * and one without this app's proof (AlertProof): this activity is exported, and
      * another app's alert is a bare launch, which switches nothing and keeps a pairing link waiting.
-     * The alert is taken out of the intent, so it opens once.
      */
     private boolean openAlert(Intent intent, boolean fresh) {
         if (intent == null || !OvisMessagingService.ACTION_OPEN_ALERT.equals(intent.getAction())) return false;
@@ -930,7 +857,6 @@ public class MainActivity extends BridgeActivity {
         if (!own || !fresh || fromRecents) return false;
         WebView view = bridge == null ? null : bridge.getWebView();
         String url = view == null ? null : view.getUrl();
-        // the PC's page with its client up: not under the cover of a first load, nor the error page
         String shown = openingView != null || url == null || url.equals(bridge.getErrorUrl()) ? null : url;
         PCStore.AlertTap alert = PCStore.alertTap(
             PCStore.saved(this),
@@ -948,7 +874,6 @@ public class MainActivity extends BridgeActivity {
             view.evaluateJavascript(PCStore.selectionScript(alert.selection), null);
             return false;
         }
-        // the alert is the newer ask: a pairing link still waiting for the connect screen would show that instead
         PCStore.link = null;
         PCStore.open(this, alert.pc, alert.address);
         PCStore.fail(null, null);
@@ -956,39 +881,23 @@ public class MainActivity extends BridgeActivity {
         return true;
     }
 
-    /** Opens the current PC again from its first page. */
     void retry() {
         PCStore.fail(null, null);
         PCStore.redirects = 0;
         reopen();
     }
 
-    /** Back to the connect screen; the PC stays in the list. */
     void changePc() {
         PCStore.setCurrent(this, null);
         reopen();
     }
 
-    /**
-     * Told to the page just before it is replaced (reopen): the client then leaves the unsent text it
-     * keeps in memory alone (the panes of a PC that names no herdr lifetime, or text typed before its
-     * herdr was proven) in storage, where its PC's
-     * next page puts it in Recover unsent text (src/lib/paneLifetime.ts, PAGE_LEAVING_EVENT). Any other
-     * page has no listener.
-     */
     private static final String LEAVING_SCRIPT = "window.dispatchEvent(new Event('ovis-page-leaving'))";
 
-    /** How long a page that does not answer LEAVING_SCRIPT (busy, or gone) holds up its replacement. */
     private static final long LEAVING_WAIT_MS = 1000;
 
-    /** Whether reopen has begun: the page is being told it leaves, and this activity then ends. */
     private boolean leaving;
 
-    /**
-     * Starts this activity again, so the next page (a PC, or the connect screen) is a first load. The
-     * page shown is told first (LEAVING_SCRIPT), so a PC switch, an alert's included, keeps its
-     * memory-only unsent text for Recover unsent text; nothing is asked and nothing is sent.
-     */
     void reopen() {
         if (leaving) return;
         leaving = true;

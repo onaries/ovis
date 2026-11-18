@@ -64,7 +64,6 @@ try {
   let admit = true;
   let routed: WebSocketRoute | undefined;
   let holdDiscard = false, delayedDiscard: (() => void) | undefined;
-  // a Send now that left the page but whose fate the page never learns
   let swallowResend = false, swallowedResend = false;
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     if (!admit) { void socket.close(); return; }
@@ -251,16 +250,13 @@ try {
   {
     await report("working");
     const pending = await queue("never beside a held draft");
-    // the lens buttons' titles name the shortcut as the platform writes it (⌘⇧J on a Mac, Ctrl+Shift+J elsewhere)
     const toggle = (title: RegExp) => page.getByTitle(title).click();
-    // keys typed while the terminal is not ready for input are held as a draft
     routed!.send(JSON.stringify({ type: "input-ready", pane_id: pane, ready: false }));
     await toggle(/^Live terminal \(.+\)$/);
     const waiting = current(pane).locator(".terminal-banner", { hasText: "Waiting for terminal input…" });
     await waiting.waitFor();
     await current(pane).locator(".xterm-helper-textarea").pressSequentially("abc");
     await until(async () => await current(pane).locator(".draft-text").textContent() === "abc", "the typing is held as a draft");
-    // ready again: the draft still waits for Send or Discard
     routed!.send(JSON.stringify({ type: "input-ready", pane_id: pane, ready: true }));
     await waiting.waitFor({ state: "hidden" });
     await toggle(/^Chat transcript \(.+\)$/);
@@ -280,7 +276,6 @@ try {
     assert.equal(await composer().inputValue(), "ls", "a refused message keeps its text");
     await composer().fill("");
     await noBytes(delivered, "a message box send beside a held draft types nothing");
-    // the row is not marked unconfirmed: once the draft is discarded, Send now delivers it
     await toggle(/^Live terminal \(.+\)$/);
     await current(pane).locator(".draft-discard").click();
     await current(pane).locator(".terminal-banner-draft").waitFor({ state: "detached" });
@@ -344,7 +339,6 @@ try {
   const unproven = async (text: string, label: string): Promise<void> => {
     const row = rows().filter({ hasText: text });
     await row.waitFor();
-    // checked again after readiness, so a held receipt arriving late would be caught too
     assert.equal(await row.getAttribute("data-state"), "uncertain", `${label}: an unproven copy stays uncertain`);
     assert.equal(await row.locator(".pending-message-send").count(), 0, `${label}: an unproven copy never offers Send now`);
     await report("idle"); await noBytes(delivered, `${label}: readiness never replays an unproven copy`);
@@ -413,7 +407,6 @@ try {
     await unproven(expired.text, "expired receipt");
   } finally { Date.now = ambient; performance.now = running; }
 
-  // (c) an ambiguous send: Send now left the page and the connection dropped before any answer
   const ambiguous = await queue("unproven after an ambiguous send");
   await lostConnection();
   const ambiguousRow = rows().filter({ hasText: ambiguous.text });
@@ -425,8 +418,6 @@ try {
   swallowResend = false;
   await unproven(ambiguous.text, "ambiguous send");
 
-  // (e) a page left open past the bridge's receipt window: its proven copy is uncertain again. The page's clock moves
-  // (a tab that slept, or a clock that jumped): no timer has to fire, the next render reads the row past its time.
   const leftOpen = await queue("held, then the page stays open past its window");
   since = received.length;
   await lostConnection();

@@ -1,4 +1,3 @@
-/** Add-a-PC modal sheet: four steps, labeled digit input, 90-second wait bound, and docked mobile footer. */
 // allow: SIZE_OK — cohesive 4-step modal sheet state machine (new/join/add modes and phases)
 import "./RelayShell.css";
 import "./AddPcSheet.css";
@@ -207,7 +206,6 @@ export function AddPcSheet({ mode, pc, state, onJoin, onPair, onMatch, onRetry, 
         actions = pairActions(cancel, <button key="primary" type="button" className="btn btn-primary" data-sheet-primary onClick={() => (onOpenPc ?? onClose)()}>{t("Open PC")}</button>);
         break;
       case "failed": {
-        // the sheet's flow picks the words of a refusal: what stopped a new PC or a join is not what stops a pairing link
         const failure = state.kind === "failed" ? relayFailureText(t, state.failure, name, state.detail, mode === "new" ? "new" : "join") : null;
         body = failure && (
           <div role="alert">

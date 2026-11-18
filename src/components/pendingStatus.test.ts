@@ -6,14 +6,11 @@ const pendingStatus = (message: Parameters<typeof status>[0], busy: boolean) => 
 describe("pending row status", () => {
   it("says a held message waits for Send now only while this connection holds it on the bridge", () => {
     expect(pendingStatus({ state: "held", serverOwned: true }, false)).toBe("Waits for Send now");
-    // a copy restored from storage: another tab's live hold, or one from before a reload
     expect(pendingStatus({ state: "held", serverOwned: false }, false)).toBe("Held message — review and send");
-    // a hold the bridge refused is reviewed too
     expect(pendingStatus({ state: "held", serverOwned: true, error: { code: "pending_lease_lost", message: "lost" } }, false)).toBe("Held message — review and send");
   });
 
   it("says what a message waits for besides its turn, queued or on its way", () => {
-    // its pane shows omp at rest, and a row on its way would say Sending for up to half a minute
     expect(pendingStatus({ state: "queued", serverOwned: true, waiting: "omp_starting" }, false)).toBe("Waiting for omp to start…");
     expect(pendingStatus({ state: "sending", serverOwned: true, waiting: "omp_starting" }, true)).toBe("Waiting for omp to start…");
   });

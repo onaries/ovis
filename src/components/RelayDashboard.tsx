@@ -26,9 +26,7 @@ export interface RelayDashboardProps {
   onCheckPcs?: () => void; onCheckPc?: (serverId: string) => void; onRefreshAccount?: () => void | Promise<void>; onAddPc: () => void; onPairByQr?: () => void;
   onOpenSheet: (pc: MyPc, mode: "new" | "join") => void; onForgetPc?: (serverId: string) => Promise<void> | void;
   onSignIn?: () => void; onSignOut?: () => void; onLeave?: () => void;
-  /** deletes the signed-in account at the account service, after the person confirmed it here */
   onDeleteAccount?: () => void;
-  /** why Delete account was refused, said on Devices alone (`error` is the directory's) */
   deleteError?: string;
   /** which sign-in `account` is (its sign_in_id): Devices' questions asked under one are dropped under the next */
   signedInAs?: string;
@@ -78,13 +76,11 @@ function DevicesSection({ meLabel, account, deleteError, onSignIn, onSignOut, on
             </div>
             {onDeleteAccount && (
               <>
-                {/* what goes and what stays, before the press that does it (the same button, as Remove this device) */}
                 {deleting && <p className="account-fineprint" role="status" data-testid="delete-account-says">{t("This deletes your Ovis account for good: your sign-in methods, your list of PCs and your plan. It cannot be undone. Devices stay paired with your PCs until you revoke them on each PC. A subscription that still renews has to be cancelled first.")}</p>}
                 <div className="relay-dash-account-actions">
                   <button type="button" className={deleting ? "btn btn-danger" : "btn"} data-action="delete-account" data-confirm={deleting ? "delete-account" : undefined} onClick={() => { if (deleting) { setDeleting(false); onDeleteAccount(); } else setDeleting(true); }}>{deleting ? t("Delete account for good?") : t("Delete account")}</button>
                   {deleting && <button type="button" className="btn btn-ghost" onClick={() => setDeleting(false)}>{t("Cancel")}</button>}
                 </div>
-                {/* why the last delete was refused (reauth_required, subscription_active), where it was pressed */}
                 {deleteError !== undefined && <p className="account-error" role="alert">{deleteError}</p>}
               </>
             )}
@@ -125,7 +121,6 @@ export function RelayDashboard({
   const [checkedByUser, setCheckedByUser] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null), prevViewRef = useRef<DashboardView>(route.view);
   const splitRef = useRef<HTMLDivElement>(null), prevPcRef = useRef<string | null>(route.pc);
-  /** the PC whose details Back, Close or Escape just left: below 1100px its row takes the focus back */
   const closedPcRef = useRef<string | null>(null), peersRef = useRef<readonly string[]>([]);
 
   useEffect(() => {
@@ -150,10 +145,6 @@ export function RelayDashboard({
   const selectPc = (serverId: string) => navigateTo(formatDashboardHash({ view: "pcs", filter: activeFilter, relay: route.relay, pc: serverId }));
   const closeDetails = () => { closedPcRef.current = route.pc; navigateTo(formatDashboardHash({ view: "pcs", filter: activeFilter, relay: route.relay, pc: null })); };
 
-  // Below 1100px the details replace the list as a full view (IS-TABLE-08), so the view starts at the top,
-  // the details heading takes the focus (ringless, RelayDashboard.css), and leaving them (Back, Escape, or browser Back)
-  // focuses the row again. From 1100px the side panel opens beside the list and the focus stays where the click put it.
-  // When an unlisted pairing is forgotten, its row is gone: focus its next row, else its previous row, else the view heading.
   const selectedPcId = selectedRow?.server_id ?? null;
   useEffect(() => {
     const prevPc = prevPcRef.current;
@@ -191,7 +182,6 @@ export function RelayDashboard({
   const renderTableSection = (relayFilter: string | null) => model && (
     <section className="relay-dash-pcs" id="relay-dash-pcs" aria-label={t("PCs")}>
       <div ref={splitRef} className={selectedRow ? "relay-dash-pcs-split is-selected" : "relay-dash-pcs-split"}>
-        {/* below 1100px (IS-TABLE-08) the details replace the list as a full view until Back */}
         {!(narrow && selectedRow) && (
           <div className="relay-dash-pcs-list">
             <RelayPcTable rows={model.rows} attention={model.attention} filters={model.filters} filter={activeFilter} onFilter={setFilter}

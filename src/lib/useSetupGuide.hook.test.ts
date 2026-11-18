@@ -6,7 +6,6 @@ import { SETUP_ROW_KEY } from "./firstHints.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
 import { useOtherDevice, useSetupGuide, type SetupGuideFacts } from "./useSetupGuide.ts";
 
-// The real hook over a fake browser: one tab's storage, and the storage events another tab's writes send.
 describe("the setup guide closed in another tab", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let records: Map<string, string>;
@@ -46,7 +45,6 @@ describe("the setup guide closed in another tab", () => {
     await act(async () => { renderer = create(createElement(Probe)); });
   }
 
-  /** What another tab's write looks like here: the record already in storage, then its event. */
   async function otherTabWrites(value: string): Promise<void> {
     records.set(GUIDE_STORAGE_KEY, value);
     const event = new Event("storage");
@@ -130,7 +128,6 @@ describe("the setup guide closed in another tab", () => {
 
   it("does not reopen it with a step taken here before the close event arrived", async () => {
     await resumeAt({ ...REOPENED, at: "theme" });
-    // the other tab's close lands in storage, its event not yet delivered here
     records.set(GUIDE_STORAGE_KEY, JSON.stringify({ status: "closed" }));
     await act(async () => { hook.dispatch({ type: "moved" }); });
     expect(hook.guide).toBeNull();
@@ -140,7 +137,6 @@ describe("the setup guide closed in another tab", () => {
   it("keeps a reopen made here when an older close event arrives after it", async () => {
     await resumeAt({ ...REOPENED, at: "theme" });
     const close = JSON.stringify({ status: "closed" });
-    // the other tab's close is in storage, then Settings reopens it here before that close's event comes
     records.set(GUIDE_STORAGE_KEY, close);
     await act(async () => { window.dispatchEvent(new Event("ovis:open-setup-guide")); });
     expect(JSON.parse(records.get(GUIDE_STORAGE_KEY)!).status).toBe("open");
@@ -153,7 +149,6 @@ describe("the setup guide closed in another tab", () => {
   it("closes here when the other tab closes right after this tab's own write", async () => {
     await resumeAt({ ...REOPENED, at: "theme" });
     const close = JSON.stringify({ status: "closed" });
-    // the other tab's close lands in storage straight after this tab writes its next step
     const write = window.localStorage.setItem.bind(window.localStorage);
     window.localStorage.setItem = (key: string, value: string) => { write(key, value); records.set(key, close); };
     await act(async () => { hook.dispatch({ type: "moved" }); });
@@ -231,7 +226,6 @@ describe("the setup guide on a watching device", () => {
     expect(hook.guide).toBeNull();
   });
 
-  /** The hook with `facts`, rendered again whenever they change; no server answers (fetch is absent). */
   async function mountFacts(facts: SetupGuideFacts): Promise<(next: SetupGuideFacts) => Promise<void>> {
     let current = facts;
     function Probe() { hook = useSetupGuide(current); return null; }
@@ -257,14 +251,12 @@ describe("the setup guide on a watching device", () => {
   it("is not settled on a fresh browser until the first-run decision is made", async () => {
     const update = await mountFacts({ enabled: true, workspaces: null, pairingGate: undefined, watching: false });
     expect(hook.settled).toBe(false);
-    // the facts arrive; the shared-settings read fails here (no server), which decides against opening
     await update({ enabled: true, workspaces: 0, pairingGate: "open", watching: false });
     await act(async () => { await Promise.resolve(); });
     expect(hook.settled).toBe(true);
   });
 });
 
-// The device list the guide reads: again on each step that shows it (`again`), and when Settings closes (`enabled`).
 describe("useOtherDevice", () => {
   const fetchBefore = Object.getOwnPropertyDescriptor(globalThis, "fetch");
   const actBefore = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
@@ -307,7 +299,6 @@ describe("useOtherDevice", () => {
     expect(name).toBe("Pixel 9");
     await act(async () => { renderer!.update(createElement(Probe, { enabled: true, again: "done" })); });
     expect(reads).toBe(2);
-    // Settings open over the guide: no read; closed: read again
     await act(async () => { renderer!.update(createElement(Probe, { enabled: false, again: "done" })); });
     expect(reads).toBe(2);
     await act(async () => { renderer!.update(createElement(Probe, { enabled: true, again: "done" })); });

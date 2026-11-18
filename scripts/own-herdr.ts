@@ -23,7 +23,6 @@ export async function runOnOwnHerdr(what: string, run: () => Promise<unknown>): 
   const configRoot = isolation.env.XDG_CONFIG_HOME!;
   const session = isolation.env.HERDR_TEST_SESSION!;
   const socket = join(isolation.sessions, session, "herdr.sock");
-  // Pre-point lazy imports at our socket, even before test-herdr's bootstrap has completed.
   process.env.HERDR_SOCKET = socket;
   process.env.OVIS_HERDR_BIN = herdr;
 

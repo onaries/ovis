@@ -1,7 +1,3 @@
-/**
- * The header's More menu (App): its button's menu, and on a phone the two groups it folds its items into,
- * Find… and Pane and tab… (G-143), each opened as a sheet of its own from More's button once More has closed.
- */
 import { useCallback, useEffect, useLayoutEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 export type MoreGroup = "find" | "pane";
@@ -28,16 +24,11 @@ export function useMoreMenu(): MoreMenu {
   return { more, setMore, closeMore, group, openGroup, closeGroup };
 }
 
-/**
- * The open group's items, the first without a hairline over it. Only a phone's More folds its items into groups:
- * wider, More lists them itself, so a group still open from a phone's width has none, and closes.
- */
 export function openGroupItems<T extends { divider?: boolean }>(kind: MoreGroup | null, sheet: boolean, find: T[], pane: T[]): T[] {
   const items = !sheet ? [] : kind === "find" ? find : kind === "pane" ? pane : [];
   return items.map((item, index) => index === 0 ? { ...item, divider: false } : item);
 }
 
-/** A group left with nothing in it (the pane went, the screen widened) is closed, not kept to come back later. */
 export function useGroupClosedWhenEmpty(menu: MoreMenu, empty: boolean): void {
   const gone = menu.group !== null && empty;
   const { closeGroup } = menu;

@@ -67,7 +67,6 @@ describe("SentWaitingList", () => {
   });
 });
 
-/** `signal`, or a failure once `ms` have passed without it */
 async function within(signal: Promise<void>, ms: number, what: string): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not come within ${ms} ms`)), ms); });
@@ -81,7 +80,6 @@ describe("mounted", () => {
   beforeEach(() => {
     renderers = [];
     for (const name of globals) saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-    // only what SettingsProvider reads and writes: no stored settings, a root it themes, no listeners that fire
     const style = { setProperty: () => {}, removeProperty: () => {}, getPropertyValue: () => "", backgroundColor: "" };
     const listen = { addEventListener: () => {}, removeEventListener: () => {} };
     const values: Record<string, unknown> = {
@@ -134,9 +132,7 @@ describe("mounted", () => {
       settleWaitingSends(key, [], Date.now(), true);
       expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
       act(() => { renderer.update(createElement(SettingsProvider, { children: createElement(Chat, { resting: true }) })); });
-      // at rest, but nothing read since: still on its way
       expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
-      // the chat's next read, at rest: the turn never came
       act(() => { jest.advanceTimersByTime(1); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [], Date.now(), true); });
       await act(async () => { await Promise.resolve(); });
       expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([true]);
@@ -153,7 +149,6 @@ describe("mounted", () => {
       settleWaitingSends(key, [], at - 1, true);
       rememberWaitingSend(key, "do the thing", at);
       const visit = mount(chat());
-      // a read two seconds on, at rest, before the agent wrote the turn; then the user leaves the chat
       act(() => { jest.advanceTimersByTime(2_000); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [], Date.now(), true); });
       act(() => { visit.unmount(); });
       renderers.splice(renderers.indexOf(visit), 1);
@@ -161,7 +156,6 @@ describe("mounted", () => {
       jest.advanceTimersByTime(5 * 60_000);
       mount(chat());
       expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
-      // the chat's first read since: the agent wrote it, in a turn the chat does not match, and the send goes
       act(() => { jest.advanceTimersByTime(1); observeWaitingClock(key, new Date().toISOString(), 0, Date.now()); settleWaitingSends(key, [{ role: "user", ts: null, parts: [{ kind: "text", text: "do the thing" }] }], Date.now(), true); });
       await act(async () => { await Promise.resolve(); });
       expect(currentWaitingSends(key)).toEqual([]);
@@ -169,14 +163,12 @@ describe("mounted", () => {
   });
 
   test("clears the rest in the commit that shows the agent at work, before the read that commit settles is judged", async () => {
-    // React's own scheduling, as in a browser: real timers and no act
     jest.useRealTimers();
     setSystemTime();
     const key = waitingKey("local", "rest-order");
     let show!: (next: readonly ConversationTurn[]) => void;
     let settled!: () => void;
     const read = new Promise<void>((resolve) => { settled = resolve; });
-    // wired as ChatView wires it: the list's rest from the chat's state, the chat's read settled in its own layout
     function Chat() {
       const [turns, setTurns] = useState<readonly ConversationTurn[]>([]);
       show = setTurns;
@@ -192,10 +184,8 @@ describe("mounted", () => {
       rememberWaitingSend(key, "next, run the tests", sent);
       mount(createElement(Chat));
       Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: false });
-      // a read's answer arrives after the rest began, and the chat shows the agent at work in the same commit
       observeWaitingClock(key, new Date().toISOString(), 0, Date.now() + 1);
       show([{ role: "assistant", ts: new Date(sent - 10_000).toISOString(), parts: [{ kind: "text", text: "earlier" }] }]);
-      // that commit's layout settled the read, after it queued its judgement: this resumes once the judgement ran
       await within(read, 5_000, "the chat's render of the read");
       expect(currentWaitingSends(key).map((item) => item.unanswered)).toEqual([undefined]);
     } finally { forgetWaitingSends(key); }
@@ -227,11 +217,9 @@ describe("mounted", () => {
   });
 
   test("a disconnected sibling pane preserves the baseline so a phone's send does not duplicate its transcript turn", () => {
-    // a PC whose snapshots name their herdr: a reconnect to it is the same herdr
     paneLifetimes.observe([{ id: "skewed-PC", snapshot: { panes: [], herdr_lifetime: "skewed-herdr" } } as unknown as Machine]);
     const key = waitingKey("skewed-PC", "baseline-owner");
     const user = (text: string, ts: number) => ({ role: "user" as const, ts: new Date(ts).toISOString(), parts: [{ kind: "text" as const, text }] });
-    // The phone is two seconds ahead of the PC. Its loaded chat already accounts for that skew.
     const earlier = user("earlier", at - 10_000);
     settleWaitingSends(key, [earlier], at, true);
     function Sibling() {

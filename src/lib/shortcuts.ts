@@ -18,7 +18,6 @@ export const SHORTCUTS = [
   // Mod+Shift+N keeps working where the browser lets it through (the installed app), but Chrome
   // keeps Ctrl+Shift+N for a new incognito window in a tab: O is the one shown, and works in both
   { id: "new-session", label: "New workspace", keys: ["Mod", "Shift", "O"] },
-  // no default key: the free Mod+Shift letters are few, so each person picks one in Settings
   { id: "new-tab", label: "New tab", keys: [] },
   { id: "rename-tab", label: "Rename tab", keys: [] },
   { id: "split-right", label: "Split pane right", keys: [] },
@@ -29,21 +28,17 @@ export const SHORTCUTS = [
   { id: "close-tab", label: "Close tab", keys: [] },
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
   { id: "next-pane", label: "Next pane", keys: ["Mod", "Shift", "ArrowDown"] },
-  // no default key either, as New tab: each person picks one in Settings
   { id: "previous-tab", label: "Previous tab", keys: [] },
   { id: "next-tab", label: "Next tab", keys: [] },
   { id: "previous-workspace", label: "Previous workspace", keys: [] },
   { id: "next-workspace", label: "Next workspace", keys: [] },
   { id: "settings", label: "Settings", keys: ["Mod", "Shift", ","] },
-  // listed only: held, not dispatched; VoiceInput.tsx listens for it itself (isVoiceShortcut)
   { id: "voice", label: "Dictate (hold)", keys: ["Mod", "Shift", "Space"] },
-  // listed only, as voice: the message box's own key (Composer.tsx), Option+Enter on a Mac
   { id: "hold-message", label: "Hold message in chat", keys: ["Alt", "Enter"] },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
 
-/** Shown in Settings with their fixed keys, never dispatched here or recorded: their own component listens for them. */
 export function listedOnly(id: ShortcutId): boolean {
   return id === "voice" || id === "hold-message";
 }
@@ -86,7 +81,6 @@ export function shortcutDisplayKeys(id: ShortcutId, overrides: ShortcutOverrides
   return value ? bindingDisplayKeys(value) : [];
 }
 
-/** A stored binding as shown: Mod+Shift+key, or its exact modifiers in macOS order (⌃⌥⇧⌘). */
 export function bindingDisplayKeys(value: string): string[] {
   const chord = parseExactChord(value);
   const bare = chord?.key ?? value;
@@ -95,17 +89,14 @@ export function bindingDisplayKeys(value: string): string[] {
   return [...(chord.ctrl ? ["Ctrl"] : []), ...(chord.alt ? ["Alt"] : []), ...(chord.shift ? ["Shift"] : []), ...(chord.meta ? ["Meta"] : []), key];
 }
 
-/** Two bindings conflict when they name the same chord on this platform, however each is stored. */
 export function shortcutConflict(id: ShortcutId, keys: string[], overrides: ShortcutOverrides, platformIsMac = isMacPlatform()): boolean {
   const wanted = new Set(keys.map((key) => formatExactChord(bindingChord(key, platformIsMac))));
   return SHORTCUTS.some((other) => other.id !== id && shortcutKeys(other.id, overrides).some((key) => wanted.has(formatExactChord(bindingChord(key, platformIsMac)))));
 }
 
-/** The key a Mod+Shift chord names, as overrides and KEY_TO_ID store it (letters lowercase). */
 export function shortcutEventKey(event: ShortcutEventLike): string {
   // Shift+Comma produces "<" on common keyboard layouts.
   const code = event.code ?? "";
-  // Share the terminal's letter-position convention, but never turn a typed symbol into an app action.
   // A Latin layout's own letter stays as typed, accented ones included: BÉPO's É sits on KeyW and
   // Turkish F's Ç on KeyB, and neither is that binding.
   const nonLatinLetter = /^\p{L}$/u.test(event.key) && !/^\p{Script=Latin}$/u.test(event.key);
@@ -118,7 +109,6 @@ export function shortcutEventKey(event: ShortcutEventLike): string {
   return !/^[a-z]$/.test(typed) && Object.hasOwn(PUNCTUATION_BY_CODE, code) ? PUNCTUATION_BY_CODE[code]! : typed;
 }
 
-/** Punctuation keys by position, named by the US character (IntlBackslash, the ISO key, as §). */
 const PUNCTUATION_BY_CODE: Readonly<Record<string, string>> = {
   Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Semicolon: ";", Quote: "'",
   Backslash: "\\", Period: ".", Slash: "/", Backquote: "`", IntlBackslash: "§",
@@ -132,7 +122,7 @@ function loadKeyboardLayout(): void {
   if (layoutRequested || typeof navigator === "undefined") return;
   layoutRequested = true;
   const keyboard = (navigator as Navigator & { keyboard?: { getLayoutMap?: () => Promise<ReadonlyMap<string, string>> } }).keyboard;
-  keyboard?.getLayoutMap?.().then((map) => { layoutMap = map; }, () => { /* keep the US names */ });
+  keyboard?.getLayoutMap?.().then((map) => { layoutMap = map; }, () => {});
 }
 
 /**
@@ -167,7 +157,6 @@ export function matchShortcut(event: ShortcutEventLike, platformIsMac: boolean, 
   return id && !Object.hasOwn(overrides, id) ? id : null;
 }
 
-/** Mod+Shift+Space, held to dictate. matchShortcut never returns "voice": it has no action. */
 export function isVoiceShortcut(event: ShortcutEventLike, platformIsMac: boolean): boolean {
   const hasMod = platformIsMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
   return hasMod && event.shiftKey && !event.altKey && (event.code === "Space" || event.key === " ");
@@ -179,8 +168,7 @@ const STEP_SHORTCUTS: ReadonlySet<ShortcutId> = new Set(["previous-pane", "next-
  * Mod+Shift+ArrowUp/ArrowDown move the selection in a text field (on a Mac Cmd+Shift+↑ selects to
  * the start of the text): in the message box or any other field with text they stay the field's, and
  * switch panes everywhere else: an empty field, which has nothing to select, and the terminal (its
- * own input element is xterm's, not a field to edit). keepsKeyForText also lets them go where the
- * field has no text left that way.
+ * own input element is xterm's, not a field to edit).
  */
 export interface KeyTargetLike {
   tagName?: string;
@@ -215,12 +203,6 @@ export function isAppShortcut(event: ShortcutEventLike, overrides: ShortcutOverr
 
 export { isMacPlatform };
 
-/**
- * Arrows, Home and End select or move in a field with text; there a matching binding gives way. A
- * step to another pane, tab or workspace gives way only until the selection's moving end is at the
- * edge the key goes to: then the key has nothing left to do in the field. A step focuses the next
- * pane's message box, and a draft there must not stop the next step for good.
- */
 export function keepsKeyForText(event: { key: string; target: KeyTargetLike | EventTarget | null }, shortcut: ShortcutId): boolean {
   if (!(event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") || !keepsArrowsForText(event.target)) return false;
   const field = event.target as KeyTargetLike;
@@ -232,17 +214,8 @@ export function keepsKeyForText(event: { key: string; target: KeyTargetLike | Ev
   return back ? moving > 0 : moving < (field.value ?? "").length;
 }
 
-/** The dialogs, sheets and menus that keep their keys: a confirmation, the palette, Settings, a row menu, a phone's drawer. */
 const KEY_OWNERS = "dialog, [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']";
 
-/**
- * What a press of the Close pane or Close tab binding does: "pass" leaves the key to a dialog, sheet or menu that
- * has it, or that is open over the page (its own confirmation included), and to a field whose own list
- * is open (the message box's slash and file suggestions: the field keeps the focus, beside its
- * listbox, aria-expanded), and does nothing; "ignore"
- * takes a held key's repeat and closes nothing, so holding it never goes on to the next pane; "run"
- * closes the selected pane (or its tab) once.
- */
 export function closePaneKeyStep(event: { repeat?: boolean; target: EventTarget | null }, modalOpen: boolean): "run" | "ignore" | "pass" {
   const target = event.target as { closest?: (selector: string) => unknown; getAttribute?: (name: string) => string | null } | null;
   if (modalOpen || (typeof target?.closest === "function" && target.closest(KEY_OWNERS) !== null)) return "pass";
@@ -250,7 +223,6 @@ export function closePaneKeyStep(event: { repeat?: boolean; target: EventTarget 
   return event.repeat ? "ignore" : "run";
 }
 
-/** A dialog or sheet open over the page besides `own` (the palette asking from inside itself). */
 export function modalOpenBesides(own: Element | null): boolean {
   return [...document.querySelectorAll("[aria-modal='true'], [role='alertdialog']")].some((node) => node !== own && !(own?.contains(node) ?? false));
 }
@@ -271,7 +243,6 @@ function layoutLabel(key: string): string {
   return own ? own.toUpperCase() : key;
 }
 
-/** True while Settings records a chord: the dispatcher below stands down so the pressed chord is not run. */
 let recordingShortcut = false;
 export function setShortcutRecording(recording: boolean): void {
   recordingShortcut = recording;
@@ -280,7 +251,6 @@ export function isRecordingShortcut(): boolean {
   return recordingShortcut;
 }
 
-/** the shortcuts whose action is also a button, a menu item or a palette row: counted by how it was taken */
 const SHORTCUT_ACTIONS: Partial<Record<ShortcutId, TelemetryAction>> = {
   "toggle-sidebar": "sidebar", "new-session": "new_workspace", "new-tab": "new_tab", "split-right": "split", "split-down": "split", "close-pane": "close_pane", settings: "settings",
 };
@@ -299,7 +269,6 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       const closeStep = shortcut === "close-pane" || shortcut === "close-tab" ? closePaneKeyStep(event, modalOpenBesides(null)) : null;
       if (closeStep === "pass") return;
       event.preventDefault();
-      // a held chord repeats: a tab or a split is made once per press, not once per key repeat
       if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down" || shortcut === "zoom-pane")) return;
       if (closeStep === "ignore") return;
       const counted = SHORTCUT_ACTIONS[shortcut];

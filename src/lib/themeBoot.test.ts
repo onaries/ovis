@@ -5,8 +5,6 @@ import { bootRows, customRow, drawnTheme, NO_CUSTOM_THEMES, readThemeFile, withT
 import { themeFor } from "./themeFor.ts";
 import { rowFor, SUPPORTED_ENTRIES, THEME_IDS, type DrawnTheme } from "./themes.ts";
 
-// The page's boot script and the app read the same two records; whatever they hold, both must draw
-// the same row, or the first frame is not the one the app goes on showing.
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 let records: Map<string, string>;
 let systemDark: boolean;
@@ -30,9 +28,7 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "window");
 });
 
-/** The row the page's boot script draws. */
 const boot = (): DrawnTheme => savedThemeEntry(() => window.localStorage);
-/** The row the app draws on its first render (SettingsProvider). */
 const app = (): DrawnTheme => {
   const settings = loadSettings();
   return drawnTheme(settings, resolveTheme(settings.theme));
@@ -73,7 +69,6 @@ describe("theme boot", () => {
           store(main, themes);
           systemDark = dark;
           const label = JSON.stringify({ main, themes, dark });
-          // the very same row: mode, palette, surfaces and terminal colors together
           expect(boot(), label).toBe(app());
           const settings = loadSettings();
           expect(storedAppearance(readStoredAppearance(() => window.localStorage)), label)
@@ -83,7 +78,6 @@ describe("theme boot", () => {
       }
     }
     expect(compared).toBe(MAINS.length * THEMES.length * 2);
-    // every row a pick can draw
     for (const entry of SUPPORTED_ENTRIES) {
       for (const theme of ["dark", "light"] as const) {
         store({ theme, darkTheme: entry.id, lightTheme: entry.id }, null);
@@ -97,11 +91,9 @@ describe("theme boot", () => {
     store("{not json", { darkTheme: "gruvbox", lightTheme: "gruvbox-light" });
     expect(boot()).toBe(rowFor("gruvbox", "dark"));
     expect(boot()).toBe(app());
-    // and they win over a readable main record's own sides
     store({ theme: "light", darkTheme: "codex", lightTheme: "codex" }, { darkTheme: "nord", lightTheme: "solarized-light" });
     expect(boot()).toBe(rowFor("solarized-light", "light"));
     expect(boot()).toBe(app());
-    // a damaged protected record leaves the main record's choice
     store({ theme: "light", lightTheme: "one-light" }, "{not json");
     expect(boot()).toBe(rowFor("one-light", "light"));
     expect(boot()).toBe(app());
@@ -164,7 +156,6 @@ describe("theme boot", () => {
     expect(boot()).toBe(themeFor(DEFAULT_APPEARANCE, resolveTheme(DEFAULT_APPEARANCE.theme)));
     expect(boot()).toBe(app());
     expect(DEFAULT_APPEARANCE).toEqual({ theme: "system", darkTheme: DEFAULT_SETTINGS.darkTheme, lightTheme: DEFAULT_SETTINGS.lightTheme });
-    // nothing stored at all is the same default, following the OS scheme
     blocked = false;
     store(null, null);
     systemDark = false;
@@ -187,7 +178,6 @@ describe("theme boot", () => {
       });
     };
     try {
-      // In the hosted shell with no saved settings: follows prefers-color-scheme (system)
       setShellMeta(true);
       store(null, null);
       systemDark = false;
@@ -197,20 +187,17 @@ describe("theme boot", () => {
         lightTheme: DEFAULT_SETTINGS.lightTheme,
       });
       expect(boot()).toBe(rowFor(DEFAULT_SETTINGS.lightTheme, "light"));
-      // the settings SettingsProvider starts from keep following the system, as the first frame did
       expect(loadSettings().theme).toBe("system");
       expect(app()).toBe(boot());
 
       systemDark = true;
       expect(boot()).toBe(rowFor(DEFAULT_SETTINGS.darkTheme, "dark"));
 
-      // A saved record with darkTheme/lightTheme but no explicit theme field in shell mode still defaults theme to system
       store({ darkTheme: "amber", lightTheme: "amber" }, null);
       systemDark = false;
       expect(boot()).toBe(rowFor("amber", "light"));
       expect(boot()).toBe(app());
 
-      // A saved explicit theme setting always wins in the hosted shell
       store({ theme: "dark", darkTheme: "codex", lightTheme: "codex" }, null);
       systemDark = false;
       expect(boot()).toBe(rowFor("codex", "dark"));
@@ -221,7 +208,6 @@ describe("theme boot", () => {
       expect(boot()).toBe(rowFor("codex", "light"));
       expect(boot()).toBe(app());
 
-      // Main Ovis app (no ovis-shell meta): a fresh device follows the OS scheme too
       setShellMeta(false);
       store(null, null);
       systemDark = false;
@@ -257,7 +243,6 @@ describe("an imported theme at the first frame", () => {
   const theme: CustomTheme = "theme" in read ? read.theme : (() => { throw new Error("the fixture is no theme"); })();
   const custom = withTheme(NO_CUSTOM_THEMES, theme, "dark")!;
   const rows = (value: unknown): void => { records.set(CUSTOM_ROWS_STORAGE_KEY, typeof value === "string" ? value : JSON.stringify(value)); };
-  /** The main record and, in its own key, the imported themes. */
   const storeWith = (main: object, list: unknown): void => {
     store(main, null);
     records.set(CUSTOM_THEMES_STORAGE_KEY, typeof list === "string" ? list : JSON.stringify(list));
@@ -265,12 +250,10 @@ describe("an imported theme at the first frame", () => {
 
   test("the boot script draws the row the app stored: the one the app goes on drawing", () => {
     storeWith({ theme: "dark", darkTheme: "nord" }, custom);
-    // a device that has not derived it yet (the list came from the PC): the built-in theme under it, for that launch
     expect(boot()).toBe(rowFor("nord", "dark"));
     expect(app()).toBe(customRow(theme, "dark"));
     rows(bootRows(custom));
     expect(boot()).toEqual(app());
-    // the side that draws no imported theme is the built-in one's, with or without the stored row
     storeWith({ theme: "light", darkTheme: "nord", lightTheme: "one-light" }, custom);
     rows(bootRows(custom));
     expect(boot()).toBe(rowFor("one-light", "light"));
@@ -299,7 +282,6 @@ describe("an imported theme at the first frame", () => {
       rows(value);
       expect(boot(), JSON.stringify(value)).toBe(rowFor("nord", "dark"));
     }
-    // a choice the stored list does not hold as an id draws nothing imported, nor does a damaged list
     for (const dark of [7, "x", "custom:1", null]) {
       storeWith({ theme: "dark", darkTheme: "nord" }, { themes: [theme], dark, light: null });
       rows(bootRows(custom));
@@ -312,7 +294,6 @@ describe("an imported theme at the first frame", () => {
       expect(boot(), list).toBe(rowFor("nord", "dark"));
       expect(boot()).toBe(app());
     }
-    // the list in the main record, where an earlier build never wrote it, is not read
     store({ theme: "dark", darkTheme: "nord", customThemes: custom }, null);
     rows(bootRows(custom));
     expect(boot()).toBe(rowFor("nord", "dark"));
@@ -326,7 +307,6 @@ describe("an imported theme at the first frame", () => {
     const origDoc = Object.getOwnPropertyDescriptor(globalThis, "document");
     Object.defineProperty(globalThis, "document", { configurable: true, value: { querySelector: () => ({ setAttribute: (_name: string, value: string) => { meta = value; } }) } });
     try {
-      // a property the app sets itself is not the theme's to remove
       props.set("--ui-scale", "1");
       const row = customRow(theme, "dark");
       applyThemeEntry(root as unknown as HTMLElement, row);

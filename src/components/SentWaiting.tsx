@@ -20,20 +20,11 @@ export function useWaitingSends(machineId: string, paneId: string, connected: bo
   return useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(key));
 }
 
-/**
- * Sent, and the agent has not written it as a turn yet: the user's bubble where the turn will be,
- * faded, with nothing under it, as a messenger shows a message at once on Send. Its turn takes its
- * place when the transcript has it; a clock joins it, where the turn's time will be, only when that
- * takes longer than WAITING_HINT_MS. Not come WAITING_SEND_MS after it was sent while the agent rests
- * (`resting`), it is unanswered (markUnanswered): said so under it, with the terminal, where an agent
- * that failed the turn before writing it shows why, and a way to let it go. `paneKey`: waitingKey's.
- */
 export function SentWaitingList({ sends, paneKey, resting = false, agent = null, onOpenTerminal }: {
-  sends: readonly WaitingSend[]; paneKey?: string; resting?: boolean; /** the pane's agent kind */ agent?: string | null; onOpenTerminal?: () => void;
+  sends: readonly WaitingSend[]; paneKey?: string; resting?: boolean; agent?: string | null; onOpenTerminal?: () => void;
 }) {
   const t = useT();
   const [now, setNow] = useState(Date.now);
-  // the next moment a bubble changes: its clock, and while the agent rests, the minute after which it is unanswered
   const watching = paneKey !== undefined && resting;
   const nextHint = sends.reduce((soonest, send) => {
     const hint = send.at + WAITING_HINT_MS;
@@ -41,14 +32,9 @@ export function SentWaitingList({ sends, paneKey, resting = false, agent = null,
       : watching && send.at + WAITING_SEND_MS > now ? send.at + WAITING_SEND_MS : send.at + WAITING_STUCK_MS;
     return due > now && due < soonest ? due : soonest;
   }, Number.POSITIVE_INFINITY);
-  // the clock as it is now: an agent that comes to rest long after the minute makes the send unanswered at once
-  // since when the agent rests, as this chat saw it: a send is said unanswered only after a read that came since then
-  // a layout effect: the rest is cleared in the commit that shows the agent at work, before a read settled in that
-  // commit's layout (ChatView) is judged, whatever else updates in it
   useLayoutEffect(() => {
     if (paneKey === undefined) return;
     restingSince(paneKey, resting ? Date.now() : null);
-    // a chat opened again judges its sends by a read since then, not by the one its last visit settled
     return () => { restingSince(paneKey, null); };
   }, [paneKey, resting]);
   useEffect(() => {
@@ -62,17 +48,12 @@ export function SentWaitingList({ sends, paneKey, resting = false, agent = null,
     return () => clearTimeout(timer);
   }, [nextHint]);
   const late = t("Sent · waiting for the agent's next turn");
-  // the catalog's product name, or the label the composer gives one it does not list
   const name = agent === null ? null : agentName(agent) === agent ? agentDisplayLabel(agent) : agentName(agent);
   const unanswered = name === null ? t("Not in the conversation. If the agent showed an error, it is in the terminal.")
     : t("Not in the conversation. If {agent} showed an error, it is in the terminal.", { agent: name });
-  // no live region of its own: the chat footer has one, and the user's own words need no announcing
   return <div className="chat-sent-waiting-list">
     {sends.map((send) => {
-      // capped at the lines its turn's card shows (UserMessage, ChatView.tsx), so the turn takes its
-      // place at about its height; the card's fade and Show full message come with the turn
       const capped = shouldFoldUserMessage(send.text);
-      // whole: its turn is not coming to take its place with the card's Show full message
       if (send.unanswered === true) return <div key={send.id} className="chat-turn chat-turn-user chat-turn-unanswered" data-unanswered-send={send.id}>
         <div className="chat-user-row">
           <div className="chat-bubble"><div className="chat-bubble-body">{send.text}</div></div>

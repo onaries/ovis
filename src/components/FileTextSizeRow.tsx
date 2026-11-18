@@ -3,12 +3,10 @@ import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, fileFontSize, uiFontSize, u
 import { useT } from "../lib/i18n.ts";
 import { SettingsRow, Stepper } from "./SettingsControls.tsx";
 
-/** Settings → Appearance → File text size: a file's own reading size, from the chat's until one is chosen (#2005). */
 export function FileTextSizeRow() {
   const { settings, update } = useSettings();
   const t = useT();
   const size = fileFontSize(settings);
-  // the sizes the first step started from, kept through later steps and written with each (lib/settings.ts)
   const base = settings.fileFontSize !== null && settings.fileFontBase?.size === settings.fileFontSize ? settings.fileFontBase : null;
   const choose = (next: number): FileFontBase => ({ size: next, chat: base?.chat ?? chatFontSize(settings), ui: base?.ui ?? uiFontSize(settings) });
   return (

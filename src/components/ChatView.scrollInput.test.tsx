@@ -5,8 +5,6 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { SettingsProvider } from "../lib/settings.ts";
 import { ChatView } from "./ChatView.tsx";
 
-// The renderer has no layout engine. Supply only the scroller geometry and browser
-// events; the real ChatView owns input classification, following and the Jump button.
 class Scroller extends EventTarget {
   clientHeight = 758;
   clientWidth = 600;
@@ -123,13 +121,10 @@ test.each(["wheel", "touch", "key", "scrollbar", "layout", "returned"] as const)
         case "key": send(new Key("keydown")); break;
         case "scrollbar": send(new Pointer("pointerdown", 600)); send(new Pointer("pointermove", 410)); break;
         case "layout": break;
-        // a wheel its scroll already showed, then back at the end by hand: the shrink is layout's again (#1734)
         case "returned": send(new Wheel("wheel")); scroller.scrollTop -= 190; scroll(); scroller.scrollTop += 190; scroll(); break;
         default: input satisfies never;
       }
       scroller.clientHeight = 627;
-      // ResizeObserver writes the end and measures it BEFORE the input's scroll
-      // arrives. That measurement must not consume the pending user input.
       resize();
       expect(scroller.scrollTop).toBe(1373);
       scroller.scrollTop -= 190;

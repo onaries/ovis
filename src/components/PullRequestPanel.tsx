@@ -15,16 +15,13 @@ import { checkDraft, mergeBlockedWord, mergeLabel, pullRequestErrorMessage, thre
 
 export interface PullRequestPanelProps {
   paneId: string;
-  /** the pane's folder, read when the pane is gone */
   directory: string;
-  /** the PC's name where it says which PC (another PC, or this one among several), in place of its id */
   machineName?: string;
 }
 
 type Load = { status: "pending" } | { status: "failed"; error: unknown } | { status: "ready"; view: PullRequestView };
 const PENDING: Load = { status: "pending" };
 
-/** How a Send to agent went, per row: on its way, in the draft (with or without the log), or too long for it. */
 type Sent = "sending" | "added" | "added_without_log" | "too_long";
 
 const STATE_ICON: Record<PullRequestCheckState, typeof CircleCheck> = { pass: CircleCheck, fail: CircleX, pending: CircleDot, skipped: CircleMinus, neutral: CircleMinus };
@@ -58,7 +55,6 @@ export function PullRequestPanel({ paneId, directory, machineName }: PullRequest
       (error: unknown) => { if (id === request.current) setLoad({ status: "failed", error }); },
     );
   }, [fetchPullRequest, target]);
-  // another pane or PC, or a closed tab: what is on its way for the last one is dropped when it lands
   useEffect(() => { read(); return () => { request.current += 1; }; }, [read]);
 
   const paneKey = paneStorageId(machineId, paneId);
@@ -66,7 +62,6 @@ export function PullRequestPanel({ paneId, directory, machineName }: PullRequest
   const sendCheck = async (view: PullRequestView, check: PullRequestCheck, key: string): Promise<void> => {
     mark(key, "sending");
     let log = null;
-    // a log that cannot be read still leaves the check's name and page to send
     if (check.job_id !== null) log = await fetchPullRequestLog(target, check.job_id, new URL(view.url).host).catch(() => null);
     const added = blockIntoComposer(paneKey, checkDraft(view, check, log));
     mark(key, !added ? "too_long" : check.job_id !== null && log === null ? "added_without_log" : "added");
@@ -193,7 +188,6 @@ export function PullRequestPanel({ paneId, directory, machineName }: PullRequest
   );
 }
 
-/** A path that wraps only after a `/` on a narrow screen, so a file name is never split. */
 function breakAfterSlashes(path: string): ReactNode[] {
   return path.split("/").flatMap((part, index, parts) => index === parts.length - 1 ? [part] : [`${part}/`, <wbr key={index} />]);
 }

@@ -9,6 +9,7 @@ export type HttpRequest = Payload<typeof FrameType.HTTP_OPEN>;
 export type HttpResponse = Payload<typeof FrameType.HTTP_HEADERS>;
 export type WsRequest = Payload<typeof FrameType.WS_OPEN>;
 export type SessionFrame = Extract<MuxFrame, { type: 1 | 2 | 3 | 4 | 10 | 11 | 12 | 13 | 14 }>;
+/** Setup frames only a phone sends; the others (WELCOME, PAIR_CHALLENGE, AUTH_OK) come from the PC. */
 const CLIENT_SETUP: readonly number[] = [FrameType.HELLO, FrameType.AUTH, FrameType.PAIR, FrameType.PAIR_REQUEST, FrameType.PAIR_REVEAL, FrameType.PAIR_CONFIRM];
 type Traffic = "interactive" | "bulk" | "control";
 type CancelTimer = () => void;
@@ -16,7 +17,11 @@ const U64_MAX = 0xffffffffffffffffn;
 export const MUX_SETUP_MS = 10_000;
 const KiB = 1024;
 const MiB = 1024 * KiB;
+// See docs/relay-mux-limits.md: >= 5 MB/s at 50 ms RTT, with 24 KiB kept for
+// interactive records and an independent control reserve.
 export const MUX_FLIGHT = { ordinary: 408 * KiB, bulk: 384 * KiB, control: 16 * KiB, total: 424 * KiB } as const;
+// Reserve before admitting streams; even counting reservations AND their payloads, the worst
+// accounted total is 2 * 12 MiB + 4 MiB + 1 MiB + 64 KiB + 424 KiB < 32 MiB.
 export const MUX_RECEIVE_RESERVATION_BYTES = 12 * MiB;
 const QUEUE = { outgoing: 4 * MiB, nonterminal: 3 * MiB, metadata: MiB, control: 64 * KiB } as const;
 
@@ -36,9 +41,11 @@ export interface MuxOptions {
   readonly limits?: LimitsV1;
   readonly onHttp?: (stream: HttpStream) => void;
   readonly onWs?: (stream: WsStream) => void;
+  /** Negotiation and device-key verification belong to the session adapter, not this engine. */
   readonly onSession?: (frame: SessionFrame) => void;
   readonly onClose?: (error: MuxProtocolError) => void;
   readonly requestTimeoutMs?: (request: HttpRequest) => number;
+  /** Server adapters may drop untrusted identity headers, after syntax and size validation. */
   readonly filterRequestHeaders?: boolean;
 }
 
@@ -405,6 +412,8 @@ export class WsStream extends MuxStream {
       if (this.assembling) { this.reset("stream_protocol_error"); return; }
       const length = frame.payload.total_message_bytes;
       if (length === undefined) { this.reset("stream_protocol_error"); return; }
+      // A message over the v1 limit (LARGE_WS_MESSAGES) cannot wait for the window to credit it: its whole
+      // size is reserved against the receive bound before it is allocated, and each fragment credited as it comes.
       const held = length > LIMITS_V1.max_ws_message_bytes ? length : 0;
       if (held && !this.engine.reserve(this, held)) { this.close(1009, "message too large", true); return; }
       this.assembling = { data: new Uint8Array(length), offset: 0, text: !!(frame.flags & WS_DATA_FLAGS.TEXT), held };
@@ -431,6 +440,7 @@ export class WsStream extends MuxStream {
         return;
       }
     }
+    // Zero-length messages still own queue entries. Bound those independently of DATA credit.
     if (!this.engine.retainMetadata(this, 8)) return;
     this.pendingInbound++;
     this.messages.push({ data, bytes: message.offset, held: message.held });
@@ -603,15 +613,22 @@ export class MuxEngine {
       ordinaryFlightBytes: this.ordinaryFlight, bulkFlightBytes: this.bulkFlight, controlFlightBytes: this.controlFlight,
       submitted: this.submitted, acknowledged: this.acknowledged, receivedFrames: this.receivedFrames,
       bufferedBytes: this.queued + this.metadata + this.controlQueued + inbound + this.ordinaryFlight + this.controlFlight,
+      // With fixed windows/concurrency this conservative count is below 32 MiB, including
+      // a reservation as well as each counted inbound payload.
       accountedBytes: this.reserved + this.queued + this.metadata + this.controlQueued + inbound + this.ordinaryFlight + this.controlFlight,
     };
   }
+  /** Called once, only after the session layer verified AUTH/PAIR and AUTH_OK. */
   authenticate(deviceId: string): void {
     check(this.active && this.deviceId === undefined && /^[0-9a-f]{16}$/.test(deviceId), "Invalid authentication transition");
     this.deviceId = deviceId;
     this.setupTimer();
     this.refreshIdle();
   }
+  /**
+   * Replaces the setup deadline: a pairing by comparing digits waits for a person on both ends
+   * (shared/relay-pair-sas.ts PAIR_APPROVAL_MS), not the 10 seconds a code or a signature takes.
+   */
   extendSetup(ms: number): void {
     check(this.active && this.deviceId === undefined, "Session setup already ended");
     this.setupTimer();
@@ -886,6 +903,7 @@ export class MuxEngine {
         await this.options.send(entry.bytes);
       }
     } catch (error) {
+      // A rejected send may already have encrypted/submitted bytes. Never retry it.
       this.carrierLost(error instanceof MuxProtocolError ? error : new MuxProtocolError("internal_error", "Carrier send failed"));
     } finally {
       this.sending = false;
@@ -950,6 +968,10 @@ export class MuxEngine {
       else this.fail("internal_error", "Receive handler failed");
     }
   }
+  /**
+   * The codec bounds START lengths before returning a frame. Validate the original envelope through the codec using an
+   * empty-message payload; no oversized declaration ever reaches reassembly allocation.
+   */
   private oversizedMessage(bytes: Uint8Array): boolean {
     if (bytes.length < 12 || bytes.length > MAX_FRAME_BYTES || bytes[1] !== FrameType.WS_DATA || !((bytes[3] ?? 0) & WS_DATA_FLAGS.START)) return false;
     if (new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(8) <= this.receiveMessageBytes) return false;
@@ -1206,6 +1228,7 @@ export class MuxEngine {
   }
   ping(): void {
     if (!this.active || this.hidden) return;
+    // the idle keepalive is this probe now: left armed, it would replace the probe before its PONG came back
     this.idleTimer?.();
     this.probeTimer?.();
     const random = crypto.getRandomValues(new Uint32Array(2));
@@ -1217,6 +1240,7 @@ export class MuxEngine {
   measure(): Promise<number | undefined> {
     if (!this.active || this.hidden) return Promise.resolve(undefined);
     const answer = new Promise<number | undefined>((resolve) => { this.rttWaiters.push(resolve); });
+    // a probe already out is shared, never replaced: replacing it would restart its PONG deadline
     if (this.probe === undefined) this.ping();
     return answer;
   }

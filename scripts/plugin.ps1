@@ -2,7 +2,6 @@
 # its plugin command. Herdr may have started before Bun was installed: read the current user PATH at invocation time.
 param(
     [string]$Command = 'status',
-    # the command's own flags (link --code, add --google), handed on as they are
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest
 )
 $ErrorActionPreference = 'Stop'

@@ -120,7 +120,6 @@ describe("telemetry receiver", () => {
       { ...settings, statusIndicators: "unknown" },
       { ...settings, terminalWheelSpeed: 11 },
       { ...settings, chatFontSize: "16px" },
-      // the Turkish UI language was removed before any release sent a snapshot
       { ...settings, language: "tr" },
       { ...settings, account: { accountId: "acct-private-42", email: "person@example.com" } },
       { ...settings, fontFamily: { value: "D2Coding" } },
@@ -136,7 +135,6 @@ describe("telemetry receiver", () => {
   test("takes herdr theme ids and the dark/light theme keys, and every older app's snapshot too", async () => {
     const { env, rows } = fakeDb();
     const themed: TelemetrySettings = { ...settings, palette: "tokyo-night", paletteDark: "tokyo-night", paletteLight: "tokyo-night-day", darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" };
-    // the exact key set apps before the theme keys send, with their ids and with a herdr id
     for (const valid of [settings, { ...settings, palette: "tokyo-night" }, themed] satisfies TelemetrySettings[]) {
       expect(telemetrySettings(valid)).toEqual(valid);
       expect(readEvent({ ...event, settings: valid }, now)?.settings).toEqual(valid);
@@ -150,9 +148,7 @@ describe("telemetry receiver", () => {
       { ...settings, palette: "not-a-theme" },
       { ...themed, darkTheme: "not-a-theme" },
       { ...themed, lightTheme: null },
-      // removed before any release could send them
       { ...settings, palette: "lilac" },
-      // herdr's terminal theme maps to the web default and is never sent
       { ...settings, paletteDark: "terminal" },
       oneSide,
       { ...themed, unknownSetting: true },
@@ -189,7 +185,6 @@ describe("telemetry receiver", () => {
       expect(migrated.query("SELECT settings, country, changed_settings FROM events").all()).toEqual([{ settings: null, country: null, changed_settings: "theme" }]);
       for (const db of [fresh, migrated]) {
         expect((await send(sqlite(db), { ...event, settings }, "KR")).status).toBe(204);
-        // A replay with different values and country is ignored for the same install/event/version.
         expect((await send(sqlite(db), { ...event, settings: { ...settings, theme: "light" } }, "US")).status).toBe(204);
         expect(db.query("SELECT country, version, settings FROM events WHERE version = '0.4.2'").all()).toEqual([
           { country: "KR", version: "0.4.2", settings: JSON.stringify(settings) },
@@ -203,11 +198,9 @@ describe("telemetry receiver", () => {
       db.exec(schema);
       const env = sqlite(db);
       const other = "7c1d2a90-4b3e-4f5a-8c6d-9e0f1a2b3c4d";
-      // one install heard from before the country was kept, then in two countries; another never named one
       db.exec(`INSERT INTO events (day, event, install_id, version, previous_version, os, arch, install_method) VALUES ('2026-10-08', 'install', '${event.install_id}', '0.4.0', NULL, 'linux', 'x64', 'plugin')`);
       await send(env, { ...event, version: "0.4.1", previous_version: "0.4.0" }, "KR");
       await send(env, event, "US");
-      // a replay from elsewhere is the same event: it is ignored, and the country stays
       await send(env, event, "JP");
       await send(env, { ...event, install_id: other });
       const query = /-- installs per country[^\n]*\n--[^\n]*\n(SELECT[\s\S]+?;)/.exec(readme)![1]!;
@@ -222,7 +215,6 @@ describe("telemetry receiver", () => {
       db.exec(schema);
       const env = sqlite(db);
       const ids = ["11111111-2222-4333-8444-555555555555", "22222222-3333-4444-8555-666666666666", "33333333-4444-4555-8666-777777777777"];
-      // The last non-null snapshot wins, even if a later event has no snapshot; the third install never reports one.
       await send(env, { ...event, install_id: ids[0], version: "0.4.1", previous_version: "0.4.0", settings: { ...settings, theme: "light", density: "compact", wrapCode: true } });
       await send(env, { ...event, install_id: ids[0], version: "0.4.3", previous_version: "0.4.2", settings: null });
       await send(env, { ...event, install_id: ids[1], settings: { ...settings, theme: "dark", density: "comfortable", wrapCode: false } });
@@ -340,13 +332,11 @@ describe("telemetry receiver: active", () => {
       JSON.stringify({ ...active, harnesses: ["cursor"] }),
       JSON.stringify({ ...active, harnesses: ["pi", "claude"] }),
       JSON.stringify({ ...active, event: "install" }),
-      // an install/update event is not an active message
       JSON.stringify(event),
     ]) expect((await handle(postActive(body), env, now)).status).toBe(400);
     expect((await handle(new Request("https://receiver.test/v1/active"), env, now)).status).toBe(405);
     expect((await handle(postActive(JSON.stringify(active), "text/plain"), env, now)).status).toBe(415);
     expect((await handle(postActive(JSON.stringify({ ...active, pad: "x".repeat(9000) })), env, now)).status).toBe(413);
-    // an active message is not an event either
     expect((await handle(post(JSON.stringify(active)), env, now)).status).toBe(400);
     expect(rows).toHaveLength(1);
   });
@@ -447,14 +437,12 @@ describe("telemetry receiver: active", () => {
     const rowsOf = () => db.query("SELECT day, install_id, version, country, harnesses FROM active ORDER BY day").all();
 
     expect((await send({ ...active, harnesses: ["claude"] }, now, "KR")).status).toBe(204);
-    // later the same day a new kind appears: the row is replaced, and a message without a country keeps it
     expect((await send({ ...active, version: "0.4.3", harnesses: ["claude", "codex"] }, now)).status).toBe(204);
     expect(rowsOf()).toEqual([{ day: "2026-10-08", install_id: event.install_id, version: "0.4.3", country: "KR", harnesses: '["claude","codex"]' }]);
 
     expect((await send({ ...active, day: "2026-10-09", harnesses: [] }, new Date("2026-10-09T10:00:00Z"), "KR")).status).toBe(204);
     expect(rowsOf()).toHaveLength(2);
 
-    // delivered five minutes after midnight, the message is still yesterday's visit
     const other = "7c1d2a90-4b3e-4f5a-8c6d-9e0f1a2b3c4d";
     expect((await send({ ...active, install_id: other, day: "2026-10-09", harnesses: ["pi"] }, new Date("2026-10-10T00:05:00Z"))).status).toBe(204);
     expect(db.query("SELECT day, harnesses FROM active WHERE install_id = ?").all(other)).toEqual([{ day: "2026-10-09", harnesses: '["pi"]' }]);
@@ -473,7 +461,6 @@ describe("telemetry receiver: counts", () => {
     const earliest = new Date(now.getTime() - COUNTS_LATE_DAYS * 86_400_000).toISOString().slice(0, 10);
     expect(readCounts({ ...counts, day: earliest }, now)?.day).toBe(earliest);
     expect(readCounts({ ...counts, wide: narrow, narrow: null }, now)?.wide).toEqual(narrow);
-    // a day the app was used without pressing anything counted is a row too: nothing used is not unknown
     expect(readCounts({ ...counts, narrow: { counts: {}, shown: [] } }, now)?.narrow).toEqual({ counts: {}, shown: [] });
     const { env, rows } = fakeDb();
     expect((await handle(from(postCounts(JSON.stringify(counts)), { country: "KR" }), env, now)).status).toBe(204);
@@ -489,7 +476,6 @@ describe("telemetry receiver: counts", () => {
     for (const bucket of [0, 5, 1.5, "1", null, -1]) {
       expect(readCounts({ ...counts, narrow: { ...narrow, counts: { ...narrow.counts, composer_voice: bucket } } }, now)?.narrow).toEqual(narrow);
     }
-    // the stored JSON is in name order, whatever order it came in
     const unordered = { counts: Object.fromEntries(Object.entries(narrow.counts).reverse()), shown: [...narrow.shown].reverse() };
     expect(JSON.stringify(readCounts({ ...counts, narrow: unordered }, now)?.narrow)).toBe(JSON.stringify(narrow));
   });
@@ -500,7 +486,6 @@ describe("telemetry receiver: counts", () => {
       { ...counts, event: "active" },
       { ...counts, day: "2026-09-23" },
       { ...counts, day: "2026-10-09" },
-      // the receiver's own today has not ended: the sender keeps it and sends it again
       { ...counts, day: "2026-10-08" },
       { ...counts, day: "2026-02-30" },
       { ...counts, install_id: "me@example.com" },
@@ -536,7 +521,6 @@ describe("telemetry receiver: counts", () => {
     const env = sqliteEnv(db);
     const yesterday = { ...counts, day: "2026-10-07" };
     expect((await handle(postCounts(JSON.stringify(yesterday)), env, now)).status).toBe(204);
-    // a replay after a lost answer, even with other numbers, is the same day: ignored
     expect((await handle(postCounts(JSON.stringify({ ...yesterday, narrow: { counts: { chat_send: 4 }, shown: [] } })), env, now)).status).toBe(204);
     const other = "7c1d2a90-4b3e-4f5a-8c6d-9e0f1a2b3c4d";
     expect((await handle(postCounts(JSON.stringify({ ...yesterday, install_id: other, narrow: { counts: {}, shown: ["composer"] }, wide: { counts: { chat_send: 1 }, shown: [] } })), env, now)).status).toBe(204);
@@ -545,7 +529,6 @@ describe("telemetry receiver: counts", () => {
       { day: "2026-10-07", install_id: other, narrow: JSON.stringify({ counts: {}, shown: ["composer"] }) },
     ]);
     const readme = readFileSync(join(import.meta.dir, "README.md"), "utf8");
-    // the query reads the last 7 finished days of the database's own clock; the rows are moved to yesterday's date
     db.exec("UPDATE counts SET day = date('now', '-1 day')");
     const query = /-- share of installs that used each counter[^\n]*\n--[^\n]*\n(SELECT[\s\S]+?;)/.exec(readme)![1]!;
     const shares = db.query(query).all().map((row) => Object.values(row as object));

@@ -1,5 +1,3 @@
-//! The command line. Help and version answer before anything connects.
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Help,
@@ -9,7 +7,6 @@ pub enum Action {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
-    /// The herdr-core session: `--session`, else `HC_SESSION`, else `default`.
     pub session: Option<String>,
 }
 

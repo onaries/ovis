@@ -13,7 +13,6 @@ function prompt(question: string): InteractivePrompt {
   return { question } as InteractivePrompt;
 }
 
-/** A read whose answers the test hands out one by one, in the order the reads started. */
 function harness(words: (asked: InteractivePrompt, language: string) => string = (asked) => asked.question) {
   const calls: { paneId: string; resolve(answer: { prompt: InteractivePrompt | null }): void; reject(error: Error): void }[] = [];
   const waits: { ms: number; run(): void; cancelled: boolean }[] = [];
@@ -258,12 +257,10 @@ describe("QuestionReads", () => {
     reads.shownAgain();
     reads.sync(["a", "b", "c"].map((key) => target(key)));
     expect(calls).toHaveLength(3);
-    // a's retry waits for a slot: b and c hold both
     waits[0]!.run();
     calls[1]!.resolve({ prompt: prompt("B") });
     await settled();
     expect(calls.map((call) => call.paneId)).toEqual(["pane-a", "pane-b", "pane-c", "pane-a"]);
-    // only b's read is done: it alone is made again, once c's slot is free
     reads.shownAgain();
     reads.sync(["a", "b", "c"].map((key) => target(key)));
     calls[2]!.resolve({ prompt: prompt("C") });
@@ -279,7 +276,6 @@ describe("QuestionReads", () => {
     reads.shownAgain();
     reads.sync([target("a")]);
     expect(calls).toHaveLength(2);
-    // shown again while that read is on its way: it may carry the question as it was before
     reads.shownAgain();
     reads.shownAgain();
     reads.sync([target("a")]);

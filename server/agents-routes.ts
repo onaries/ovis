@@ -32,12 +32,6 @@ export const AGENT_LABELS: Record<string, string> = {
   "dsh-tui": "DeepSeek Harness",
 };
 
-/**
- * The answer for the agent catalog route, or null when the path is not it. `shellAgents`: the server's
- * own locator, which starts them too. `has`: whether a kind is on a PATH a pane's shell starts it from,
- * read again once after an install put it in its installer's folder (installed-lookup.ts), so Add
- * another agent… can pick what its tile just installed; without it, the locator and this server's PATH.
- */
 export async function handleAgentsRequest(request: Request, pathname: string, shellAgents: Pick<ShellAgentLocator, "executable">, has?: (kind: string) => Promise<boolean>): Promise<Response | null> {
   if (pathname === "/api/agents") {
     setRequestRoute(pathname);
@@ -58,8 +52,6 @@ export async function handleAgentsRequest(request: Request, pathname: string, sh
         kinds.add("omp");
         kinds.add("claude");
       }
-      // not herdr kinds: offered where this server can run them (see shell-agent.ts), with the locator
-      // the start asks too, so what is offered is what starts
       const shellStarted = new Set<string>();
       for (const kind of Object.keys(SHELL_AGENTS)) if (has !== undefined ? await has(kind) : (await shellAgents.executable(kind)) !== null) shellStarted.add(kind);
       for (const kind of shellStarted) kinds.add(kind);

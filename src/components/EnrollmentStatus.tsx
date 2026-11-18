@@ -2,7 +2,6 @@ import { useT } from "../lib/i18n.ts";
 import type { EnrollmentState } from "../lib/relay/device.ts";
 import type { EnrollmentCompletion } from "../lib/relay/shellState.ts";
 
-/** Account work never gates opening an already paired PC. */
 export function EnrollmentStatus({ state, retry }: { readonly state: EnrollmentState | "local" | EnrollmentCompletion | undefined; readonly retry?: () => void }) {
   const t = useT();
   if (typeof state === "object") return <p className="relay-shell-detail" role="status">{t("In your account")}{state.admitted !== undefined && <> · {t("Devices added: {count}", { count: state.admitted })}</>}</p>;

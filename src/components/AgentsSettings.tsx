@@ -1,10 +1,3 @@
-/**
- * Settings → Agents: the coding agents of the PC open here, one row each (its version, its sign-in
- * as the usage accounts show it, the accounts with their plan limits, how New workspace starts it
- * and herdr's session resume for it), the accounts no agent here signs in to, the agents it can
- * install, and how the plan limits are shown. It took the place of Subscription usage and Agent
- * integrations: every control of those two pages is here.
- */
 import { Fragment, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarClock, Check, ChevronDown, ChevronRight, ChevronUp, Compass, Cpu, Eye, EyeOff, Gauge, History, KeyRound, Network, Plus, RotateCw, Shield, ShieldCheck, SquareTerminal, Users, Zap } from "lucide-react";
 
@@ -12,7 +5,6 @@ import type { AgentCatalogRow } from "../../shared/agent-catalog.ts";
 import type { AgentIntegration, CLIProxyStatus, ProviderUsage, UsageProviderId } from "../../shared/protocol.ts";
 import type { UsageLoginRequest } from "../../shared/usage-login.ts";
 
-/** A sign-in the page follows in its own dialog, hosted at the page's root so no row or list it came from can take it away. */
 type FollowedSignIn = Extract<UsageLoginRequest, { provider: "claude" | "codex" }>;
 import { agentsPage, signInState, type AgentsPageRow } from "../lib/agentsPage.ts";
 import { CLAUDE_EFFORTS, CLAUDE_LAUNCH_MODES, CODEX_EFFORTS, CODEX_LAUNCH_MODES, launchChoiceFault, modelDraftAfterSync, modelSuggestions, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
@@ -42,11 +34,8 @@ type Translate = ReturnType<typeof useT>;
 export interface AgentsSettingsProps {
   /** a watching device reads the page, but installs, signs in and adds nothing */
   watching: boolean;
-  /** an account's sign-in tab opened, on the server's PC */
   onLocalLogin: (paneId: string) => void;
-  /** shows a pane of `machineId` in its terminal: the tab an install runs in */
   onOpenPane: (machineId: string, paneId: string) => void;
-  /** Settings closes as the setup guide opens */
   onOpenGuide: () => void;
 }
 
@@ -58,15 +47,9 @@ function codexModeName(mode: CodexLaunchMode, t: Translate): string {
   return mode === "readOnly" ? t("Read only") : mode === "auto" ? t("Auto") : mode === "fullAccess" ? t("Full access") : t("Agent default");
 }
 
-/**
- * The model and effort New workspace, New tab and New worktree fill in for a new Claude Code or Codex
- * (lib/agentLaunchMode.ts launchDefaults), each still changeable there. A model is kept once it is a name the
- * agent's `--model` takes; until then the field says why and the last one kept stays.
- */
 function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }: { agent: "claude" | "codex"; model: string; effort: string; efforts: readonly string[]; onModel: (model: string) => void; onEffort: (effort: string) => void }) {
   const t = useT();
   const [draft, setDraft] = useState(model);
-  // another device's change shows here, but never over text the reader is still fixing
   useEffect(() => { setDraft((current) => modelDraftAfterSync(agent, current, model)); }, [agent, model]);
   const invalid = launchChoiceFault(agent, { model: draft }) === "model";
   const suggestions = modelSuggestions(agent);
@@ -95,12 +78,6 @@ function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }:
   </>;
 }
 
-/**
- * The settings that belong to one agent, in its row on this page (and in its own group while Settings is
- * searched): the mode New workspace, New tab and New worktree start Claude Code or Codex in
- * (lib/agentLaunchMode.ts), and the chips its chat's message box can carry. Nothing here writes the agent's
- * own configuration. An agent with none of them shows none.
- */
 function AgentOwnRows({ agentId }: { agentId: string }) {
   const { settings, update } = useSettings();
   const t = useT();
@@ -127,7 +104,6 @@ function AgentOwnRows({ agentId }: { agentId: string }) {
   }
 }
 
-/** The agents that have settings of their own, and their names where the PC has no row for them. */
 const OWN_NAMES: Readonly<Record<string, string>> = { claude: "Claude Code", codex: "Codex" };
 const OWN_ROWS = new Set(Object.keys(OWN_NAMES));
 
@@ -135,11 +111,10 @@ const OWN_ROWS = new Set(Object.keys(OWN_NAMES));
  * herdr's integration for one agent (`integration.list`), read only: installing one writes into the
  * agent's hooks or settings, which this app leaves to the user, so it shows the command to run.
  */
-function IntegrationRow({ integration, label }: { integration: AgentIntegration; /** the row's label: the integration's own name, or Session resume inside an agent's row */ label: string }) {
+function IntegrationRow({ integration, label }: { integration: AgentIntegration; label: string }) {
   const t = useT();
   const commandRef = useRef<HTMLElement>(null);
   const [copied, setCopied] = useState(false);
-  // the latest Copy owns the label: an earlier press's timer must not clear it early
   const copiedTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
   const name = integration.label;
@@ -161,7 +136,6 @@ function IntegrationRow({ integration, label }: { integration: AgentIntegration;
   const state = integration.state === "outdated" ? t("Installed, but older than this herdr: run this to update it") : t("Not installed");
   return (
     <SettingsRow icon={History} label={label} description={t("herdr's own integration for resuming this agent's session. Installing it changes the agent's settings, so Ovis shows the command to run and does not install it itself.")} keywords={state} wide condition={<span className="settings-condition">{state}</span>}>
-      {/* the command stays in sight on a page without sentences: it is what Copy copies */}
       <span className="settings-integration-action">
         <code ref={commandRef} className="settings-integration-command">{command}</code>
         <button type="button" className="btn" aria-label={t("Copy the command for {name}", { name })} onClick={() => void copy()}>{t(copied ? "Copied" : "Copy")}</button>
@@ -170,8 +144,7 @@ function IntegrationRow({ integration, label }: { integration: AgentIntegration;
   );
 }
 
-/** One provider's accounts: whose, where from, its plan limit, its state; moved, hidden, or signed in again. */
-function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { readonly id: UsageProviderId; readonly providers: readonly ProviderUsage[]; /** every provider's accounts removed from Ovis */ readonly removed: readonly ProviderUsage[]; readonly onLocalLogin: ((paneId: string) => void) | undefined; readonly onFollow: (request: FollowedSignIn) => void }) {
+function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { readonly id: UsageProviderId; readonly providers: readonly ProviderUsage[]; readonly removed: readonly ProviderUsage[]; readonly onLocalLogin: ((paneId: string) => void) | undefined; readonly onFollow: (request: FollowedSignIn) => void }) {
   const { settings, update } = useSettings();
   const t = useT();
   const all = orderProviders(providers, settings.usageOrder);
@@ -188,8 +161,7 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
       const name = usageName(usage);
       const hidden = settings.usageHidden.includes(usage.key);
       // another tool's record is no sign-in Ovis holds: its row names that tool, and its status says how long ago it
-      // read, as an old record once the tool stopped. Where this PC holds a sign-in of the account too, the status
-      // stays the sign-in's and that age is among the facts of the line
+      // read, as an old record once the tool stopped.
       const recordOnly = !isSignIn(usage);
       const age = usage.recorded ? [...(usage.recorded.stale ? [t("Old record")] : []), lastSeen(usage.checked_at)] : [];
       const status = recordOnly ? age.join(" · ") : usage.problem === null ? t("Signed in") : {
@@ -206,7 +178,6 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
         <div className="usage-account-identity">
           <span className="usage-accounts-account" title={usage.account ?? undefined}>{usage.account ?? PROVIDER_NAME[id]}</span>
           <span className="usage-account-meta">
-            {/* each fact wraps whole while it fits a line of its own: a phone's row breaks between two, not inside "Session 69% left" */}
             <span>{facts.map((fact, nth) => <Fragment key={nth}>{nth > 0 && " "}<span className="usage-account-fact">{fact}{nth < facts.length - 1 && " ·"}</span></Fragment>)}</span>
             <span className={`usage-account-status${usage.problem ? " has-problem" : ""}${recordOnly ? " is-recorded" : ""}`} title={recordedNote(usage, Date.now())?.join("\n")}>{status}</span>
           </span>
@@ -228,7 +199,6 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
   </>;
 }
 
-/** The line under an agent's name: its sign-in as the accounts show it, or only that it is there. */
 function stateLine(entry: AgentsPageRow, read: boolean, t: Translate): { text: string; tone: "ok" | "warn" | "none" | "dim" } {
   const state = signInState(entry.provider, entry.accounts, read, entry.missing);
   switch (state.kind) {
@@ -245,22 +215,15 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
   entry: AgentsPageRow;
   open: boolean;
   onToggle: () => void;
-  /** every provider's accounts: a move within this row keeps the others' places in the saved order */
   allProviders: readonly ProviderUsage[];
-  /** the accounts removed from Ovis, for Restore */
   removed: readonly ProviderUsage[];
-  /** plan limits are on and a usage report arrived: the accounts were read */
   read: boolean;
-  /** plan limits are on: a report is coming */
   limitsOn: boolean;
-  /** the PC shown is the server's, where the accounts are read */
   local: boolean;
   watching: boolean;
-  /** herdr's integrations were read for this PC: a row without one has none */
   integrationsRead: boolean;
   onLocalLogin: (paneId: string) => void;
   onAddAccount: (provider: UsageProviderId) => void;
-  /** a sign-in followed in the browser: Claude Code's or Codex's first one, or signing an account in again */
   onFollow: (request: FollowedSignIn) => void;
 }) {
   const t = useT();
@@ -270,21 +233,16 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
   // an account another tool recorded is listed here, but the agent itself is still to be signed in
   const signedIn = accounts.filter(isSignIn);
   const detailsId = `agents-details-${agent.id}`;
-  // the one sign-in it lacks is a tap away while the row is shut; open, the list below has its own
-  // without the command it is read with, a sign-in would not show here either: the note says what to install instead
   const action = open || watching || !read || provider === null || (entry.missing !== null && signedIn.length === 0) ? null
     : again.length === 1 ? <UsageSignInAgain usage={again[0]!} onStarted={onLocalLogin} onFollow={onFollow} />
       : signedIn.length === 0 ? <button type="button" className="btn agents-row-action" aria-label={t("Sign in to {agent}", { agent: agent.name })} onClick={() => provider === "claude" || provider === "codex" ? onFollow({ provider, default: true }) : onAddAccount(provider)}><KeyRound aria-hidden="true" /><span className="agents-row-action-label">{t("Sign in")}</span></button>
         : null;
   const signIn = agent.sign_in;
   const { settings } = useSettings();
-  // T3 Code's provider row: what New tab starts it with, on the row itself
   const launch = agent.id === "claude" ? [settings.claudeLaunchModel, settings.claudeLaunchEffort] : agent.id === "codex" ? [settings.codexLaunchModel, settings.codexLaunchEffort] : null;
   const defaults = launch === null ? null : launch.some((value) => value !== "") ? launch.map((value) => value || t("Agent default")).join(" · ") : t("Agent default");
   return (
     <li className="agents-item" data-agent={agent.id} data-section={provider === null ? undefined : `accounts-${provider}`} tabIndex={provider === null ? undefined : -1}>
-      {/* the whole head is the one toggle, a real button a keyboard reaches and a focus ring goes round (G-036);
-          the one action a shut row may carry sits beside it */}
       <div className="agents-summary">
         <button type="button" className="agents-toggle" aria-expanded={open} aria-controls={open ? detailsId : undefined} onClick={onToggle}>
           <AgentMark agent={agent.id} size={22} />
@@ -305,7 +263,6 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
             <span>{t("Accounts")} <span className="usage-account-count">{accounts.length}</span></span>
             {!watching && <button type="button" className="btn btn-ghost" onClick={() => onAddAccount(provider)}><Plus aria-hidden="true" />{t("Add account")}</button>}
           </div>
-          {/* with the sign-in unreadable, "No accounts signed in" would be the guess the note replaces */}
           {(entry.missing === null || accounts.length > 0) && <ProviderAccounts id={provider} providers={allProviders} removed={removed} onLocalLogin={watching ? undefined : onLocalLogin} onFollow={onFollow} />}
         </> : <p className="agents-detail-note" role="status">{limitsOn ? t("Loading…") : t("Turn on plan limits to see accounts.")}</p>)}
         {provider === null && signIn !== null && (local && signIn.provider === null
@@ -320,12 +277,11 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
   );
 }
 
-/** Plan limits: whether they are shown, and how. The status-line switch is Claude's, for networks that refuse its usage API. */
+/** The status-line switch is Claude's, for networks that refuse its usage API. */
 function PlanLimits({ watching }: { watching: boolean }) {
   const { settings, update } = useSettings();
   const t = useT();
   const statusline = useStatuslineSwitch(settings.showUsage);
-  // one row: off, or on and counted one way; the row says what it shows, the sign-in sentence is the account's own (G-095, G-098)
   return (
     <SettingsGroup section="plan-limits" className="agents-limits">
       <SettingsRow icon={Gauge} label={t("Plan limits")} description={t("Meters of your plans' limits, on every device: Used shows the share already spent, Remaining what is left, and Off hides them.")}
@@ -347,7 +303,6 @@ function PlanLimits({ watching }: { watching: boolean }) {
   );
 }
 
-/** A section's actions, at its top right: the page has no group captions (SettingsBare). */
 function SectionHead({ children }: { children?: ReactNode }) {
   return <div className="agents-head">{children}</div>;
 }
@@ -355,38 +310,30 @@ function SectionHead({ children }: { children?: ReactNode }) {
 export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide }: AgentsSettingsProps) {
   const t = useT();
   const { settings } = useSettings();
-  // a search finds an agent's own settings in a group of its own, as its row is shut
   const searching = useContext(SettingsQuery).length > 0;
   const api = useMachineApi();
   const machineId = useMachineId();
-  // the accounts are read on the PC Ovis's server runs on: they are this PC's only when it is shown
   const local = machineId === "local";
 
-  // the PC's catalog: each Check again, and each install that finished, reads it again
   const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[]; pathProblem: string | null } | null>(null);
   const [catalogError, setCatalogError] = useState<UserError | null>(null);
   const [reads, setReads] = useState(0);
-  // a read under way: Check again says so and takes no second press until it lands (G-113)
   const [checking, setChecking] = useState(false);
-  // why a tile's install did not finish, by agent; a tile that runs again or is done clears its own
   const [failures, setFailures] = useState<Readonly<Record<string, string>>>({});
   const checkAgain = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const abort = new AbortController();
     setCatalogError(null);
     setChecking(true);
-    // every read after the first (Check again, a finished install) has the PC read its shells' PATH again
     fetchAgentCatalog(machineId, abort.signal, reads > 0).then(
       (answer) => setCatalog({ machineId, agents: answer.agents, pathProblem: answer.path_problem ?? null }),
       (reason: unknown) => {
         if (abort.signal.aborted) return;
-        // a PC on an Ovis from before the catalog answers 404 for it
         setCatalogError(reason instanceof ApiError && reason.status === 404 ? { message: t("This PC's Ovis cannot install agents yet. Update it, then try again."), detail: null } : userErrorMessage(reason));
       },
     ).finally(() => { if (!abort.signal.aborted) setChecking(false); });
     return () => abort.abort();
   }, [machineId, reads, t]);
-  // an install that finished moves its agent up to On this PC: the focus its own tile had goes to Check again
   const finished = (agent: string): void => {
     const at = document.activeElement;
     const lost = at === null || at === document.body || at.closest("li")?.querySelector(`[data-agent="${CSS.escape(agent)}"]`) != null;
@@ -430,7 +377,6 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const ownGroups = searching ? [...OWN_ROWS]
     : page === null ? (catalogError === null ? [] : [...OWN_ROWS])
       : [...OWN_ROWS].filter((id) => !page.rows.some((entry) => entry.agent.id === id));
-  // a provider whose every account was removed keeps its group, for Restore
   const otherProviders = [...new Set([...(page?.otherProviders ?? providers.map((entry) => entry.id)),
     ...removed.map((entry) => entry.id).filter((id) => !page?.rows.some((row) => row.provider === id))])];
   const failed = Object.values(failures);
@@ -453,7 +399,6 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
           {/* aria-disabled, not disabled: a press keeps the focus it had instead of dropping it to the page */}
           <button type="button" ref={checkAgain} className="btn btn-ghost agents-check-again" aria-disabled={checking || undefined} aria-busy={checking || undefined} onClick={() => { if (!checking) setReads((count) => count + 1); }}><RotateCw aria-hidden="true" />{t(checking ? "Checking…" : "Check again")}</button>
         </SectionHead>
-        {/* a failed read, the first or a Check again: the rows the last good one gave stay, with the error beside them */}
         {catalog !== null && catalog.machineId === machineId && catalog.pathProblem !== null && <p className="settings-hint agents-note" role="status">{t("An agent your shell's startup file (.zshrc) puts on PATH may be missing here: Ovis could not read that PATH. Check again reads it once more.")}<br /><code>{catalog.pathProblem}</code></p>}
         {catalogError !== null && <p className="settings-hint agents-note" role="alert">{catalogError.message}{catalogError.detail !== null && <><br /><code>{catalogError.detail}</code></>}</p>}
         {agents === null ? catalogError === null && <div className="settings-card"><p className="settings-item settings-hint" role="status">{t("Loading…")}</p></div>
@@ -467,16 +412,12 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
         {integrationNote}
       </section>
 
-      {/* the settings live on this device and start the agent on any PC: one the PC shown has no row for (not
-          installed, or its catalog unread) keeps its own group, and a search finds every one in a group */}
-      {/* outside an agent's row, its rows need its name over them: Model and Effort are alike for every agent */}
       <SettingsBare.Provider value="rows">
         {ownGroups.map((id) => <SettingsGroup key={id} title={OWN_NAMES[id]!} section={`agent-${id}`}>
           <AgentOwnRows agentId={id} />
         </SettingsGroup>)}
       </SettingsBare.Provider>
 
-      {/* herdr's integrations for agents without a row above, read only: found ones first, then the ones this PC lacks (each a link's section) */}
       {otherIntegrations.length > 0 && <details className="settings-section agents-more" data-section="integrations" tabIndex={-1} open={searching || undefined}>
         <summary className="agents-more-toggle"><ChevronRight className="agents-more-chevron" aria-hidden="true" />{t("Other agents herdr knows ({count})", { count: otherIntegrations.length })}</summary>
         {[otherIntegrations.filter((integration) => integration.available), otherIntegrations.filter((integration) => !integration.available)].map((rows, index) => rows.length > 0 &&

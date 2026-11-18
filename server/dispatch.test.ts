@@ -71,14 +71,12 @@ it.each(["paired owner", "tailscale owner", "open LAN visitor", "watching device
       expect([401, 403]).toContain(response?.status ?? 0);
       expect(discover).not.toHaveBeenCalled();
     }
-    // the bridge token's path is unchanged
     expect((await get("/api/bridge?discover=herdr", { authorization: "Bearer bridge-token" }))?.status).toBe(200);
   } finally { app.stop(); identity.mockRestore(); discover.mockRestore(); tailnet.mockRestore(); proof.mockRestore(); role.mockRestore(); rmSync(stateDir, { recursive: true, force: true }); }
 });
 
 for (const [path, status, expectedTimeouts] of [["/api/health", 200, [60]], ["/api/nope", 404, [60]]] as const) {
   it(`dispatches GET ${path} with a fake socket context`, async () => {
-    // Given: isolated server services and a transport that never uses a Bun request socket.
     const stateDir = mkdtempSync(join(tmpdir(), "ovis-dispatch-"));
     const ping = spyOn(herdr, "ping").mockResolvedValue({ version: "fixture", protocol: 22, terminal_attach: false, terminal_mirror: true });
     let app: ReturnType<typeof createServer> | undefined;
@@ -92,9 +90,7 @@ for (const [path, status, expectedTimeouts] of [["/api/health", 200, [60]], ["/a
         timeout: (request, seconds) => { timeouts.push({ request, seconds }); },
         upgrade: () => { throw new Error("Unexpected WebSocket upgrade"); },
       };
-      // When
       const response = await handleRequest(request, ctx);
-      // Then
       expect(response?.status).toBe(status);
       expect(timeouts).toEqual(expectedTimeouts.map((seconds) => ({ request, seconds })));
       expect(response?.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
@@ -189,7 +185,6 @@ it("scopes a remote PC's receipt identity to the Portal user, not only to a brow
       "x-portal-proof": "valid-portal-proof", "x-portal-user": user, "x-portal-auth": "credential",
     } }), ctx);
     expect(response).toBeUndefined();
-    // one attach at a time: each comes over its own upstream socket, so arrival order is not send order
     const arrived = new Promise<void>((resolve) => { heard = resolve; });
     relays.at(-1)!.message(JSON.stringify({ type: "attach", pane_id: "p", cols: 80, rows: 24, receipt_resume_id: browser }));
     await arrived;
@@ -287,7 +282,6 @@ it("marks a socket that only the open LAN let in, one relayed to another PC too,
     const bridgedRelay = await upgrade(lan, "/ws?machine_id=remote", { authorization: "Bearer bridge-token" });
     expect([bridgedRelay.open, bridgedRelay.relay !== undefined]).toEqual([true, true]);
     bridgedRelay.relay!.close();
-    // this PC itself
     expect((await upgrade(from("127.0.0.1"), "/ws")).open).toBeUndefined();
   } finally {
     app.stop(); endpoint.mockRestore(); upstream.stop(true);

@@ -7,11 +7,9 @@ it("picks from a stretch that holds none of the ports the system hands out", () 
   // Linux's default, and macOS's and Windows's
   expect(quietRange(32768, 60999)).toEqual([20_000, 32_767]);
   expect(quietRange(49152, 65535)).toEqual([20_000, 49_151]);
-  // a host set to hand out the ports a fixed pick would have taken
   expect(quietRange(15_000, 65_000)).toEqual([1024, 14_999]);
   expect(quietRange(20_500, 40_000)).toEqual([40_001, 65_535]);
   expect(quietRange(1024, 30_000)).toEqual([30_001, 65_535]);
-  // nearly every port handed out: no stretch of a thousand is left
   expect(quietRange(1024, 65_535)).toBeNull();
   expect(quietRange(1500, 65_000)).toBeNull();
   for (const [first, last] of [[32768, 60999], [15_000, 65_000], [20_500, 40_000], [1024, 30_000]] as const) {

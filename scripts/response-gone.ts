@@ -7,11 +7,6 @@ import type { Response } from "playwright-core";
  */
 const GONE = /Protocol error \(Network\.getResponseBody\): (No resource with given identifier found|No data found for resource with given identifier)|Target page, context or browser has been closed/;
 
-/**
- * `read` of `response` (its JSON, body or headers), or undefined, said in the log, when the browser no longer has it:
- * a handler or a wait that comes to an answer late passes over that one instead of ending the run. Any other failure
- * (a body that is not JSON) is thrown, so a wrong answer still fails.
- */
 export async function unlessGone<T>(response: Response, read: (response: Response) => Promise<T>): Promise<T | undefined> {
   try {
     return await read(response);

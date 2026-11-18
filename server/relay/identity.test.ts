@@ -31,7 +31,6 @@ describe("relay identity", () => {
     let competing: ReturnType<typeof loadRelayIdentity> | undefined;
     let entered = false;
     const spy = spyOn(privateStateFs, "openSync").mockImplementation((...args) => {
-      // Both callers have seen ENOENT before either can publish its prepared file.
       if (!entered) {
         entered = true;
         competing = loadRelayIdentity(dir);

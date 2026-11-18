@@ -4,48 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GITHUB_HOSTED_LABELS, parseWorkflow, root, topLevelTerms, unreadWorkflowFiles, workflowFileProblems, type Job, type Step } from "./shell-workflow-rules.ts";
 
-// Anyone who holds a runner registration token can register a self-hosted runner under any label; it then takes the
-// jobs that ask for that label, with the run's runtime token, which lets a job write any artifact of its run and any
-// Actions cache its ref's later runs restore. This test holds the workflow files to ONE rule set:
-// 1. Every workflow and action file GitHub loads ends in `.yml` (so these tests read it), and every job-level `uses:` is a
-//    workflow in ./.github/workflows that the test reads: another repository's workflow, or a missing one, fails.
-// 2. A PRIVILEGED job (a write permission, id-token included; an environment; or a secret: any reference to the secrets
-//    context but the automatic GITHUB_TOKEN, in the job or its workflow's env) names one of GITHUB_HOSTED_LABELS literally,
-//    or a matrix of them; uses only REVIEWED_ACTIONS, each at its exact reference; and restores no Actions cache: every
-//    cache-capable step is off in a reviewed form.
-// 3. A WHOLE-RUN run is hosted and cacheless as a whole: every job of its workflow and of every workflow called in it
-//    names a listed label literally (or a matrix of them), or uses exactly `${{ inputs.hosted_only && '<listed label>' ||
-//    ... }}` in a workflow whose call passes `hosted_only: true` literally; uses only REVIEWED_ACTIONS; and has every
-//    cache-capable step off in a reviewed form (setup-ci `cache: none`, or its hosted_only form under such a call;
-//    actions/cache only with `!inputs.hosted_only` as a top-level `&&` term of a condition that is one expression, under
-//    such a call; setup-bun `no-cache: true`; setup-node `package-manager-cache: false`). The whole-run runs are:
-//    - every run with a privileged job that takes an artifact (an action REVIEWED_ACTIONS marks as fetching one:
-//      download-artifact, deploy-pages; recognised by owner/repo in any spelling), since every job of a run can write
-//      the run's artifacts; and
-//    - every Pages run, found by any of four signs: a job that can write Pages, a job in the github-pages environment, a
-//      job holding id-token write with a secret, or the Pages actions (by owner/repo).
-//    Every other privileged job is held to rule 2 only: it is hosted and cacheless, but its siblings are not.
-// It fails closed on any other form, whatever that form would evaluate to. Every job-level and step-level `if` of a
-// covered job, and repository-wide every `if` of every workflow and of setup-ci, is refused when it still holds `${{` or
-// `}}` after one whole-value wrapper is stripped: GitHub reads such a condition as a string, always true. The inputs of
-// reviewed actions are read without regard to case, as the runner reads them, and inputs that differ only in case are
-// refused; a download with a token, from another repository, by run id or by artifact ids is refused. GitHub reads keys and contexts without regard to case where this test reads
-// them exactly, so: a matrix axis is resolved case-insensitively over the matrix and its include entries; a key the tests
-// read written in another case, sibling keys that differ only in case, and a key with a character outside ASCII fail;
-// such a character inside an expression counts as a secret reference; a permission value other than read, none or
-// read-all counts as write; an action is recognised by its path split on / and \\ with empty and . pieces dropped, in any
-// case, but a runner label and an action reference pass only as the exact listed string.
-// THE LIMIT: a Pages run is missed when no job of its workflow, or of a workflow it calls, shows any of the four signs
-// (a job without them in a workflow where another job shows one is covered), and a run is whole-run only when one of its
-// privileged jobs takes an artifact through a reviewed action. Rule 2 sees a secret only by its reference: a credential
-// that reaches a job another way (through an artifact, from vars.*, fetched at run time) is not seen as one, and such a
-// job is held only by the other signs it shows. The test reads runner labels, actions and their inputs only: it does not
-// inspect shell commands or scripts for cache access or artifact fetches.
-// That GitHub gives a job asking only for `ubuntu-24.04` or `ubuntu-latest` to its own runners, even when a self-registered
-// runner carries that label, was observed by a trial on 2026-11-17 (14 of 14 jobs); it is not documented by GitHub. The
-// other labels on GITHUB_HOSTED_LABELS are assumed to behave the same (scripts/self-hosted-runner/README.md, "Security model").
-
-/** A reference to the secrets context, in any form, but the automatic GITHUB_TOKEN, which the permissions count instead. */
 const SECRET = /(?<![\w.-])secrets\b(?!\s*\.\s*GITHUB_TOKEN\b)(?:\s*\.\s*(?:\w+|\*)|\s*\[[^\]]*\])?/giu;
 /**
  * The actions a privileged job, or any job of a whole-run run, may use, each at the exact reference reviewed, and whether
@@ -62,7 +20,6 @@ const REVIEWED_ACTIONS: Record<string, { fetchesArtifact: boolean }> = {
   "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8": { fetchesArtifact: false },
   "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6": { fetchesArtifact: false },
   "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1": { fetchesArtifact: false },
-  "contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08": { fetchesArtifact: false },
 };
 const reviewed = (uses: string): boolean => Object.hasOwn(REVIEWED_ACTIONS, uses);
 /** The actions setup-ci's own steps may use, each at the exact reference reviewed. */
@@ -75,6 +32,8 @@ const SETUP_CI_ACTIONS = [
 // the whole value is one expression with the reviewed prefix: no second `${{ }}` and no text around it
 const LABEL_FORM = /^\$\{\{ inputs\.hosted_only && '([^']+)' \|\| (?:(?!\$\{\{|\}\}).)+ \}\}$/s;
 const NO_CACHE_FORM = /^\$\{\{ inputs\.hosted_only && 'none' \|\| (?:(?!\$\{\{|\}\}).)+ \}\}$/s;
+const MAC_PULL_REQUEST = "${{ fromJSON(matrix.os == 'macos-15' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_MAC_LABELS || toJSON(matrix.os)) }}";
+const NOT_FOR_PULL_REQUESTS = [/^github\.event_name != 'pull_request'$/, /^startsWith\(github\.ref, 'refs\/tags\/[^']*'\)$/];
 
 type Permissions = Record<string, string> | "read-all" | "write-all";
 type Matrix = Record<string, unknown> & { include?: Record<string, unknown>[] };
@@ -96,7 +55,6 @@ const action = (uses: string): string => {
   const pieces = path.split(/[\\/]/).filter((piece) => piece !== "" && piece !== ".").map((piece) => piece.toLowerCase());
   return `${path.startsWith("./") ? "./" : ""}${pieces.join("/")}`;
 };
-/** The repository an action comes from (owner/repo), whatever path inside it follows: how the Pages actions are recognised. */
 const actionRepo = (uses: string): string => action(uses).split("/").slice(0, 2).join("/");
 const PAGES_ACTIONS = ["actions/deploy-pages", "actions/upload-pages-artifact"];
 /** The actions that fetch an artifact, by the identity GitHub resolves, so another spelling of one is still found (and then refused as unreviewed). */
@@ -136,7 +94,7 @@ function writeScopes(workflows: Workflows, file: string, job: AnyJob): string[] 
  * its first `${{` to its last `}}` (a `run:` script's included), and a whole brace-free `if:` value, which is an
  * expression. The span is greedy so that a `}}` inside a quoted string (`${{ format('}}', secrets.X) }}`) cannot end it
  * early; prose between two expressions of one value then counts too, which errs on the safe side. A string without `${{`
- * (a step's name) is prose, not a reference. Each reference once, in the order the job makes them.
+ * (a step's name) is prose, not a reference.
  */
 function secretReferences(value: unknown, key = ""): string[] {
   if (typeof value === "string") {
@@ -153,7 +111,6 @@ function secretReferences(value: unknown, key = ""): string[] {
   return [];
 }
 
-/** What makes `job` privileged: write scopes, an environment, each secret it references (its own, or its workflow env's). */
 function privileges(workflows: Workflows, file: string, job: AnyJob): string[] {
   const reasons = writeScopes(workflows, file, job);
   if (job.environment !== undefined) reasons.push("environment");
@@ -174,7 +131,6 @@ function matrixValues(matrix: unknown, axis: string): unknown[] | null {
   if (!mapping(matrix) || twins(matrix) || outsideAscii(matrix)) return null;
   if (Object.keys(matrix).some((key) => ["include", "exclude"].includes(key.toLowerCase()) && key !== key.toLowerCase())) return null;
   const include = matrix.include ?? [];
-  // twins inside an include entry need no check of their own: every case variant's value is collected below
   if (!Array.isArray(include) || !include.every((entry) => mapping(entry) && !outsideAscii(entry))) return null;
   const bases = Object.entries(matrix).filter(([key]) => key !== "include" && key !== "exclude" && same(key)).map(([, values]) => values);
   if (!bases.every((values) => Array.isArray(values))) return null;
@@ -183,17 +139,19 @@ function matrixValues(matrix: unknown, axis: string): unknown[] | null {
   return [...(bases as unknown[][]).flat(), ...include.flatMap((entry) => Object.entries(entry).filter(([key]) => same(key)).map(([, value]) => value))];
 }
 
-/** Whether `job` names a hosted label literally, or a matrix axis whose every value is one. */
+function hostedAxis(job: AnyJob, axis: string): boolean {
+  const values = matrixValues(job.strategy?.matrix, axis);
+  return values !== null && values.length > 0 && values.every((value) => typeof value === "string" && GITHUB_HOSTED_LABELS.includes(value));
+}
+
 function hostedLiteral(job: AnyJob): boolean {
   const runsOn = job["runs-on"];
   if (typeof runsOn !== "string") return false;
   if (GITHUB_HOSTED_LABELS.includes(runsOn)) return true;
   const axis = /^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$/.exec(runsOn)?.[1];
-  const values = axis === undefined ? null : matrixValues(job.strategy?.matrix, axis);
-  return values !== null && values.length > 0 && values.every((value) => typeof value === "string" && GITHUB_HOSTED_LABELS.includes(value));
+  return axis !== undefined && hostedAxis(job, axis);
 }
 
-/** Each privileged job of `workflows` that can reach a runner GitHub does not host, and each call this test cannot read. */
 function privilegeProblems(workflows: Workflows): string[] {
   return Object.entries(workflows).flatMap(([file, workflow]) =>
     Object.entries(workflow.jobs).flatMap(([id, job]) => {
@@ -208,21 +166,17 @@ function privilegeProblems(workflows: Workflows): string[] {
   );
 }
 
-/** The labels a job names: a literal label, every value of the matrix axis it names, or the hosted_only prefix's label. */
 function labelsOf(job: AnyJob): string[] {
   const runsOn = job["runs-on"];
   if (typeof runsOn !== "string") return [];
   if (!runsOn.includes("${{")) return [runsOn];
   const prefixed = LABEL_FORM.exec(runsOn);
   if (prefixed !== null) return [prefixed[1]!];
-  const axis = /^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$/.exec(runsOn)?.[1];
+  const axis = runsOn === MAC_PULL_REQUEST ? "os" : /^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$/.exec(runsOn)?.[1];
   return ((axis === undefined ? null : matrixValues(job.strategy?.matrix, axis)) ?? []).filter((value): value is string => typeof value === "string");
 }
 
-/**
- * The mapping keys the workflow tests in scripts/ read, exactly as written, to decide anything (permission scopes
- * included). GitHub reads many keys and contexts without regard to case; these tests do not.
- */
+/** GitHub reads many keys and contexts without regard to case; these tests do not. */
 const READ_KEYS = [
   "on", "jobs", "permissions", "actions", "attestations", "checks", "contents", "deployments", "discussions", "id-token", "issues", "models", "packages",
   "pages", "pull-requests", "repository-projects", "security-events", "statuses", "runs-on", "environment", "secrets", "uses", "with", "env", "if",
@@ -230,13 +184,12 @@ const READ_KEYS = [
   "hosted_only", "inputs", "outputs", "runs", "default", "type", "workflow_call", "id",
 ];
 
-/** The inputs of an action or a call that these tests read; any other input name is the action's own. */
 const READ_INPUTS = ["cache", "no-cache", "package-manager-cache", "hosted_only", "artifact-ids", "run-id", "github-token", "repository"];
 
 /**
- * Which keys of the mapping at `path` must be written as these tests read them. A map of the user's own names (a job
- * id, an environment variable, an output, an input or secret definition, a service, a matrix axis) is decided by its
- * full place in the file, never by its parent's name alone: a job whose id is `env` is still a job.
+ * A map of the user's own names (a job id, an environment variable, an output, an input or secret definition, a
+ * service, a matrix axis) is decided by its full place in the file, never by its parent's name alone: a job whose id
+ * is `env` is still a job.
  */
 function readKeysAt(path: string[]): string[] {
   const shape = path.map((part) => (/^\d+$/.test(part) ? "#" : part));
@@ -281,7 +234,6 @@ function keyProblems(file: string, value: unknown, path: string[] = []): string[
   return [...problems, ...Object.entries(value).flatMap(([key, entry]) => keyProblems(file, entry, [...path, key]))];
 }
 
-/** The workflows whose own runs contain `file`'s jobs: itself when an event other than a call starts it, and its callers' roots. */
 function runRoots(workflows: Workflows, file: string): string[] {
   const roots = Object.keys(events(workflows[file]!.on)).some((event) => event !== "workflow_call") ? [file] : [];
   for (const [callerFile, caller] of Object.entries(workflows)) {
@@ -290,7 +242,6 @@ function runRoots(workflows: Workflows, file: string): string[] {
   return [...new Set(roots)];
 }
 
-/** Every job of the run that `root` starts, through its local calls, with whether its call passed `hosted_only: true` literally. */
 function runJobs(workflows: Workflows, root: string): { file: string; id: string; job: AnyJob; hostedOnly: boolean }[] {
   const jobs: { file: string; id: string; job: AnyJob; hostedOnly: boolean }[] = [];
   const visit = (file: string, hostedOnly: boolean): void => {
@@ -326,10 +277,6 @@ function conditionProblems(job: AnyJob): string[] {
   ];
 }
 
-/**
- * How `step` could restore an Actions cache: anything but a reviewed off form (under a call that passes hosted_only: true,
- * its forms too). It does not refuse a mixed condition itself: both callers run conditionProblems on every job and step.
- */
 function cacheStepProblems(step: AnyStep, hostedOnly: boolean): string[] {
   const name = action(step.uses!);
   const inputs = stepInputs(step);
@@ -339,7 +286,7 @@ function cacheStepProblems(step: AnyStep, hostedOnly: boolean): string[] {
     return cache === "none" || (hostedOnly && typeof cache === "string" && NO_CACHE_FORM.test(cache)) ? [] : [`setup-ci cache ${JSON.stringify(cache ?? "save (default)")} is neither none nor the hosted_only form under a call that passes hosted_only: true`];
   }
   if (name === "actions/cache" || name === "actions/cache/restore") {
-    if (mixedCondition(step.if ?? "")) return []; // conditionProblems names it
+    if (mixedCondition(step.if ?? "")) return [];
     return hostedOnly && topLevelTerms(step.if ?? "").includes("!inputs.hosted_only") ? [] : [`${name} if ${JSON.stringify(step.if ?? null)} has no top-level && !inputs.hosted_only term under a call that passes hosted_only: true`];
   }
   if (name === "oven-sh/setup-bun") return inputs["no-cache"] === true ? [] : ["oven-sh/setup-bun without no-cache: true"];
@@ -348,10 +295,8 @@ function cacheStepProblems(step: AnyStep, hostedOnly: boolean): string[] {
 }
 
 /**
- * Why a privileged job's steps break rule 2: a mixed condition, an action that is not reviewed at its exact reference, or
- * one that can restore a cache. A job that calls another workflow has no steps and is not passed to conditionProblems
- * here or in runJobs: its own `if` is held by the repository-wide test "no if in any workflow or in setup-ci mixes an
- * expression with text".
+ * A job that calls another workflow has no steps and is not passed to conditionProblems here or in runJobs: its own
+ * `if` is held by the repository-wide test "no if in any workflow or in setup-ci mixes an expression with text".
  */
 function privilegedJobProblems(workflows: Workflows): string[] {
   return Object.entries(workflows).flatMap(([file, workflow]) =>
@@ -367,14 +312,23 @@ function privilegedJobProblems(workflows: Workflows): string[] {
   );
 }
 
-/** Why the run that `root` starts is not GitHub-hosted and cacheless in a reviewed form. */
+function pullRequestProblems(workflows: Workflows, root: string): string[] {
+  if (!Object.keys(events(workflows[root]!.on)).some((event) => event.toLowerCase() === "pull_request")) return [];
+  return runJobs(workflows, root)
+    .filter(({ file, job }) => privileges(workflows, file, job).length > 0)
+    .filter(({ job }) => job.if === undefined || mixedCondition(job.if) || !topLevelTerms(job.if).some((term) => NOT_FOR_PULL_REQUESTS.some((form) => form.test(term))))
+    .map(({ file, id }) => `${file} ${id}`);
+}
+
 function runProblems(workflows: Workflows, root: string): string[] {
   const problems = new Set<string>();
   for (const { file, id, job, hostedOnly } of runJobs(workflows, root)) {
     const where = `${root}: ${file} ${id}`;
     const runsOn = job["runs-on"];
     const prefixed = typeof runsOn === "string" ? LABEL_FORM.exec(runsOn) : null;
-    if (!hostedLiteral(job) && !(hostedOnly && prefixed !== null && GITHUB_HOSTED_LABELS.includes(prefixed[1]!))) {
+    if (runsOn === MAC_PULL_REQUEST && hostedAxis(job, "os")) {
+      for (const privileged of pullRequestProblems(workflows, root)) problems.add(`${where}: runs-on the pull-request Mac form in a run where a pull request can run the privileged job ${privileged}`);
+    } else if (!hostedLiteral(job) && !(hostedOnly && prefixed !== null && GITHUB_HOSTED_LABELS.includes(prefixed[1]!))) {
       problems.add(`${where}: runs-on ${JSON.stringify(runsOn)} is neither a listed hosted label nor the hosted_only form under a call that passes hosted_only: true`);
     }
     for (const problem of conditionProblems(job)) problems.add(`${where}: ${problem}`);
@@ -405,7 +359,6 @@ function setupCiCacheProblems(steps: AnyStep[]): string[] {
     );
 }
 
-/** Whether a job may write Pages: a `pages` write scope, `write-all`, or anything the test counts as write for every scope. */
 const writesPages = (scopes: string[]): boolean =>
   scopes.some((scope) => scope.toLowerCase().startsWith("pages:") || scope === "write-all" || scope.startsWith("default permissions") || scope.startsWith("permissions "));
 
@@ -431,14 +384,12 @@ function pagesRoots(workflows: Workflows): string[] {
   return [...new Set(Object.entries(workflows).flatMap(([file, workflow]) => (Object.values(workflow.jobs).some((job) => deploys(file, job)) ? runRoots(workflows, file) : [])))].sort();
 }
 
-/** The workflows whose runs contain a privileged job that takes an artifact (an action that fetches one, in any spelling GitHub resolves). */
 function consumerRoots(workflows: Workflows): string[] {
   const consumes = (file: string, job: AnyJob): boolean =>
     job.uses === undefined && privileges(workflows, file, job).length > 0 && (job.steps ?? []).some((step) => step.uses !== undefined && FETCHING.includes(actionRepo(step.uses)));
   return [...new Set(Object.entries(workflows).flatMap(([file, workflow]) => (Object.values(workflow.jobs).some((job) => consumes(file, job)) ? runRoots(workflows, file) : [])))].sort();
 }
 
-/** The whole-run runs: Pages runs, and runs with a privileged job that takes an artifact. */
 const wholeRunRoots = (workflows: Workflows): string[] => [...new Set([...pagesRoots(workflows), ...consumerRoots(workflows)])].sort();
 
 /** The problems of every whole-run run; each of `deploying` must still deploy Pages, or that check would pass on nothing. */
@@ -450,7 +401,6 @@ function wholeRunProblems(workflows: Workflows, deploying: string[] = []): strin
   ];
 }
 
-/** The labels named by the jobs these rules cover: privileged jobs, and every job of a whole-run run. */
 function coveredLabels(workflows: Workflows): string[] {
   const privileged = Object.entries(workflows).flatMap(([file, workflow]) => Object.values(workflow.jobs).filter((job) => job.uses === undefined && privileges(workflows, file, job).length > 0));
   const runJobsCovered = wholeRunRoots(workflows).flatMap((runRoot) => runJobs(workflows, runRoot).map(({ job }) => job));
@@ -480,7 +430,6 @@ const called = (callerJob: AnyJob, calledJob: AnyJob): Workflows => ({
   "caller.yml": { on: { push: {} }, permissions: { contents: "read" }, jobs: { call: { uses: "./.github/workflows/called.yml", ...callerJob } } },
   "called.yml": { on: { workflow_call: {} }, jobs: { job: calledJob } },
 });
-/** A Pages run: deploy, a sibling job, and a call of a workflow with a hosted_only input. */
 const pages = (sibling: AnyJob, call: Record<string, unknown> | undefined, calledJob: AnyJob): Workflows => ({
   "site.yml": { on: { workflow_dispatch: {} }, permissions: { contents: "read" }, jobs: { validate: { uses: "./.github/workflows/checks.yml", ...(call && { with: call }) }, sibling, deploy: DEPLOY } },
   "checks.yml": { on: { push: {}, workflow_call: { inputs: { hosted_only: { type: "boolean", default: false } } } }, permissions: { contents: "read" }, jobs: { check: calledJob } },
@@ -805,7 +754,6 @@ describe("a whole-run run (a Pages run, or one whose privileged job takes an art
     });
   }
 
-  // the sibling is read-only, so the job under test alone decides whether the workflow is a Pages run
   const withDeploy = (deploy: AnyJob, permissions: Permissions | null = { contents: "read" }): Workflows => ({ "x.yml": { on: { push: {} }, ...(permissions && { permissions }), jobs: { other: { "runs-on": "self-hosted", permissions: { contents: "read" } }, deploy } } });
   test("takes write-all, no permissions at all, or a permissions scalar other than read-all for a job that can write Pages", () => {
     expect(pagesRoots(withDeploy({ "runs-on": "ubuntu-24.04", permissions: "write-all" }))).toEqual(["x.yml"]);
@@ -870,6 +818,44 @@ describe("a whole-run run (a Pages run, or one whose privileged job takes an art
       expect(wholeRunProblems(workflows)).toEqual(problems);
     });
   }
+
+  const MAC_MATRIX = { include: [{ os: "ubuntu-24.04" }, { os: "macos-15" }, { os: "macos-15-intel" }] };
+  const macBuild = (runsOn: string = MAC_PULL_REQUEST, matrix: Matrix = MAC_MATRIX): AnyJob => ({ "runs-on": runsOn, strategy: { matrix }, steps: [{ uses: CHECKOUT }] });
+  const macRun = (on: unknown, publish: AnyJob, build: AnyJob = macBuild()): Workflows => ({ "rel.yml": { on, permissions: { contents: "read" }, jobs: { build, publish } } });
+  const PULL_REQUEST = { pull_request: {}, push: { tags: ["v*"] } };
+  const MAC_IN_PR_RUN = (privileged: string): string => `rel.yml: rel.yml build: runs-on the pull-request Mac form in a run where a pull request can run the privileged job ${privileged}`;
+  const macCases: [string, Workflows, string[]][] = [
+    ["allows the pull-request Mac form where the publishing job never runs for a pull request", macRun(PULL_REQUEST, { ...PUBLISH, if: "github.event_name != 'pull_request' && always()" }), []],
+    ["allows it where the publishing job runs for a tag only", macRun(PULL_REQUEST, { ...PUBLISH, if: "startsWith(github.ref, 'refs/tags/remote-v')" }), []],
+    ["allows it in a run no pull request starts, whatever its publishing job's condition", macRun({ workflow_dispatch: {}, pull_request_target: {} }, PUBLISH), []],
+    ["refuses it where the publishing job has no condition", macRun(PULL_REQUEST, PUBLISH), [MAC_IN_PR_RUN("rel.yml publish")]],
+    ["refuses it where the pull request term is inside an ||", macRun(PULL_REQUEST, { ...PUBLISH, if: "github.event_name != 'pull_request' || always()" }), [MAC_IN_PR_RUN("rel.yml publish")]],
+    ["refuses it where the guard names a branch, which a pull request's merge ref is not either but nothing proves", macRun(PULL_REQUEST, { ...PUBLISH, if: "github.ref == 'refs/heads/main'" }), [MAC_IN_PR_RUN("rel.yml publish")]],
+    ["refuses it where the publishing job's condition mixes an expression with text", macRun(PULL_REQUEST, { ...PUBLISH, if: "${{ github.event_name != 'pull_request' }} && true" }), [MAC_IN_PR_RUN("rel.yml publish"), `rel.yml: rel.yml publish: job if "\${{ github.event_name != 'pull_request' }} && true" ${MIXED}`]],
+    ["refuses it where the trigger is written in another case", macRun({ Pull_Request: {} }, PUBLISH), [MAC_IN_PR_RUN("rel.yml publish")]],
+    ["refuses the form over a matrix one of whose labels is not hosted", macRun(PULL_REQUEST, { ...PUBLISH, if: "github.event_name != 'pull_request'" }, macBuild(MAC_PULL_REQUEST, { include: [{ os: "macos-15" }, { os: "self-hosted" }] })), [`rel.yml: rel.yml build: runs-on ${JSON.stringify(MAC_PULL_REQUEST)} ${RUNS_ON}`]],
+    ...[
+      MAC_PULL_REQUEST.replace(" && github.event.pull_request.head.repo.full_name == github.repository", ""),
+      MAC_PULL_REQUEST.replace("github.event_name == 'pull_request'", "github.event_name != 'workflow_call'"),
+      `${MAC_PULL_REQUEST}-x`,
+    ].map((runsOn): [string, Workflows, string[]] => [`refuses another form: ${runsOn}`, macRun({ workflow_dispatch: {} }, PUBLISH, macBuild(runsOn)), [`rel.yml: rel.yml build: runs-on ${JSON.stringify(runsOn)} ${RUNS_ON}`]]),
+  ];
+  for (const [name, workflows, problems] of macCases) {
+    test(name, () => {
+      expect(wholeRunProblems(workflows)).toEqual(problems);
+    });
+  }
+
+  test("no privileged job may take the pull-request Mac form itself", () => {
+    expect(privilegeProblems(one({ ...macBuild(), permissions: { contents: "write" }, if: "github.event_name != 'pull_request'" }))).toEqual([`x.yml job: runs-on ${JSON.stringify(MAC_PULL_REQUEST)} with contents: write`]);
+  });
+
+  test("the remote bundles and the Rust PTY host take the pull-request Mac form, and their publishing jobs skip pull requests", () => {
+    expect(repository["remote-bundles.yml"]!.jobs.bundle!["runs-on"]).toBe(MAC_PULL_REQUEST);
+    expect(repository["pty-sidecar.yml"]!.jobs.build!["runs-on"]).toBe(MAC_PULL_REQUEST);
+    expect(pullRequestProblems(repository, "remote-bundles.yml")).toEqual([]);
+    expect(pullRequestProblems(repository, "pty-sidecar.yml")).toEqual([]);
+  });
 
   test("a push to gh-pages shows none of the Pages signs; the privileged-job rule keeps it hosted", () => {
     expect(pagesRoots(release(HOSTED_JOB, GH_PAGES))).toEqual([]);

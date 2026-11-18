@@ -33,13 +33,12 @@ export const HERDR_INSTALL_CMD = "https://herdr.dev/install.cmd";
 /** the upload is cut off after this long on the PC, as a dead SSH link may never deliver EOF */
 export const INSTALL_UPLOAD_TIMEOUT_S = 25 * 60;
 const INSTALL_EXTRACT_TIMEOUT_MS = 10 * 60_000;
-// Allow time for staging, progress probes and cleanup beyond the bounded upload and extraction.
 const INSTALL_LOCK_MAX_AGE_MINUTES = Math.ceil((INSTALL_UPLOAD_TIMEOUT_S * 1000 + INSTALL_EXTRACT_TIMEOUT_MS) / 60_000) + 5;
 /**
- * Takes `$base/install.lock` (a directory holding the owner's PID). A lock whose owner is
+ * A lock whose owner is
  * gone, or that outlived the longest possible install (the local SSH timeout is 30 minutes),
  * was left by an install that never reached its trap; it is reclaimed rather than blocking
- * every retry until someone deletes it by hand. Expects `$base`; sets `$lock`.
+ * every retry until someone deletes it by hand.
  *
  * Reclaiming happens under `install.lock.reclaim`, a second mkdir mutex, with the owner and
  * age read again inside it: two installers that both judged the lock stale cannot then
@@ -79,27 +78,17 @@ export const WINDOWS_INSTALL_RELEASE = `$target = Join-Path $base 'install.lock'
 export interface HostInspection {
   platform: "linux-x64" | "linux-arm64" | "darwin-x64" | "darwin-arm64" | "win32-x64";
   home: string;
-  /** an installed herdr, empty when the bundle's (or, on Windows, herdr's installer) is needed */
   herdrPath: string;
-  /** the socket the bridge will register, exactly as its own bridgeIdentity() spells it */
   expectedSocket: string;
-  /** the socket of the session itself, spelled the same way: tells a chosen socket that is no choice (POSIX only) */
   defaultSocket?: string;
   bundleReady: boolean;
   bundleOlder: boolean;
   descriptors: BridgeDescriptor[];
-  /** this bundle version's runtime directory and the bridge registry, as absolute paths on the PC */
   runtimeDir: string;
   registryDir: string;
-  /** A unique POSIX startup attempt's result, never shared with an earlier attempt. */
   startupResult?: string;
 }
 export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection; headless?: boolean; herdr_socket?: string; start_new_herdr?: boolean }
-/**
- * The Windows lock's stable reclaim prefix. It is ASCII-safe even when the state directory,
- * destination or account is not. The state directory and target outlive a restart (a PID does
- * not), so this server can reclaim its stopped predecessor while another target or server waits.
- */
 export function installLockOwner(stateDir: string, target: Pick<SshTarget, "destination" | "port"> = { destination: "" }): string {
   return createHash("sha256").update(`${hostname()}\0${stateDir}\0${target.destination}\0${target.port ?? ""}`).digest("hex");
 }
@@ -107,7 +96,6 @@ export function installLockOwner(stateDir: string, target: Pick<SshTarget, "dest
 const activeWindowsInstalls = new Set<string>();
 const INSTALL_BUSY = "Another installation is in progress; retry shortly";
 
-/** One unique attempt per stable server/target owner; a stopped attempt remains reclaimable. */
 export async function withWindowsInstallAttempt<T>(reclaim: string, run: (owner: string) => Promise<T>): Promise<T> {
   if (activeWindowsInstalls.has(reclaim)) throw new Error(INSTALL_BUSY);
   activeWindowsInstalls.add(reclaim);
@@ -117,14 +105,12 @@ export async function withWindowsInstallAttempt<T>(reclaim: string, run: (owner:
 
 export interface InstallOptions {
   cacheDir?: string;
-  /** who holds the Windows install lock; {@link installLockOwner} unless a caller says otherwise */
   owner?: string;
   onProgress?(stage: InstallStage, done: number, total: number | null): void;
 }
 
 export interface RemoteHost {
   readonly kind: "posix" | "windows";
-  /** the words the approval list uses for the runtime bundle */
   readonly bundleDescription: string;
   readonly logHint: string;
   inspect(ssh: SshConnection, session?: string, socket?: string): Promise<HostInspection>;
@@ -138,16 +124,13 @@ export interface RemoteHost {
   start(ssh: SshConnection, options: StartOptions): Promise<void>;
   /** A cold start needing desktop sign-in or consent after an interactive-launch failure. */
   startupNotice?(ssh: SshConnection, session?: string): Promise<string | null>;
-  /** what the bridge asked the owner to choose: herdr sessions running there, or (`gone`) that the chosen one stopped */
   foundSessions?(ssh: SshConnection, inspection: HostInspection): Promise<{ gone: boolean; sessions: FoundHerdrSession[] } | null>;
   /** a chosen socket checked on the PC by the rule its bridge applies (server/herdr-discovery.ts); null when it cannot be */
   chosenSocketStatus?(ssh: SshConnection, inspection: HostInspection, socket: string): Promise<"usable" | "gone" | "refused" | null>;
-  /** Read-only discovery, including when the chosen Ovis server is stopped. */
   discoverSessions?(ssh: SshConnection, inspection: HostInspection): Promise<FoundHerdrSession[]>;
   descriptors(ssh: SshConnection): Promise<BridgeDescriptor[]>;
 }
 
-/** the most a PC's herdr discovery answer (or its error) may send */
 const DISCOVERY_OUTPUT_BYTES = 256 * 1024;
 
 function parseDescriptors(lines: string[]): BridgeDescriptor[] {
@@ -213,7 +196,6 @@ export const posixHost: RemoteHost = {
     const result: unknown = JSON.parse(text);
     if (typeof result !== "object" || result === null || !("code" in result) || (result.code !== "herdr_sessions_found" && result.code !== "herdr_session_gone") || !("sessions" in result)) throw new Error("The PC returned an invalid startup result");
     const gone = result.code === "herdr_session_gone";
-    // a stopped chosen session may leave no other one running
     return { gone, sessions: gone && Array.isArray(result.sessions) && result.sessions.length === 0 ? [] : parseFoundHerdrSessions(result.sessions) };
   },
   async discoverSessions(ssh, inspection) {
@@ -441,7 +423,7 @@ export const windowsHost: RemoteHost = {
 };
 
 /**
- * Which shell the PC answers to. sh first (every Linux and macOS host); a host that
+ * sh first (every Linux and macOS host); a host that
  * cannot run it is asked in PowerShell, and one that answers neither gets sh's own error,
  * which names the real problem (a refused connection, a wrong key).
  */

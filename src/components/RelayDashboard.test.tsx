@@ -34,7 +34,6 @@ const fourPcs = (): DashboardPc[] =>
     [
       pc(IDS.desk, "Desk PC", "paired", { last_seen_at: new Date().toISOString() }),
       pc(IDS.mac, "MacBook", "paired", { listed: false, linked: false }),
-      // new in the account and never seen there: it waits on its own screen to be added, as a PC that pulled could not
       pc(IDS.mini, "Mac mini", "needs-approval", {
         added_at: new Date().toISOString(),
         join: { server_public_key: "k", relay: AP },
@@ -84,7 +83,6 @@ describe("RelayDashboard frame and routes", () => {
   let narrowMatches = false;
   let narrowSplitMatches = false;
   let events: EventTarget;
-  /** the open details panel and its heading, as the dashboard finds them under the PCs split (the renderer draws no DOM) */
   let detailsHeading: { tabIndex: number; focus: () => void };
   let detailsPanel: { scrolledTo: unknown[]; scrollIntoView: (options?: unknown) => void; querySelector: (selector: string) => unknown };
 
@@ -292,7 +290,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(currentHrefs()).toEqual(["#devices", "#devices"]);
     expect(focusedNodes.length).toBeGreaterThan(0);
 
-    // Data refresh (re-render with updated pcs) never steals focus
     focusedNodes = [];
     await act(async () => {
       renderer!.update(createElement(SettingsProvider, { children: createElement(RelayDashboard, baseProps()) }));
@@ -314,17 +311,14 @@ describe("RelayDashboard frame and routes", () => {
         .map((r) => textOf(r.find((n) => n.props.className === "relay-pc-name-label")));
     expect(rows()).toEqual(["Home server"]);
     expect(renderer!.root.findAll((n) => n.props["data-pc-details"] !== undefined).length).toBe(1);
-    // with Details open beside it the table drops Last seen, so its cells stay on one line
     const headers = () => renderer!.root.findAll((n) => n.type === "th").map(textOf);
     expect(headers()).toEqual(["Name", "State", "Relay", "Action"]);
 
-    // Back to Needs you filter without selection
     await navigateHash("#pcs?filter=needs", "popstate");
     expect(rows()).toEqual(["Mac mini", "Home server"]);
     expect(renderer!.root.findAll((n) => n.props["data-pc-details"] !== undefined).length).toBe(0);
     expect(headers()).toEqual(["Name", "State", "Relay", "Last seen", "Action"]);
 
-    // Missing PC id in route renders no details panel
     await navigateHash("#pcs?pc=missing_pc_id", "popstate");
     expect(renderer!.root.findAll((n) => n.props["data-pc-details"] !== undefined).length).toBe(0);
   });
@@ -338,7 +332,6 @@ describe("RelayDashboard frame and routes", () => {
     const scrolls: unknown[][] = [];
     (window as unknown as { scrollTo: (...args: unknown[]) => void }).scrollTo = (...args) => { scrolls.push(args); };
 
-    // a phone (the tab-bar layout): the details are the whole view, started at the top; Back brings the list back under the focus
     phoneMatches = true;
     narrowMatches = true;
     window.location.hash = "#pcs";
@@ -356,7 +349,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(details()).toHaveLength(0);
     expect(lists()).toHaveLength(1);
     expect(focusedNodes).toEqual(["details-heading", `row:${IDS.home}`]);
-    // browser Back (popstate) from phone Details also restores focus to the row
     focusedNodes = [];
     await select();
     expect(details()).toHaveLength(1);
@@ -366,7 +358,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(lists()).toHaveLength(1);
     expect(focusedNodes).toEqual(["details-heading", `row:${IDS.home}`]);
 
-    // between the phone and 1100px: the details also replace the list as a full view, started at the top, and Back restores focus to the row
     await act(async () => { renderer!.unmount(); });
     phoneMatches = false;
     focusedNodes = [];
@@ -385,7 +376,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(details()).toHaveLength(0);
     expect(lists()).toHaveLength(1);
     expect(focusedNodes).toEqual(["details-heading", `row:${IDS.home}`]);
-    // browser Back (popstate) from narrow Details also restores focus to the row
     focusedNodes = [];
     await select();
     expect(details()).toHaveLength(1);
@@ -395,7 +385,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(lists()).toHaveLength(1);
     expect(focusedNodes).toEqual(["details-heading", `row:${IDS.home}`]);
 
-    // a deep link opens with the details and moves no focus
     await act(async () => { renderer!.unmount(); });
     focusedNodes = [];
     window.location.hash = `#pcs?pc=${IDS.home}`;
@@ -420,7 +409,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(details()).toHaveLength(0);
     expect(lists().map((n) => n.props["data-pc-list"])).toEqual(["table"]);
 
-    // the side panel from 1392px+: the click keeps its focus, nothing scrolls, Close moves nothing
     await act(async () => { renderer!.unmount(); });
     narrowSplitMatches = false;
     focusedNodes = [];
@@ -465,17 +453,14 @@ describe("RelayDashboard frame and routes", () => {
         { server_id: zed.server_id, relay: AP },
       ]);
       await mount(baseProps({ pcs: withZed }));
-      // MacBook is before Zed laptop in the table: forgetting MacBook focuses the next row (Zed laptop)
       await forgetSelect(IDS.mac);
       focusedNodes = [];
       await closeAfterForget(withZed.filter((item) => item.server_id !== IDS.mac));
       expect(focusedNodes).toEqual([`row:${zed.server_id}`]);
-      // Zed laptop is now the last row in the table: forgetting it focuses the previous row (Desk PC)
       await forgetSelect(zed.server_id);
       focusedNodes = [];
       await closeAfterForget(fourPcs().filter((item) => item.server_id !== IDS.mac));
       expect(focusedNodes).toEqual([`row:${IDS.desk}`]);
-      // When the forgotten unlisted pairing was the only PC, the split unmounts and focus lands on the view heading
       await act(async () => { renderer?.unmount(); });
       window.location.hash = "#pcs";
       const sole = dashboardPcs([pc(IDS.mac, "MacBook", "paired", { listed: false, linked: false })], [{ server_id: IDS.mac, relay: AP }]);
@@ -501,17 +486,14 @@ describe("RelayDashboard frame and routes", () => {
     expect(String(removeBtn.props.className)).not.toContain("btn-danger");
     expect(String(removeBtn.props.className)).not.toContain("account-link-danger");
 
-    // First click arms confirmation on the exact same button instance
     await act(async () => { removeBtn.props.onClick(); });
     expect(left).toBe(0);
     expect(String(removeBtn.props.className)).toContain("btn-danger");
     expect(removeBtn.props["data-confirm"]).toBe("remove-device");
 
-    // Second click on the same button invokes onLeave
     await act(async () => { removeBtn.props.onClick(); });
     expect(left).toBe(1);
 
-    // Sign out button works
     const signOutBtn = sideFoot.find((n) => n.type === "button");
     await act(async () => { signOutBtn.props.onClick(); });
     expect(signedOut).toBe(1);
@@ -644,7 +626,6 @@ describe("RelayDashboard frame and routes", () => {
     ]);
     await mount(baseProps({ pcs: fleet, pcStatus: liveStatus, onCheckPcs: () => {} }));
 
-    // 1. The live answer replaces stale Offline; the unchecked QR pairing counts in neither group.
     const stripBtns = renderer!.root.findAll((n) => n.type === "button" && typeof n.props["data-strip-cell"] === "string");
     expect(stripBtns.map((b) => [b.props["data-strip-cell"], b.props["data-strip-count"], textOf(b)])).toEqual([
       ["ready", 2, "Ready2"],
@@ -656,13 +637,11 @@ describe("RelayDashboard frame and routes", () => {
     const viewAll = renderer!.root.findAll((n) => n.type === "button" && n.props["data-action"] === "view-all-attention");
     expect(viewAll).toHaveLength(0);
 
-    // 2. Needs you contains exactly the three PCs still needing action, excluding the answered PC.
     await act(async () => { stripBtns[1]!.props.onClick(); });
     expect(window.location.hash).toBe("#pcs?filter=needs");
     const needsTableRows = renderer!.root.findAll((n) => n.type === "tr" && n.props["data-pc-id"] !== undefined);
     expect(needsTableRows.map((row) => row.props["data-pc-id"])).toEqual([extra1.server_id, IDS.mini, extra2.server_id]);
 
-    // 3. The answered PC belongs to Ready; its name opens Details without opening the PC.
     const readyFilter = renderer!.root.find((n) => n.type === "button" && textOf(n) === "Ready");
     await act(async () => { readyFilter.props.onClick(); });
     const homeRow = renderer!.root.find((n) => n.type === "tr" && n.props["data-pc-id"] === IDS.home);
@@ -673,7 +652,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(textOf(detailsPane)).toContain("Home server");
     expect(textOf(detailsPane)).toContain("This device: answered · 24 ms");
 
-    // 4. Relay route passes live pcStatus into RelayMap (only checking wire animates, answered/no-answer reflected) and selecting a PC in the map opens Details
     await navigateHash("#relay");
     const flows = renderer!.root.findAll((n) => n.type === "path" && n.props.className === "relay-map-flow");
     expect(flows.length).toBeGreaterThan(0);
@@ -683,7 +661,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(window.location.hash).toContain(`pc=${IDS.desk}`);
     expect(renderer!.root.find((n) => n.props["data-pc-details"] === IDS.desk)).toBeDefined();
 
-    // 5. Local mode's Overview shows no account-availability words (Ready/Needs you/Offline)
     window.location.hash = "#overview";
     const localHtml = renderStatic(baseProps({
       account: null,
@@ -694,7 +671,6 @@ describe("RelayDashboard frame and routes", () => {
     expect(localHtml).not.toContain('data-strip-cell="ready"');
     expect(localHtml).not.toContain(">Ready<");
 
-    // 6. Empty fleet (F0) on Overview/PCs keeps only the empty state's Add a PC as .btn-primary while making the header action quiet, and restores the header .btn-primary on Devices/Relay/Settings
     await act(async () => {
       renderer!.update(createElement(SettingsProvider, { children: createElement(RelayDashboard, baseProps({ pcs: [] })) }));
     });
@@ -714,6 +690,4 @@ describe("RelayDashboard frame and routes", () => {
     expect(String(headerAdd().props.className)).toBe("btn btn-primary");
   });
 
-  // the page heading's ring and the phone map's rail are what the browser draws: scripts/relay-dashboard-browser-qa.ts
-  // (view-heading-focus, details-390-focus, map-rail-390) reads their computed styles and rectangles
 });

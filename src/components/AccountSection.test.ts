@@ -5,7 +5,6 @@ import { memoryAccountStore, memoryLock, type AccountSession } from "../lib/acco
 import { translate } from "../lib/i18n.ts";
 import { accountListsOf, accountLimitsOf, formatAccountLimits, formatRelayBytes, probeUntilReachable, reachabilityProbe, REPROBE_MS } from "./AccountSection.tsx";
 
-// the relay tab offers the relay's own pairing while the account service cannot be reached (ConnectPhoneDialog's RelayTab)
 it("counts an answer the service could give as reachable, and a server error or no answer as not", async () => {
   const seen: boolean[] = [];
   const answering = (status: number) => reachabilityProbe((reachable) => seen.push(reachable), Object.assign(async () => new Response(null, { status }), { preconnect: fetch.preconnect }));
@@ -30,7 +29,6 @@ it("asks an account service that did not answer again, sooner first, until it an
   await flush();
   expect(asked).toBe(5);
   expect(waits).toEqual([REPROBE_MS[0], REPROBE_MS[1], REPROBE_MS[2], REPROBE_MS[2]]);
-  // stopped (Settings closed, or a new probe took over): nothing is asked again
   asked = 0;
   waits.length = 0;
   const stop = probeUntilReachable(async () => { asked += 1; return false; }, timers);
@@ -62,7 +60,6 @@ it("drops a limits answer that arrives after the sign-in it was asked for ended 
     const store = memoryAccountStore();
     const shown = session("acct_a");
     await store.set("session", shown);
-    // another tab signs in as someone else, or signs out, while the request is on its way
     const fetch = async (_input: RequestInfo | URL, _init?: RequestInit) => {
       await store.set("session", meanwhile);
       return Response.json({ plan: "plan of acct_a", pcs_max: 3 });

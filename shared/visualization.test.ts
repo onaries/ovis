@@ -30,6 +30,7 @@ describe("Codex visualization references", () => {
     expect(answer(`\`\`\`text\n${line}\n\`\`\``)[0]?.type).toBe("code");
     expect(answer(`Example: ${line}`)[0]?.type).toBe("paragraph");
     for (const data of [null, [], { path: "https://example.org/a.html" }, { path: "//host/a.html" },
+      // a network share on a Windows PC, however its leading separators are written
       { path: "/\\host/share/a.html" }, { path: "\\\\host\\share\\a.html" }, { path: "\\/host/share/a.html" },
       { path: "relative/a.html" }, { path: "/repo/a.svg" }, { path: "/repo/a.html\n" },
       { path: "/repo/a.html", title: 2 }]) {
@@ -61,6 +62,7 @@ describe("Codex visualization references", () => {
     expect(answer(`- The flow:\n  it reads ${line}`)).toEqual([{ type: "list", ordered: false, items: [{ content: [...text("The flow:"), ...text(" "), ...text(`it reads ${line}`)] }] }]);
   });
   it("draws the same card for every mode, also one this app has never seen", () => {
+    // `mode` is how Codex's own app lays its preview out: the card does not use it, so it never turns a reference back into text
     for (const mode of ["wide", "inline", "unknown", 3, null, { nested: true }]) {
       expect(visualizationReference(directive({ path: "/repo/a.html", mode, title: "A" }))).toEqual({ path: "/repo/a.html", title: "A" });
       expect(answer(directive({ path: "/repo/a.html", mode }))).toEqual([{ type: "visualization", path: "/repo/a.html" }]);
@@ -69,6 +71,7 @@ describe("Codex visualization references", () => {
   it("names a card by the file's own name, and shows the reference's title only beside it", () => {
     expect(visualizationName("/repo/out/report.html")).toBe("report.html");
     expect(visualizationName("C:\\work\\out/diagram.HTM")).toBe("diagram.HTM");
+    // what reorders or hides text is taken out: a right-to-left override, zero-width characters, a byte-order mark
     expect(visualizationName("/repo/report\u202Efdp.html")).toBe("reportfdp.html");
     expect(visualizationName("/repo/a\u200Bb\u2066c\uFEFF.html")).toBe("abc.html");
     const long = visualizationName(`/repo/${"x".repeat(300)}-final.html`);

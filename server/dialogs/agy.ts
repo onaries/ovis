@@ -83,10 +83,7 @@ function agyWriteInEditor(screen: string): { lines: string[]; answerIndex: numbe
 }
 
 /**
- * Whether `screen` still shows `expected`'s inline `Write-in...` editor (`Your answer:` over
- * `enter Submit · esc Back`) with the cursor on `Write-in...`, the expected multi-select checks, and
- * `draft` in it: nothing before the answer is typed, the answer before the Enter that submits it. The
- * editor wraps a long answer onto rows of its own, so the two are compared without their whitespace.
+ * The editor wraps a long answer onto rows of its own, so the two are compared without their whitespace.
  */
 export function agyCustomEditorMatches(screen: string, expected: ParsedPrompt, checked: ReadonlySet<number>, draft: string): boolean {
   if (expected.responder !== "agy-question" || expected.customMenuIndex === null) return false;
@@ -109,10 +106,6 @@ export function agyCustomEditorMatches(screen: string, expected: ParsedPrompt, c
     && parsed.checkedOptionIndices.every((index) => checked.has(index));
 }
 
-/**
- * Parses `agy`'s live `ask_question` prompt screen into an `InteractivePrompt`, or returns null
- * when the screen does not show a complete, unambiguous `ask_question` menu.
- */
 export function parseAgyQuestion(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const shown = lines.map(cleanLine).filter(Boolean);
@@ -255,18 +248,14 @@ export function parseAgyQuestion(screen: string): ParsedPrompt | null {
       },
     } : {}),
   };
-  // the card's id reads the ticks the terminal shows, so a card shown with other ticks is asked anew; the answer's own
-  // Spaces change them under it, so its checks compare the question without them (agySameQuestion) and the ticks apart
   const hashed = { can_step_back: undefined, can_step_next: undefined, default_option_index: undefined };
   const parsed = finishPrompt("agy", draft, internal, hashed);
   questionIds.set(parsed, finishPrompt("agy", draft, internal, { ...hashed, default_option_indices: undefined }).id);
   return parsed;
 }
 
-/** each card's id as it would be without its ticks */
 const questionIds = new WeakMap<ParsedPrompt, string>();
 
-/** Whether two reads show the same Antigravity question, whatever is ticked on it. */
 export function agySameQuestion(shown: ParsedPrompt | null | undefined, expected: ParsedPrompt): shown is ParsedPrompt {
   const id = shown ? questionIds.get(shown) : undefined;
   return id !== undefined && id === questionIds.get(expected);

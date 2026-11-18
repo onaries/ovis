@@ -103,7 +103,6 @@ function store(entries: readonly Entry[], path = join(home, ".gjc", "agent", "ag
 
 const read = () => gjcRecorded.read(recordedContext());
 
-/** Oh My Pi's record of an account's session limit, read at `readAt` */
 function ompStoreOf(account: string, email: string, readAt: number, used: number): void {
   const path = join(home, ".omp", "agent", "agent.db");
   mkdirSync(dirname(path), { recursive: true });

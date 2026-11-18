@@ -49,7 +49,6 @@ it("writes and types nothing of a long input line whose sender may no longer typ
   const { prompt, typed, keys } = herdr();
   let watching = false;
   const authorize = () => { if (watching) throw new client.HerdrError("read_only", "this connection can only watch"); };
-  // herdrRpc asks the guard once connected, right before the prompt is written
   prompt.mockImplementation(async (_target, _text, _socketPath, guard) => {
     watching = true;
     if (guard && !guard()) throw new client.HerdrError("cancelled", "herdr agent.prompt was not sent");
@@ -73,7 +72,6 @@ it("never types a long input line after its prompt failed in a way that may have
 it("sends chat text through the guarded terminal path when a custom dsh agent has no prompt adapter", async () => {
   const { prompt, typed, keys } = herdr();
   spyOn(client, "paneGet").mockResolvedValue({ pane_id: "w:p1", agent: "dsh", agent_status: "idle", cwd: "/tmp", terminal_id: "dsh-test" } as Awaited<ReturnType<typeof client.paneGet>>);
-  // read for a picker of the agent's own (freeAgentPicker): dsh's prompt line is none
   spyOn(client, "paneRead").mockResolvedValue({ text: "dsh> " } as Awaited<ReturnType<typeof client.paneRead>>);
   prompt.mockRejectedValue(new client.HerdrError("agent_not_ready", "custom dsh agent"));
   await submitter()("w:p1", "hello dsh", "hello dsh", Date.now(), false);

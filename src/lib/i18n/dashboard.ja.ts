@@ -1,4 +1,3 @@
-/** Japanese for dashboard feature strings. */
 export const DASHBOARD_JA: Record<string, string> = {
   "Add a PC": "PC を追加",
   "A PC joins through your account, or pairs with this device alone.": "PC はアカウント経由で参加するか、このデバイスとだけペアリングします。",

@@ -18,14 +18,11 @@ function records(root: string): Record<string, unknown>[] {
 }
 
 it("attributes reserved setup job lookups to the dispatch branch rather than a machine proxy", async () => {
-  // Given: job ids collide with valid proxy endpoint names.
   const root = mkdtempSync(join(tmpdir(), "herdr-request-route-dispatch-"));
   const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "", tailscaleOwner: null, sidecar: false });
   try {
     for (const jobId of ["session", "agents", "settings", "events"]) {
-      // When: the reserved setup branch answers the missing job.
       const response = await fetch(`http://127.0.0.1:${app.port}/api/machines/setup/${jobId}`);
-      // Then
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ error: { code: "job_not_found" } });
       const rows = records(root).filter((row) => row.request_id === response.headers.get("x-request-id"));
@@ -113,7 +110,6 @@ function handshake(port: number, path: string, extra = ""): Promise<{ status: nu
 }
 
 it("records exactly one completion for HTTP responses, early refusals, streams and both 101 paths", async () => {
-  // Given: temporary state and a wire-level remote WebSocket stand-in, never SSH.
   const root = mkdtempSync(join(tmpdir(), "herdr-request-contract-"));
   const store = new DeviceStore(root);
   const watch = store.pair(store.startPairing().code, "fictional-watch-label", "watch");
@@ -149,7 +145,6 @@ it("records exactly one completion for HTTP responses, early refusals, streams a
     expect(matched[0]?.status).toBe(expected);
   };
   try {
-    // When / Then: the exact outer boundary covers every response class.
     check(await fetch(`${base}/api/preferences`, { headers: auth }), 200);
     check(await fetch(`${base}/api/auth`, { method: "DELETE", headers: auth }), 204);
     check(await fetch(`${base}/api/devices/pair`, { method: "POST", body: "{}" }), 400);
@@ -184,7 +179,7 @@ it("records exactly one completion for HTTP responses, early refusals, streams a
       routeMedia.headers.get("content-security-policy")?.replace("media-src data: blob:", `media-src data: blob: ${base}/api/fs/page-media/`) ?? null,
     );
     const sse = await fetch(`${base}/api/machines/events`, { headers: auth, signal: abort.signal });
-    check(sse, 200); // Already complete while the stream remains open.
+    check(sse, 200);
     expect(sse.headers.get("content-type")).toBe("text/event-stream");
     const reader = sse.body?.getReader();
     expect((await reader?.read())?.done).toBe(false);
@@ -221,7 +216,6 @@ it("records exactly one completion for HTTP responses, early refusals, streams a
 });
 
 for (const writable of [true, false]) it(`correlates portal startup failure with writable log ${writable}`, async () => {
-  // Given: a failed startup before dispatch, and a non-file log path.
   const root = mkdtempSync(join(tmpdir(), "herdr-request-startup-"));
   if (!writable) mkdirSync(join(root, "http-requests.jsonl"));
   const portal = new PortalService({ stateDir: root });
@@ -229,9 +223,7 @@ for (const writable of [true, false]) it(`correlates portal startup failure with
   const log = spyOn(console, "error").mockImplementation(() => {});
   const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "", tailscaleOwner: null, machines: false, sidecar: false, portal });
   try {
-    // When
     const response = await fetch(`http://127.0.0.1:${app.port}/api/preferences`);
-    // Then
     expect(response.status).toBe(500);
     const id = response.headers.get("x-request-id");
     expect(id).toMatch(/^[0-9a-f-]{36}$/);

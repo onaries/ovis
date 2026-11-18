@@ -14,7 +14,6 @@ import { SettingsProvider } from "../lib/settings.ts";
 import { usageCounters } from "../lib/usageCounters.ts";
 import type { SidebarActivity } from "../lib/sidebarActivity.tsx";
 
-// the prompt read is the only request the list makes: each test answers it itself
 let answerPrompt: (prompt: InteractivePrompt | null) => void = () => {};
 let promptReads = 0;
 let presses: string[] = [];
@@ -26,7 +25,6 @@ await mock.module("../lib/api.ts", () => ({
   },
 }));
 await mock.module("react-dom", () => ({ ...ReactDom, createPortal: (node: ReactNode) => node }));
-// a menu as the list hands it over (RowMenu's own drawing is RowMenu's): its props are what is read
 const rowMenu = await import("./RowMenu.tsx");
 function RowMenu(_props: Parameters<typeof rowMenu.RowMenu>[0]) { return null; }
 await mock.module("./RowMenu.tsx", () => ({ ...rowMenu, RowMenu }));
@@ -36,16 +34,13 @@ type InboxListHandle = import("../lib/useInbox.ts").InboxListHandle;
 const { SummaryReads } = await import("../lib/useInboxSummaries.ts");
 const { useAgentStateStamping } = await import("../lib/useAgentStateSince.ts");
 
-/** App's part in a waiting row's time: it stamps the state changes the list reads (lib/useAgentStateSince.ts) */
 function Stamping({ machines, activity }: { machines: Machine[]; activity: SidebarActivity }) {
   useAgentStateStamping(machines, activity);
   return null;
 }
 
-// the summary reads the page's reader makes: each case answers them itself
 type SummaryCall = { machineId: string; paneIds: readonly string[]; resolve(answer: PaneSummaries | null): void };
 let summaryCalls: SummaryCall[] = [];
-/** an ISO time this many minutes ago */
 const ago = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
 const said = (text: string, at: string | null, more: Partial<PaneSummary> = {}): PaneSummary => ({ role: "assistant", text, at, asked_at: null, ...more });
 
@@ -55,7 +50,6 @@ const activity: SidebarActivity = {
   status: (_machineId, pane) => pane.agent_status as AgentStatus | undefined,
 };
 
-/** the fixture's state, but with some panes in another state */
 const statusOf = (moved: Record<string, AgentStatus>): SidebarActivity => ({
   seqs: () => new Map(),
   status: (_machineId, pane) => moved[pane.pane_id] ?? pane.agent_status as AgentStatus | undefined,
@@ -75,12 +69,9 @@ const byClass = (root: ReactTestInstance, name: string): ReactTestInstance[] =>
 describe("InboxList", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let renderer: ReactTestRenderer | undefined;
-  // the page's reader (lib/useInbox.ts), which outlives each mount of the list
   let questionReads: ReturnType<typeof newQuestionReads>;
   let summaryReads: InstanceType<typeof SummaryReads>;
-  /** whether the window is a phone's (the sheets' width) */
   let phone: boolean;
-  /** the animation frames asked for and not run yet: a case that waits for a status line's words runs them */
   let frames: FrameRequestCallback[];
   const runFrames = (): Promise<void> => act(async () => { for (const run of frames.splice(0)) run(0); });
 
@@ -88,7 +79,6 @@ describe("InboxList", () => {
     promptReads = 0;
     phone = true;
     frames = [];
-    // no case runs a reader's retry: their waits never fire, so no timer outlives a case to read into the next one
     const never = () => () => {};
     questionReads = newQuestionReads(never);
     summaryCalls = [];
@@ -131,21 +121,16 @@ describe("InboxList", () => {
     wide?: boolean; current?: string | null; filter?: InboxFilter; query?: string; watching?: boolean; activity?: SidebarActivity; scrollTop?: number;
     connection?: HeaderConnection;
     failure?: { error: string; retry(): Promise<void> | void } | null;
-    /** how many times the list has opened (lib/useInbox.ts), and the opening it last took the focus for: a fresh opening unless a case says not */
     opening?: number; focusTaken?: number;
-    /** the row (inboxKey) whose thread a Back just left: the list's opening gives it the focus */
     returnTo?: string | null;
     /** how far the scroller can scroll at first: a scrollTop past it is clamped, as a browser does */
     scrollMax?: number;
-    /** the head's Search button is not drawn: a column with the room for its search field (InboxList.css) */
     searchToggleHidden?: boolean;
     more?: Parameters<typeof InboxList>[0]["more"]; note?: ReactNode;
-    /** what the shell asks of the list through (lib/useInbox.ts) */
     handle?: { current: InboxListHandle | null };
     onFilter?: (filter: InboxFilter) => void; onQuery?: (query: string) => void;
     onOpen?: (machineId: string, paneId: string) => void; onNew?: (machineId: string) => void;
   }
-  // each drawn host node's stand-in, by its class (the section by its tag), and every focus call made on them
   let nodes = new Map<string, { scrollTop: number; focus(options?: FocusOptions): void }>();
   let focused: { node: string; options?: FocusOptions; label?: string }[] = [];
   let scroll = { current: 0 };
@@ -167,7 +152,6 @@ describe("InboxList", () => {
     drawn = { machines, options };
     await act(async () => {
       renderer = create(view(machines, options), { createNodeMock: (element) => {
-        // by the first class, the section by its tag, and one of the list's icon buttons by its own class
         const classes = String((element.props as { className?: string }).className ?? element.type).split(" ");
         const name = element.type === "section" ? "section" : classes[0] === "icon-button" ? classes.find((part) => part.startsWith("inbox-") && part !== "inbox-round") ?? classes[0] : classes[0]!;
         const label = (element.props as { "aria-label"?: string })["aria-label"];
@@ -175,9 +159,7 @@ describe("InboxList", () => {
         const node = {
           get scrollTop() { return top; },
           set scrollTop(value: number) { top = Math.min(value, scrollMax); },
-          // a row says which one it is by its spoken name
           focus(focusOptions?: FocusOptions) { focused.push({ node: name, options: focusOptions, ...(name === "inbox-row" ? { label } : {}) }); },
-          // drawn, unless the test says the search button is not (a column with the room for its field: InboxList.css)
           getClientRects: () => (name === "inbox-search-toggle" && options.searchToggleHidden ? [] : [{}]),
         };
         nodes.set(name, node);
@@ -186,7 +168,6 @@ describe("InboxList", () => {
     });
     return renderer!.root;
   };
-  /** draws again with the same props but those given */
   const redraw = async (change: { machines?: Machine[] } & DrawOptions) => {
     const { machines = drawn.machines, ...options } = change;
     drawn = { machines, options: { ...drawn.options, ...options } };
@@ -200,12 +181,9 @@ describe("InboxList", () => {
   const anchor = { isConnected: true, focus() {}, querySelector: () => null, closest: () => null };
   const item = (root: ReactTestInstance, paneId: string, machineId = "local") => byClass(root, "inbox-item").find((node) => node.props["data-pane"] === paneId && node.props["data-machine"] === machineId)!;
   const words = (root: ReactTestInstance, paneId: string, machineId = "local") => byClass(item(root, paneId, machineId), "inbox-words").map(text);
-  /** the state mark a row draws: its state, its label, and whether anything is drawn for it */
   const mark = (root: ReactTestInstance, paneId: string) => {
     const [slot] = byClass(item(root, paneId), "inbox-state");
     const [badge] = byClass(slot!, "sidebar-status");
-    // the mark's name, its tooltip and the text it holds are one word: a pointer and a screen reader are told the same,
-    // whichever of them a reader takes
     expect(badge!.props.title).toBe(badge!.props["aria-label"]);
     expect(byClass(badge!, "visually-hidden").map(text)).toEqual([badge!.props["aria-label"]]);
     return { state: badge!.props["data-status"] as string, label: badge!.props["aria-label"] as string, drawn: String(slot!.props.className).split(" ").includes("is-drawn") };
@@ -240,16 +218,12 @@ describe("InboxList", () => {
   });
 
   it("ends a row with its state's mark, named in the words the chip and the filters use, and draws none for an agent at rest", async () => {
-    // the fixture: w1C works, w1D waits for the user; w1E is made done and not looked at, w1F waits on background work
     const machines = roster((pane) => pane.pane_id === "w1F:p1" ? { ...pane, background_wait: true } as HerdrPane : pane);
     const waiting: SidebarActivity = { seqs: () => new Map(), status: (_machineId, pane) => pane.pane_id === "w1E:p1" ? "done" : pane.pane_id === "w1F:p1" ? "waiting" : pane.agent_status as AgentStatus | undefined };
     const root = await draw(machines, { activity: waiting });
     expect(mark(root, "w1D:p1")).toEqual({ state: "blocked", label: "Needs you", drawn: true });
     expect(mark(root, "w1C:p1")).toEqual({ state: "working", label: "Working", drawn: true });
-    // a turn that waits on background work is Working in the mode's words, and its own mark says what the eye sees
-    // that it is not the working dot
     expect(mark(root, "w1F:p1")).toEqual({ state: "waiting", label: "Working, waiting on background work", drawn: true });
-    // the row's own name keeps the filters' word
     expect(String(byClass(item(root, "w1F:p1"), "inbox-row")[0]!.props["aria-label"]).split(", ").at(-1)).toBe("Working");
     expect(mark(root, "w1E:p1")).toEqual({ state: "done", label: "Done", drawn: true });
     await redraw({ activity });
@@ -268,7 +242,6 @@ describe("InboxList", () => {
     expect(words(root, "w1D:p1")).toEqual(["Needs you"]);
     expect(words(root, "w1C:p1")).toEqual(["Working"]);
     expect(words(root, "w1E:p1")).toEqual(["Done"]);
-    // the resting agent's workspace: its name is the pane's own label, so the place says something more
     expect(words(root, "w1F:p1")).toEqual(["docs-site"]);
   });
 
@@ -335,7 +308,6 @@ describe("InboxList", () => {
     const root = await draw(roster((pane) => pane.pane_id === "w1C:p1" ? { ...pane, plan } as HerdrPane : pane));
     const label = (paneId: string) => byClass(item(root, paneId), "inbox-row")[0]!.props["aria-label"] as string;
     expect(label("w1C:p1")).toBe("Claude Code, Idempotent payments, Working, Write the export guard test");
-    // a row whose words are the state's own word says it once
     expect(label("w1D:p1")).toBe("Codex, Guard the export button, Needs you");
   });
 
@@ -403,11 +375,8 @@ describe("InboxList", () => {
     expect(byClass(loading, "inbox-empty").map(text)).toEqual(["Loading…"]);
     await act(async () => { renderer?.unmount(); });
 
-    // nothing runs, and the round plus is there to start a workspace with
     const none = await draw(empty());
     expect(byClass(none, "inbox-add").length).toBe(1);
-    // what happened and the next step are two lines, each a block of its own, with a space between them for a reader
-    // that takes the status as one text
     const lines = (root: ReactTestInstance) => byClass(root, "inbox-empty")[0]!.findAll((node) => node.type === "span").map(text);
     expect(lines(none)).toEqual(["Nothing is running yet", "Use + to start a workspace"]);
     expect(byClass(none, "inbox-empty").map(text)).toEqual(["Nothing is running yet Use + to start a workspace"]);
@@ -434,19 +403,15 @@ describe("InboxList", () => {
     const alerts = (root: ReactTestInstance) => root.findAll((node) => typeof node.type === "string" && node.props.role === "alert");
     const buttons = (node: ReactTestInstance) => node.findAll((inner) => inner.type === "button");
 
-    // Given a load in flight, no roster yet: a status line, no alert and nothing to press.
     const loading = await draw([]);
     expect([alerts(loading).length, byClass(loading, "inbox-empty").map((node) => node.props.role)]).toEqual([0, ["status"]]);
     await act(async () => { renderer?.unmount(); });
 
-    // When the load failed with no roster, on a phone and in the column: one alert in the rows' place, which says
-    // what happened and the read's own message, and one real button under it that loads again.
     for (const wide of [false, true]) {
       phone = !wide;
       const failed = await draw([], { wide, failure });
       const [alert, ...others] = alerts(failed);
       expect([others.length, byClass(failed, "inbox-empty").length, byClass(failed, "inbox-rows").length]).toEqual([0, 0, 0]);
-      // what happened in the app's words, and the read's own message under it
       expect([byClass(alert!, "inbox-failed-line").map(text), byClass(alert!, "inbox-failed-cause").map(text)]).toEqual([["Couldn't load the list."], ["Failed to fetch"]]);
       const [retry, ...more] = buttons(byClass(failed, "inbox-failed")[0]!);
       expect([more.length, retry!.props.type, retry!.props.className]).toEqual([0, "button", "btn inbox-retry"]);
@@ -455,18 +420,15 @@ describe("InboxList", () => {
       await act(async () => { renderer?.unmount(); });
     }
 
-    // a read that failed with no message of its own: the app's words alone
     const silent = await draw([], { failure: { ...failure, error: "" } });
     expect([byClass(silent, "inbox-failed-line").length, byClass(silent, "inbox-failed-cause").length]).toEqual([1, 0]);
     await act(async () => { renderer?.unmount(); });
 
-    // a roster that lists PCs and nothing running, then fails to load again: the failure, not the empty line
     const empty = roster().map((machine) => ({ ...machine, snapshot: machine.snapshot && { ...machine.snapshot, panes: [] } }));
     const none = await draw(empty, { failure });
     expect([alerts(none).length, byClass(none, "inbox-empty").length]).toEqual([1, 0]);
     await act(async () => { renderer?.unmount(); });
 
-    // rows already drawn stay over a refresh that failed: the list does not trade them for the failure
     const kept = await draw(roster(), { failure });
     expect([alerts(kept).length, byClass(kept, "inbox-item").length > 0]).toEqual([0, true]);
   });
@@ -475,27 +437,20 @@ describe("InboxList", () => {
     let release = (): void => undefined;
     const presses: string[] = [];
     const failure = { error: "Failed to fetch", retry: () => { presses.push("retry"); return new Promise<void>((resolve) => { release = resolve; }); } };
-    /** the words the button says: its label not hidden */
     const said = (button: ReactTestInstance) => button.findAll((node) => node.type === "span" && node.props["aria-hidden"] === undefined && typeof node.children[0] === "string").map(text);
-    /** the live words in the rows' place: their role, their line, and whether the read's message is hidden */
     const live = (root: ReactTestInstance) => byClass(root, "inbox-failed-words").map((node) => [node.props.role, byClass(node, "inbox-failed-line").map(text)[0], byClass(node, "inbox-failed-cause").map((cause) => cause.props["aria-hidden"] ?? null)]);
     for (const wide of [false, true]) {
       phone = !wide;
-      // Given a load that failed, Retry ready.
       const failed = await draw([], { wide, failure });
       const retry = () => byClass(failed, "inbox-retry")[0]!;
       expect([live(failed), retry().props["aria-disabled"], retry().props["aria-busy"], said(retry())]).toEqual([[["alert", "Couldn't load the list.", [null]]], undefined, undefined, ["Retry"]]);
 
-      // When Retry is pressed, then pressed again while its read is on its way.
       await act(async () => { retry().props.onClick(); });
       await act(async () => { retry().props.onClick(); });
 
-      // Then one read was asked for; the loading words stand where the failure was, the read's message kept unseen,
-      // and Retry says it is on its way, busy, taking no press.
       expect(presses.length).toBe(wide ? 2 : 1);
       expect([live(failed), retry().props["aria-disabled"], retry().props["aria-busy"], said(retry())]).toEqual([[["status", "Loading…", ["true"]]], true, true, ["Retrying…"]]);
 
-      // When that read ends with the roster still failing: the failure is said again, and Retry is ready.
       await act(async () => { release(); });
       expect([live(failed), retry().props["aria-disabled"], retry().props["aria-busy"], said(retry())]).toEqual([[["alert", "Couldn't load the list.", [null]]], undefined, undefined, ["Retry"]]);
       await act(async () => { renderer?.unmount(); });
@@ -506,25 +461,20 @@ describe("InboxList", () => {
     const failure = { error: "Failed to fetch", retry: () => {} };
     for (const wide of [false, true]) {
       phone = !wide;
-      // Given a list whose load failed, the opening's focus taken, and nothing focused on the page (Retry left it).
       await draw([], { wide, failure });
       expect(byClass(renderer!.root, "inbox-retry")).toHaveLength(1);
       focused.length = 0;
 
-      // When a read brings the rows.
       await redraw({ machines: roster() });
 
-      // Then the rows are drawn and the list's root has the focus, without a scroll.
       expect([byClass(renderer!.root, "inbox-retry").length, byClass(renderer!.root, "inbox-item").length > 0]).toEqual([0, true]);
       expect(focused).toEqual([{ node: "section", options: { preventScroll: true } }]);
       await act(async () => { renderer?.unmount(); });
 
-      // Given the same failure, with the focus somewhere else on the page (the search field, another control).
       Object.defineProperty(document, "activeElement", { configurable: true, value: { nodeName: "INPUT" } });
       await draw([], { wide, failure });
       focused.length = 0;
 
-      // When the rows come, the focus stays where it is.
       await redraw({ machines: roster() });
       expect(focused).toEqual([]);
       Reflect.deleteProperty(document, "activeElement");
@@ -535,20 +485,16 @@ describe("InboxList", () => {
   it("says what the connection has to say in one status line, and draws nothing while it has nothing to say", async () => {
     const line = (root: ReactTestInstance) => root.findAll((node) => node.type === "p" && node.props.role === "status" && /inbox-connection|visually-hidden/.test(String(node.props.className)))
       .filter((node) => byClass(root, "inbox-empty").every((empty) => empty !== node));
-    // Given a list whose connection is as it should be: the status line is in the document, and drawn by nothing.
     const root = await draw(roster());
     await runFrames();
     expect(line(root).map((node) => [node.props.className, text(node)])).toEqual([["visually-hidden", ""]]);
 
-    // When the connection is lost.
     await redraw({ connection: "reconnecting" });
 
-    // Then the line says so, between the two top controls.
     expect(line(root).map((node) => [node.props.className, text(node)])).toEqual([["inbox-connection", "Reconnecting…"]]);
     const top = byClass(root, "inbox-top")[0]!;
     expect(top.findAll((node) => node.props.className === "inbox-connection").length).toBe(1);
 
-    // When it is back: Connected, for as long as the source says it.
     await redraw({ connection: "connected" });
     expect(line(root).map((node) => text(node))).toEqual(["Connected"]);
     await redraw({ connection: null });
@@ -559,7 +505,6 @@ describe("InboxList", () => {
     phone = false;
     const root = await draw(roster(), { wide: true, connection: "reconnecting" });
     await runFrames();
-    // no line in the column's top row, drawn or only said, with its search field shut and with it open
     const lines = () => byClass(root, "inbox-top")[0]!.findAll((node) => node.props.role === "status").length + byClass(root, "inbox-connection").length;
     expect(lines()).toBe(0);
     await act(async () => { byClass(root, "inbox-search-toggle")[0]!.props.onClick(); });
@@ -604,17 +549,14 @@ describe("InboxList", () => {
       await type("a");
       await redraw({ query: "a" });
       await type("ab");
-      // opening the field is no search, and a later letter of the same search is none either
       expect(told).toEqual(["inbox_search"]);
       await redraw({ query: "" });
       told.length = 0;
-      // with two PCs the + only asks which: nothing is counted until one is picked
       await act(async () => { byClass(root, "inbox-add")[0]!.props.onClick({ currentTarget: anchor }); });
       expect(told).toEqual([]);
       await act(async () => { menus(root)[0]!.props.items[1].run(); });
       expect(told).toEqual(["new_workspace_by_button"]);
       told.length = 0;
-      // a row opened is told with its own PC, which counts it only when it is this one (usageCounters.paneUse)
       const items = byClass(root, "inbox-item").filter((node) => !String(node.props.className).includes("is-offline"));
       for (const item of items) await act(async () => { byClass(item, "inbox-row")[0]!.props.onClick(); });
       expect(told).toEqual(items.map((item) => `inbox_open@${item.props["data-machine"]}`));
@@ -628,7 +570,6 @@ describe("InboxList", () => {
     const moved = statusOf({ "w1E:p1": "blocked" });
     expect(inboxOrder(roster(), moved).map((row) => row.entry.pane.pane_id)).not.toEqual(before);
     const list = () => byClass(root, "inbox-rows")[0]!;
-    /** a focus landing on a row, with the keyboard's ring drawn or not */
     const focusOn = (ring: boolean) => ({ target: { matches: (selector: string) => ring && selector === ":focus-visible" } });
     await act(async () => { list().props.onFocus(focusOn(true)); });
     await redraw({ activity: moved });
@@ -636,7 +577,6 @@ describe("InboxList", () => {
     await act(async () => { list().props.onBlur({ relatedTarget: null, currentTarget: {} }); });
     expect(order(root)).toEqual(inboxOrder(roster(), moved).map((row) => row.entry.pane.pane_id));
 
-    // a focus no ring shows (the row a thread's Back returns to, on a touch screen) is nobody's place: the rows follow
     await redraw({ activity });
     await act(async () => { list().props.onFocus(focusOn(false)); });
     await redraw({ activity: moved });
@@ -658,57 +598,44 @@ describe("InboxList", () => {
   });
 
   it("goes to its top and takes the focus on its own section when the shell asks, and the kept place is the top from then on", async () => {
-    // Given a list scrolled down, whose kept place is still being reached (its rows' words are not all back).
     const handle: { current: InboxListHandle | null } = { current: null };
     await draw(roster(), { wide: true, scrollTop: 240, scrollMax: 200, focusTaken: 1, handle });
     expect([nodes.get("inbox-scroll")!.scrollTop, focused]).toEqual([200, []]);
 
-    // When the shell asks for the list's top (the rail's current place).
     await act(async () => { handle.current!.toTop(); });
 
-    // Then the list is at its top with the focus on its section, without a scroll of the page.
     expect([nodes.get("inbox-scroll")!.scrollTop, scroll.current]).toEqual([0, 0]);
     expect(focused).toEqual([{ node: "section", options: { preventScroll: true } }]);
 
-    // And words that land later do not take it back to the place it had.
     scrollMax = Number.POSITIVE_INFINITY;
     await answerSummaries({ "w1E:p1": said("All six export tests pass.", ago(6.5)) });
     expect(nodes.get("inbox-scroll")!.scrollTop).toBe(0);
   });
 
   it("gives the focus to the row whose thread a Back just left, and to its own section when that row is not drawn", async () => {
-    // Given a list opened by Back from the thread of w1C (lib/useInbox.ts says which row was open).
     const root = await draw(roster(), { opening: 2, focusTaken: 1, returnTo: "local:w1C:p1" });
 
-    // Then the reader's place is that row, with no jump of the scroll.
     const spoken = item(root, "w1C:p1").findByType("button").props["aria-label"] as string;
     expect(focused).toEqual([{ node: "inbox-row", options: { preventScroll: true }, label: spoken }]);
     await act(async () => { renderer?.unmount(); });
 
-    // Given the same Back with a filter that leaves that row out of the list.
     await draw(roster(), { opening: 2, focusTaken: 1, returnTo: "local:w1C:p1", filter: "blocked" });
 
-    // Then the list's section takes the focus.
     expect(focused).toEqual([{ node: "section", options: { preventScroll: true } }]);
   });
 
   it("takes the focus once for each time it opens, and none when it is only drawn again for another width", async () => {
-    // Given a list that has just opened: it took the focus, and says which opening that was for.
     await draw(roster());
     expect(focused.map((call) => call.node)).toEqual(["section"]);
     expect(taken.current).toBe(1);
 
-    // When a window widened past a phone's draws the list again, beside the thread the reader is typing in.
     await act(async () => { renderer?.unmount(); });
     await draw(roster(), { wide: true, current: "local:w1C:p1", focusTaken: 1 });
 
-    // Then the list leaves the focus where it is.
     expect(focused).toEqual([]);
 
-    // When the list opens again while it is drawn (Back from the thread to the pane with none chosen).
     await redraw({ current: null, opening: 2 });
 
-    // Then it takes the focus, once.
     expect(focused.map((call) => call.node)).toEqual(["section"]);
     await redraw({ query: "export" });
     expect(focused.map((call) => call.node)).toEqual(["section"]);
@@ -737,7 +664,6 @@ describe("InboxList", () => {
   });
 
 
-  /** answers the newest summary read: every pane it asked about, null where the case gives nothing */
   const answerSummaries = async (summaries: Record<string, PaneSummary>) => {
     const call = summaryCalls.at(-1)!;
     await act(async () => { call.resolve({ server_time: new Date().toISOString(), summaries: Object.fromEntries(call.paneIds.map((id) => [id, summaries[id] ?? null])) }); });
@@ -767,11 +693,8 @@ describe("InboxList", () => {
     expect(words(root, "w1F:p1")).toEqual(["You: Run the export tests again"]);
   });
 
-  // A wait is timed as the Agents list times a state: from the stamp this device made when it saw the state begin
-  // (lib/agentStateSince.ts), which App takes for as long as the page lives. The clock is set, so a stamp is where a case puts it.
   const NOW = 1_800_000_000_000;
   const atClock = async (minutesAgo: number, run: () => Promise<void>): Promise<void> => { jest.setSystemTime(new Date(NOW - minutesAgo * 60_000)); await run(); };
-  /** the list's own clock ticks (every thirty seconds while a row shows a time): its rows' ages are drawn again */
   const tick = (): Promise<void> => atClock(0.5, () => act(async () => { jest.advanceTimersByTime(30_000); }));
   const withClock = async (run: () => Promise<void>): Promise<void> => {
     jest.useFakeTimers();
@@ -784,13 +707,11 @@ describe("InboxList", () => {
   };
 
   it("keeps a waiting agent's question as its words and says how long it has waited since this device saw the wait begin", () => withClock(async () => {
-    // Given the agent at work forty minutes ago, as the page saw it, and waiting since three and a half minutes ago.
     let root!: ReactTestInstance;
     await atClock(40, async () => { root = await draw(roster(), { activity: statusOf({ "w1D:p1": "working" }) }); });
     await atClock(3.5, () => redraw({ activity }));
     await atClock(1, async () => {
       await act(async () => { answerPrompt(question("Run the export tests?")); });
-      // the agent last spoke before it worked for half an hour: its words' time is not its wait's
       await answerSummaries({ "w1D:p1": said("I will run the export tests next.", ago(39.5)) });
     });
     await tick();
@@ -799,18 +720,13 @@ describe("InboxList", () => {
   }));
 
   it("times a waiting row from the wait this device saw begin, else from the agent's last message, and draws none with neither", () => withClock(async () => {
-    // Given a page that opened on two agents already waiting, no page of this device having seen either wait begin: one
-    // whose last message is forty minutes old, and one with no message at all.
     const both = statusOf({ "w1E:p1": "blocked" });
     let root!: ReactTestInstance;
     await atClock(3.5, async () => { root = await draw(roster(), { activity: both }); });
     await atClock(0, () => answerSummaries({ "w1D:p1": said("I will run the export tests next.", ago(40.5)) }));
 
-    // Then the first draws the time of its last message, and the second, with neither, no time.
     expect([age(root, "w1D:p1"), times(root, "w1E:p1")]).toEqual([["40m"], []]);
 
-    // When the first goes back to work and waits again two and a half minutes ago: a wait this device saw begin, whose
-    // own time it draws, not its last message's.
     await atClock(10, () => redraw({ activity: statusOf({ "w1D:p1": "working", "w1E:p1": "blocked" }) }));
     await atClock(2.5, () => redraw({ activity: both }));
     await tick();
@@ -869,7 +785,6 @@ describe("InboxList", () => {
     await answerSummaries({ "w1E:p1": said("Done.", ago(6.5)), "w1F:p1": said("Done too.", ago(-10)) });
     expect(age(root, "w1E:p1")).toEqual(["6m"]);
     expect(age(root, "w1F:p1")).toEqual(["<1m"]);
-    // a filter that draws no time while an hour passes: no clock ticks meanwhile
     await redraw({ filter: "working" });
     const later = Date.now() + 60 * 60_000;
     const clock = spyOn(Date, "now").mockReturnValue(later);
@@ -911,7 +826,6 @@ describe("InboxList", () => {
     const root = await draw(roster(), { more: { label: "More", expanded: false, popup: "dialog", onPress: (node) => pressed.push(node) }, note: <span className="test-note">Link copied</span> });
     const top = byClass(root, "inbox-top")[0]!;
     const classes = (node: ReactTestInstance) => node.findAll((inner) => typeof inner.type === "string" && inner.parent === node).map((inner) => String(inner.props.className).split(" ").find((name) => name.startsWith("inbox-") && name !== "inbox-round") ?? String(inner.props.className));
-    // the connection's status line is in the document from the first render, drawn by nothing while it has no word
     expect(classes(top)).toEqual(["inbox-more", "test-note", "visually-hidden", "inbox-add"]);
     expect(classes(byClass(root, "inbox-foot")[0]!)).toEqual(["inbox-filter-toggle", "inbox-search"]);
     const more = byClass(root, "inbox-more")[0]!;
@@ -944,12 +858,10 @@ describe("InboxList", () => {
       const root = await draw(roster(), { wide: true });
       const buttons = (zone: string) => byClass(root, zone)[0]!.findAll((node) => node.type === "button").map((node) => String(node.props.className).split(" ").find((name) => name.startsWith("inbox-") && name !== "inbox-round"));
       expect(buttons("inbox-top")).toEqual(["inbox-search-toggle", "inbox-filter-toggle", "inbox-add"]);
-      // the filter is the one the foot of a phone's list has: it says the filter that is on, and opens the same choice
       const filter = byClass(root, "inbox-filter-toggle")[0]!;
       expect([filter.props["aria-label"], filter.props["aria-haspopup"], filter.props["aria-expanded"]]).toEqual(["Filter by state", "menu", false]);
       expect(byClass(root, "inbox-foot").length).toBe(0);
       const row = byClass(item(root, "w1D:p1"), "inbox-row")[0]!;
-      // the mark is the row's last child, after the two lines, not on the words' line
       expect(byClass(row, "inbox-sub").length).toBe(0);
       expect(String((row.children.at(-1) as ReactTestInstance).props.className).split(" ")).toContain("inbox-state");
       expect(row.props.title).toBe("Guard the export button\nNeeds you");
@@ -967,10 +879,8 @@ describe("InboxList", () => {
     });
 
     it("draws no More and no way out of its own: the mode's rail beside it holds them, whatever the shell hands the list", async () => {
-      // Given the column drawn with a More, as only the list that is the screen is given one.
       const root = await draw(roster(), { wide: true, more: { label: "More", expanded: false, popup: "menu", onPress() {} } });
 
-      // Then the column draws neither More nor Back to Ovis, and no picture of the app's mark.
       const drawn = root.findAll((node) => node.type === "button").map((node) => String(node.props["aria-label"] ?? text(node)));
       expect(drawn.filter((name) => /Back to Ovis|More/.test(name))).toEqual([]);
       expect([byClass(root, "inbox-more").length, byClass(root, "inbox-exit").length, root.findAll((node) => node.type === "img").length]).toEqual([0, 0, 0]);
@@ -980,14 +890,10 @@ describe("InboxList", () => {
       const queries: string[] = [];
       const root = await draw(roster(), { wide: true, onQuery: (query) => queries.push(query) });
       const toggle = () => byClass(root, "inbox-search-toggle")[0]!;
-      // the class by which a narrow column draws the field and lets the filter and New workspace give way (InboxList.css)
       const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
-      /** the head's controls, in the order they are drawn and the keyboard walks them */
       const head = () => byClass(root, "inbox-top")[0]!.findAll((node) => node.type === "button" || node.type === "input").map((node) => String(node.props.className).split(" ").find((name) => name.startsWith("inbox-") && name !== "inbox-round"));
-      // all four are drawn; the stylesheet shows the field or Search by the column's width
       expect(head()).toEqual(["inbox-search-input", "inbox-search-toggle", "inbox-filter-toggle", "inbox-add"]);
       expect([toggle().props["aria-expanded"], opened()]).toEqual([false, false]);
-      // the list's search says its scope, in its field, its button's name and its tooltip
       expect([toggle().props["aria-label"], toggle().props.title]).toEqual(["Search agents", "Search agents"]);
 
       await act(async () => { toggle().props.onClick(); });
@@ -996,7 +902,6 @@ describe("InboxList", () => {
       const scoped = root.findByProps({ type: "search" });
       expect([scoped.props.placeholder, scoped.props["aria-label"]]).toEqual(["Search agents", "Search agents"]);
 
-      // with words in it, Escape takes the words and the field stays; empty, Escape puts it away
       await redraw({ query: "export" });
       const field = () => root.findByProps({ type: "search" });
       const escape = (isComposing = false) => ({ key: "Escape", nativeEvent: { isComposing }, preventDefault() {} });
@@ -1014,13 +919,11 @@ describe("InboxList", () => {
       expect(opened()).toBe(true);
       await act(async () => { field().props.onKeyDown(escape()); });
       expect([toggle().props["aria-expanded"], opened()]).toEqual([false, false]);
-      // the field went from under the focus: the button that opened it has it, not nothing
       expect(focused.at(-1)?.node).toBe("inbox-search-toggle");
     });
 
     it("keeps a folded field open when Escape takes words typed before the column narrowed, and folds it on the next Escape", async () => {
       const queries: string[] = [];
-      // the words were typed while the column had the room for the field, so Search was never pressed
       const root = await draw(roster(), { wide: true, query: "export", onQuery: (query) => queries.push(query) });
       const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
       const field = () => root.findByProps({ type: "search" });
@@ -1029,7 +932,6 @@ describe("InboxList", () => {
       await act(async () => { field().props.onKeyDown(escape); });
       expect(queries).toEqual([""]);
       await redraw({ query: "" });
-      // the field holding the focus stays drawn
       expect(opened()).toBe(true);
       expect(focused.map((call) => call.node)).not.toContain("inbox-search-toggle");
       await act(async () => { field().props.onKeyDown(escape); });
@@ -1052,7 +954,6 @@ describe("InboxList", () => {
       const opened = () => String(byClass(root, "inbox-top")[0]!.props.className).split(" ").includes("is-search-open");
       expect(opened()).toBe(true);
       await act(async () => { byClass(root, "inbox-search-toggle")[0]!.props.onClick(); });
-      // a narrow column's row stays the field's for as long as it holds words
       expect(opened()).toBe(true);
     });
   });

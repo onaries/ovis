@@ -7,11 +7,9 @@ import { useSplitLayout } from "./useSplitView.ts";
 describe("useSplitLayout", () => {
   let renderer: ReactTestRenderer | undefined;
   const saved = new Map<string, PropertyDescriptor | undefined>();
-  /** every split the hook set */
   let written: (SplitState | null)[];
   let layout: ReturnType<typeof useSplitLayout>;
   const splitShownRef = { current: false };
-  /** a split of two halves side by side: slot a, the active one, shows the selection, slot b another pane */
   const split: SplitState = {
     root: { dir: "row", ratio: 0.5, first: { slot: "a" }, second: { slot: "b" } },
     panes: { b: { machineId: "local", paneId: "w1:p2" } },
@@ -61,10 +59,8 @@ describe("useSplitLayout", () => {
     await draw({ wideScreen: true, threadDrawn: false });
     expect(layout.splitOn).toBe(true);
     expect(splitShownRef.current).toBe(true);
-    // the inbox mode's thread draws the selected pane alone: the other half's alerts are no longer muted
     await draw({ wideScreen: true, threadDrawn: true });
     expect(splitShownRef.current).toBe(false);
-    // back in the classic app, the split is on the screen again
     await draw({ wideScreen: true, threadDrawn: false });
     expect(splitShownRef.current).toBe(true);
   });
@@ -74,7 +70,6 @@ describe("useSplitLayout", () => {
       written = [];
       await draw({ wideScreen, threadDrawn: false });
       await act(async () => { layout.activateSlotOf({ machineId: "local", paneId: "w1:p2" }); });
-      // slot b is active and the pane slot a showed stays in slot a: neither half is drawn twice once the window widens
       expect(written).toEqual([{ ...split, panes: { a: { machineId: "local", paneId: "w1:p1" } }, active: "b" }]);
     }
   });

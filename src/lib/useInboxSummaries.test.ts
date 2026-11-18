@@ -7,7 +7,6 @@ import { inboxOrder } from "./agentInbox.ts";
 import type { SidebarActivity } from "./sidebarActivity.tsx";
 import { SUMMARY_RETRIES, SUMMARY_RETRY_MS, SummaryReads, summaryTargets, type SummaryTarget } from "./useInboxSummaries.ts";
 
-/** A read whose answers the test hands out one by one, in the order the reads started. */
 function harness(now: number | (() => number) = 0, subscribed = true) {
   const calls: { machineId: string; paneIds: readonly string[]; resolve(answer: PaneSummaries | null): void; reject(error: Error): void }[] = [];
   const waits: { ms: number; run(): void; cancelled: boolean }[] = [];
@@ -29,7 +28,6 @@ const target = (key: string, stamp = "1", machineId = "local", lifetime = ""): S
 const said = (text: string, at: string | null = null): PaneSummary => ({ role: "assistant", text, at, asked_at: null });
 const answer = (summaries: Record<string, PaneSummary | null>, server_time = "1970-01-01T00:00:00.000Z"): PaneSummaries => ({ server_time, summaries });
 const settled = () => new Promise<void>((resolve) => queueMicrotask(resolve)).then(() => undefined);
-/** past every microtask, so an unhandled rejection has been reported */
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("summaryTargets", () => {
@@ -137,7 +135,6 @@ describe("SummaryReads", () => {
 
   it("asks a row once more after the wait when its new stamp answers with the words and time it had, whatever its state", async () => {
     const { reads, calls, waits } = harness();
-    // a stamp's state is in the stamp alone: working, then done
     reads.sync([target("a", "1:4:working")]);
     calls[0]!.resolve(answer({ "pane-a": said("Last turn", "1970-01-01T00:00:01.000Z") }));
     await settled();
@@ -161,7 +158,6 @@ describe("SummaryReads", () => {
     reads.sync([target("a", "1")]);
     calls[0]!.resolve(answer({ "pane-a": { ...said("Last turn", "2026-11-12T09:59:00.000Z"), asked_at: "2026-11-12T09:58:00.000Z" } }, "2026-11-12T10:00:00.000Z"));
     await settled();
-    // the next answer's server clock is 50 ms further from this device's: the same source times correct 50 ms apart
     deviceNow += 1000;
     reads.sync([target("a", "2")]);
     calls[1]!.resolve(answer({ "pane-a": { ...said("Last turn", "2026-11-12T09:59:00.000Z"), asked_at: "2026-11-12T09:58:00.000Z" } }, "2026-11-12T10:00:01.050Z"));
@@ -172,7 +168,6 @@ describe("SummaryReads", () => {
   it("counts a corrected time a Date cannot hold as no time", async () => {
     const { reads, calls } = harness(Date.parse("2026-11-12T10:00:00.000Z"));
     reads.sync([target("a")]);
-    // the server's clock is behind this device's: the latest time a Date holds, corrected, passes it
     calls[0]!.resolve(answer({ "pane-a": { ...said("far", "+275760-09-13T00:00:00.000Z"), asked_at: "+275760-09-13T00:00:00.000Z" } }, "2026-11-12T09:00:00.000Z"));
     await settled();
     expect(reads.summaries().get("a")).toMatchObject({ text: "far", at: null, askedAt: null });
@@ -202,7 +197,6 @@ describe("SummaryReads", () => {
     calls[0]!.resolve(answer({ "pane-b": said("Old") }));
     await settled();
     reads.sync([target("b", "2")]);
-    // the first answer under the new stamp may come from a read begun before the change
     calls[1]!.resolve(answer({ "pane-b": said("Let me run the tests") }));
     await settled();
     expect(reads.summaries().get("b")?.text).toBe("Let me run the tests");
@@ -213,7 +207,6 @@ describe("SummaryReads", () => {
     calls[2]!.resolve(answer({ "pane-b": said("All tests pass.") }));
     await settled();
     expect(reads.summaries().get("b")?.text).toBe("All tests pass.");
-    // once per key and stamp
     expect(waits).toHaveLength(1);
     expect(calls).toHaveLength(3);
   });
@@ -258,7 +251,6 @@ describe("SummaryReads", () => {
     reads.sync([target("a", ":f1:3:done")]);
     calls[0]!.resolve(answer({ "pane-a": said("Words before the proof") }));
     await settled();
-    // the snapshot proves its herdr now: the same pane, read again
     reads.sync([target("a", "life-1:f1:3:done", "local", "life-1")]);
     expect(reads.summaries().get("a")?.text).toBe("Words before the proof");
     expect(calls).toHaveLength(2);
@@ -278,7 +270,6 @@ describe("SummaryReads", () => {
     calls[1]!.resolve(answer({ "pane-a": said("New pane's words") }));
     await settled();
     expect(reads.summaries().get("a")?.text).toBe("New pane's words");
-    // within one lifetime the words are carried across a stamp change as before
     reads.sync([target("a", "life-2:f2:4:done", "local", "life-2")]);
     expect(reads.summaries().get("a")?.text).toBe("New pane's words");
   });
@@ -387,7 +378,6 @@ describe("SummaryReads", () => {
     await settled();
     expect(notified()).toBe(2);
     expect(reads.summaries().get("a")?.failed).toBe(true);
-    // the words carried to the new stamp lose their failed mark at once, and the answer gives it back with its askedAt
     reads.sync([target("a", "4")]);
     expect(notified()).toBe(3);
     expect(reads.summaries().get("a")?.failed).toBe(false);

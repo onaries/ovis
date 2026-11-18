@@ -7,9 +7,6 @@ import { linkTarget, type NotificationTarget } from "./notificationTarget.ts";
 import { getTransport, setTransport } from "./transport.ts";
 import { useNotificationTargets, useSelectTarget } from "./useSelection.ts";
 
-// The real hook: a desktop link selects its pane only once the roster lists it in the link's
-// workspace (lib/deepLink.ts resolveLink); before that it selects its PC alone and waits as the
-// address's own link does, so no pane it may not mean is drawn or attached meanwhile.
 describe("a desktop link's landing", () => {
   let saved: PropertyDescriptor | undefined;
   let renderer: ReactTestRenderer | undefined;
@@ -18,7 +15,6 @@ describe("a desktop link's landing", () => {
   let selected: [string, string | null, string | undefined][];
   let waits: number;
 
-  // workspace 3 is "alpha"; herdr handed pane t3 to workspace 4 ("beta")
   const roster = [{
     id: "local",
     state: "connected",
@@ -54,7 +50,6 @@ describe("a desktop link's landing", () => {
       const rosterSeq = useRef(0);
       const [, setLinkLanded] = useState(true);
       const [, setLinkTick] = useState(0);
-      // as App's selectTarget: a pick drops the link waiting
       const selectTargetRef = useRef((machineId: string, paneId: string | null, view?: string) => { selected.push([machineId, paneId, view]); pendingLink.current = null; });
       take = useNotificationTargets({
         machinesRef, selectTargetRef, selectionHint, pendingLink, pendingFile, setLinkLanded, linkSince, rosterSeq, setLinkTick,
@@ -112,8 +107,6 @@ describe("a desktop link's landing", () => {
   });
 });
 
-// The real selection and its landing effect, wired as App wires them: a link to a pane the cached
-// roster lacks clears the selection while this PC is asked, and always ends on a pane.
 describe("a desktop link to a pane the cached roster lacks", () => {
   const transport = getTransport();
   let saved: PropertyDescriptor | undefined;
@@ -135,7 +128,6 @@ describe("a desktop link to a pane the cached roster lacks", () => {
   };
   const machines = [{ id: "local", name: "This PC", kind: "local", enabled: true, state: "connected", error: null, snapshot }] as unknown as Machine[];
 
-  /** what this PC answers when asked for its session: its roster, or a failed read */
   function answer(read: "roster" | "fails"): void {
     setTransport({ ...transport, async fetch() {
       reads += 1;
@@ -160,7 +152,6 @@ describe("a desktop link to a pane the cached roster lacks", () => {
   });
 
   async function mount(): Promise<void> {
-    // the link settles (setLinkLanded(true)) after it waited (setLinkLanded(false))
     let settle = () => {};
     landed = new Promise((resolve) => { settle = resolve; });
     let waiting = false;
@@ -247,7 +238,6 @@ describe("a desktop link to a pane the cached roster lacks", () => {
   });
 
   it("selects a live pane by its hyphenated workspace id when that workspace was renamed and its old name given to another", async () => {
-    // the app wrote `?ws=<gamma>-alpha` while gamma was "alpha"; gamma is now "gamma", and "alpha" is workspace 3
     answer("roster");
     await mount();
     await act(async () => { take(linkTarget(`?ws=${gamma}-alpha&pane=t5`)!); });

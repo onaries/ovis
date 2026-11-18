@@ -11,7 +11,6 @@ const root = join(import.meta.dir, "..");
 const indexHtml = readFileSync(join(root, "index.html"), "utf8");
 const manifest = readFileSync(join(root, "public", "manifest.webmanifest"), "utf8");
 
-/** The `_headers` blocks: each path with its header lines, as Pages reads them. */
 function headerBlocks(text: string): Map<string, string[]> {
   const blocks = new Map<string, string[]>();
   let path: string | null = null;
@@ -25,7 +24,6 @@ function headerBlocks(text: string): Map<string, string[]> {
 }
 
 describe("the shell's page", () => {
-  /** the render host's own script, run against a stand-in for its page: what it wrote, and the frames it put in its body */
   const renderHost = () => {
     const html = shellFiles(manifest)["render.html"] ?? "";
     const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];

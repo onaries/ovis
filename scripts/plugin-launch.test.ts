@@ -6,12 +6,6 @@ import { pathToFileURL } from "node:url";
 import { type CheckoutCommit, checkoutCommit, gitFailed, main, run } from "./plugin-launch.ts";
 import { generateKeyPair, MANIFEST, releaseFile, PTY_ASSETS, ptyFile, SERVER_PLATFORMS, signManifest, sourceTrees, writeManifest } from "./server-manifest.ts";
 
-/**
- * scripts/plugin-launch.ts's choice between the release's binary and this checkout's sources (INSTALL.md, "Binary or
- * source"): sources only when this version's release has no ovis-server.json at all. The source path is a
- * stand-in that records its call (the real one would build the checkout and run scripts/plugin.ts), and every install
- * goes into a folder of the test's own.
- */
 const version = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
 let scratch = "";
 let saved: Record<string, string | undefined> = {};
@@ -28,10 +22,6 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/**
- * runs `args` with the source path recorded; what it returned, and each call the source path got. The checkout's sources
- * are trees git ties (the release's own, unless a test gives others), whatever state this checkout's are in.
- */
 const BUILT_FROM = { server: "a".repeat(40), shared: "b".repeat(40) };
 async function launch(args: string[], fetchFile?: typeof fetch, sources: { server: string; shared: string } | { error: string } = BUILT_FROM): Promise<{ code: number; sourced: string[][]; home: string }> {
   const home = join(scratch, "server");
@@ -39,7 +29,6 @@ async function launch(args: string[], fetchFile?: typeof fetch, sources: { serve
   const code = await main(args, { home, fetchFile, sources, source: async (command, rest) => { sourced.push([command, ...rest]); return 7; } });
   return { code, sourced, home };
 }
-/** a release out of reach: each address asked is recorded, and the fetch fails as offline */
 function offline(asked: string[]): typeof fetch {
   return (async (url: string | URL | Request) => { asked.push(String(url)); throw new TypeError("fetch failed"); }) as typeof fetch;
 }
@@ -50,7 +39,6 @@ describe("the herdr plugin's launcher", () => {
     mkdirSync(join(scratch, "release", `v${version}`), { recursive: true });
     const first = await launch(["status", "--json"]);
     expect(first).toMatchObject({ code: 7, sourced: [["status", "--json"]] });
-    // only a start that found the build complete remembers it (below, "whatever ran before")
     expect(existsSync(join(first.home, "from-source"))).toBe(false);
     expect(existsSync(join(first.home, "bin"))).toBe(false);
   });
@@ -84,16 +72,13 @@ describe("the herdr plugin's launcher", () => {
     expect(result).toMatchObject({ code: 1, sourced: [] });
     expect(existsSync(join(result.home, "from-source"))).toBe(false);
     rmSync(join(dir, MANIFEST));
-    // (not `start`: that one runs only a finished build, and this checkout's build is not this test's)
     expect((await launch(["status"])).sourced).toEqual([["status"]]);
   });
 
   it("asks the release again at the build step, so a release that gained its binary is taken", async () => {
-    // the source choice an earlier start remembered
     mkdirSync(join(scratch, "server"), { recursive: true });
     writeFileSync(join(scratch, "server", "from-source"), `${version}\n`);
     process.env["OVIS_RELEASES_URL"] = "http://nowhere.invalid";
-    // the build step drops what was remembered and asks again; this address is refused, so it fails
     expect(await launch(["install"])).toMatchObject({ code: 1, sourced: [] });
   });
 
@@ -108,7 +93,6 @@ describe("the herdr plugin's launcher", () => {
     const install = await launch(["install"]);
     expect(install).toMatchObject({ code: 7, sourced: [["install"]] });
     delete process.env["OVIS_FROM_SOURCE"];
-    // the release answers a server error: a start that asked it would fail, not run the sources the install built
     const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
     expect(await launch(["start"], broken)).toMatchObject({ code: 7, sourced: [["start"]] });
   });
@@ -124,8 +108,6 @@ describe("the herdr plugin's launcher", () => {
     expect(existsSync(join(home, "from-source"))).toBe(false);
   });
 
-  // .ovis/server/source-build, which install.ps1 reads: what the stamp says while the build runs is what a build cut
-  // off there (a closed window, a restart) leaves
   const head = Bun.spawnSync(["git", "-C", join(import.meta.dir, ".."), "rev-parse", "HEAD"]).stdout.toString().trim();
   const finished = `${[version, head].filter(Boolean).join(" ")}\n`;
   async function build(exitCode: number, fetchFile?: typeof fetch): Promise<{ code: number; during: string; after: string }> {
@@ -138,7 +120,6 @@ describe("the herdr plugin's launcher", () => {
   it("stamps the build finished, with the version and the commit, only after every step returned 0", async () => {
     process.env["OVIS_FROM_SOURCE"] = "1";
     expect(await build(0)).toEqual({ code: 0, during: "started\n", after: finished });
-    // a release without ovis-server.json builds and stamps the same
     delete process.env["OVIS_FROM_SOURCE"];
     const notFound = (async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
     expect(await build(0, notFound)).toEqual({ code: 0, during: "started\n", after: finished });
@@ -146,7 +127,6 @@ describe("the herdr plugin's launcher", () => {
 
   it("stamps the version alone in a folder git says is no repository", async () => {
     process.env["OVIS_FROM_SOURCE"] = "1";
-    // git pointed at no repository says so as it does in a folder that is no git checkout
     process.env["GIT_DIR"] = join(scratch, "no-git");
     try {
       expect(await checkoutCommit()).toEqual({ none: "no checkout" });
@@ -164,9 +144,7 @@ describe("the herdr plugin's launcher", () => {
     const given = Object.fromEntries(Object.keys(set).map((name) => [name, process.env[name]]));
     Object.assign(process.env, set);
     try {
-      // (on Windows with the cmd.exe form too: the test below)
       expect(await checkoutCommit()).toMatchObject({ failed: expect.stringMatching(/^fatal: detected dubious ownership in repository at /), trust: expect.stringContaining("git config --global --add safe.directory ") });
-      // regression (main stamped the version alone, which install.ps1 took as built whatever commit the checkout is at)
       expect(await build(0)).toEqual({ code: 0, during: "started\n", after: "started\n" });
     } finally {
       for (const [name, value] of Object.entries(given)) {
@@ -180,7 +158,6 @@ describe("the herdr plugin's launcher", () => {
     process.env["OVIS_FROM_SOURCE"] = "1";
     expect(await build(0)).toMatchObject({ after: finished });
     expect(await build(1)).toEqual({ code: 1, during: "started\n", after: "started\n" });
-    // a build step that takes the release's binary drops the stamp with the marker
     delete process.env["OVIS_FROM_SOURCE"];
     const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
     expect(await launch(["install"], broken)).toMatchObject({ code: 1, sourced: [] });
@@ -195,9 +172,7 @@ describe("the herdr plugin's launcher", () => {
       return { code, after: readFileSync(join(home, "source-build"), "utf8") };
     };
     expect(await stamped(["a".repeat(40), "a".repeat(40)])).toEqual({ code: 0, after: `${version} ${"a".repeat(40)}\n` });
-    // a pull while bun install ran: the sources built are not the commit's that HEAD now names
     expect(await stamped(["a".repeat(40), "b".repeat(40)])).toEqual({ code: 0, after: "started\n" });
-    // git failing after the build, or before it: nothing tells what was built
     for (const answers of [[{ commit: "a".repeat(40) }, { failed: "git exited with 128" }], [{ failed: "git exited with 128" }, { commit: "a".repeat(40) }]] as const) {
       const given = [...answers];
       expect(await main(["install"], { home, source: async () => 0, commit: async () => given.shift()! })).toBe(0);
@@ -218,9 +193,7 @@ describe("the herdr plugin's launcher", () => {
         said.length = 0;
         const given: CheckoutCommit[] = [before, after];
         expect(await main(["install"], { home, source: async () => 0, commit: async () => given.shift()! })).toBe(0);
-        // the stamp stays `started` either way
         expect(readFileSync(join(home, "source-build"), "utf8")).toBe("started\n");
-        // regression (fails on main): a change of kind was said as a move to another commit
         expect(said.some((line) => line.includes("moved to another commit")), `${JSON.stringify([before, after])}: ${said.join(" | ")}`).toBe(moved);
         expect(said.some((line) => line.includes("git's answer for the checkout changed while it was built"))).toBe(!moved);
       }
@@ -263,7 +236,6 @@ describe("the herdr plugin's launcher", () => {
       if (!("failed" in answer) || !answer.trust) throw new Error(`no trust command: ${JSON.stringify(answer)}`);
       // the reason the release's binary is not taken there says git distrusts it, not that it is no checkout
       expect(sourceTrees(folder)).toEqual({ error: "git does not trust this folder (another account owns it), so the binaries cannot be tied to their sources" });
-      // the build in that folder is left unfinished, and the command is said on a line of its own
       const home = join(scratch, "server");
       expect(await main(["install"], { home, source: async () => 0, commit: () => checkoutCommit(folder) })).toBe(0);
       expect(readFileSync(join(home, "source-build"), "utf8")).toBe("started\n");
@@ -295,8 +267,7 @@ describe("the herdr plugin's launcher", () => {
     }
   });
 
-  // The release's binary is taken only for sources git ties to it (sourceTrees); nothing else the launcher does needs git.
-  // Run in a process of its own, started with a PATH that has no git (Bun looks a program up on the PATH it started with).
+  // Bun looks a program up on the PATH it started with: a PATH without git needs a process of its own
   it("runs without git on PATH: builds and runs from source, leaving the build unfinished, and gives no binary to sources it cannot tie", async () => {
     const bin = join(scratch, "bin");
     mkdirSync(bin);
@@ -315,17 +286,13 @@ const status = await main(["status"], { home, source });
 console.log(JSON.stringify({ install, stamp, status, calls, trees: sourceTrees() }));`;
     const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, PATH: bin, OVIS_FROM_SOURCE: "1" }, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    // regression (fails on main): sourceTrees threw ENOENT before any command ran
     expect(code, err).toBe(0);
     expect(JSON.parse(out)).toEqual({ install: 0, stamp: "started\n", status: 0, calls: ["install", "status"], trees: { error: "git is not on PATH, so the binaries cannot be tied to their sources" } });
     expect(err).toContain("git could not read the checkout's commit (git is not on PATH)");
   });
 
-  // Without sources git ties to the release (no git, no checkout, changes not committed) its binary is never taken, so
-  // nothing the release answers changes the choice: it is not asked. A start for that reason runs the checkout's own
-  // build only once it finished, and does not remember it. These run the launcher of a checkout of the test's own, with
-  // its real source path: its scripts/plugin.ts stands for the server and notes the command it got; `stop` ends the
-  // process its server.pid names, and `status` says it runs.
+  // Without sources git ties to the release (no git, no checkout, changes not committed) its binary is not installed
+  // (none is in these checkouts yet), so nothing the release answers changes the choice: it is not asked.
   // `key`: the release key this checkout pins instead of RELEASE_PUBLIC_KEY, so a release the test signs is checked as
   // the real one is
   function checkout({ packages = true, client = true, stamp, git = false, key }: { packages?: boolean; client?: boolean; stamp?: string; git?: boolean; key?: string } = {}): string {
@@ -360,7 +327,6 @@ if (process.argv[2] === "status") console.log(pid === null ? "down" : \`running 
     }
     return dir;
   }
-  /** `command` (`start`) in that checkout, in a process of its own: without git on PATH unless `git`, the release out of reach unless `releases` names one */
   async function startIn(dir: string, { git = false, sources, releases = "https://releases.invalid", command = "start" }: { git?: boolean; sources?: { error: string }; releases?: string; command?: string } = {}) {
     const bin = join(scratch, "no-git");
     mkdirSync(bin, { recursive: true });
@@ -382,8 +348,6 @@ console.log(JSON.stringify({ code, asked }));`;
     writeFileSync(join(dir, ".ovis", "server", "source-build"), `${stamp}\n`);
   };
 
-  // Only `start` brings a server up: `stop` and `status` reach the sources whatever their build, so a server that runs
-  // from them (started before the build was cut off, or its client removed) is stopped by herdr's stop action.
   for (const [state, unfinish] of [
     ["its client is gone", (dir: string) => rmSync(join(dir, "dist", "index.html"))],
     ["its packages are gone", (dir: string) => rmSync(join(dir, "node_modules"), { recursive: true })],
@@ -396,7 +360,6 @@ console.log(JSON.stringify({ code, asked }));`;
         writeFileSync(join(dir, "server.pid"), String(server.pid));
         unfinish(dir);
         const status = await startIn(dir, { command: "status" });
-        // regression (fails on main: exit 1, "nothing was started", and scripts/plugin.ts never ran)
         expect(status).toMatchObject({ code: 0, asked: [], ran: "status", marker: false });
         expect(status.out).toContain(`running (pid ${server.pid})`);
         expect(await startIn(dir, { command: "stop" })).toMatchObject({ code: 0, asked: [], ran: "stop", marker: false });
@@ -407,11 +370,7 @@ console.log(JSON.stringify({ code, asked }));`;
     });
   }
 
-  // A complete build of another version or commit than the checkout's (a pull with no build step: new server sources,
-  // the old client) is a server that runs: it starts as on main, the choice remembered where main remembers it, after one
-  // line that says which build it is and how to rebuild it. Where git reads the commit, the stamp is compared with it.
   const uncommitted = { error: "server/ or shared/ has changes that are not committed, so the binaries would not be built from HEAD's sources" };
-  /** this version's release folder without ovis-server.json (as GitHub's 404) */
   const noCompiledServer = () => {
     mkdirSync(join(scratch, "release", `v${version}`), { recursive: true });
     return pathToFileURL(join(scratch, "release")).href;
@@ -426,40 +385,31 @@ console.log(JSON.stringify({ code, asked }));`;
         stampIn(dir, stamp(dir));
         const result = await startIn(dir, tied ? { git: true, releases: noCompiledServer() } : { git: true, sources: uncommitted });
         expect(result).toMatchObject({ code: 0, asked: [], ran: "start", marker: tied });
-        // the build's and the checkout's, in that order, on the line before the start's own, with the command
         const line = result.err.split("\n").find((text) => text.includes("this checkout's build is of")) ?? "";
         const [built, now] = said(dir);
         expect(line.indexOf(built)).toBeGreaterThan(-1);
         expect(line.indexOf(now)).toBeGreaterThan(line.indexOf(built));
-        // the command for this platform's shell, as the launcher builds it (PowerShell on Windows)
         expect(line).toContain(process.platform === "win32" ? "$env:OVIS_FROM_SOURCE = '1'; bun " : "OVIS_FROM_SOURCE=1 bun ");
         expect(result.err.indexOf(line)).toBeLessThan(result.err.indexOf("so this checkout runs"));
       });
     }
   }
 
-  // The same check where git ties the sources and the release has no compiled server for them: an unfinished build is
-  // refused there too, whether or not a line is left uncommitted. The other commands reach the sources, and only a start
-  // that found the build complete remembers the choice: the marker sends later starts to the sources before any check.
   it("starts nothing where git ties the sources, the release ships no compiled server and the build is not complete, whatever ran before", async () => {
     const dir = checkout({ git: true, client: false });
     const releases = noCompiledServer();
     const start = await startIn(dir, { git: true, releases });
-    // regression (fails on main: exit 0, a server with no client, and the choice remembered)
     expect(start).toMatchObject({ code: 1, ran: null, marker: false });
     expect(start.err).toContain("ships no compiled server");
     expect(start.err).toContain("no dist/index.html");
     // regression (fails at 1040c7de: the stop wrote the marker, and the start after it ran the sources unchecked)
     for (const command of ["stop", "status"]) expect(await startIn(dir, { git: true, releases, command })).toMatchObject({ code: 0, ran: command, marker: false });
     expect(await startIn(dir, { git: true, releases })).toMatchObject({ code: 1, ran: null, marker: false });
-    // once the build is complete, the start runs it and remembers it
     mkdirSync(join(dir, "dist"));
     writeFileSync(join(dir, "dist", "index.html"), "");
     expect(await startIn(dir, { git: true, releases })).toMatchObject({ code: 0, ran: "start", marker: true });
   });
 
-  // The two other ways a release gives no binary for sources git ties: its manifest has the shape from before schema 1,
-  // or it was built from other trees (a branch, or main between releases). Both are new to the check with this change.
   for (const [way, said, manifest] of [
     ["the release's manifest has the shape from before schema 1", "shape from before schema 1", (dir: string) => writeFileSync(join(dir, MANIFEST), JSON.stringify({ version }))],
     ["the release was built from other trees (a branch)", "other git trees", (dir: string) => {
@@ -478,7 +428,6 @@ console.log(JSON.stringify({ code, asked }));`;
       signManifest(release, keys.privateKeyPem);
       const releases = pathToFileURL(join(scratch, "release")).href;
       const start = await startIn(dir, { git: true, releases });
-      // regression (fails on main: exit 0, a server with no client, and the choice remembered)
       expect(start).toMatchObject({ code: 1, ran: null, marker: false });
       expect(start.err).toContain(said);
       expect(start.err).toContain("no dist/index.html");
@@ -488,8 +437,6 @@ console.log(JSON.stringify({ code, asked }));`;
     });
   }
 
-  // A release out of reach, for sources git ties, with no checked binary kept: no binary can be had, so `stop` and
-  // `status` reach the sources, whose scripts/plugin.ts reads the server's record; a start still fails, as on main.
   it("stops, and reports, a running server where git ties the sources and the release is out of reach; a start still fails", async () => {
     const dir = checkout({ git: true });
     const server = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1 << 30)"], { stdout: "ignore", stderr: "ignore" });
@@ -499,7 +446,6 @@ console.log(JSON.stringify({ code, asked }));`;
       expect(start).toMatchObject({ code: 1, ran: null, marker: false });
       expect(start.err).toContain("could not install the server");
       const status = await startIn(dir, { git: true, command: "status" });
-      // regression (fails on main and at 1040c7de: exit 1, and scripts/plugin.ts never ran)
       expect(status).toMatchObject({ code: 0, ran: "status", marker: false });
       expect(status.asked).toEqual([`https://releases.invalid/v${version}/ovis-server.json`]);
       expect(status.out).toContain(`running (pid ${server.pid})`);
@@ -512,7 +458,6 @@ console.log(JSON.stringify({ code, asked }));`;
 
   it("starts a finished build without git, the release out of reach, without asking it, and remembers nothing", async () => {
     const dir = checkout({ stamp: `${version} ${"a".repeat(40)}` });
-    // regression (fails at e1a4d23f, which remembered the choice; on main: exit 1, nothing ran)
     expect(await startIn(dir)).toMatchObject({ code: 0, asked: [], ran: "start", marker: false });
     expect(readFileSync(join(dir, ".ovis", "server", "source-build"), "utf8")).toBe(`${version} ${"a".repeat(40)}\n`);
   });
@@ -524,7 +469,6 @@ console.log(JSON.stringify({ code, asked }));`;
   ] as const) {
     it(`starts nothing without git for a checkout ${state}, saying it needs a build and how`, async () => {
       const result = await startIn(checkout(given));
-      // regression (fails at e1a4d23f, which ran it and remembered it)
       expect(result).toMatchObject({ code: 1, asked: [], ran: null, marker: false });
       expect(result.err).toContain(missing);
       expect(result.err).toContain("OVIS_FROM_SOURCE");
@@ -540,10 +484,8 @@ console.log(JSON.stringify({ code, asked }));`;
   it("takes the usual way again once git ties the sources and the release answers: the start without git left nothing behind", async () => {
     const dir = checkout({ git: true });
     expect(await startIn(dir)).toMatchObject({ code: 0, ran: "start", marker: false });
-    // git and a release back: the release is asked (it has no compiled server, so the checkout runs from source)
     mkdirSync(join(scratch, "release", `v${version}`), { recursive: true });
     const back = await startIn(dir, { git: true, releases: pathToFileURL(join(scratch, "release")).href });
-    // regression (fails at e1a4d23f: its marker sent this start to the sources without asking the release)
     expect(back.err).toContain("ships no compiled server");
     expect(back).toMatchObject({ code: 0, ran: "start", marker: true });
   });
@@ -585,7 +527,6 @@ describe("the launcher's child", () => {
   const posix = it.skipIf(process.platform === "win32");
   const launcherModule = JSON.stringify(join(import.meta.dir, "plugin-launch.ts"));
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  /** `promise`, or a failure after 10 s: a launcher that hangs fails its test, which still reaches its `finally` */
   async function within<T>(promise: Promise<T>, what: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -596,7 +537,6 @@ describe("the launcher's child", () => {
   const launch = (script: string, env: Record<string, string> = {}) =>
     Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, ...env }, stdout: "pipe", stderr: Bun.file(join(scratch, "stderr")) });
   const said = () => readFileSync(join(scratch, "stderr"), "utf8");
-  /** kills the launcher, and the child whose pid is in `pidFile`, whatever the test came to */
   function cleanUp(launcher: ReturnType<typeof launch>, pidFile: string): void {
     launcher.kill("SIGKILL");
     const child = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
@@ -608,7 +548,6 @@ describe("the launcher's child", () => {
     const launcher = launch(`const { run } = await import(${launcherModule});
 process.exit(await run(["sh", "-c", 'trap "exit 3" TERM; echo $$ > ${pidFile}; echo up; while :; do sleep 0.05; done']));`);
     try {
-      // the child says it is up on the stdout it shares with the launcher, then loops
       const up = await within(launcher.stdout.getReader().read(), "the child never started");
       expect(new TextDecoder().decode(up.value)).toBe("up\n");
       launcher.kill("SIGTERM");
@@ -619,9 +558,8 @@ process.exit(await run(["sh", "-c", 'trap "exit 3" TERM; echo $$ > ${pidFile}; e
 
   for (const [signal, exit] of [["SIGTERM", 3], ["SIGHUP", 4]] as const) {
     posix(`gets a ${signal} that comes the instant it starts, and the launcher exits as the child did, leaving no child behind`, async () => {
-      // The launcher is held where it starts listening for the signal, if it has started the child by then, until the
-      // child has sent it the signal: as if it were descheduled there. A launcher that listens only after the spawn is
-      // ended by the signal and leaves its child running; one that listens first passes it on.
+      // A launcher that listens only after the spawn is ended by the signal and leaves its child running; one that
+      // listens first passes it on.
       const pidFile = join(scratch, "child");
       const sent = join(scratch, "sent");
       const name = signal.slice(3);
@@ -644,9 +582,6 @@ process.exit(await run(["sh", "-c", 'trap "exit ${exit}" ${name}; echo $$ > ${pi
 
   for (const [signal, exit] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) {
     posix(`starts no further build step after a ${signal} that came as one started and found it already ended`, async () => {
-      // The signal comes just before the build's first step starts, and that step (\`true\`) has ended before the
-      // launcher could pass the signal on: a stop that reached nothing. The launcher stops there, as that signal would
-      // have stopped it, and the next step never starts. Git, which the build reads, runs as it is.
       const second = join(scratch, "second-step");
       const pidFile = join(scratch, "child");
       const launcher = launch(`const spawn = Bun.spawn;
@@ -671,9 +606,6 @@ process.exit(await main(["install"], { home: ${JSON.stringify(join(scratch, "ser
   }
 
   posix("names the first of two signals that came while a build step ran that then ended with 0", async () => {
-    // The first step is sent a SIGTERM by the launcher (passed on from its own), and answers it with a SIGHUP to the
-    // launcher; once that one is passed on too, it ends with 0. Each signal comes only after the one before it was
-    // passed on, so the order is the same every time.
     const second = join(scratch, "second-step");
     const pidFile = join(scratch, "child");
     const launcher = launch(`const spawn = Bun.spawn;
@@ -688,14 +620,11 @@ const { main } = await import(${launcherModule});
 process.exit(await main(["install"], { home: ${JSON.stringify(join(scratch, "server"))} }));`, { OVIS_FROM_SOURCE: "1" });
     try {
       const code = await within(launcher.exited, "the launcher never exited");
-      // regression (fails on main: 129, the SIGHUP that came last)
       expect({ code, secondStep: existsSync(second) }, said()).toEqual({ code: 143, secondStep: false });
     } finally { cleanUp(launcher, pidFile); }
   }, 30_000);
 
   posix("does not stop a build at a signal an earlier run in the same process was sent", async () => {
-    // run() and main() called one after another in one process, as only a caller other than the launcher's CLI would:
-    // the SIGTERM the first run passed on to its child belongs to that run, and the build after it runs every step.
     const pidFile = join(scratch, "child");
     const launcher = launch(`const { main, run } = await import(${launcherModule});
 const first = await run(["sh", "-c", 'echo $$ > ${pidFile}; kill -TERM $PPID; while :; do sleep 0.05; done']);
@@ -712,13 +641,11 @@ process.exit(0);`, { OVIS_FROM_SOURCE: "1" });
     try {
       const [out, code] = await within(Promise.all([new Response(launcher.stdout).text(), launcher.exited]), "the launcher never exited");
       expect(code, said()).toBe(0);
-      // regression (fails on main: the build stopped after its first step with 143)
       expect(JSON.parse(out)).toEqual({ first: 143, code: 0, steps: 3 });
     } finally { cleanUp(launcher, pidFile); }
   }, 30_000);
 
   posix("exits with 128 + the platform's number of whatever signal ended the child", async () => {
-    // regression (fails on main: 128 for SIGKILL and SIGQUIT, which its table of HUP, INT and TERM did not know)
     for (const [signal, code] of [["KILL", 137], ["QUIT", 131], ["TERM", 143]] as const) expect([signal, await run(["sh", "-c", `kill -${signal} $$`])]).toEqual([signal, code]);
   });
 });

@@ -6,13 +6,9 @@ import { SettingsProvider } from "../src/lib/settings.ts";
 import type { AgentStatus, ConversationMetadata } from "../shared/protocol.ts";
 declare global { interface Window { chatFallbackQA: {
   pane: (pane: string) => void; refresh: () => void; agent: (agent: string | null) => void; status: (status: AgentStatus | undefined) => void;
-  /** the metadata the chat last forwarded for a pane, as the composer's model pill receives it */
   metadata: (pane: string) => ConversationMetadata | null | undefined;
-  /** how many answers the chat has forwarded metadata for: one per read it handled */
   forwarded: () => number;
-  /** whether the chat listens to its terminal's output, and that output arriving */
   listening: () => boolean; output: () => void;
-  /** resolves once `check` holds, checked again on each forwarded metadata and listener change */
   until: (check: () => boolean) => Promise<void>;
 } } }
 const metadata = new Map<string, ConversationMetadata | null>();

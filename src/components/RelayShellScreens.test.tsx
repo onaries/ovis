@@ -133,7 +133,6 @@ describe("RelayShellScreens", () => {
     expect(digitsHtml).toMatch(/<label[^>]*class="relay-shell-field-label"/);
     expect(digitsHtml).toMatch(/<input[^>]*class="input relay-shell-code-input"/);
 
-    // Compact mode for AddPcSheet omits duplicate h1 and copy
     const compactHtml = render(
       createElement(TypedDigits, {
         pc: "Desk PC",
@@ -145,7 +144,6 @@ describe("RelayShellScreens", () => {
     expect(compactHtml).not.toContain("<h1");
     expect(compactHtml).not.toContain("relay-shell-copy");
 
-    // Uncontrolled input node is retained across code-looking -> code-entry error
     const submitted: string[] = [];
     const fieldMock = { value: "7K3QD-M2XHA" };
     let renderer: ReactTestRenderer | undefined;
@@ -337,7 +335,6 @@ describe("RelayShellScreens", () => {
       expect(joins).toContain("This device joins Desk PC with your account&#x27;s key.");
       expect(joins).toContain('disabled="" aria-busy="true">Pair</button>');
       expect(joins).toContain("Checking your account…");
-      // a device that is signed out is told of no account, pressed or not
       const own = confirm("checking", "own");
       expect(own).toContain("This device gets a key of its own for Desk PC.");
       expect(own).toContain('disabled="" aria-busy="true">Pair</button>');

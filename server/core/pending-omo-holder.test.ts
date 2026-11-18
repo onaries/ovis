@@ -102,7 +102,6 @@ it("binds a queued command's outcome to the OmO it was queued for when another h
     bound.push(args[1]);
     realBind(...args);
   });
-  // herdr lists the other holder first by the time the turn ends
   fixture.state.foreground = [peer, parent];
   await fixture.drain();
   expect(item.message.error?.code).toBeUndefined();
@@ -110,7 +109,6 @@ it("binds a queued command's outcome to the OmO it was queued for when another h
   expect(bound).toHaveLength(1);
   await bound[0]?.visibility?.binding;
   expect(bound[0]?.visibility?.process).toEqual({ pid: parent.pid, started: 1_000, held: true });
-  // the pending checks read the holders for the queued process; the binding reads none of its own
   expect(holderReads.mock.calls.map((call) => call[3])).toEqual(holderReads.mock.calls.map(() => parent.pid));
   expect(holderReads).toHaveBeenCalled();
 });

@@ -52,6 +52,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "本轮编辑的文件",
   "Open working-tree diff for {path}": "打开 {path} 的工作树差异",
   "This file is outside the pane's repository.": "此文件位于窗格的仓库之外。",
+  "A key may not have reached the terminal: the connection ended before it was confirmed.": "按键可能未送达终端：确认之前连接已断开。",
   "Open PC": "打开 PC",
   "View only": "仅查看",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "未粘贴：文件路径中含有换行，终端会将其当作 Enter。",
@@ -132,7 +133,6 @@ const BASE: Record<string, string> = {
   "Recent folders": "最近的文件夹",
   "Dismiss": "关闭",
   "Input line": "输入框",
-  // ---- settings ----
   "Settings": "设置",
   "PCs": "PC",
   "PC {name}": "PC {name}",
@@ -142,7 +142,6 @@ const BASE: Record<string, string> = {
   "Devices and PCs": "设备和电脑",
   "Access token": "访问 Token",
 
-  // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "搜索窗格和命令",
   "Switch chat / terminal": "切换聊天 / 终端",
   "Focus pane input": "聚焦面板输入框",
@@ -155,7 +154,6 @@ const BASE: Record<string, string> = {
   "Previous workspace": "上一个工作区",
   "Next workspace": "下一个工作区",
 
-  // ---- agent status words (lib/status.ts) ----
   "READY": "就绪",
   "RUN": "运行",
   "INPUT": "需回应",
@@ -163,7 +161,6 @@ const BASE: Record<string, string> = {
   "BG": "后台",
   "—": "—",
 
-  // ---- app header and shell ----
   "Opening link…": "正在打开链接…",
   "Connecting to Ovis…": "正在连接 Ovis…",
   "Close workspace list": "关闭工作区列表",
@@ -238,7 +235,6 @@ const BASE: Record<string, string> = {
   "Alerts on in the app. Tap to turn them off": "应用内提醒已开启。点按可关闭",
   "Alerts on while this tab is open (closed-app alerts need https, and on iPhone the home-screen app). Tap to turn them off": "此标签页打开期间会收到提醒（关闭应用后的提醒需要 https，在 iPhone 上还需使用主屏幕应用）。点按可关闭",
 
-  // ---- sidebar ----
   "Rename pane": "重命名窗格",
   "Branch": "分支",
   "Opening…": "正在打开…",
@@ -247,7 +243,6 @@ const BASE: Record<string, string> = {
   "Close": "关闭",
   "Rename failed: {reason}": "重命名失败：{reason}",
 
-  // ---- PCs sidebar ----
   "Filter workspaces and agents": "筛选工作区和 Agent",
   "Connecting…": "正在连接…",
   "Connected": "已连接",
@@ -284,12 +279,10 @@ const BASE: Record<string, string> = {
   "Step {n} of {total}": "第 {n} 步，共 {total} 步",
   "{done} of {total}": "{done} / {total}",
 
-  // ---- command palette ----
   "Refresh": "刷新",
   "Search panes and actions": "搜索窗格和命令",
   "Search conversation": "搜索对话",
 
-  // ---- new workspace ----
   "Browse": "浏览",
   "Cancel": "取消",
   "Install": "安装",
@@ -298,29 +291,22 @@ const BASE: Record<string, string> = {
   "Sign in": "登录",
   "Starting…": "正在启动…",
   "Start": "启动",
-  // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
-
-  // ---- folder browser ----
   "No matching folders": "没有匹配的文件夹",
   "This folder cannot be opened.": "无法打开此文件夹。",
   "Folders could not be loaded.": "无法加载文件夹。",
   "Unlock agent": "解锁 Agent",
 
-  // ---- files ----
   "Files": "文件",
   "This image is {size}; download it to view.": "此图片大小为 {size}；请下载后查看。",
   "Download": "下载",
   "Open {path}": "打开 {path}",
 
-  // ---- PC dialog ----
   "Continue": "继续",
 
-  // ---- updates ----
   "Reload app": "重新加载应用",
   "Details": "详情",
 
 
-  // ---- prompt card ----
   "Submit": "提交",
   "Recommended": "推荐",
   "Agents": "Agent",
@@ -333,12 +319,10 @@ const BASE: Record<string, string> = {
   "{agent} is ready": "{agent} 已就绪",
 
 
-  // ---- composer ----
   "Drag to resize · double-click to reset": "拖动以调整大小 · 双击重置",
   "Failed": "失败",
   "Send now": "立即发送",
 
-  // ---- chat view ----
   "Copied": "已复制",
   "Worked for {duration}": "工作了 {duration}",
   "Copy message": "复制消息",
@@ -346,7 +330,6 @@ const BASE: Record<string, string> = {
   "{m}m": "{m} 分钟",
   "{h}h {m}m": "{h} 小时 {m} 分",
 
-  // ---- terminal ----
   "The question on screen changed; check it and answer again.": "屏幕上的问题已变化。请查看后重新回答。",
   "Reconnect": "重新连接",
   "Discard": "丢弃",
@@ -354,11 +337,9 @@ const BASE: Record<string, string> = {
   "Held message — review and send": "保留的消息。请检查后发送",
 
 
-  // ---- voice input ----
   "Dictate (hold)": "听写（按住）",
   "Hold message in chat": "在聊天中暂存消息",
   "Voice input needs HTTPS": "语音输入需要 HTTPS",
-  // ---- errors (lib/userError.ts) ----
   "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.": "此浏览器已不再登录此电脑。请在设置 → 设备和电脑中重新配对。",
   "That item no longer exists on the PC. Refresh and try again.": "该项目在电脑上已不存在。请刷新后重试。",
   "It changed on the PC while you were acting. Check it and try again.": "你操作期间电脑上的内容已更改。请检查后重试。",
@@ -382,19 +363,16 @@ const BASE: Record<string, string> = {
   "The server cannot save settings: check that its state folder is writable.": "服务器无法保存设置：请检查其状态文件夹是否可写。",
 
 
-  // ---- devices ----
   "Loading…": "正在加载…",
   "Done": "完成",
   "Name": "名称",
   "Recent": "最近",
   "Needs you": "需回应",
 
-  // ---- phone ----
   "Copy": "复制",
   "…": "…",
   "Alerts": "提醒",
   "Sending…": "正在发送…",
-  // the alerts health notice over the pane and Settings → Alerts say these alike (lib/pushHealth.ts)
   "This device's push subscription is missing. Turn alerts on again.": "此设备的推送订阅不存在。请重新开启提醒。",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "此设备的提醒连接已失效。请重新开启提醒以重新连接。",
   "Turn alerts on again": "重新开启提醒",
@@ -415,7 +393,6 @@ const BASE: Record<string, string> = {
   "Queued messages": "排队的消息",
   "Not confirmed. Check the terminal before sending again.": "未确认。重新发送前请检查终端。",
   "Too large to attach: {name} ({size}). A file can be up to {limit}.": "文件过大，无法附加：{name}（{size}）。单个文件最大为 {limit}。",
-  // ---- subscription usage ----
   "Move {name} up": "将 {name} 上移",
   "Move {name} down": "将 {name} 下移",
   "Subscription usage": "订阅用量",
@@ -424,7 +401,6 @@ const BASE: Record<string, string> = {
   "{n} background tasks": "{n} 个后台任务",
   "Try again": "重试",
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "开启中继后将关闭设备门槛：此后新的浏览器需要配对码或访问令牌。",
-  // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新建标签页",
   "New tab with agent…": "用 Agent 新建标签页…",
   "New worktree": "新建工作树",
@@ -460,7 +436,6 @@ const BASE: Record<string, string> = {
   "Change PC": "切换电脑",
   "Forget this PC": "忘记这台电脑",
   "Selected": "已选择",
-  // Recover unsent text (components/UnsentText.tsx)
   "Unsent text · {destination}": "未发送的文本 · {destination}",
   "Put in message box adds this text to {destination}. Nothing is sent.": "点击“放入输入框”会将此文本放入 {destination}。不会发送。",
   "Text you had not sent before herdr restarted. Copy it and paste it where you need it. Nothing here is sent.": "这是重启前未发送的文本。复制后粘贴到需要的地方。不会自动发送。",
@@ -665,7 +640,6 @@ const BASE: Record<string, string> = {
   "Show QR code": "显示二维码",
 };
 
-/** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const ZH_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: { ...SETTINGS_ZH, ...SETTINGS_ACCESS_ZH, ...SETTINGS_COMPOSER_ZH, ...SETTINGS_LAYOUT_ZH, ...SETTINGS_AGENTS_ZH, ...SETTINGS_HELP_ZH },

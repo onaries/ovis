@@ -9,7 +9,6 @@ import type { Transport } from "../../shared/relay-e2ee.ts";
 import { signRelayPass } from "../../shared/relay-pass.ts";
 
 const fixtures: ReturnType<typeof relayFixture>[] = [];
-/** links and relays a test left running, stopped before its fixture goes */
 const stops: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const stop of stops.splice(0)) await stop();
@@ -128,7 +127,6 @@ for (const warm of [false, true]) {
     try {
       link.start();
       await bounded(online.promise);
-      // the warm socket, if any, is opened in the same turn that read the sync
       expect(urls.map((url) => new URL(url).searchParams.get("warm"))).toEqual(warm ? [null, "ab".repeat(16)] : [null]);
     } finally {
       await link.stop();
@@ -197,7 +195,6 @@ it("gives up on a warm socket the relay stopped answering and opens another, wit
         socket.send(serverChallenge(importPublicKey(identity.public_key), { server_id: identity.server_id,
           role: socket.data.warm ? "warm" : "control", connection_id: socket.data.warm ? generation : null }).frame);
       },
-      // the control socket is answered; the warm socket, once it has sent its proof, never again
       message(socket, message) {
         if (socket.data.warm) return;
         if (message === '{"type":"ping"}') socket.send('{"type":"pong"}');
@@ -214,7 +211,6 @@ it("gives up on a warm socket the relay stopped answering and opens another, wit
       opened.push({ url, socket });
       const warm = opened.filter((entry) => entry.url.searchParams.has("warm")).length;
       if (url.searchParams.has("warm")) {
-        // proven: the relay's challenge, the last thing it says on this socket, has arrived
         const send = socket.send.bind(socket);
         socket.send = (data) => { send(data); if (typeof data === "string" && data.includes('"server_proof"')) warmOpened[warm - 1]?.resolve(); };
       } else socket.addEventListener("message", (event) => { if (event.data === '{"type":"pong"}') pong.resolve(); });
@@ -224,7 +220,6 @@ it("gives up on a warm socket the relay stopped answering and opens another, wit
   try {
     link.start();
     await bounded(warmOpened[0]!.promise);
-    // the control socket stays answered every ten seconds; the warm one goes silent
     for (let step = 0; step < 2; step++) {
       pong = deferred<void>();
       clock.advance(10_000);
@@ -255,7 +250,6 @@ it("drops and reconnects a control socket that sends an oversized message after 
       open(socket) {
         socket.send(serverChallenge(importPublicKey(identity.public_key), { server_id: identity.server_id, role: "control", connection_id: null }).frame);
       },
-      // valid JSON the link would otherwise read as a pong
       message(socket) { socket.send(JSON.stringify({ type: "pong", padding: "x".repeat(8192) })); },
     },
   });
@@ -281,11 +275,6 @@ async function passFor(serverId: string, newSessions: boolean): Promise<string> 
   return signRelayPass(keys.privateKey, "0badc0de", serverId, Math.floor(Date.now() / 1000), undefined, { newSessions });
 }
 
-/**
- * A link on a relay of this test's own, for what a real relay never does: it leaves a client the PC named open, loses
- * its control socket, names no pass mode. It takes the PC's proofs as they come, says `notice` of passes in `sync`
- * together with one waiting client, and passes that client's frames to the data socket the PC opens for it.
- */
 async function limitedLink(notice: Record<string, unknown> | null, options: Partial<Pick<RelayLinkOptions, "pass" | "honoredPass" | "now">> = {}) {
   const fixture = relayFixture();
   fixtures.push(fixture);
@@ -293,21 +282,18 @@ async function limitedLink(notice: Record<string, unknown> | null, options: Part
   const key = importPublicKey(identity.public_key);
   const clock = new TestClock();
   const connectionId = "cd".repeat(16);
-  /** the PC's sockets as it holds them, and what it sent on its control sockets after the proof */
   const sockets: { control: WebSocket[]; data: WebSocket[] } = { control: [], data: [] };
   const sentOnControl: string[] = [];
   const awaited: { check: (frame: string) => boolean; resolve: () => void }[] = [];
   let pong = deferred<void>();
   const dataProven = deferred<void>();
   const lost = deferred<void>();
-  /** the 2 s the PC gives the relay to close a client it named is being counted */
   const closing = deferred<void>();
   const arm = clock.setTimeout.bind(clock);
   clock.setTimeout = (callback, ms) => { if (ms === 2_000) closing.resolve(); return arm(callback, ms); };
   type Peer = { role: "control" | "data"; proven: boolean };
   let relayControl: Bun.ServerWebSocket<Peer> | undefined;
   let relayData: Bun.ServerWebSocket<Peer> | undefined;
-  /** the client's end: what it sends goes to the PC's data socket, and back */
   const transport: Transport = { onmessage: null, onclose: null, onerror: null, send: (data) => { relayData?.send(data); }, close: () => {} };
   const server = Bun.serve<Peer>({
     hostname: "127.0.0.1", port: 0,
@@ -360,13 +346,10 @@ async function limitedLink(notice: Record<string, unknown> | null, options: Part
   const devices = fixture.app.context.services.devices;
   return {
     link, clock, connectionId, sockets, sentOnControl, devices,
-    /** The client on the PC's data socket, greeted. */
     phone: () => relayPhone(transport, identity.public_key),
     keys: () => crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]),
     closing: () => bounded(closing.promise),
-    /** The relay drops the PC's control socket; settles once the PC saw it go. */
     async loseControl() { relayControl?.close(); await bounded(lost.promise); },
-    /** Ten seconds pass and the relay answers the keepalive they bring. */
     async tenSeconds() { pong = deferred<void>(); clock.advance(10_000); await bounded(pong.promise); },
     passFor: (newSessions: boolean) => passFor(identity.server_id, newSessions),
   };
@@ -384,7 +367,6 @@ it("names a new device to the relay, makes no device, and closes the client's da
   await relay.closing();
   expect(relay.sentOnControl).toEqual([NAMED(relay.connectionId)]);
   expect(relay.devices.list(null)).toEqual([]);
-  // this relay closes nobody: the PC ends the client's data socket itself, 2 s after it named it and no sooner
   relay.clock.advance(1_999);
   expect(relay.sockets.data[0]?.readyState).toBe(WebSocket.OPEN);
   relay.clock.advance(1);
@@ -414,7 +396,6 @@ for (const past of [false, true]) {
   it(`counts a relay that names no pass mode as enforcing only past its enforce_at (${past ? "past it: a new device is named" : "before it: a new device pairs"})`, async () => {
     const at = Date.parse("2030-01-01T00:00:00.000Z");
     let pass: string | null = null;
-    // a relay from before `sync` named the mode
     const relay = await limitedLink({ state: "ok", enforce_at: new Date(at).toISOString() }, { pass: () => pass, now: () => (past ? at : at - 1) });
     pass = await relay.passFor(false);
     const phone = await relay.phone();
@@ -457,7 +438,6 @@ it("names nobody once the relay holds this PC to no pass any more", async () => 
 
 it("sends a pass that came while its control socket was being let in, once that socket is proven", async () => {
   let asked = 0;
-  // the control socket opens with pass-1; pass-2 comes before the relay's sync
   const relay = await limitedLink(null, { pass: () => (asked++ === 0 ? "pass-1" : "pass-2") });
   expect(relay.sentOnControl).toEqual([JSON.stringify({ type: "relay_pass", pass: "pass-2" })]);
 });
@@ -466,7 +446,6 @@ it("holds a renewal that follows another within the relay's minute, then sends t
   let pass = "pass-0";
   const relay = await limitedLink(null, { pass: () => pass });
   const renewals = () => relay.sentOnControl.map((frame) => (JSON.parse(frame) as { pass?: string }).pass);
-  // the first renewal on a control socket goes at once
   pass = "pass-1";
   relay.link.renewPass(pass);
   expect(renewals()).toEqual(["pass-1"]);
@@ -481,7 +460,6 @@ it("holds a renewal that follows another within the relay's minute, then sends t
   expect(renewals()).toEqual(["pass-1"]);
   relay.clock.advance(1);
   expect(renewals()).toEqual(["pass-1", "pass-3"]);
-  // a minute after that one, the next goes at once
   for (let step = 0; step < 6; step++) await relay.tenSeconds();
   relay.clock.advance(5_000);
   pass = "pass-4";

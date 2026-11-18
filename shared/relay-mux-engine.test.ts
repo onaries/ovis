@@ -701,6 +701,7 @@ describe("WebSockets", () => {
     p.server.sendLargeMessages();
     const sockets = [];
     for (let i = 0; i < LIMITS_V1.max_ws_streams; i++) sockets.push(await socket(p));
+    // 8 WS windows (8 MiB) and four HTTP windows (1.25 MiB) leave less than the message under the 12 MiB bound
     for (let i = 0; i < 4; i++) p.client.openHttp({ method: "GET", target: "/api/held", headers: [], body: "none" });
     await p.flush();
     const { local, remote } = required(sockets[0]);

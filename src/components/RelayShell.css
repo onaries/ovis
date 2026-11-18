@@ -1,10 +1,3 @@
-/*
- * The hosted shell's screens (RelayShell.tsx, RelayShellScreens.tsx): the sign-in is one centred
- * 368px (--relay-signin-w) unboxed column on --bg; pairing and recovery screens sit in a bordered
- * panel card of the same width. Only tokens from the styles.css :root block; buttons and fields use
- * the system's .btn and .input primitives.
- */
-
 .relay-shell-screen {
   display: grid;
   place-items: center;
@@ -28,7 +21,6 @@
   border-radius: var(--radius-md);
 }
 
-/* Sign-in is an unboxed 368px column directly on --bg: no card border, no panel background, no padding */
 .relay-shell-screen > .relay-shell.account-centered {
   padding: 0;
   background: transparent;
@@ -69,7 +61,6 @@
   text-wrap: pretty;
 }
 
-/* the saved PCs: one row each, the whole row the link, a hairline between rows */
 .relay-shell-pcs {
   margin: var(--space-2) 0 var(--space-4);
   padding: 0;
@@ -134,7 +125,6 @@
   margin: var(--space-4) 0 0;
 }
 
-/* a PC below the shell's minimum version: its steps to update, each command copyable whole */
 .relay-shell-more {
   margin-top: var(--space-3);
 }
@@ -183,7 +173,6 @@
   color: var(--text-dim);
 }
 
-/* the six digits to compare with the PC's screen: the pairing code's size, in two groups of three */
 .relay-shell-digits {
   margin: var(--space-4) 0;
   font-family: var(--font-mono);
@@ -195,7 +184,6 @@
   color: var(--text-strong);
 }
 
-/* a key that is not the PC's: the two ids, one above the other, the PC's first */
 .relay-shell-keys {
   margin: var(--space-4) 0 0;
   padding: var(--space-3);
@@ -213,7 +201,6 @@
   margin: var(--space-1) 0 var(--space-3);
 }
 
-/* Pair with a code / typed digits: visible label and .input field */
 .relay-shell-code-form {
   margin-top: var(--space-3);
   display: flex;
@@ -252,12 +239,10 @@
   outline-offset: var(--ring-offset);
 }
 
-/* the ID a typed code found, in the groups the PC draws it in under its code */
 .relay-shell-code-id {
   margin: var(--space-4) 0;
 }
 
-/* under the hairline: the QR route ghost button */
 .relay-shell-sign-in-links {
   margin: 0;
 }

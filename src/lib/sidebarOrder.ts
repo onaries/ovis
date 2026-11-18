@@ -1,4 +1,3 @@
-/** Activity order uses raw statuses and herdr recency; opened finishes use only bridge finish IDs. */
 import type { AgentStatus, HerdrPane, PaneInfo, SessionSnapshot } from "../../shared/protocol.ts";
 import { knownStatus, paneStatus } from "./status.ts";
 
@@ -13,15 +12,12 @@ export function stateSeqs(snapshot: Pick<SessionSnapshot, "agents"> | null | und
   return seqs;
 }
 
-/** Stand-ins date pushed statuses for ordering only. They never identify a finish. */
 export interface SeqMemory { status: Map<string, unknown>; bumped: Map<string, number>; real: Map<string, number> }
 export const newSeqMemory = (): SeqMemory => ({ status: new Map(), bumped: new Map(), real: new Map() });
 
 export function liveSeqs(snapshot: Pick<SessionSnapshot, "agents" | "panes"> | null | undefined, memory: SeqMemory): Map<string, number> {
   const seqs = stateSeqs(snapshot);
   const panes = snapshot?.panes ?? [];
-  // Recency only: legacy bridges have no finish_epoch, but a rollback invalidates stand-ins.
-  // This never changes acknowledgement records or identifies a finish.
   if ([...seqs].some(([id, seq]) => seq < (memory.real.get(id) ?? seq))) memory.bumped.clear();
   let top = Math.max(0, ...seqs.values(), ...memory.bumped.values());
   for (const pane of panes) {
@@ -56,7 +52,6 @@ export function shownStatus(pane: FinishPane, seen: SeenRecord | null): AgentSta
   return seen && isSeenDone(pane, seen) ? "idle" : pane.agent_status;
 }
 
-/** Blocked first, then herdr's latest state change, then the order given. */
 export function activityOrder<T>(rows: readonly T[], paneOf: (row: T) => Pick<PaneInfo, "pane_id" | "agent_status">, seqs: ReadonlyMap<string, number>): T[] {
   return rows
     .map((row, index) => {

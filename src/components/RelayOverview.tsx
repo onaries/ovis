@@ -25,10 +25,8 @@ import { StatusDot, type StatusDotState } from "./StatusDot.tsx";
 export const ATTENTION_LIMIT = 3;
 export const SKELETON_ROWS = 4;
 export const LOADING_SPINNER_MS = 1_000;
-/** The least Check again stays busy after a click, so a read that lands at once still shows it ran; it stays busy past this until the read it asked for has landed. */
 export const CHECK_AGAIN_BUSY_MS = 1_000;
 
-/** Ready and Needs you omit unchecked pairings. Needs you includes Offline as a note. */
 type StripCell = { readonly key: string; readonly glyph: StatusDotState; readonly label: string; readonly count: number; readonly onClick: () => void; readonly pressed: boolean; readonly offline?: number };
 
 export interface RelayOverviewProps {
@@ -36,7 +34,6 @@ export interface RelayOverviewProps {
   readonly mode?: "account" | "local";
   readonly defaultRelay: string;
   readonly meLabel?: string;
-  /** The sign-in of the account on show. With it, an account without a PC says how to add one. */
   readonly provider?: AccountProvider;
   readonly now?: number;
   readonly error?: string | null;
@@ -49,7 +46,6 @@ export interface RelayOverviewProps {
   readonly onFilter?: (filter: DashboardFilter) => void;
   readonly onOpenRelay?: (origin?: string) => void;
   readonly onRetryError?: () => void;
-  /** Reads the account's PCs again. A promise it returns settles when that read has landed: Check again stays busy until then. */
   readonly onRefreshAccount?: () => void | Promise<void>;
   readonly onAddPc?: () => void;
   readonly onPairByQr?: () => void;
@@ -60,7 +56,6 @@ export interface RelayOverviewProps {
   readonly children?: ReactNode;
 }
 
-/** Latest measured handshake RTT through a relay origin, or null when no check answered through it. */
 export function relayLatencyMs(relay: { readonly origin: string; readonly pcs: readonly string[] }, pcStatus: ReadonlyMap<string, PcStatus> | undefined): number | null {
   if (!pcStatus) return null;
   let best: number | null = null;
@@ -72,7 +67,6 @@ export function relayLatencyMs(relay: { readonly origin: string; readonly pcs: r
   return best;
 }
 
-/** One cause/onset sentence for an attention row: fresh Add countdown, closed window, available update, or offline duration. */
 export function attentionReasonText(
   pc: DashboardPc,
   expiresAt: number | null,
@@ -118,10 +112,8 @@ function rowAction(pc: DashboardPc, fresh: boolean, t: ReturnType<typeof useT>, 
 
 /** The installer for a PC on Windows, as README.md gives it: the `sh` line of `INSTALLER_COMMAND` does not run there. */
 export const WINDOWS_INSTALLER_COMMAND = "irm https://ovis.sh/install.ps1 | iex";
-/** How long Copy reads Copied after a copy that worked. */
 export const COPIED_MS = 1_600;
 
-/** One installer line under the system it is for, with its Copy button: the first step of an account that has no PC yet. */
 function InstallCommand({ os, command, action }: { readonly os: string; readonly command: string; readonly action: string }) {
   const t = useT();
   const osId = useId();
@@ -133,7 +125,6 @@ function InstallCommand({ os, command, action }: { readonly os: string; readonly
     void copyText(command, preRef.current).then((ok) => {
       if (!ok) return;
       setCopied(true);
-      // one timer at a time: an earlier copy's must not turn the label back early
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => { copiedTimer.current = null; setCopied(false); }, COPIED_MS);
     });
@@ -143,7 +134,6 @@ function InstallCommand({ os, command, action }: { readonly os: string; readonly
       <span id={osId} className="relay-overview-empty-os">{os}</span>
       <div className="relay-overview-empty-command-row">
         <pre ref={preRef} className="relay-overview-empty-command"><code>{command}</code></pre>
-        {/* two Copy buttons on one screen: each is described by the system its line is for */}
         <button type="button" className="btn" data-action={action} aria-describedby={osId} onClick={copy}>{t(copied ? "Copied" : "Copy")}</button>
       </div>
     </>
@@ -162,7 +152,6 @@ export function RelayOverview(props: RelayOverviewProps) {
   const [showSpinner, setShowSpinner] = useState(false);
   const [checking, setChecking] = useState(false);
   const checkTimer = useRef<number | null>(null);
-  // what a Check again still waits for: its least busy time, and the read it asked for
   const checkWaits = useRef<{ timer: boolean; read: boolean }>({ timer: false, read: false });
   const mounted = useRef(false);
   const announcedWait = useAnnouncedText(loading ? t("Loading your PCs…") : null);
@@ -182,7 +171,6 @@ export function RelayOverview(props: RelayOverviewProps) {
     if (checking || !refreshAccount) return;
     const waits = { timer: true, read: true };
     checkWaits.current = waits;
-    // a later Check again has its own waits: an earlier one's late answer ends nothing of it
     const landed = (part: "timer" | "read"): void => {
       waits[part] = false;
       if (checkWaits.current === waits && !waits.timer && !waits.read && mounted.current) setChecking(false);
@@ -193,8 +181,6 @@ export function RelayOverview(props: RelayOverviewProps) {
     try { read = refreshAccount(); } catch { read = undefined; }
     void Promise.resolve(read).then(() => landed("read"), () => landed("read"));
   };
-  // only a signed-in dashboard says how to add a PC: without an account there is no list a PC could join. A list that
-  // could not be read is not known to be empty: under that banner nobody is told to install Ovis and add a PC again
   const providerName = mode === "account" && provider !== undefined && error === null ? PROVIDER_NAMES[provider] : null;
   // a PC's own page signs in through a device flow, which Apple has none of: such an account is not told to sign in there with Apple
   const pcCanSignIn = provider !== undefined && (DEVICE_PROVIDERS as readonly string[]).includes(provider);
@@ -211,10 +197,7 @@ export function RelayOverview(props: RelayOverviewProps) {
       { key: "needs", glyph: "needs-you", label: t("Needs you"), count: model.counts.needsYou, onClick: () => selectFilter?.("needs"), pressed: currentFilter === "needs", offline: model.counts.offline },
       { key: "relays", glyph: "ready", label: t("Relays in use"), count: model.relays.length, onClick: () => onOpenRelay?.(), pressed: false },
     ];
-  // the attention rows on show, with the reason each one carries; a reason they all share is said once, above them
-  // `joins`: the reason is the shared Join one (askToJoinReason), named on what draws it as data-reason="join"
   const attentionRows = (model?.attention ?? []).slice(0, ATTENTION_LIMIT).flatMap(({ server_id, reason, expiresAt }) => { const pc = byId.get(server_id); return pc === undefined ? [] : [{ pc, reason, expiresAt, why: attentionReasonText(pc, expiresAt, t, { now, targetVersion }), joins: pc.state === "needs-approval" && expiresAt === null && askToJoinReason(pc, t) !== null }]; });
-  // how many PCs this device reaches right now and by which way; a check still running or never run counts nowhere
   const reachable = { direct: 0, relay: 0, none: 0 };
   for (const { check } of model?.rows ?? []) if (check !== null && check.kind !== "checking") reachable[check.kind === "offline" ? "none" : check.route === "relay" ? "relay" : "direct"] += 1;
   const firstAttention = attentionRows[0];
@@ -254,7 +237,6 @@ export function RelayOverview(props: RelayOverviewProps) {
           <Monitor className="relay-overview-empty-icon" aria-hidden="true" />
           <h2 className="relay-overview-empty-title">{t("No PCs yet")}</h2>
           {providerName === null ? (
-            // the banner above already says the list could not be read: the heading stands alone under it
             error === null && <p className="relay-overview-empty-copy">{t("Sign in on a PC, or scan the QR code it shows, to see it here.")}</p>
           ) : (
             <>

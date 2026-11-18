@@ -134,6 +134,7 @@ export function matchSnippet(text: string, pattern: RegExp): Pick<ConversationSe
   return { before, match: squash(found[0]), after };
 }
 
+/** Two answers of one time (Codex, when the user steers mid-task) can both pass: see pickedTurn. */
 export function searchedTurnChanged(turn: ConversationTurn, match: ConversationSearchMatch): boolean {
   if (turn.role !== match.role || turn.ts !== match.ts) return false;
   const name = conversationTurnAnchor(turn);
@@ -154,6 +155,19 @@ export function searchedTurnChanged(turn: ConversationTurn, match: ConversationS
   return sameBefore && (goes.startsWith(went) || went.startsWith(goes));
 }
 
+/**
+ * Turns of its time that share the name (their first 80 characters agree, or their first tool call) go
+ * by which still has the matched words anywhere in its text, a progress note's too: an answer's words
+ * never leave it, though they can leave the search (Codex marks them commentary later). When several
+ * still have them, the one that says exactly what was searched, unless another may have said it then
+ * and changed since: any turn went on from the match's words (its name too may have changed), or a
+ * turn of its role and time has a progress note (Codex marks an answer's parts commentary later, so
+ * what it said then is not known). Turns without a time (Kimi's prompts) go by name and their whole
+ * searched text: the first of the name that still says it, else the one of the name that changed
+ * since; by name only for a match of an older server, which has no digest. A match with a store row
+ * (Hermes) opens the turn with a text part read from it, whatever either was named from: a page
+ * boundary may split one answer at another row.
+ */
 export function pickedTurn(turns: readonly (ConversationTurn | null)[], match: ConversationSearchMatch): number | "none" | "several" {
   if (match.row !== undefined) {
     const row = match.row;
@@ -191,6 +205,14 @@ export function pickedTurn(turns: readonly (ConversationTurn | null)[], match: C
   return named >= 0 ? named : changed ?? "none";
 }
 
+/**
+ * A turn that changed since loses its name only to a later turn of its time (pickedTurn), so a pick
+ * reads on until a turn before the named one is of an earlier time: turns come in time order, but for
+ * answers dated by an earlier start (Codex, when the user steers mid-task), which all follow that
+ * start. That holds only while a turn of the name still says what was searched: a clock that went
+ * back (Hermes orders by its own ids) puts a turn of the match's time after an earlier one, so when
+ * none does the pick reads to the beginning.
+ */
 export function pickSettled(turns: readonly ConversationTurn[], match: ConversationSearchMatch): boolean {
   if (match.row !== undefined) {
     const row = match.row, read = turns.flatMap((turn) => turn.text_rows ?? []);
@@ -207,6 +229,10 @@ export function pickSettled(turns: readonly ConversationTurn[], match: Conversat
   return turns.slice(0, named).some((turn) => turn.ts !== null && Date.parse(turn.ts) < at);
 }
 
+/**
+ * Whether the search read a store row (Hermes) newer than every row the turns were read from: the
+ * chat has not read its newest page since, or the row is gone (false when no turn has rows).
+ */
 export function pickAhead(turns: readonly (ConversationTurn | null)[], match: ConversationSearchMatch): boolean {
   const row = match.row, read = turns.flatMap((turn) => turn?.text_rows ?? []);
   return row !== undefined && read.length > 0 && read.every((each) => each < row);

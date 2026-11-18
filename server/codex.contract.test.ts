@@ -8,7 +8,6 @@ import { createServer } from "./index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import type { ConversationResponse } from "../shared/protocol.ts";
 
-// Real herdr metadata + HTTP + native files, all under an owned workspace/store.
 const root = mkdtempSync(join(tmpdir(), "ovis-codex-contract-"));
 const codexHome = join(root, "codex");
 const rollout = join(codexHome, "sessions", "rollout.jsonl");
@@ -34,8 +33,6 @@ beforeAll(async () => {
   workspaceId = created.workspace.workspace_id;
   paneId = created.root_pane.pane_id;
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
-  // a stand-in Codex that shows both answers, then says so with a file, and keeps running: the chat reads
-  // a screen only while a Codex process runs in the pane
   mkdirSync(join(root, "bin"));
   const codex = join(root, "bin", "codex");
   const ready = join(root, "bin", "ready");
@@ -43,7 +40,6 @@ beforeAll(async () => {
   const show = (text: string) => `printf '%s\\n' '${text}' | fold -s -w 60 | sed '1s/^/• /;2,$s/^/  /'`;
   writeFileSync(codex, `#!/bin/sh\n${show(`${answerPrefix}Answer one`)}\n${show(`${answerPrefix}Answer two`)}\n: > '${ready}'\nsleep 600\n`);
   chmodSync(codex, 0o755);
-  // watched before the command is sent, so its creation cannot be missed
   const watcher = watch(join(root, "bin"));
   const started = new Promise<void>((done) => watcher.on("change", (_, name) => { if (name === "ready" && existsSync(ready)) done(); }));
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -76,7 +72,7 @@ it("serves native Codex conversations and invalidates replaced files even at the
   expect(first.history_id).toBeString();
   expect((await read()).history_id).toBe(first.history_id);
   expect(first.metadata).toEqual({ model: "codex-test-model", reasoning_effort: "xhigh" });
-  expect((await read()).metadata).toEqual(first.metadata); // cached response keeps metadata
+  expect((await read()).metadata).toEqual(first.metadata);
   expect(first.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
   expect(JSON.stringify(first)).not.toContain("Hidden instructions");
   expect(first.turns.at(-1)?.parts[0]).toMatchObject({ text: `${answerPrefix}Answer one`, phase: "final_answer" });
@@ -156,7 +152,6 @@ it("serves skill activity without shipping the selected skill's instruction body
 it("shows a turn Codex ended in an error in the chat, and reads it at rest rather than DONE", async () => {
   const status = async () => ((await (await fetch(`http://127.0.0.1:${server.port}/api/session`)).json()) as { snapshot: { panes: { pane_id: string; agent_status: string }[] } })
     .snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
-  // the pane's statuses as the server tells its clients, each waited for from before the report that causes it
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
   const frames: string[] = [];
   const waiters = new Set<() => void>();
@@ -181,7 +176,6 @@ it("shows a turn Codex ended in an error in the chat, and reads it at rest rathe
     await rested;
   };
   try {
-    // a turn that answered is a finish
     writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
     await turn("done");
     // codex-cli 0.167.0 at its usage limit, as recorded: the turn's end carries the error, and no answer
@@ -190,7 +184,6 @@ it("shows a turn Codex ended in an error in the chat, and reads it at rest rathe
     await turn("idle");
     expect((await read()).turns.at(-1)?.parts).toEqual([{ kind: "text", failed: true,
       text: "Error: You\u2019ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 13th, 2026 6:05 PM." }]);
-    // herdr saying the rest again changes nothing
     await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
     expect(await status()).toBe("idle");
   } finally { ws.close(); }

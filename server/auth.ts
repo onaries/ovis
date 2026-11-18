@@ -12,7 +12,6 @@
  * helpers for that cookie live here too), and index.ts warns when a public bind address is
  * combined with neither.
  */
-
 import { timingSafeEqual } from "node:crypto";
 
 import { isLoopbackAddress } from "./access.ts";
@@ -60,7 +59,6 @@ export const COOKIE_MAX_AGE_SECONDS = 31536000;
 const AUTH_FAILURE_BUDGET = 5;
 const AUTH_BACKOFF_MS = 1_000;
 const AUTH_BACKOFF_MAX_MS = 60_000;
-/** addresses remembered; past the cap the ones whose wait is over are dropped first */
 export const AUTH_CLIENTS_MAX = 1024;
 const authAttempts = new Map<string, { failures: number; until: number }>();
 const BEARER_PREFIX = "bearer ";
@@ -297,7 +295,6 @@ function recordAuthFailure(client: string, budget: number): void {
   const wait = failures < budget ? 0 : Math.min(AUTH_BACKOFF_MS * 2 ** (failures - budget), AUTH_BACKOFF_MAX_MS);
   authAttempts.set(client, { failures, until: wait === 0 ? 0 : Date.now() + wait });
   if (authAttempts.size <= AUTH_CLIENTS_MAX) return;
-  // over the cap: an address whose wait is over first, else the oldest
   for (const [address, entry] of authAttempts) {
     if (authAttempts.size <= AUTH_CLIENTS_MAX / 2) return;
     if (entry.until !== 0 && entry.until > Date.now()) continue;
@@ -306,7 +303,6 @@ function recordAuthFailure(client: string, budget: number): void {
   while (authAttempts.size > AUTH_CLIENTS_MAX) authAttempts.delete(authAttempts.keys().next().value!);
 }
 
-/** Forget every address's budget (tests share this module's state). */
 export function forgetAuthAttempts(): void {
   authAttempts.clear();
   sharedFailures.clear();
@@ -319,7 +315,6 @@ export async function handleAuthRequest(request: Request, token: string, client:
     return noContent(clearCookie(TOKEN_COOKIE), clearCookie(DEVICE_COOKIE), CLEAR_LEGACY_TOKEN_COOKIE, CLEAR_LEGACY_DEVICE_COOKIE);
   }
   if (request.method !== "POST") return badRequest("method_not_allowed", "use POST or DELETE");
-  // Gate off: answering 204 without a cookie lets one client flow work either way.
   if (token === "") return noContent();
   const wait = waitLeft("sign-in", client);
   if (wait > 0) return tooManyAttempts(wait);

@@ -249,7 +249,6 @@ export const SETTINGS_KO: Record<string, string> = {
   "agents hooks claude codex install": "에이전트 훅 claude codex 설치",
   "onboarding first run getting started welcome": "온보딩 처음 실행 시작하기 환영",
   "Agent integrations": "에이전트 통합",
-  // the hosted relay shell's rows (lib/relay/shell.tsx)
   "This page shows one PC. The front page lists every PC this phone is paired with.": "이 페이지는 PC 한 대를 보여줍니다. 첫 페이지에 이 폰과 페어링된 모든 PC가 나옵니다.",
   "Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.": "이 PC에 대한 이 폰의 키를 삭제합니다. 다시 페어링하려면 PC의 새 QR 코드가 필요합니다.",
 
@@ -296,6 +295,5 @@ export const SETTINGS_KO: Record<string, string> = {
   "Reopen files on return": "돌아오면 파일 다시 열기",
   "Remove PC {name}": "{name} PC 제거",
 
-  // Settings → Alerts → Also send to, when the server could not say what it holds (design pass G-111)
   "Could not read this PC's alert destination ({error}). Close Settings and open it again.": "이 PC의 외부 알림 설정을 읽지 못했습니다({error}). 설정을 닫았다가 다시 여세요.",
 };

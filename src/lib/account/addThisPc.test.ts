@@ -4,7 +4,7 @@ import { encodeOffer } from "../../../shared/relay-offer.ts";
 import { deriveServerId } from "../../../shared/relay-server-proof.ts";
 import { importPublicKey } from "../../../shared/relay-e2ee.ts";
 import { nativeTransport, setTransport } from "../transport.ts";
-import { AddPcWaitOver, keepAddPcWaiting, listThisPc, onAddPcWaiting, pagePc, pcAnswers, reopenAddWindow } from "./addThisPc.ts";
+import { AddPcWaitOver, keepAddPcWaiting, listOfferedPc, listThisPc, onAddPcWaiting, pagePc, pcAnswers, reopenAddWindow } from "./addThisPc.ts";
 import type { AccountService } from "./service.ts";
 
 afterEach(() => setTransport(nativeTransport));
@@ -75,7 +75,6 @@ test("reopening the add window says which PC opened it", async () => {
   try { expect(await reopenAddWindow()).toBe(serverId); } finally { fetchSpy.mockRestore(); }
 });
 
-/** A PC that answers the link route with its offer, and an account service that records what is done to its directory. */
 function listing(signedIn: { account: string | null }) {
   const publicKey = exportPublicKey(generateKeyPair().publicKey);
   const serverId = deriveServerId(importPublicKey(publicKey));
@@ -148,7 +147,6 @@ test("a listing for a wait that was stopped opens no window, and reads nothing o
     // stopped while the PC was asked which one it is: no window is asked for after Stop waiting
     expect(await why(() => false)).toBe("ended");
     expect(pc.asked).toEqual(["/api/health"]);
-    // stopped while the window was being opened: over at once, before any read that may never be answered
     pc.asked.length = 0;
     expect(await why(() => !pc.asked.includes("/api/relay/link"))).toBe("ended");
     expect(pc.asked).toEqual(["/api/health", "/api/relay/link"]);
@@ -189,4 +187,28 @@ test("which PC answers is read from its health, and from the hosted app's page w
     fetchSpy.mockRestore();
     if (saved) Object.defineProperty(globalThis, "location", saved); else Reflect.deleteProperty(globalThis, "location");
   }
+});
+
+// the relay tab lists the PC its QR code names beside the code, and the listing never holds the code up: from the offer
+// itself, so no pairing window of the PC is opened or closed for it; only under the account the screen showed; and
+// never again for a PC listed already
+test.each([
+  ["not listed yet, under the account the screen showed", "acct_1", null, ["put"]],
+  ["listed an hour ago", "acct_1", 3_600_000, []],
+  ["not listed, with another account's sign-in stored since the screen was drawn", "acct_2", null, []],
+] as const)("the relay tab's listing beside a QR code, which never holds the code up, for a PC %s, writes only what that account lacks", async (_what, stored, age, writes) => {
+  const keys = generateKeyPair();
+  const publicKey = exportPublicKey(keys.publicKey);
+  const offer = { v: 1 as const, server_id: deriveServerId(importPublicKey(publicKey)), server_public_key: publicKey, relay: "wss://relay.ovis.sh", name: "desk", code: "123456" };
+  const pcCalls = spyOn(globalThis, "fetch");
+  const written: string[] = [];
+  const entry = { server_id: offer.server_id, label: "desk", added_at: new Date(Date.now() - (age ?? 0)).toISOString(), last_seen_at: null, public_key: null, relay: null };
+  const service = { listPcs: async () => age === null ? [] : [entry], putPc: async () => { written.push("put"); }, deletePc: async () => { written.push("delete"); }, session: async () => ({ account: stored }), forSignIn() { return this; } } as unknown as AccountService;
+  try {
+    const listed = listOfferedPc(service, offer, "acct_1");
+    if (stored === "acct_1") await listed;
+    else await expect(listed).rejects.toBeInstanceOf(AddPcWaitOver);
+    expect(written).toEqual([...writes]);
+    expect(pcCalls).not.toHaveBeenCalled();
+  } finally { pcCalls.mockRestore(); }
 });

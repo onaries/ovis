@@ -10,7 +10,6 @@ import { useT } from "../lib/i18n.ts";
 import { inFocusTrap } from "../lib/useFocusTrap.ts";
 import { failureText } from "./RelayPanel.tsx";
 
-/** Whole seconds from `now` until `at`, never below 0. */
 export function secondsLeft(at: number, now: number): number {
   return Math.max(0, Math.ceil((at - now) / 1000));
 }
@@ -25,7 +24,6 @@ export function deadlineOf(pairing: RelayPairingRequest, now: number): number | 
   const known = heard.get(pairing);
   if (known !== undefined) return known;
   const left = pairing.left_ms;
-  // an older server sends no `left_ms`: its `expires_at` against this clock is all there is
   const at = typeof left === "number" && Number.isFinite(left) && left >= 0 ? now + left : Date.parse(pairing.expires_at);
   if (Number.isNaN(at)) return null;
   heard.set(pairing, at);
@@ -117,7 +115,6 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
 
   const ids = pairings.map((pairing) => pairing.id).join(" ");
   const [now, setNow] = useState(() => Date.now());
-  // read once per telling (deadlineOf keeps it), at the moment this window heard it
   const deadlines = pairings.map((pairing) => deadlineOf(pairing, Date.now()));
   const timed = deadlines.some((at) => at !== null);
   useEffect(() => {
@@ -125,7 +122,6 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-    // a list that changes starts the seconds again from its own arrival
   }, [timed, ids]);
 
   const layer = useRef<HTMLDivElement>(null);
@@ -136,11 +132,8 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
   const entered = useRef(new Map<string, number>());
   /** the key or the pointer press on an Approve that its next click comes of, and when it was made (the event's `timeStamp`) */
   const pressed = useRef<{ id: string; key: boolean; at: number } | null>(null);
-  /** each prompt's place in the stack, as last drawn */
   const places = useRef(new Map<string, number>());
-  /** the focus is, or was until its prompt went, inside the layer */
   const held = useRef(false);
-  /** what had the focus before the first prompt took it, or before Tab brought it into one */
   const opener = useRef<HTMLElement | null>(null);
   /** the focus was given back by a cleanup React ran only to run the effects again (development's replay): it is taken again */
   const replayed = useRef(false);
@@ -153,11 +146,8 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
     places.current = new Map(pairings.map((pairing, index) => [pairing.id, index]));
     const active = document.activeElement;
     if (replayed.current) { replayed.current = false; held.current = true; }
-    // a prompt being read keeps the focus when another arrives
     if (layer.current?.contains(active)) return;
     if (!takesFocus(active)) return;
-    // a new prompt takes it; so does the next one when the prompt that had it was decided or ran out,
-    // but not when the person had taken the focus back to the page meanwhile
     const next = arrived[0] ?? (held.current ? pairings[0] : undefined);
     const node = next && prompts.current.get(next.id);
     if (!node) return;
@@ -169,8 +159,7 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
     held.current = true;
     // handed the focus, not walked to: the next keys may be habit (Tab, Enter), so its guard starts again
     since.current.set(next.id, at);
-    // several devices in a short window scroll: the one with the focus is in view. A stack that moved
-    // for it put other prompts under the pointer, so theirs start again too
+    // A stack that moved for it put other prompts under the pointer, so theirs start again too
     const scrolled = layer.current?.scrollTop;
     node.scrollIntoView({ block: "nearest" });
     if (layer.current?.scrollTop !== scrolled) for (const moved of since.current.keys()) since.current.set(moved, at);
@@ -178,13 +167,11 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
   useLayoutEffect(() => {
     const node = layer.current;
     return () => {
-      // the last prompt went: the focus it took goes back where it was, unless it has moved on since
       const active = document.activeElement;
       const from = opener.current;
       if (!held.current || !from?.isConnected) return;
       if (active !== null && active !== document.body && !node?.contains(active)) return;
       from.focus({ preventScroll: true });
-      // read by this component only if it is still there: a prompt that really went has no next effect
       replayed.current = true;
     };
   }, []);
@@ -231,7 +218,6 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
           ? aroundDigits(t("{name} wants to add this PC to your account. Type {digits} on {name}, or check that {name} shows the same number, then press Approve here."), pairing.label)
           : [`${t("{name} wants to pair through the relay. Approve it only if its screen shows", { name: pairing.label })} `, ""];
         const until = deadlines[index] ?? null;
-        // `now` is a tick behind a request that has just arrived: never more than the PC said is left
         const left = until === null ? null : secondsLeft(until, Math.max(now, until - (pairing.left_ms ?? Infinity)));
         return (
           <div key={pairing.id} ref={(node) => { if (node) prompts.current.set(pairing.id, node); else prompts.current.delete(pairing.id); }}
@@ -240,7 +226,6 @@ export function RelayPairingPrompt({ pairings }: { pairings: readonly RelayPairi
             <Smartphone aria-hidden="true" />
             <span>
               <span id={`${id}-${pairing.id}`}>{before}{digits}{after}</span>
-              {/* a second that passes is not news: the layer announces the prompt, not its clock */}
               {left !== null && <span className="relay-pairing-left" aria-live="off" data-testid="relay-pairing-left"> {t("{n} s left", { n: left })}</span>}
               {failure?.id === pairing.id && <span className="relay-error" role="alert"> {failure.text}</span>}
             </span>

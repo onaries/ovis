@@ -4,29 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContextOptions, type Locator, type Page } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
-import { openSettingsPage } from "./settings-page.ts";
-import { PAGES, SETTINGS, openSettings } from "./settings-pages-harness.ts";
+import { openSettingsPage, sheetRisen } from "./settings-page.ts";
+import { PAGES, SETTINGS } from "./settings-pages-harness.ts";
 import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
 import { ZH } from "../src/lib/i18n.zh.ts";
+import { serveDemo } from "./demo-server.ts";
 
-// Settings' segmented controls on the unmodified app over the demo's fixture transport, read by their boxes and
-// never by their pixels or their words: what an option draws stays inside its track, a chosen option holds its own
-// label, and no label leaves its option or lies on its neighbour. A phone drew a second outline around every chosen
-// option (the option's finger-sized hit box wore the shadow meant for the pill inside it), and at 360px the four
-// phrases of Agents order lay over each other. A read-only fact beside its label (Devices, Access) keeps its own width
-// up to its cap: on a phone those shrank beside a long description until they broke one letter to a line. All files
-// and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
+// All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-segmented-"));
 
 type Language = "en" | "ko" | "ja" | "zh";
 const WORDS: Record<Language, Record<string, string>> = { en: {}, ko: KO, ja: JA, zh: ZH };
 const PHONE: BrowserContextOptions = { deviceScaleFactor: 3, isMobile: true, hasTouch: true };
 
-/**
- * The segmented controls of the open dialog: how many are drawn, and what is wrong with them, one line each. A box
- * counts as drawn when its own style paints it: a fill, a shadow, an outline or a border.
- */
 const segmented = (page: Page): Promise<{ seen: number; defects: string[] }> => page.locator(".settings-dialog").evaluate((dialog) => {
   interface Box { left: number; top: number; right: number; bottom: number }
   const SLACK = 0.5;
@@ -40,7 +31,6 @@ const segmented = (page: Page): Promise<{ seen: number; defects: string[] }> => 
   const paints = (style: CSSStyleDeclaration): boolean => !clear(style.backgroundColor) || style.backgroundImage !== "none" || style.boxShadow !== "none"
     || (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0 && !clear(style.outlineColor))
     || (["Top", "Right", "Bottom", "Left"] as const).some((side) => style[`border${side}Style`] !== "none" && parseFloat(style[`border${side}Width`]) > 0 && !clear(style[`border${side}Color`]));
-  /** The boxes an option paints: its own, and its ::before's and ::after's (placed from the option's padding edge where absolute, else taken for the option's own). */
   const painted = (option: Element): Box[] => {
     const own = boxOf(option.getBoundingClientRect());
     const style = getComputedStyle(option);
@@ -55,7 +45,6 @@ const segmented = (page: Page): Promise<{ seen: number; defects: string[] }> => 
     }
     return boxes;
   };
-  /** An option's label as drawn: the box around its lines of text. */
   const labelOf = (option: Element): Box | null => {
     const range = document.createRange();
     range.selectNodeContents(option);
@@ -83,11 +72,9 @@ const segmented = (page: Page): Promise<{ seen: number; defects: string[] }> => 
     }
     const shared = (one: Box, other: Box): number => Math.min(Math.min(one.right, other.right) - Math.max(one.left, other.left), Math.min(one.bottom, other.bottom) - Math.max(one.top, other.top));
     for (const [index, one] of options.entries()) for (const other of options.slice(index + 1)) {
-      // an option's box is what a tap on it hits: two of them never share a point, on one row or on two
       if (shared(one.box, other.box) > SLACK) defects.push(`${one.name} and ${other.name}: their boxes share ${px(shared(one.box, other.box))}`);
       if (one.label !== null && other.label !== null && shared(one.label, other.label) > SLACK) defects.push(`${one.name} and ${other.name}: the labels lie over each other by ${px(shared(one.label, other.label))}`);
     }
-    // options that take more than one row go two to a row at most, and the ones sharing a row share it equally
     const rows = new Map<number, Box[]>();
     for (const { box } of options) rows.set(Math.round(box.top), [...(rows.get(Math.round(box.top)) ?? []), box]);
     if (rows.size < 2) continue;
@@ -100,7 +87,6 @@ const segmented = (page: Page): Promise<{ seen: number; defects: string[] }> => 
   return { seen, defects };
 });
 
-/** The faces a page asks for have arrived, and the frames that lay the page out with them have been drawn. */
 const settled = (page: Page): Promise<void> => page.evaluate(() => document.fonts.ready.then(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))));
 
 async function settingsIn(browser: Browser, url: string, language: Language, width: number, options: BrowserContextOptions, settings: Record<string, unknown> = {}): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
@@ -109,17 +95,11 @@ async function settingsIn(browser: Browser, url: string, language: Language, wid
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(url);
-  await page.locator(".conn-live").waitFor({ state: "attached" });
-  await openSettings(page);
+  await page.goto(`${url}?settings=appearance`);
+  await sheetRisen(page);
   return { page, errors, close: () => context.close() };
 }
 
-/**
- * On a phone (the stylesheet's 640px), the facts of the open dialog that are narrower than their own text on one line
- * while their cap (their max-width, of their row) has room for more: a fact squeezed by the text beside it. One line
- * each. A desktop's row has the room, and its facts keep the layout they had.
- */
 const squeezedFacts = (page: Page): Promise<string[]> => page.locator(".settings-dialog").evaluate((dialog) => {
   const found: string[] = [];
   if (!matchMedia("(max-width: 640px)").matches) return found;
@@ -131,7 +111,6 @@ const squeezedFacts = (page: Page): Promise<string[]> => page.locator(".settings
     const room = row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight);
     const max = getComputedStyle(fact).maxWidth;
     const cap = max === "none" ? room : max.endsWith("%") ? room * parseFloat(max) / 100 : parseFloat(max);
-    // its width on one line, read with the row's limits lifted for one layout and put back at once
     const before = fact.getAttribute("style");
     fact.style.setProperty("flex", "none");
     fact.style.setProperty("max-width", "none");
@@ -143,24 +122,20 @@ const squeezedFacts = (page: Page): Promise<string[]> => page.locator(".settings
   return found;
 });
 
-/** Chooses an option with a finger and waits until it is the pressed one and the page is drawn with it. */
 async function choose(page: Page, option: Locator): Promise<void> {
   await option.tap();
   await page.waitForFunction((node) => node?.getAttribute("aria-pressed") === "true", await option.elementHandle());
   await settled(page);
 }
 
-/** A control's track and options, each as left, top, width and height from the track's corner: equal lists are one shape. */
 const shapeOf = (control: Locator): Promise<string[]> => control.evaluate((track) => {
   const origin = track.getBoundingClientRect();
   const part = (box: DOMRect): string => [box.left - origin.left, box.top - origin.top, box.width, box.height].map((value) => Math.round(value * 10) / 10).join(" ");
   return [`${Math.round(origin.width * 10) / 10} ${Math.round(origin.height * 10) / 10}`, ...[...track.querySelectorAll(":scope > button")].map((option) => part(option.getBoundingClientRect()))];
 });
 
-/** How many rows a control's options take. */
 const rowsOf = (control: Locator): Promise<number> => control.evaluate((track) => new Set([...track.querySelectorAll(":scope > button")].map((option) => Math.round(option.getBoundingClientRect().top))).size);
 
-/** Every page of Settings, its folded groups open and what it asks the server for arrived. Returns how many segmented controls it read, so a pass that read none is not taken for a sound one. */
 async function everyPage(page: Page, language: Language, where: string): Promise<number> {
   const label = (name: string): string => WORDS[language][name] ?? name;
   let seen = 0;
@@ -182,22 +157,11 @@ try {
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n    <script type="module"`));
   const prefix = "/herdr-web-ui/demo/app/";
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith(prefix)) return new Response("not found", { status: 404 });
-    let file: string;
-    try { file = decodeURIComponent(path.slice(prefix.length)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return await body.exists() ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix });
   const url = `http://127.0.0.1:${server.port}${prefix}`;
   try {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? chromium.executablePath(), headless: true, args: ["--no-sandbox"] });
     try {
-      // a finger's phone at the three widths, in the four languages: the option is its hit box there, taller than the track
       for (const language of ["en", "ko", "ja", "zh"] as const) {
         const { page, errors, close } = await settingsIn(browser, url, language, 390, PHONE);
         try {
@@ -215,7 +179,6 @@ try {
       }
       console.log("PASS on a phone at 390, 360 and 320px, in English, Korean, Japanese and Chinese, every Settings page's segmented controls draw inside their tracks and hold their labels, and no fact is squeezed");
 
-      // the owner's phone: every choice of the four-option control in turn holds its own label, on its own cell
       {
         const { page, errors, close } = await settingsIn(browser, url, "ko", 360, PHONE);
         try {
@@ -237,8 +200,6 @@ try {
       }
       console.log("PASS at 360px in Korean each of the four-option control's choices holds its own label, in one shape");
 
-      // a chosen label is drawn heavier, and in Latin text wider. At the narrowest width where a control's options
-      // still share one line, choosing any of them must leave them on that line: a tap never moves the page
       {
         const { page, errors, close } = await settingsIn(browser, url, "en", 430, PHONE);
         try {
@@ -267,7 +228,6 @@ try {
       }
       console.log("PASS at the narrowest width where three options share a line, choosing any of them keeps the line");
 
-      // the longest labels at the largest interface text, and the same page compact
       for (const [language, settings] of [["ja", { uiFontSize: 20 }], ["ko", { uiFontSize: 20 }], ["ko", { density: "compact" }]] as const) {
         const { page, errors, close } = await settingsIn(browser, url, language, 320, PHONE, settings);
         try {
@@ -279,7 +239,6 @@ try {
       }
       console.log("PASS at 320px the largest interface text and the compact density keep every label in its option");
 
-      // a device that asks for more contrast draws the chosen option by a rule of its own
       for (const options of [PHONE, {}]) {
         const { page, errors, close } = await settingsIn(browser, url, "en", options === PHONE ? 360 : 1440, { ...options, contrast: "more" });
         try {
@@ -292,7 +251,6 @@ try {
       }
       console.log("PASS with more contrast asked for, on a phone and at 1440px, the chosen option still draws inside its track");
 
-      // a mouse's window: the option is the pill itself
       {
         const { page, errors, close } = await settingsIn(browser, url, "en", 1440, {});
         try {

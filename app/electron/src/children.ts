@@ -1,8 +1,3 @@
-/**
- * The two programs the desktop app runs: herdr-core (`hc`), which owns the terminals, and the Ovis
- * server, compiled into one binary (scripts/server-artifact.ts), which serves the window. Nothing here imports Electron, so the
- * tests run it under Bun.
- */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync, type WriteStream } from "node:fs";
@@ -26,11 +21,9 @@ export function withoutInherited(command: string, args: string[], bash = "/bin/b
   return platform !== "win32" && isFile(bash) ? [bash, ["-c", CLOSE_INHERITED, "ovis", command, ...args]] : [command, args];
 }
 
-/** Where the staged programs sit: `resources/ovis` in a packaged app, `app/electron/stage` in development. */
 export interface Layout {
   bun: string;
   hc: string;
-  /** the server's folder, and its binary in it */
   server: string;
   serverBinary: string;
 }
@@ -83,10 +76,11 @@ export function serverEnv(base: Env, options: { hc: string; stateDir: string; po
     ...coreEnv(base),
     OVIS_RUNTIME: "herdr-core",
     OVIS_HC_BIN: options.hc,
+    // the app's own hc, not one the user named: one that does not answer leaves the server to find another, and say so
+    OVIS_HC_BIN_BUNDLED: "1",
     OVIS_STATE_DIR: options.stateDir,
     HOST: "127.0.0.1",
     PORT: String(options.port),
-    // the app updates itself and this server with it: Settings says so instead of the plain server's way (shared/update.ts)
     OVIS_DESKTOP_APP: "1",
   };
   const dropped = new Set(["HERDR_PLUGIN_ROOT", "HERDR_SOCKET", "OVIS_MANAGED", "OVIS_BOOT_ID", "OVIS_TOKEN"]);
@@ -134,7 +128,6 @@ export async function installCore(bundled: string, dir: string, env: Env, log: W
   return installed;
 }
 
-/** `[0, 1, 17]` for an hc that says `hc 0.1.17`, else null */
 export async function hcVersion(hc: string, env: Env): Promise<number[] | null> {
   const { code, output } = await run(hc, ["--version"], env, null, 10_000);
   const match = code === 0 ? /^hc (\d+)\.(\d+)\.(\d+)/.exec(output.trim()) : null;
@@ -175,10 +168,6 @@ export interface RunningServer {
 
 const LISTENING = /^Ovis listening on (http:\/\/\S+)$/m;
 
-/**
- * Runs the Ovis server and resolves once it says where it listens. It fails when the server ends
- * first or says nothing within `timeoutMs`, with the end of its output.
- */
 export function startServer(layout: Layout, env: Env, log: WriteStream, timeoutMs = 60_000, onSpawn?: (child: ChildProcess) => void): Promise<RunningServer> {
   const [command, args] = withoutInherited(layout.serverBinary, ["serve"]);
   const child = spawn(command, args, { cwd: layout.server, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
@@ -187,7 +176,6 @@ export function startServer(layout: Layout, env: Env, log: WriteStream, timeoutM
     child.once("exit", (code) => resolve(code));
     child.once("error", () => resolve(null));
   });
-  // the end of the output only: the line that says where it listens comes after whatever it printed first
   let output = "";
   const take = (chunk: Buffer) => {
     log.write(chunk);
@@ -263,7 +251,6 @@ export async function choosePort(saved: number | null): Promise<number> {
   return freePort();
 }
 
-/** What the app keeps between runs, in `desktop.json` of its data folder. */
 export interface Saved {
   port: number | null;
   /**
@@ -300,8 +287,7 @@ export interface ProcessProbe {
 const SERVES = /^"? serve$/;
 
 /**
- * Ends the server an earlier run left behind (the app was killed before it could stop it), so two
- * never share one state folder. Only the same process is ended: it still runs this app's Bun on its
+ * Only the same process is ended: it still runs this app's Bun on its
  * server and started at the recorded time. A pid the system has since
  * given to another program, or to another server, is left alone.
  */
@@ -337,7 +323,6 @@ export async function processCommand(pid: number): Promise<string | null> {
   return code === 0 && output.trim() !== "" ? output.trim() : null;
 }
 
-/** processStart, waited for: a record written with it never lacks the start time */
 export function processStartSync(pid: number): string | null {
   try {
     const [command, args] = psStart(pid);

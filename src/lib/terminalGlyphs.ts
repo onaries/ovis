@@ -29,9 +29,6 @@
  *   Code message), as a color emoji two cells wide in its one cell, so a symbol that
  *   overflows its cell is asked for its text form (U+FE0E).
  * Copy reads xterm's buffer, not the DOM, and still returns what the pane wrote.
- *
- * Box-drawing and block characters are not text to fit at all: each is replaced by a
- * cell-sized box with its lines painted in (terminalBoxGlyphs.ts).
  */
 import type { Terminal } from "@xterm/xterm";
 
@@ -44,7 +41,6 @@ const MIN_SPACING_PX = 1;
  * 93%); a narrower one is centered, and a two-cell one enlarged to fill this much.
  */
 const FILL = 0.9;
-/** The most a wide glyph is enlarged, so it never towers over the Latin beside it. */
 const MAX_SCALE = 1.2;
 /**
  * The most a wide glyph is widened alone (horizontal scaling, 장평 in Korean typesetting, where
@@ -54,32 +50,21 @@ const MAX_STRETCH = 1.1;
 
 /** how many copies of a glyph xterm's WidthCache measures at once (WidthCacheSettings.REPEAT) */
 const XTERM_MEASURE_REPEAT = 32;
-/** composition-view fits kept before the cache starts over: far more syllables than a session types */
 const VIEW_FIT_CACHE_MAX = 4096;
 
-/** marks a cell this module drew itself, so the observer does not take it for a span to adjust */
 const BOX_CLASS = "herdr-box-glyph";
 
-/** Combining marks, and the Hangul vowel and final jamo a decomposed syllable continues with. */
 const DECOMPOSED = /[\p{M}\u1160-\u11ff]/u;
-/** A pictograph that is text by default. */
 const TEXT_DEFAULT_PICTOGRAPH = /(?!\p{Emoji_Presentation})\p{Extended_Pictographic}/gu;
 const PRESENTATION_SELECTOR = /[\ufe0e\ufe0f]/u;
 const TEXT_PRESENTATION = "\ufe0e";
 
 export interface GlyphFit {
-  /** font-size multiplier for the span; 1 keeps it */
   scale: number;
-  /** horizontal scaling of the span, after `scale`; 1 keeps it */
   stretch: number;
-  /** the space left beside each glyph once it is drawn; its half goes before the glyph */
   spacing: number;
 }
 
-/**
- * How to draw a span whose glyphs advance `glyphWidth` and get `spacing` added by xterm, in
- * a grid of `cellWidth` columns; null when the span is already right.
- */
 export function glyphFit(spacing: number, glyphWidth: number, cellWidth: number): GlyphFit | null {
   if (!(spacing > MIN_SPACING_PX) || !(glyphWidth > 0) || !(cellWidth > 0)) return null;
   const slot = glyphWidth + spacing;
@@ -90,15 +75,11 @@ export function glyphFit(spacing: number, glyphWidth: number, cellWidth: number)
   return { scale: widen / stretch, stretch, spacing: slot - glyphWidth * widen };
 }
 
-/** Nerd Font icons and the like: the private use areas, where a font's glyph is meant to fill one cell. */
 const PRIVATE_USE = /^[\ue000-\uf8ff\u{f0000}-\u{ffffd}\u{100000}-\u{10fffd}]/u;
 const ANY_PRIVATE_USE = /[\ue000-\uf8ff\u{f0000}-\u{ffffd}\u{100000}-\u{10fffd}]/u;
-/** Powerline's other separators (flames, trapezoids, pixels): shapes that run from the top of the row to the bottom */
 const POWERLINE_EXTRA = /^[\ue0b8-\ue0d7]/u;
 
-/** a character that joins the one before it: a variation selector, a zero-width joiner, a combining mark */
 const JOINS = /[\p{M}\u200d\ufe00-\ufe0f]/u;
-/** the app's own icon font (PaneTerminal.css), whose late arrival makes every width measured before it wrong */
 export const ICON_FAMILY = "Symbols Nerd Font Mono";
 
 const QUOTES = /["']/g;
@@ -107,13 +88,11 @@ const familyKey = (name: string): string => name.replace(QUOTES, "").trim().toLo
 // a unicode-range as code point pairs, by the text FontFace.unicodeRange gives back
 const parsedRanges = new Map<string, [number, number][]>();
 
-/** Whether a `unicode-range` (as FontFace.unicodeRange gives it back) covers any character of the text. */
 export function coversAny(unicodeRange: string, text: string): boolean {
   let ranges = parsedRanges.get(unicodeRange);
   if (!ranges) {
     ranges = unicodeRange.split(",").map((range): [number, number] => {
       const [low = "", high = low] = range.trim().replace(/^u\+/i, "").split("-");
-      // a wildcard (U+4??) spans every digit it stands for
       return [Number.parseInt(low.replace(/\?/g, "0"), 16), Number.parseInt(high.replace(/\?/g, "f"), 16)];
     });
     parsedRanges.set(unicodeRange, ranges);
@@ -125,7 +104,6 @@ export function coversAny(unicodeRange: string, text: string): boolean {
   return false;
 }
 
-/** What following a late face needs of a FontFace: its family, what it covers, where its load stands, and the promise that settles with it. */
 export interface LateFace {
   readonly family: string;
   readonly unicodeRange: string;
@@ -134,20 +112,12 @@ export interface LateFace {
 }
 
 export interface LateFaces {
-  /**
-   * Follows every face of `families` that covers a character of `text` and has not loaded yet.
-   * `painted` text is drawn as boxes, not from a font: its faces are followed quietly, and their
-   * arrival measures nothing again until a character they cover is asked for as drawn from the font.
-   * True when that happened: xterm measured the text with a stand-in, and it is measured again in
-   * the next frame.
-   */
   ask(families: string, text: string, painted?: boolean): boolean;
   stop(): void;
 }
 
 interface Relay {
   fire: (() => void) | null;
-  /** a face followed for painted text alone has arrived */
   arrivedQuietly: ((face: LateFace) => void) | null;
 }
 
@@ -160,20 +130,15 @@ function whenLoaded(face: LateFace, relay: Relay, entry: { quiet: boolean }): vo
 }
 
 /**
- * Follows the faces that are to draw a terminal's characters but had not loaded when those were
- * measured, and calls `arrived` in the next `frame` once any of them loaded: one call however many
- * arrive before it, so the terminal measures and draws again once, not once a face. Each face is
- * followed by its own `loaded` promise and starts no load: the page loads the faces its text reaches
- * (a face behind a font that draws the character never loads), one face that fails or stalls holds
- * back none of the others, and a face that failed is not followed. A face followed only for
+ * Each face is followed by its own `loaded` promise and starts no load: the page loads the faces its
+ * text reaches (a face behind a font that draws the character never loads), one face that fails or
+ * stalls holds back none of the others, and a face that failed is not followed. A face followed only for
  * characters drawn as boxes measures nothing again when it arrives, since nothing drawn used it, but
  * xterm measured those characters with the stand-in too: the first time one is drawn from the font
  * (under the cursor), the terminal measures again then.
  */
 export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | undefined, frame: (callback: () => void) => void, arrived: () => void): LateFaces {
-  // each face followed, and whether only painted text asked for it so far
   const followed = new WeakMap<Face, { quiet: boolean }>();
-  // faces that arrived while only painted text had asked for them
   const arrivedQuietly = new Set<LateFace>();
   let waiting = false;
   let stopped = false;
@@ -184,7 +149,6 @@ export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | u
       frame(() => {
         waiting = false;
         if (stopped) return;
-        // everything is measured again: what arrived quietly is measured with it
         arrivedQuietly.clear();
         arrived();
       });
@@ -202,7 +166,6 @@ export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | u
         if (following) {
           if (painted) continue;
           following.quiet = false;
-          // the face arrived while its characters were boxes: this one is drawn from it, and xterm's width is the stand-in's
           if (arrivedQuietly.delete(face)) {
             stale = true;
             relay.fire?.();
@@ -226,23 +189,21 @@ export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | u
 }
 
 /**
- * Whether a character is an icon drawn wider than its one cell. Symbols Nerd Font Mono advances
- * 1em, two of the app's 0.5-0.6em cells, so each icon covered the cell after it (`ls` with icons,
- * a prompt's branch symbol). Only the private use areas: an emoji wider than its one cell is left
- * to run over, as xterm's Unicode 6 widths give most emoji one cell and they came out tiny.
+ * Symbols Nerd Font Mono advances 1em, two of the app's 0.5-0.6em cells, so each icon covered the
+ * cell after it (`ls` with icons, a prompt's branch symbol). Only the private use areas: an emoji wider
+ * than its one cell is left to run over, as xterm's Unicode 6 widths give most emoji one cell and they
+ * came out tiny.
  */
 export function oversizedIcon(char: string, width: number, cellWidth: number): boolean {
   return PRIVATE_USE.test(char) && width > cellWidth + MIN_SPACING_PX;
 }
 
-/** The font-size multiplier that fits every icon of a run into its cell. */
 export function iconScale(widths: readonly number[], cellWidth: number): number {
   return Math.min(1, ...widths.map((width) => cellWidth / width));
 }
 
 let segmenter: Intl.Segmenter | undefined;
 
-/** How many characters a text shows: letter-spacing is added once a grapheme, and a span's cells are counted the same way. */
 export function graphemes(text: string): number {
   segmenter ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
   let count = 0;
@@ -267,16 +228,10 @@ export function stretchedView(base: string, stretch: string): string {
   return `translateX(min(0px, calc(${room} - ${+(100 * factor).toFixed(4)}%))) ${stretch}`;
 }
 
-/** The text to draw for a cell span: composed when it carries marks or decomposed Hangul. */
 export function displayText(text: string): string {
   return DECOMPOSED.test(text) ? text.normalize("NFC") : text;
 }
 
-/**
- * `text` with every text-default pictograph asking for its text form, or null when there is
- * none or the text already chooses a presentation somewhere. A span is fitted as a whole, so
- * its glyphs either all switch to text or all stay as xterm measured them.
- */
 export function textPresentation(text: string): string | null {
   if (PRESENTATION_SELECTOR.test(text)) return null;
   const textForm = text.replace(TEXT_DEFAULT_PICTOGRAPH, `$&${TEXT_PRESENTATION}`);
@@ -293,19 +248,13 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   const screen = term.element?.querySelector<HTMLElement>(".xterm-screen");
   const measure = document.createElement("canvas").getContext("2d");
   if (!rows || !screen || !measure) return () => {};
-  // glyph advances by "<bold><italic><text>", for the font they were measured in
   const widths = new Map<string, number>();
-  // the composition view's fit by glyph, weight, size, family and cell width (null: drawn as it is)
   const viewFits = new Map<string, GlyphFit | null>();
-  // the characters that asked for their faces in that font (every style's: a face of each weight is followed)
   const asked = new Set<string>();
-  // the box characters that asked while drawn as boxes
   const askedPainted = new Set<string>();
   let measuredFont = "";
-  // a box character's drawing, for the cell size it was drawn in
   const boxes = new Map<string, BoxDrawing | null>();
   let boxCell = "";
-  // the boxes one pass made: painted together once every span is written, when their places are known
   let placed: { box: HTMLSpanElement; drawing: BoxDrawing; cells: number; rowHeight: number }[] = [];
 
   /**
@@ -314,7 +263,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
    * (Symbols Nerd Font Mono advances 1em, two of the app's cells, and each icon covered the cell
    * after it), and the rest with xterm's spacing in a span of its own: xterm merges cells that share
    * a spacing (an icon with a Powerline arrow, or with a 1em CJK symbol), and their fits differ.
-   * False when the span holds nothing to draw or fit.
    */
   const rebuild = (span: HTMLSpanElement, text: string, cellWidth: number, rowHeight: number, fontSize: number, widthOf: (glyph: string) => number): boolean => {
     const cell = `${cellWidth}x${rowHeight}@${fontSize}`;
@@ -330,11 +278,8 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       }
       return drawing;
     };
-    // a character that joins the one before it makes one cell of two characters, or two cells of one
-    // (an icon with VS16): the runs below count a character a cell, so such a span is left as drawn
     if (JOINS.test(text)) return false;
     const chars = [...text];
-    // a separator is its own kind: beside an icon it shares the icon's spacing, not its fit
     const kinds = chars.map((char) => drawingOf(char) !== null ? "box"
       : !oversizedIcon(char, widthOf(char), cellWidth) ? "text" : POWERLINE_EXTRA.test(char) ? "shape" : "icon");
     if (!kinds.some((kind) => kind !== "text")) return false;
@@ -342,7 +287,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     const parts: HTMLSpanElement[] = [];
     for (let start = 0; start < chars.length;) {
       let end = start;
-      // an icon is a run of its own: two icons of different widths each get their own size and centring
       while (end < chars.length && kinds[end] === kinds[start] && (kinds[start] !== "icon" || end === start)) end += 1;
       const run = chars.slice(start, end);
       const part = document.createElement("span");
@@ -362,14 +306,11 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
           glyphs.style.cssText = "display:block;width:100%;height:100%;overflow:hidden;color:transparent";
           placed.push({ box: part, drawing: boxRun(run.map((char) => drawingOf(char)!), cellWidth), cells: run.length, rowHeight });
         } else if (kinds[start] === "shape") {
-          // a separator takes the height of the row (its outline is as tall as the font's em) and is narrowed
-          // to its cell, the glyph alone transformed: the box around it keeps the cell and its background
           const size = rowHeight;
           const squeeze = cellWidth / (widthOf(run[0]!) * (size / fontSize));
           glyphs.style.cssText = `display:block;width:${100 / squeeze}%;height:100%;font-size:${size}px;line-height:${rowHeight}px;letter-spacing:0;font-weight:inherit;transform:scaleX(${squeeze});transform-origin:0 0`;
           part.style.overflow = "hidden";
         } else {
-          // each icon centred in its cell: what its smaller glyph leaves is split before and after it
           const scale = iconScale(run.map(widthOf), cellWidth);
           const left = cellWidth - widthOf(run[0]!) * scale;
           glyphs.style.cssText = `display:block;width:100%;height:100%;overflow:hidden;font-size:${fontSize * scale}px;line-height:${rowHeight}px;letter-spacing:${left}px;padding-left:${left / 2}px;font-weight:inherit`;
@@ -438,15 +379,11 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       if (painted !== "") lateFaces.ask(fontFamily ?? "", painted, true);
       if (fresh !== "" && lateFaces.ask(fontFamily ?? "", fresh)) {
         widths.clear();
-        // a box under the cursor, drawn from a face that arrived while it was painted: xterm spaced it
-        // for the stand-in's width, so its one cell is spaced from the face now, before the next frame
-        // measures everything again
         if (span.classList.contains("xterm-cursor") && isBoxGlyph(shown) && [...shown].length === 1 && cellWidth > 0) {
           span.style.letterSpacing = `${cellWidth - widthOf(shown)}px`;
         }
       }
       if (rebuilt) continue;
-      // under the cursor an icon is fitted in the cursor's own span, which keeps its background and border
       if (span.classList.contains("xterm-cursor") && [...shown].length === 1 && oversizedIcon(shown, widthOf(shown), cellWidth)) {
         span.style.cssText += `;font-size:${fontSize * iconScale([widthOf(shown)], cellWidth)}px;letter-spacing:0px`;
         continue;
@@ -460,7 +397,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       const first = String.fromCodePoint(shown.codePointAt(0) ?? 0x20);
       let glyphWidth = widthOf(first);
       let spacing = xtermSpacing;
-      // the spacing is re-measured from the first glyph, so that glyph must be one that switches
       const textForm = spacing < 0 ? textPresentation(shown) : null;
       if (textForm?.startsWith(first + TEXT_PRESENTATION)) {
         const slot = glyphWidth + spacing;
@@ -474,8 +410,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
         if (spacing !== xtermSpacing) span.style.letterSpacing = `${spacing}px`;
         continue;
       }
-      // the glyphs' own lengths, before the stretch: each glyph and its spacing then take their
-      // cells, and the margin brings xterm's span to the column after them, so it ends there
       const spaced = fit.spacing / fit.stretch;
       const half = spaced / 2;
       const slot = glyphWidth + spacing;
@@ -515,7 +449,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     const snap = (value: number): number => Math.round(value * ratio) / ratio;
     made.forEach(({ box, drawing, cells, rowHeight }, index) => {
       const corner = corners[index]!;
-      // where the box sits in the grid's own pixels, and where its column and row start there
       const left = (corner.left - frame.left) / scale;
       const top = (corner.top - frame.top) / scale;
       const column = Math.round(left / cellWidth) * cellWidth;
@@ -600,14 +533,12 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
         // a face still loading for this glyph is followed from here as well: the rows ask only for text they
         // draw, and a syllable composed before any row drew its script would keep the stand-in's fit for good
         viewFaces.ask(fontFamily ?? "", first);
-        // xterm's own element: what it held goes back once the width is read
         const held = xtermMeasure.textContent;
         xtermMeasure.textContent = first.repeat(XTERM_MEASURE_REPEAT);
         const drawn = xtermMeasure.offsetWidth / XTERM_MEASURE_REPEAT;
         xtermMeasure.textContent = held;
         measure.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
         const glyphWidth = measure.measureText(first).width;
-        // a glyph wider than its one cell takes two in the row
         const cells = drawn > cellWidth + MIN_SPACING_PX ? 2 : 1;
         fit = glyphFit(cells * cellWidth - drawn, glyphWidth, cellWidth);
         if (viewFits.size >= VIEW_FIT_CACHE_MAX) viewFits.clear();
@@ -624,7 +555,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     // as the browser stores it (15.600000000000001px reads back rounded)
     if (view.style.transform !== viewWritten) viewBase = view.style.transform;
     probe.transform = stretchedView(viewBase, stretch);
-    // a transform the browser cannot read keeps xterm's, and the glyph its own width
     if (stretch !== "" && probe.transform === "") {
       probe.transform = viewBase;
       stretch = "";

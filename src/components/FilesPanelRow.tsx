@@ -4,7 +4,6 @@ import { useSettings } from "../lib/settings.ts";
 import { useT } from "../lib/i18n.ts";
 import { SettingsRow, Toggle } from "./SettingsControls.tsx";
 
-/** Settings → Chat → Files beside the pane: Browse files as a panel right of the pane on a wide window (#1666). */
 export function FilesPanelRow() {
   const { settings, update } = useSettings();
   const t = useT();

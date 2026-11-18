@@ -6,7 +6,6 @@ import { fontSettled } from "./fontFamily.ts";
 import { useTerminalRefits, type TerminalRefitsDeps } from "./useTerminalRefits.ts";
 import { HerdrSocket } from "./ws.ts";
 
-/** A WebSocket the test opens, recording what the client sends; opening it again is the connection made again. */
 class FakeSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -22,7 +21,6 @@ class FakeSocket {
 }
 
 const PANE = "w1:p1";
-/** one theme for every render, as the settings give it: the theme is set again only when it changes */
 const COLORS = {} as TerminalRefitsDeps["colors"];
 
 describe("useTerminalRefits under the inbox mode's list", () => {
@@ -37,14 +35,12 @@ describe("useTerminalRefits under the inbox mode's list", () => {
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: FakeSocket });
     Object.defineProperty(globalThis, "window", { configurable: true, value: globalThis });
-    // the page in use: a pane shown again sizes its pty only then
     Object.defineProperty(globalThis, "document", { configurable: true, value: { visibilityState: "visible", hasFocus: () => true, addEventListener() {}, removeEventListener() {} } });
     termRef.current = null;
     client = new HerdrSocket("ws://test/ws");
     client.connect();
     socket = FakeSocket.last;
     socket.open();
-    // shown, the pane sized the pty: it holds the size
     client.attach(PANE, 100, 30);
   });
 
@@ -77,7 +73,6 @@ describe("useTerminalRefits under the inbox mode's list", () => {
       else renderer = create(createElement(Probe, { covered, chatView }));
     });
   };
-  /** the frames sent since `from` that attach or size the pane */
   const sizing = (from: number) => socket.sent.slice(from).filter((frame) => ["attach", "resize", "release-size"].includes(frame.type));
 
   it("attaches a pane the list covers keeping the pty's size when the connection comes back, and asks for its grid as it is shown", async () => {
@@ -95,13 +90,11 @@ describe("useTerminalRefits under the inbox mode's list", () => {
   it("takes the history the browser keeps to its newest rows once as the chat stops covering the grid, and not under a selection", async () => {
     let bottoms = 0;
     let selecting = false;
-    // mounted on the chat; the terminal the switch finds is read as it happens
     await draw(false, true);
     termRef.current = { cols: 100, rows: 30, hasSelection: () => selecting, scrollToBottom: () => { bottoms += 1; } } as unknown as Terminal;
     expect(bottoms).toBe(0);
     await draw(false, false);
     expect(bottoms).toBe(1);
-    // a render with nothing switched, and the reader's own scroll after the switch, are left alone
     await draw(false, false);
     expect(bottoms).toBe(1);
     selecting = true;

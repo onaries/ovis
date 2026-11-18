@@ -15,9 +15,7 @@ const spinner = document.getElementById("spinner");
 const statusText = document.getElementById("status-text");
 const cancel = document.getElementById("cancel");
 const android = window.Capacitor?.getPlatform?.() === "android";
-/** Counts the opens of a PC's own address, so one cancelled or replaced says nothing when it ends. */
 let attempt = 0;
-/** Whether an open is waiting for its check (the status shows). */
 let pending = false;
 
 /**
@@ -31,7 +29,6 @@ function showStatus(text) {
   cancel.hidden = !pending;
 }
 
-/** Stops waiting for an open still being checked: it ends without a word, and the app does not open it. */
 function stopPending() {
   if (!pending) return;
   attempt++;
@@ -59,7 +56,6 @@ const relayErrors = {
 };
 
 async function open(text) {
-  // another address, or the same again: an open still being checked gives way, whatever this one does
   stopPending();
   const url = parseAddress(text);
   if (url === null) { error.textContent = t("That is not an http or https address.", "http 또는 https 주소가 아닙니다."); input.focus(); return; }
@@ -97,7 +93,6 @@ cancel.addEventListener("click", () => {
 
 form.addEventListener("submit", (event) => { event.preventDefault(); void open(input.value); });
 
-// the hosted shell's front page: sign in there, and every PC of the account shows (src/components/AccountPcs.tsx)
 const account = document.getElementById("account");
 if (ACCOUNT_SIGN_IN) {
   account.hidden = false;

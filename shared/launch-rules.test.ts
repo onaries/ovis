@@ -21,6 +21,7 @@ describe("an agent's launch arguments", () => {
     expect(launchArgsFault("claude", ["--effort", "ultra"])).toContain("--effort");
     expect(launchArgsFault("codex", ["-c", "model_reasoning_effort=ultra", "-m", "gpt-6.1"])).toBeNull();
     expect(launchArgsFault("codex", ["-c", "model_reasoning_effort=ultracode"])).toContain("model_reasoning_effort");
+    // DeepSeek Harness's levels, in both spellings
     expect(launchArgsFault("dsh-tui", ["--effort", "off"])).toBeNull();
     expect(launchArgsFault("dsh-tui", ["--effort=max"])).toBeNull();
     expect(launchArgsFault("dsh-tui", ["--effort", "xhigh"])).toBe("agent.args --effort must be one of off, low, high, max");
@@ -28,6 +29,7 @@ describe("an agent's launch arguments", () => {
   });
   it("still takes Claude Code's --effort ultracode, which the dialog no longer lists as a level", () => {
     expect(CLAUDE_EFFORTS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // Claude Code 2.1.311 still reads it as xhigh with Ultracode on; the refusal names it with the levels
     expect(launchArgsFault("claude", ["--effort", "ultracode"])).toBeNull();
     expect(launchArgsFault("claude", ["--effort", "ultra"])).toBe("agent.args --effort must be one of low, medium, high, xhigh, max, ultracode");
   });
@@ -58,6 +60,7 @@ describe("every spelling the CLIs accept for a model or an effort", () => {
     ["claude", ["--effort=ultracode"], null],
     ["claude", ["--effort=medium", "--settings={\"ultracode\":true}"], null],
     ["codex", ["--config=model_reasoning_effort=ultracode"], "model_reasoning_effort"],
+    // a flag's value is the flag's: "--" there is not the end of the options
     ["codex", ["-m", "--"], "--model"],
   ] as const)("%s %j", (kind, args, flag) => {
     const fault = launchArgsFault(kind, args);

@@ -1,14 +1,7 @@
 /**
  * Whether the app updates itself, and from where. A packaged build does when it was built with a
  * feed (OVIS_UPDATE_FEED at build time writes electron-builder's app-update.yml); OVIS_UPDATE_URL
- * only replaces that feed, since electron-updater reads app-update.yml again when it downloads. A
- * development run never updates, and OVIS_UPDATES=0 turns it off. On Linux
- * the AppImage replaces itself, and a .deb install (electron-builder's `package-type` file in the
- * resources says `deb`) installs the downloaded .deb with apt-get behind the system's password prompt.
- *
- * The beta channel (the same setting as the server's: OVIS_UPDATE_CHANNEL, or `beta` in the
- * `update-channel` file of the server's state dir) takes the beta builds CI publishes from green
- * main (.github/workflows/beta.yml) from BETA_FEED instead. It is read when the app starts.
+ * only replaces that feed, since electron-updater reads app-update.yml again when it downloads.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,12 +10,9 @@ import { readUpdateChannel, type UpdateChannel } from "../../../shared/update.ts
 
 type Env = Record<string, string | undefined>;
 
-/** The rolling `desktop-beta` prerelease the beta workflow uploads each beta build and its feed files to. */
 export const BETA_FEED = "https://github.com/devswha/ovis/releases/download/desktop-beta";
-/** The setting file in the server's state dir, the one server/updater.ts reads (UPDATE_CHANNEL_FILE). */
 const CHANNEL_FILE = "update-channel";
 
-/** which electron-updater class installs the update; "default" is its own pick for the platform */
 export type Installer = "default" | "appimage" | "deb";
 
 export type UpdatePlan = { enabled: false; reason: string } | { enabled: true; feed: string | null; channel: UpdateChannel; installer: Installer };
@@ -41,7 +31,6 @@ export function debInstallCommand(file: string, prompted: boolean): string[] {
   return ["apt-get", "install", "-y", "--no-remove", file.replace(/'/g, prompted ? "\\'\\''" : "\\'")];
 }
 
-/** OVIS_UPDATE_CHANNEL when it names a channel, else the state dir's `update-channel` file, else stable. */
 export function updateChannel(env: Env, stateDir: string): UpdateChannel {
   const set = readUpdateChannel(env["OVIS_UPDATE_CHANNEL"]);
   if (set) return set;
@@ -83,19 +72,12 @@ export function updatePlan(options: { packaged: boolean; env: Env; platform: str
     if (url.protocol !== "https:") return { enabled: false, reason: "OVIS_UPDATE_URL must be an https address" };
     return { enabled: true, feed: url.href, channel, installer };
   }
-  // the beta workflow builds no Windows app yet, so its feed has none: Windows stays on the release
-  // feed and its stable channel (latest.yml), since the release publishes no beta.yml
   if (channel === "beta" && options.platform === "win32") return { enabled: true, feed: null, channel: "stable", installer };
   return { enabled: true, feed: channel === "beta" ? BETA_FEED : null, channel, installer };
 }
 
-/**
- * How often the app asks its feed, after the check it makes as it starts: no release is pushed to
- * the app, so this is how long one can go unheard of.
- */
 export const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
-/** The update the app holds, downloaded and waiting for Restart to Update: its version and electron-updater's file. */
 export interface HeldUpdate {
   version: string;
   file: string;
@@ -113,13 +95,11 @@ export interface HeldUpdate {
 export interface UpdateOffer {
   /** a Mac only: downloaded and handed to Squirrel, which has not said it holds it */
   staging: HeldUpdate | null;
-  /** what Restart to Update installs */
   ready: HeldUpdate | null;
 }
 
 export const NO_OFFER: UpdateOffer = { staging: null, ready: null };
 
-/** What the updater said: a download done, Squirrel holding it (a Mac only), or an error. */
 export type UpdaterEvent = { is: "downloaded"; update: HeldUpdate } | { is: "staged" } | { is: "error" };
 
 /**
@@ -154,9 +134,6 @@ export function downloadsUpdate(check: { found: string; held: HeldUpdate | null;
 }
 
 /**
- * One check of the feed, as the app runs it after it starts and every hour
- * (UPDATE_CHECK_INTERVAL_MS), for an updater whose `autoDownload` is off: the version found is
- * downloaded here, unless `wanted` says no (the app holds it already). A failed check is logged.
  * The updater's error event already reports a failed download (a cancelled one is no error): the
  * promise of that download is only caught, where left alone it was logged a second time as an
  * unhandled rejection (#2831). A download that fails before it begins (a feed that names a version
@@ -179,15 +156,8 @@ export async function checkForUpdates(updater: Pick<AppUpdater, "checkForUpdates
   await download.catch(() => {});
 }
 
-/**
- * What the app has said about a downloaded update, kept in `<user data>/update-notice.json` so a
- * version is announced once, also across starts (a .deb installs only from Restart to Update, so
- * the same download is found again by every start until then).
- */
 export interface UpdateNotices {
-  /** the version whose system notification was shown */
   notified: string | null;
-  /** the version whose line in the window was closed */
   closed: string | null;
 }
 
@@ -206,11 +176,6 @@ export function writeUpdateNotices(path: string, notices: UpdateNotices): void {
   renameSync(temporary, path);
 }
 
-/**
- * What a downloaded update still has to say: one system notification per version, and its line
- * in the window until that line is closed for the version. The tray's Restart to Update stays
- * either way, and a later version is announced afresh.
- */
 export function updateNotice(version: string, said: UpdateNotices): { notify: boolean; line: boolean } {
   return { notify: said.notified !== version, line: said.closed !== version };
 }

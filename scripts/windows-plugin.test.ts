@@ -75,7 +75,6 @@ it.skipIf(process.platform !== "win32")("runs the Windows launcher with executab
             continue;
           }
           expect(code, `${installation} ${command}: ${out}${err}`).toBe(command === "status" ? 7 : 0);
-          // start takes no flags: the launcher starts the server with the command alone
           expect(JSON.parse(readFileSync(result, "utf8"))).toEqual([command, ...rest]);
         } finally {
           clearTimeout(timeout);
@@ -193,12 +192,10 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   mkdirSync(config);
   writeFileSync(join(config, ".env"), `HOST=127.0.0.1\nPORT=${port}\n`);
   const env: Record<string, string | undefined> = { ...process.env, HOME: undefined, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
-    // A running Herdr without Bun on PATH: the manifest's real Windows launcher must find it.
     Path: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
     HERDR_SOCKET: socket, HERDR_SOCKET_PATH: socket, HERDR_PLUGIN_ROOT: undefined,
     HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: config, OVIS_STATE_DIR: join(scratch, "app-state"),
     OVIS_AUTO_UPDATE: "0", OVIS_TOKEN: "", HOST: "127.0.0.1", PORT: String(port),
-    // this checkout's own server: the developer path of scripts/plugin-launch.ts, not a release binary
     OVIS_FROM_SOURCE: "1" };
   delete env["PATH"];
   const run = async (command: string, expectedCode = 0) => {
@@ -211,10 +208,8 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   };
   try {
     await run("start");
-    // start's process has exited, but the managed server and its children must still answer.
     const health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json() as { herdr: { terminal_mirror: boolean } };
     expect(health.herdr.terminal_mirror).toBe(true);
-    // The "not built yet" notice is a 200 too: the page itself must come back.
     expect(await (await fetch(`http://127.0.0.1:${port}/`)).text()).toContain('<div id="root"');
     const history = await (await fetch(`http://127.0.0.1:${port}/api/pane/conversation?pane_id=history`)).json() as { source: string; turns: unknown[] };
     expect(history.source).toBe("omp-transcript");
@@ -229,7 +224,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     const owned = new Set([pid, ...descendantProcesses(rows, pid).map(member => member.pid)]);
     const birth = new Map(rows.map(row => [row.pid, row.started]));
     expect(owned.size).toBeGreaterThanOrEqual(3);
-    for (let attempt = 0; attempt < 3; attempt++) await run("start"); // fast successful exits keep their exit code
+    for (let attempt = 0; attempt < 3; attempt++) await run("start");
     expect(Number(readFileSync(join(state, "server.pid"), "utf8"))).toBe(pid);
     const record = statSync(join(state, "server.pid"));
     const owner = readFileSync(join(state, "server.owner"), "utf8");

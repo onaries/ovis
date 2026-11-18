@@ -1,4 +1,3 @@
-/** Korean for dashboard feature strings. */
 export const DASHBOARD_KO: Record<string, string> = {
   "Add a PC": "PC 추가",
   "A PC joins through your account, or pairs with this device alone.": "PC는 계정을 통해 들어오거나, 이 기기와만 페어링합니다.",

@@ -16,7 +16,6 @@ beforeAll(() => {
 afterAll(() => relay.stop());
 
 let counter = 0;
-/** a nameplate no other test uses */
 const nameplate = () => { counter++; return `${"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[counter >> 5]}${"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[counter & 31]}Q`; };
 const open = (plate: string, role: "host" | "guest") => Peer.open(`${base}/v1/pair?nameplate=${plate}&role=${role}&v=1`);
 const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

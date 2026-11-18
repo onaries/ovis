@@ -8,10 +8,6 @@ import { findTui, lookupMessage, runTui, tuiEnv, tuiPaths, WINDOWS_MESSAGE, type
 const ROOT = join(import.meta.dir, "..");
 let scratch: string;
 
-/**
- * A stand-in for ovis-tui: writes its arguments, OVIS_URL and OVIS_TOKEN (or that it has none) to
- * STANDIN_RECORD, then, as told, says "ready" and waits for a line, ends by a signal, or exits with a code.
- */
 const STANDIN = `#!/bin/sh
 {
   for arg in "$@"; do printf 'arg:%s\\n' "$arg"; done
@@ -135,7 +131,6 @@ describe("runTui", () => {
     expect(record()).toBeNull();
   });
 
-  /** the signals runTui listens for and stops listening for, in order, and Bun.spawn's calls among them */
   function watched(): { readonly seen: string[]; readonly handlers: Map<string, () => void>; readonly on: TuiOptions["on"]; [Symbol.dispose]: () => void } {
     const seen: string[] = [];
     const handlers = new Map<string, () => void>();
@@ -154,7 +149,6 @@ describe("runTui", () => {
     chmodSync(program, 0o755);
     using signals = watched();
     const ran = runTui([], options({ on: signals.on }));
-    // the program has started by now: runTui spawns it before its first await
     expect(signals.seen).toEqual(["SIGINT", "SIGTERM", "SIGHUP", "spawn"]);
     signals.handlers.get("SIGTERM")!();
     expect(await ran).toBe(128 + 15);
@@ -162,7 +156,6 @@ describe("runTui", () => {
   });
 
   it("stops listening when the program cannot be started, and a signal after it finds nothing to pass on", async () => {
-    // a file that is no program: spawning it throws
     const program = join(scratch, "ovis-tui");
     writeFileSync(program, "not a program\n");
     chmodSync(program, 0o644);
@@ -170,7 +163,6 @@ describe("runTui", () => {
     const run = options({ on: signals.on });
     expect(await runTui([], run)).toBe(1);
     expect(run.said.join("")).toContain(`could not run ${program}`);
-    // regression (fails on main: the listeners stay, and the SIGTERM one throws on the program that never started)
     expect(signals.seen.filter((event) => event.startsWith("off ")).sort()).toEqual(["off SIGHUP", "off SIGINT", "off SIGTERM"]);
     for (const handler of signals.handlers.values()) expect(handler).not.toThrow();
   });
@@ -185,7 +177,6 @@ describe("runTui", () => {
 });
 
 describe("ovis tui", () => {
-  /** `bun scripts/plugin.ts tui …` with this test's own home, state, config and install root. */
   function launch(args: string[], extra: Record<string, string> = {}) {
     const env: Record<string, string | undefined> = { ...process.env };
     for (const key of ["PORT", "HOST", "OVIS_URL", "OVIS_TOKEN", "OVIS_TUI_BIN", "OVIS_STATE_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "HERDR_SOCKET", "HC_SESSION", "HC_SOCKET"]) delete env[key];
@@ -200,7 +191,6 @@ describe("ovis tui", () => {
     return Bun.spawn([process.execPath, "scripts/plugin.ts", "tui", ...args], { cwd: ROOT, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   }
 
-  /** A port that answers nothing, counting every connection made to it. */
   function listener() {
     const seen = { connections: 0 };
     const socket = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open: () => { seen.connections += 1; }, data: () => undefined } });

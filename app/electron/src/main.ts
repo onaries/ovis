@@ -1,9 +1,4 @@
-/**
- * Ovis for the desktop: one window on the Ovis server this app runs itself, on the herdr-core
- * (`hc`) and Bun it carries. Until the server answers, or when it stops, the window shows the
- * connection screen (renderer/connect.html) with what failed. Closing the window keeps Ovis in
- * the tray; Quit stops the server. The core and its terminals keep running, as for every hc client.
- */
+/** The core and its terminals keep running, as for every hc client. */
 import { app, autoUpdater as squirrel, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, session, shell, Tray, type MenuItemConstructorOptions } from "electron";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, rmSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
@@ -25,10 +20,6 @@ export interface Status {
   detail: string;
   versions: { hc: string; bun: string } | null;
 }
-/**
- * The downloaded update, as the window's pages are told of it (preload.ts `ovisUpdate`): `closed`
- * once its line was closed for this version, and the app's own words for the connection screen.
- */
 export interface UpdateLine {
   version: string;
   closed: boolean;
@@ -51,42 +42,32 @@ const preload = join(app.getAppPath(), "out", "preload.js");
 const iconPath = app.isPackaged ? join(process.resourcesPath, "icon.png") : join(app.getAppPath(), "..", "assets", "icon-only.png");
 
 let window: BrowserWindow | null = null;
-/** cancels a close's hide that waits for the window to leave full screen (windowClose.ts) */
 let cancelHide: (() => void) | null = null;
 let tray: Tray | null = null;
 let server: RunningServer | null = null;
-/** the start or restart in progress; another one asked for meanwhile is dropped */
 let busy: Promise<void> | null = null;
-/** the server being started, before it says where it listens */
 let spawning: ChildProcess | null = null;
 let quitting = false;
 let stopped = false;
-/** the downloaded update (updates.ts UpdateOffer): `ready` is what Restart to Update installs */
 let offer: UpdateOffer = NO_OFFER;
-/** installs `offer.ready`, once the app updates itself */
 let installOffer: (() => void) | null = null;
-/** the pages whose Restart to Update waits to hear that Ovis keeps running after all */
 let installWaiters: (() => void)[] = [];
 const noticesPath = join(app.getPath("userData"), "update-notice.json");
 let notices = readUpdateNotices(noticesPath);
 /** held so its click still arrives: a notification nothing holds is collected, and its click with it */
 let updateNotification: Notification | null = null;
-/** the version this run already handed to the system's notifications, whether or not it said it showed it */
 let handedToNotify: string | null = null;
 let status: Status = { core: "pending", server: "pending", detail: "", versions };
 const awakePath = join(app.getPath("userData"), "awake.json");
 let awake = readAwakeSettings(awakePath);
-/** the powerSaveBlocker held while an agent works (awake.ts), and how many worked when last read */
 let awakeBlocker: number | null = null;
 let awakeWorking = 0;
-/** the tray's and the menu bar's words, in the app's language once it is ready (app.getLocale()) */
 let text = desktopText("en");
 /** the pane an `ovis://open` link names (openLink.ts), as its query: told to the server's page once it shows */
 let pendingLink: string | null = null;
 
 const accountService = accountServiceOf(process.env);
 
-/** The sign-ins that service offers: OVIS_ACCOUNT_PROVIDERS (GitHub alone without it), so Apple shows only once it is set up. */
 const accountProviders = (process.env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "google" || name === "apple");
 
 function serverOrigin(): string | null {
@@ -100,7 +81,7 @@ function ours(url: string): boolean {
 function openOutside(url: string): void {
   try {
     if (["http:", "https:", "mailto:"].includes(new URL(url).protocol)) void shell.openExternal(url);
-  } catch { /* not an address */ }
+  } catch {}
 }
 
 function setStatus(next: Partial<Status>): void {
@@ -179,7 +160,6 @@ async function launch(): Promise<void> {
     const saved = readSaved(savedPath);
     if (await endLeftover(saved.server)) await waitUntilEnded(saved.server!.pid, 10_000);
     const port = await choosePort(saved.port);
-    // a quit during the steps above: no server is started for it
     if (quitting) return;
     try {
       // recorded as soon as it runs, so a crash of the app before it listens still leaves its pid behind
@@ -214,7 +194,6 @@ async function launch(): Promise<void> {
   } finally {
     if (log && !server) log.end();
   }
-  // a load that fails (or another one cut it short) leaves the server running and recorded
   if (server) await window?.loadURL(server.url).catch((error: unknown) => console.error(`Opening ${server?.url} failed: ${message(error)}`));
 }
 
@@ -225,10 +204,8 @@ async function waitUntilEnded(pid: number, timeoutMs: number): Promise<void> {
   }
 }
 
-/** stops the server once; a quit (or an update's) waits for it, then goes ahead */
 async function stopForQuit(): Promise<void> {
   quitting = true;
-  // a server still starting ends now; the start in progress then returns
   spawning?.kill("SIGTERM");
   await busy;
   const running = server;
@@ -288,7 +265,6 @@ function guard(contents: Electron.WebContents, blank?: BrowserWindow): void {
   });
 }
 
-/** holds off system sleep while the setting is on and an agent works, and lets go as soon as none does */
 function updateAwake(): void {
   const working = server ? readWorking(join(stateDir, DESKTOP_ACTIVITY_FILE)) : 0;
   const hold = holdAwake({ settings: awake, working, onBattery: powerMonitor.isOnBatteryPower(), serverRunning: server !== null });
@@ -382,10 +358,6 @@ function allowPermissions(): void {
   });
 }
 
-/**
- * An update line, written to the app's log (logs/ovis.log) as well as its output: an app opened from
- * the desktop has nobody reading its output.
- */
 function updateLog(line: string): void {
   console.log(line);
   try {
@@ -405,10 +377,6 @@ function sendUpdateLine(): void {
   window?.webContents.send("ovis:update", updateLine());
 }
 
-/**
- * The update still held. One whose file is gone is no longer offered (the tray's item and the
- * lines go), and the next check downloads it again.
- */
 function heldUpdate(): HeldUpdate | null {
   if (offer.ready !== null && stillHeld(offer.ready, existsSync) === null) {
     updateLog(`The downloaded update ${offer.ready.version} is gone from the updater's folder: no longer offered until it is downloaded again.`);
@@ -425,10 +393,8 @@ function saveNotices(next: UpdateNotices): void {
 }
 
 /**
- * A downloaded update announces itself: its line in the window, and one system notification per
- * version whose click opens the window. A version counts as announced once the system showed it,
- * so one that could not be shown (no notification service, an unsigned Mac build) is tried again
- * by the next start.
+ * A version counts as announced once the system showed it, so one that could not be shown (no
+ * notification service, an unsigned Mac build) is tried again by the next start.
  */
 function announceUpdate(): void {
   sendUpdateLine();
@@ -439,12 +405,10 @@ function announceUpdate(): void {
   const notification = new Notification({
     title: text("Ovis {version} is ready", { version }),
     body: text("Restart to update."),
-    // news that can wait: shown, with no sound
     silent: true,
     // a Linux desktop draws the app's own icon only for an installed package
     ...(process.platform === "linux" ? { icon: nativeImage.createFromPath(iconPath).resize({ width: 128 }) } : {}),
   });
-  // a newer version takes the place of the one still on screen
   updateNotification?.close();
   updateNotification = notification;
   notification.on("click", showWindow);
@@ -454,11 +418,9 @@ function announceUpdate(): void {
 }
 
 /**
- * Restart to Update, from the tray or a line in the window. Once the app is on its way out (this
- * already pressed, or a quit) another press is dropped, and so is one for an update whose file is
- * gone: installing stops the server first, and would then find nothing to install. A .deb's
- * install returns here when its password prompt was cancelled, with Ovis still running, and may
- * be asked again.
+ * Once the app is on its way out (this already pressed, or a quit) another press is dropped, and so
+ * is one for an update whose file is gone: installing stops the server first, and would then find
+ * nothing to install.
  */
 function installUpdate(): void {
   if (quitting || heldUpdate() === null) return;
@@ -491,7 +453,7 @@ async function stopAndInstall(updater: { quitAndInstall(): void; once(event: "er
 
 async function startUpdates(): Promise<void> {
   let linuxPackage: string | null = null;
-  try { linuxPackage = readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim(); } catch { /* not a Linux package */ }
+  try { linuxPackage = readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim(); } catch {}
   const writable = (folder: string) => {
     try { accessSync(folder, constants.W_OK | constants.X_OK); return true; } catch { return false; }
   };
@@ -528,15 +490,11 @@ async function startUpdates(): Promise<void> {
   autoUpdater.channel = plan.channel === "beta" ? "beta" : "latest";
   autoUpdater.allowPrerelease = plan.channel === "beta";
   autoUpdater.allowDowngrade = false;
-  // each check downloads what it found itself (checkForUpdates), and not the version already held
   autoUpdater.autoDownload = false;
   updateLog(`Updates: ${plan.channel} channel.`);
   // a .deb installs behind a password prompt: only when asked for (the tray's or a line's Restart to Update), never on a plain quit
   if (plan.installer === "deb") autoUpdater.autoInstallOnAppQuit = false;
-  // after any failure the next check takes what it finds again, the version held too, as
-  // electron-updater alone would: whatever failed (a Mac's staging of the download) gets another try
   let failed = false;
-  /** what the updater said, taken into the offer; a new one is announced, one withdrawn leaves the tray and the lines */
   const told = (event: UpdaterEvent) => {
     const before = offer.ready;
     offer = nextOffer(offer, event, process.platform);
@@ -606,12 +564,10 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.handle("ovis:update-install", (event) => {
     if (!ownPage(event.senderFrame?.url)) return undefined;
     installUpdate();
-    // not answered while the app is on its way out, so the line's button stays held: answered if Ovis
-    // starts again after all (stopAndInstall). Answered at once when the install returned: a .deb's prompt
+    // Answered at once when the install returned: a .deb's prompt
     // cancelled, with Ovis running on (or a .deb installed, a moment before it quits)
     return quitting ? new Promise<void>((answer) => { installWaiters.push(answer); }) : undefined;
   });
-  // the page names the version whose line it closes: a newer one downloaded meanwhile keeps its own
   ipcMain.on("ovis:update-close", (event, version: unknown) => {
     if (!ownPage(event.senderFrame?.url) || !offer.ready || version !== offer.ready.version) return;
     saveNotices({ ...notices, closed: offer.ready.version });
@@ -657,7 +613,6 @@ if (!app.requestSingleInstanceLock()) {
     });
   }
   app.on("activate", showWindow);
-  // the app stays in the tray with its window closed
   app.on("window-all-closed", () => {});
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => app.quit());
   void app.whenReady().then(() => {

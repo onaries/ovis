@@ -8,17 +8,14 @@ import { keyIdGroups } from "./KeyId.tsx";
 import { RelayShell, type RelayShellProps } from "./RelayShell.tsx";
 
 const EXPECTED = "0123456789abcdef0123456789abcdef";
-/** the same id but for its third and last groups */
 const RECEIVED = "01234567ffffcdef0123456789abeeee";
 const none = () => {};
 const props = (state: RelayShellProps["state"]): RelayShellProps => ({ state, scoped: true, iosTab: false, onPair: none, onRetry: none, onCancel: none, onBack: none, onForget: none, onUpdate: none, onMatch: none, onCodeStart: none, onCodeSubmit: none, onCodeMatch: none });
-/** The dashboard's table row for the PC named `name`, as rendered. */
 const rowOf = (html: string, name: string): string => {
   const row = [...html.matchAll(/<tr[^>]*data-pc-state="[^"]+"[^>]*>[\s\S]*?<\/tr>/g)].map((m) => m[0]).find((r) => r.includes(`>${name}</span>`) || r.includes(`>${name}</b>`));
   if (row === undefined) throw new Error(`no row for ${name}`);
   return row;
 };
-/** The labels of the buttons and button-styled links in a piece of markup. */
 const actionsOf = (html: string): string[] => [...html.matchAll(/<(?:a|button)[^>]*class="btn[^"]*"[^>]*>([\s\S]*?)<\/(?:a|button)>/g)].map(([, inner]) => inner!.replace(/<[^>]+>/g, ""));
 const render = (shown: RelayShellProps): string => {
   const saved = Object.getOwnPropertyDescriptor(navigator, "languages");
@@ -67,7 +64,6 @@ describe("the front page's account part", () => {
     expect(two).not.toContain("<details");
     const one = render({ ...props({ kind: "list", devices: [saved("a".repeat(32), "p620")], account: { kind: "signed-out", error: null } }), scoped: false, onSignIn: none });
     expect(signInAlternatives(one)).toEqual(["Continue without an account (1 PC)", "Pair with a QR or code"]);
-    // without an account service there is no sign-in: the saved PCs are the page itself
     expect(render({ ...props({ kind: "list", devices: [saved("a".repeat(32), "p620")] }), scoped: false })).toContain(`href="/s/${"a".repeat(32)}/"`);
   });
 
@@ -75,7 +71,6 @@ describe("the front page's account part", () => {
     const devices = [saved("a".repeat(32), "p620"), saved("b".repeat(32), "nuc")];
     const signedIn = render({ ...props({ kind: "list", devices, account: { kind: "signed-in", provider: "github", error: null, pcs: [pc("a".repeat(32), "p620", "paired")] } }), scoped: false, onSignIn: none, onSignOut: none });
     expect(signedIn).toContain("Sign out");
-    // what shell.tsx's signOut shows: the same saved PCs, the account signed out
     const after = render({ ...props({ kind: "list", devices, account: { kind: "signed-out", error: null } }), scoped: false, onSignIn: none, onSignOut: none });
     expect(after).toContain("Sign in to Ovis");
     expect(after).not.toContain("Sign out");
@@ -105,9 +100,7 @@ describe("the front page's account part", () => {
     expect(html).toContain('<span class="connection-slow">148 ms</span>');
     expect(text).toContain("laptopOfflineThe PC is off, or Ovis is not running on it.");
     expect(html.indexOf("Check now")).toBeLessThan(html.indexOf("home"));
-    // a check stops before signing in: the PC answering is all it knows, never that this device is connected
     expect(text).not.toContain("Connected");
-    // signed in, the dashboard's row for a ready PC keeps Ready as the directory state until Check now is pressed (V-023)
     const signedIn = render({ ...props({ kind: "list", devices: [], account: { kind: "signed-in", provider: "github", error: null, pcs: [pc("a".repeat(32), "home", "paired")] } }), scoped: false, onSignIn: none, pcStatus, onCheckPcs: none });
     const row = rowOf(signedIn, "home").replace(/<[^>]+>/g, "");
     expect(row).toContain("Ready");
@@ -127,7 +120,6 @@ describe("the front page's account part", () => {
     const fresh = { ...pc("b".repeat(32), "desk2", "needs-approval"), added_at: new Date().toISOString(), join: { server_public_key: "k", relay: "wss://relay.example" } };
     const old = { ...fresh, server_id: "c".repeat(32), name: "nuc", added_at: new Date(Date.now() - 3_600_000).toISOString() };
     const { join: _join, ...waiting } = { ...old, server_id: "d".repeat(32), name: "attic" };
-    // the directory's last-seen time is stale until the PC's next mailbox pull, so an offline row it may still be joined through keeps Join
     const stale = { ...old, server_id: "e".repeat(32), name: "cabin", state: "offline" as const };
     const html = render({ ...props({ kind: "list", devices: [], account: { kind: "signed-in", provider: "github", error: null, pcs: [fresh, old, waiting, stale] } }), scoped: false, onSignIn: none, onJoin: none });
     expect(actionsOf(rowOf(html, "cabin"))).toEqual(["Join"]);
@@ -135,7 +127,6 @@ describe("the front page's account part", () => {
     expect(rowOf(html, "desk2")).toContain("new · 10 min left");
     expect(actionsOf(rowOf(html, "nuc"))).toEqual(["Join"]);
     expect(actionsOf(rowOf(html, "attic"))).toEqual(["Details"]);
-    // the attention list names the waiting PCs without a redundant top notice banner (V-040)
     expect(html).not.toContain("relay-dash-notice");
     expect(html).toContain('class="relay-overview-attention"');
     expect(html).not.toContain("Add desk2 to your account?");
@@ -156,7 +147,6 @@ describe("the front page's account part", () => {
       pcs: [pc("a".repeat(32), "p620", "paired"), pc("b".repeat(32), "nuc", "needs-approval"), pc("c".repeat(32), "old-desktop", "offline", false), pc("d".repeat(32), "laptop", "offline", true)] } }), scoped: false, onSignIn: none });
     expect(html).toContain(`href="/s/${"a".repeat(32)}/"`);
     expect(html).not.toContain(`href="/s/${"b".repeat(32)}/"`);
-    // offline rows open in-page Details (button), never an anchor to /s/<id>/ (V-015)
     expect(html).not.toContain(`href="/s/${"c".repeat(32)}/"`);
     expect(html).not.toContain(`href="/s/${"d".repeat(32)}/"`);
     expect(actionsOf(rowOf(html, "laptop"))).toEqual(["Details"]);
@@ -172,11 +162,9 @@ describe("the dashboard", () => {
   const AP = "wss://relay-ap.ovis.sh";
   const GLOBAL = "wss://relay.ovis.sh";
   const ids = { desk: "a".repeat(32), mac: "b".repeat(32), mini: "c".repeat(32), home: "d".repeat(32) };
-  /** Four PCs: one ready, one unchecked QR pairing, one waiting, and one offline. */
   const four = (): MyPc[] => [
     pc(ids.desk, "Desk PC", "paired", { last_seen_at: new Date().toISOString() }),
     pc(ids.mac, "MacBook", "paired", { listed: false, linked: false }),
-    // new in the account and never seen there: it waits on its own screen to be added
     pc(ids.mini, "Mac mini", "needs-approval", { added_at: new Date().toISOString(), join: { server_public_key: "k", relay: AP } }),
     pc(ids.home, "Home server", "offline", { paired: true, last_seen_at: new Date(Date.now() - 20 * 3_600_000).toISOString() }),
   ];
@@ -187,7 +175,6 @@ describe("the dashboard", () => {
   it("sums the model into the strip: counts, relays in the map's order with their kind, and what needs attention", () => {
     const html = render(signedIn(four()));
     expect(html).toContain('data-dashboard-mode="account"');
-    // IS-FRAME-06: no subtitle in the page header (the count lives in the strip and sidebar)
     expect(html).not.toContain("relay-dash-sub");
     const counts = [...html.matchAll(/data-strip-cell="(\w+)"[^>]*data-strip-count="(\d+)"[\s\S]*?<span class="relay-overview-strip-label"><svg[\s\S]*?<\/svg><span>([^<]+)<\/span><\/span>/g)].map(([, cell, n, label]) => [cell, label, Number(n)]);
     expect(counts).toEqual([["ready", "Ready", 1], ["needs", "Needs you", 2], ["relays", "Relays in use", 2]]);
@@ -195,7 +182,6 @@ describe("the dashboard", () => {
     expect(relays).toEqual([["relay-ap.ovis.sh", "3 PCs", "regional"], ["relay.ovis.sh", "1 PC", "global"]]);
     const attention = [...html.matchAll(/<span class="relay-overview-attention-name"[^>]*>([^<]+)<\/span><span class="relay-overview-attention-why">([^<]+)<\/span>/g)].map(([, name, why]) => [name, why]);
     expect(attention).toEqual([["Mac mini", "new · 10 min left"], ["Home server", "offline since 20 h"]]);
-    // Overview ends with the Connection map disclosure to #relay; the nav counts the PCs
     expect(html).not.toContain('data-slot="relay-map"');
     expect(html).toContain('class="relay-overview-map-disclosure"');
     expect(html).toContain('<span class="relay-dash-nav-count">4</span>');
@@ -236,10 +222,8 @@ describe("the dashboard", () => {
     expect(actionsOf(rowOf(html, "Home server"))).toEqual(["Details"]);
     expect(rowOf(html, "Home server")).not.toContain(`href="/s/${ids.home}/"`);
     expect(text(rowOf(html, "Home server"))).toContain("20 h ago");
-    // the Relay cell: the directory's relay for the PC this device cannot check, Not checked for the paired ones until a check ran
     const routes = [...html.matchAll(/<td class="relay-dash-relay relay-pc-cell-relay">([\s\S]*?)<\/td>/g)].map(([, cell]) => text(cell ?? ""));
     expect(routes).toEqual(["relay-ap.ovis.sh", "Not checked", "Not checked", "Not checked"]);
-    // an offline PC this device is not paired with offers Details when it has no join route, and the directory's relay wins over the pairing's
     const unpaired = render(signedIn([pc(ids.home, "Home server", "offline")], { directoryRelays: [{ server_id: ids.home, relay: AP }] }));
     expect(actionsOf(rowOf(unpaired, "Home server"))).toEqual(["Details"]);
     expect(rowOf(unpaired, "Home server")).toContain("relay-ap.ovis.sh");
@@ -249,12 +233,10 @@ describe("the dashboard", () => {
     const answered = { kind: "answered", route: "relay", rttMs: 13 } as const;
     const html = render(signedIn(four(), { pcStatus: new Map([[ids.home, answered], [ids.desk, answered]]), onCheckPcs: none }));
     const cell = (name: string) => /<td class="relay-dash-state-cell[^"]*">([\s\S]*?)<\/td>/.exec(rowOf(html, name))?.[1] ?? "";
-    // a live answer beats the directory's stale Offline: the PC is reachable now
     expect(rowOf(html, "Home server")).toContain('<svg class="status-dot" data-state="ready"');
     expect(text(cell("Home server"))).toBe("Ready");
     expect(text(/<td class="relay-dash-relay relay-pc-cell-relay">([\s\S]*?)<\/td>/.exec(rowOf(html, "Home server"))?.[1] ?? "")).toBe("Relay · 13 ms");
     expect(cell("Home server")).not.toContain("connection-line");
-    // automatic probes add no second line until Check now
     expect(text(cell("Desk PC"))).toBe("Ready");
     const down = render(signedIn(four(), { pcStatus: new Map([[ids.home, { kind: "offline", reason: "pc" }]] as const), onCheckPcs: none }));
     expect(rowOf(down, "Home server")).toContain('<svg class="status-dot" data-state="offline"');
@@ -283,14 +265,12 @@ describe("the dashboard", () => {
 
   it("counts an unchecked QR pairing in the sidebar but not the Ready strip", () => {
     const countsOf = (html: string) => [...html.matchAll(/data-strip-cell="(\w+)"[^>]*data-strip-count="(\d+)"/g)].map(([, cell, n]) => [cell, Number(n)]);
-    // the directory empty, this device paired with one PC by QR: a row, marked not checked / not in the account yet
     const alone = render(signedIn([pc(ids.mac, "MacBook", "paired", { listed: false, linked: false })]));
     expect(alone).not.toContain("relay-dash-sub");
     expect(text(rowOf(alone, "MacBook"))).toContain("Paired · not checked");
     expect(text(rowOf(alone, "MacBook"))).not.toContain("in your account");
     expect(alone).toContain('<span class="relay-dash-nav-count">1</span>');
     expect(countsOf(alone)).toEqual([["ready", 0], ["needs", 0], ["relays", 1]]);
-    // one listed in the account + one listed but paired by QR alone: only the unlinked row says "Ready · not in the account yet"
     const both = render(signedIn([pc(ids.desk, "Desk PC", "paired"), pc(ids.mac, "MacBook", "paired", { listed: true, linked: false })]));
     expect(text(rowOf(both, "Desk PC"))).toContain("Ready");
     expect(text(rowOf(both, "MacBook"))).toContain("Ready · not in the account yet");
@@ -312,7 +292,6 @@ describe("the dashboard", () => {
     expect(empty).toContain('<h2 class="relay-overview-empty-title">No PCs yet</h2><ol class="relay-overview-empty-steps"');
     expect(text(empty)).toContain("sign in with the same GitHub account as on this device.");
     expect(actionsOf(empty)).toEqual(["Add a PC", "Copy", "Copy", "Check again", "Add a PC", "Pair with a QR or code"]);
-    // Check again needs the account's refresh: without one the dashboard offers none
     expect(actionsOf(render(signedIn([])))).toEqual(["Add a PC", "Copy", "Copy", "Add a PC", "Pair with a QR or code"]);
     expect(empty).not.toContain("<table");
     expect(empty).not.toContain('data-slot="relay-map"');
@@ -325,7 +304,6 @@ describe("the dashboard", () => {
   describe("in a browser", () => {
     const descriptors = new Map<string, PropertyDescriptor | undefined>();
     let renderer: ReactTestRenderer | undefined;
-    // the test renderer draws no DOM: a node stands in for every element (the map's svg pauses and resumes its animations on it), and the sheet portals into a body that holds them
     const node = () => ({ isConnected: true, focus() {}, contains: () => false, querySelectorAll: () => [], getClientRects: () => [], closest: () => null, addEventListener() {}, removeEventListener() {}, pauseAnimations() {}, unpauseAnimations() {} });
 
     beforeEach(() => {
@@ -335,7 +313,6 @@ describe("the dashboard", () => {
       const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value); }, removeItem: (key: string) => { store.delete(key); }, key: () => null, length: 0, clear: () => store.clear() };
       const matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
       class HTMLElement { isConnected = true; focus(): void {} }
-      // the map watches whether its svg is on screen; nothing here scrolls, so the watch never reports
       class IntersectionObserver { observe(): void {} disconnect(): void {} }
       Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
       Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: HTMLElement });
@@ -447,7 +424,6 @@ describe("the dashboard", () => {
       await mount(signedIn([...four(), old], { onJoin: (target, options) => { joined.push([target.name, options]); } }));
       expect(dialogs()).toHaveLength(0);
       expect(renderer!.root.findAll((n) => n.props.inert === true)).toHaveLength(0);
-      // the attention list offers Add for the waiting PC, and its table row again: both open the one sheet over an inert dashboard
       expect(buttons("Add")).toHaveLength(2);
       await act(async () => { buttons("Add")[1]!.props.onClick({ stopPropagation() {} }); });
       expect(dialog().props["data-add-pc-mode"]).toBe("new");
@@ -471,16 +447,12 @@ describe("the dashboard", () => {
     });
 
     it("keeps the number on the PC's own screen as a way in from Join for a PC the directory saw once, which may wait there again after Revoke all", async () => {
-      // the directory row a review recorded after Revoke all and a listing again inside the relist threshold, moved to now,
-      // with a synthetic key and its derived server_id (deriveServerId): the PC was in no account, had zero members and
-      // showed its own pairing window, yet the row keeps its old sighting
       const recorded = { server_id: "e185e94711a6d7f1eb7a12a582da9b04", label: "r2a-box", public_key: "ab".repeat(32), relay: "wss://relay.test", added_at: "2026-11-14T17:34:14.214Z", last_seen_at: "2026-11-14T17:39:14.119Z" };
       const now = Date.now(), shift = now - Date.parse("2026-11-14T17:39:14.300Z");
       const moved = (iso: string) => new Date(Date.parse(iso) + shift).toISOString();
       const relisted = myPcs([{ ...recorded, added_at: moved(recorded.added_at), last_seen_at: moved(recorded.last_seen_at) }], [], { now });
       const joined: [string, unknown][] = [];
       await mount(signedIn(relisted, { onJoin: (target, options) => { joined.push([target.name, options]); } }));
-      // the row offers Join, not Add
       expect(buttons("Add")).toHaveLength(0);
       await act(async () => { buttons("Join")[0]!.props.onClick({ stopPropagation() {} }); });
       expect(dialog().props["data-add-pc-mode"]).toBe("join");
@@ -525,7 +497,6 @@ describe("the dashboard", () => {
       await mount(signedIn(four()));
       await act(async () => { button("Add a PC").props.onClick(); });
       await act(async () => { button("Pair with a QR or code").props.onClick(); });
-      /** the dialog's accessible name: the text of the element its aria-labelledby names */
       const nameOf = (): string => {
         const shown = dialog();
         const labelledBy: unknown = shown.props["aria-labelledby"];
@@ -553,7 +524,6 @@ describe("the dashboard", () => {
       const signedOut: RelayShellProps = { ...signedIn(four()), state: { kind: "list", devices: devices(), account: { kind: "signed-out", error: null } } };
       await act(async () => { renderer!.update(createElement(SettingsProvider, { children: createElement(RelayShell, signedOut) })); });
       expect(renderer!.root.findAllByType("h1").map(textOf)).toEqual(["Sign in to Ovis"]);
-      // signing in again opens the dashboard without the dialog the sign-out closed
       await act(async () => { renderer!.update(createElement(SettingsProvider, { children: createElement(RelayShell, signedIn(four())) })); });
       expect(dialogs()).toHaveLength(0);
     });
@@ -586,7 +556,6 @@ describe("the dashboard", () => {
       await act(async () => { form.props.onSubmit({ preventDefault() {}, currentTarget: { elements: { namedItem: () => ({ value: "123 456" }) } } }); });
       expect(typed).toEqual(["123456"]);
       await act(async () => { renderer!.unmount(); });
-      // Ready state in continued mode renders AddPcSheet phase="ready" with Step 4 of 4 and all four steps done, not ReadyCheckpoint
       let openedPc = 0;
       await mount({ ...props({ kind: "ready", name: "Mac mini", server_id: ids.mini }), onOpenPc: () => { openedPc += 1; }, sheetJoin: { mode: "new", server_id: ids.mini } });
       expect(dialog().props["data-add-pc-mode"]).toBe("new");
@@ -596,7 +565,6 @@ describe("the dashboard", () => {
       await act(async () => { button("Open PC").props.onClick(); });
       expect(openedPc).toBe(1);
       await act(async () => { renderer!.unmount(); });
-      // the same screen without the sheet's join, or with another PC's: the shell's own screen, as before
       await mount({ ...props({ kind: "confirm", offer }), sheetJoin: { mode: "join", server_id: ids.desk } });
       expect(dialogs()).toHaveLength(0);
       expect(textOf(renderer!.root.findByType("h1"))).toBe("Pair with Mac mini?");
@@ -612,7 +580,6 @@ describe("the dashboard", () => {
       await act(async () => { button("Try again").props.onClick(); });
       expect(retried).toBe(1);
       await act(async () => { renderer!.unmount(); });
-      // another PC's failure, or one with no PC named: the shell's own screen, also filtering raw close-code details
       for (const state of [{ ...offline, server_id: ids.desk }, offline]) {
         await mount({ ...props(state), sheetJoin: { mode: "join", server_id: ids.mini } });
         expect(dialogs()).toHaveLength(0);
@@ -642,7 +609,6 @@ describe("the dashboard", () => {
       expect(allText).toContain("Paired · not checked");
       expect(allText).not.toContain("Needs you");
       expect(allText).not.toContain("Ready");
-      // the overview lists both relays
       expect(renderer!.root.findAll((node) => node.type === "button" && String(node.props.className ?? "").includes("relay-overview-relay-chip")).map(textOf)).toEqual(["relay-ap.ovis.sh", "relay.ovis.sh"]);
       await act(async () => { foot.find((node) => node.type === "button").props.onClick(); });
       expect(textOf(renderer!.root.findByType("h1"))).toBe("Sign in to Ovis");
@@ -667,7 +633,6 @@ describe("a key that is not the PC's", () => {
       const [pcGroups, receivedGroups] = [groupsOf(html).slice(0, 8), groupsOf(html).slice(8)];
       expect(pcGroups.every(([, differs]) => differs === false)).toBe(true);
       expect(receivedGroups).toEqual([["0123", false], ["4567", false], ["ffff", true], ["cdef", false], ["0123", false], ["4567", false], ["89ab", false], ["eeee", true]]);
-      // a differing group is named for a screen reader, not told by colour alone
       expect(html.match(/visually-hidden">\s*differs</g)).toHaveLength(2);
     });
   }

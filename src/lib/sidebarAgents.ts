@@ -60,26 +60,17 @@ export function sidebarAgents(snapshot: SessionSnapshot | null): SidebarAgent[] 
   ).map(({ row }) => row);
 }
 
-/**
- * The mark a row draws for the pane it opens: that pane's agent, never another pane's.
- * A shell (no entry) has none; an agent herdr names without a kind falls back to its label.
- */
 export function paneMark(entry: SidebarAgent | undefined): string | null {
   if (!entry) return null;
   return entry.canonicalAgent ?? entry.agentLabel ?? "";
 }
 
-/**
- * Whether a row's title says nothing but which agent it is ("Claude Code", with or without the glyph an agent puts
- * before its terminal title): the row's mark already says that, so such a title gives way to where the agent runs.
- */
 export function titleOnlyNamesAgent(title: string, names: readonly (string | null | undefined)[]): boolean {
   const plain = (text: string): string => text.replace(/^[^\p{L}\p{N}]+/u, "").trim().toLowerCase();
   const said = plain(title);
   return said !== "" && names.some((name) => typeof name === "string" && plain(name) === said);
 }
 
-/** Every agent a workspace runs, each name once, in the roster's order. */
 export function workspaceAgentLabels(agents: readonly SidebarAgent[]): Map<string, string[]> {
   const byWorkspace = new Map<string, string[]>();
   for (const { workspace, agentLabel, canonicalAgent } of agents) {
@@ -105,9 +96,7 @@ export function agentTabName(tab: TabInfo | null | undefined, workspaceTabs: rea
 
 export interface AgentContextParts {
   agentLabel: string | null;
-  /** the row's first line; an agent named like it is not said twice */
   title: string;
-  /** the agent the row's mark draws, null for the generic mark: a kind the mark already says is not written again */
   markAgent: string | null;
   /** null with a single PC: herdr does not name a lone machine either */
   machineName: string | null;
@@ -115,7 +104,6 @@ export interface AgentContextParts {
   tabName: string | null;
 }
 
-/** An agent row's second line: who it is, then where it runs, without repeating a word the row already says. */
 export function agentContext({ agentLabel, title, markAgent, machineName, workspaceLabel, tabName }: AgentContextParts): string[] {
   const agent = nonblank(agentLabel);
   const tab = nonblank(tabName);

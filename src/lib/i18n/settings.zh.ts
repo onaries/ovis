@@ -249,7 +249,6 @@ export const SETTINGS_ZH: Record<string, string> = {
   "agents hooks claude codex install": "Agent 钩子 claude codex 安装",
   "onboarding first run getting started welcome": "入门 首次运行 开始使用 欢迎",
   "Agent integrations": "代理集成",
-  // the hosted relay shell's rows (lib/relay/shell.tsx)
   "This page shows one PC. The front page lists every PC this phone is paired with.": "此页面只显示一台电脑。首页列出与此手机配对的所有电脑。",
   "Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.": "删除此手机对应这台电脑的密钥。重新配对需要电脑上新的二维码。",
 
@@ -296,6 +295,5 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Reopen files on return": "返回时重新打开文件",
   "Remove PC {name}": "移除 PC {name}",
 
-  // Settings → Alerts → Also send to, when the server could not say what it holds (design pass G-111)
   "Could not read this PC's alert destination ({error}). Close Settings and open it again.": "无法读取此 PC 的外部提醒设置（{error}）。请关闭设置后重新打开。",
 };

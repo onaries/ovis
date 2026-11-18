@@ -7,7 +7,7 @@ import { exportPublicKey, generateKeyPair } from "../../../shared/relay-e2ee.ts"
 import { deriveServerId } from "../../../shared/relay-server-proof.ts";
 import { RelayShell, type RelayShellProps } from "../../components/RelayShell.tsx";
 import { memoryAccountStore } from "../account/store.ts";
-import type { RelayDevice, RelayDeviceStore } from "./device.ts";
+import type { RelayDevice, ShellDeviceStore } from "./device.ts";
 import { mountRelayShell, type RelayShellMount } from "./shell.tsx";
 
 const AP = "wss://relay-ap.ovis.sh";
@@ -15,12 +15,10 @@ const SERVICE = "https://account.ovis.sh";
 
 const keyFor = () => { const pair = generateKeyPair(); return { server_id: deriveServerId(pair.publicKey), server_public_key: exportPublicKey(pair.publicKey) }; };
 
-/** Spins the microtask queue until `holds`, or fails naming `what`: the shell's reads are promises alone, so no clock takes part. */
 async function until(holds: () => boolean, what: string): Promise<void> {
   for (let turn = 0; turn < 10_000; turn++) { if (holds()) return; await Promise.resolve(); }
   throw new Error(`gave up waiting for ${what}`);
 }
-/** Enough turns for any read the shell wrongly started to reach the fetch (a read takes a few dozen). */
 const drain = async (): Promise<void> => { for (let turn = 0; turn < 500; turn++) await Promise.resolve(); };
 
 describe("the hosted shell's front page", () => {
@@ -29,10 +27,11 @@ describe("the hosted shell's front page", () => {
   beforeEach(() => { browser = createShellTestPage(); rendered = []; });
   afterEach(() => { jest.useRealTimers(); browser.dispose(); });
 
-  const deviceStore = (devices: RelayDevice[]): RelayDeviceStore => ({
+  const deviceStore = (devices: RelayDevice[]): ShellDeviceStore => ({
     async get(serverId) { return devices.find((device) => device.server_id === serverId); },
     async list() { return [...devices]; },
     async remove(serverId) { const at = devices.findIndex((device) => device.server_id === serverId); if (at >= 0) devices.splice(at, 1); },
+    async removeRow(serverId, row) { const at = devices.findIndex((device) => device.server_id === serverId && device.device_id === row); if (at < 0) return false; devices.splice(at, 1); return true; },
     async update(serverId, change) { const next = change(devices.find((device) => device.server_id === serverId)); const at = devices.findIndex((device) => device.server_id === serverId); if (at >= 0) devices[at] = next; else devices.push(next); return next; },
   });
   const mountFor = (over: Partial<RelayShellMount>): RelayShellMount => ({
@@ -101,7 +100,6 @@ describe("the hosted shell's front page", () => {
       last().onRefreshAccount?.();
       await until(() => reads === 2, "the read held over the sign-out");
       last().onSignOut?.();
-      // the phone app's Sign in with Apple, and the token the service answers it with
       Object.defineProperty(globalThis, "Capacitor", { configurable: true, value: { isNativePlatform: () => true, getPlatform: () => "ios", PluginHeaders: [{ name: "OvisAuth" }], nativePromise: async () => ({ idToken: "apple-id-token" }) } });
       globalThis.fetch = Object.assign(async () => { tokened.resolve(); return Response.json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600, account: "acct-test", provider: "apple" }); }, { preconnect: savedFetch.preconnect });
       last().onSignIn?.("apple");
@@ -184,38 +182,33 @@ describe("the hosted shell's front page", () => {
     await accountStore.set("session", { service: SERVICE, account: "acct-test", provider: "github", access_token: "access", refresh_token: "refresh", expires_at: now + 3_600_000 });
     const paired: RelayDevice = { server_id: desk.server_id, device_id: "0".repeat(16), private_key: {} as CryptoKey, public_spki: "spki", label: "Test phone", server_public_key: "k", relay: AP, name: "Desk PC" };
 
-    // Given the page is opened in the background
     browser.setVisibility("hidden");
     await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([paired]) }));
     await until(() => reads === 1 && rendered.length > 0 && account().pcs !== null, "the first read drawn");
     expect(rows()).toBe(3);
     expect(account().pcs!.map((pc) => [pc.name, pc.state])).toEqual([["Desk PC", "paired"], ["Mac mini", "needs-approval"], ["nuc", "needs-approval"]]);
 
-    // Then nothing is read again while it stays hidden, however long
     visible("hidden");
     jest.advanceTimersByTime(180_000);
     await drain();
     expect(reads).toBe(1);
 
-    // When it comes into view: one read at once
     visible("visible");
     await until(() => reads === 2, "the read on coming into view");
     const drawn = rendered.length;
     await until(() => rendered.length > drawn, "that read drawn");
     expect(rows()).toBe(3);
 
-    // then one every 60 s, not before
     jest.advanceTimersByTime(59_999);
     await drain();
     expect(reads).toBe(2);
     jest.advanceTimersByTime(1);
     await until(() => reads === 3, "the read at 60 s");
-    await drain(); // settle this response before advancing the fake clock by another minute
+    await drain();
     jest.advanceTimersByTime(60_000);
     await until(() => reads === 4, "the read at 120 s");
     await drain();
 
-    // a read that fails keeps the rows and says so under them
     answer = down;
     const before = rendered.length;
     jest.advanceTimersByTime(60_000);
@@ -224,9 +217,8 @@ describe("the hosted shell's front page", () => {
     expect(account().pcs).toHaveLength(3);
     expect(account().error).toContain("could not be reached");
 
-    // and while reads keep failing, the kept rows still age: past 15 minutes unseen, Desk PC is offline
     for (let read = 6; read <= 14; read++) {
-      await drain(); // the last read settles before the next minute
+      await drain();
       const drawnBefore = rendered.length;
       jest.advanceTimersByTime(60_000);
       await until(() => reads === read && rendered.length > drawnBefore, `failed read ${read} drawn`);
@@ -234,13 +226,11 @@ describe("the hosted shell's front page", () => {
     expect(account().pcs!.map((pc) => [pc.name, pc.state])).toEqual([["Desk PC", "offline"], ["Mac mini", "offline"], ["nuc", "offline"]]);
     answer = ok;
 
-    // hidden again: the timer stops with it
     visible("hidden");
     jest.advanceTimersByTime(600_000);
     await drain();
     expect(reads).toBe(14);
 
-    // back in view: read again, and the failure's line goes
     const shown = rendered.length;
     visible("visible");
     await until(() => reads === 15 && rendered.length > shown, "the read on coming back drawn");
@@ -282,7 +272,6 @@ describe("the hosted shell's front page", () => {
     const now = Date.now();
     const added = [{ server_id: desk.server_id, label: "Desk PC", added_at: new Date(now - 60_000).toISOString(), last_seen_at: new Date(now - 1_000).toISOString(), public_key: null, relay: AP }];
     let reads = 0;
-    /** the background read that left before the PC was added: it answers an empty account, late */
     const early = Promise.withResolvers<void>();
     const accountFetch = async (input: Request | string | URL): Promise<Response> => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -298,7 +287,6 @@ describe("the hosted shell's front page", () => {
 
     visible("visible");
     await until(() => reads === 2, "the background read out");
-    // the PC is added now; Check again, pressed twice (the banner's Try again calls the same), asks while that read is out
     let settled = 0;
     for (let press = 0; press < 2; press++) void Promise.resolve(last().onRefreshAccount?.()).then(() => { settled += 1; });
     await drain();
@@ -306,11 +294,9 @@ describe("the hosted shell's front page", () => {
 
     early.resolve();
     await until(() => settled === 2, "both asks settled");
-    // one read more for both asks, begun after them, and its answer is on screen by the time they settle
     expect(reads).toBe(3);
     expect(account().pcs!.map((pc) => pc.name)).toEqual(["Desk PC"]);
 
-    // with no read out, every ask reads at once: none is answered by an earlier ask's finished read
     for (const want of [4, 5]) {
       await last().onRefreshAccount?.();
       expect(reads).toBe(want);
@@ -331,7 +317,6 @@ describe("the hosted shell's front page", () => {
 
     const mounted = mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
     await until(() => reads === 1 && rendered.length > 0 && account().pcs === null, "the loading dashboard with its first read out");
-    // Add a PC, Pair with a QR or code, Pair with a code
     last().onCodeStart();
     await until(() => last().state.kind === "code-entry", "the code entry");
 
@@ -352,7 +337,6 @@ describe("the hosted shell's front page", () => {
     await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
     await until(() => rendered.length > 0 && account().pcs !== null, "the first read drawn");
 
-    // another tab signed out: the session is gone from the shared store
     await accountStore.set("session", undefined);
     visible("visible");
     await until(() => { const { state } = last(); return (state.kind === "list" || state.kind === "empty") && state.account?.kind === "signed-out"; }, "the signed-out front page");
@@ -371,9 +355,7 @@ describe("the hosted shell's front page", () => {
     };
     const inner = memoryAccountStore();
     await inner.set("session", sessionOf("acct-a", "github"));
-    // another tab stores account B's sign-in right after the page read account A's
     let reads = 0;
-    // (a session is read through the store's update: service.ts, session)
     const accountStore: typeof inner = { ...inner, update: (async (name: Parameters<typeof inner.update>[0], change: Parameters<typeof inner.update>[1]) => {
       await inner.update(name, change);
       if (name === "session" && ++reads === 1) await inner.set("session", sessionOf("acct-b", "google"));
@@ -407,7 +389,6 @@ describe("the hosted shell's front page", () => {
 
     const mounted = mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github", "google"], accountStore, accountFetch, store: deviceStore([]) }));
     await until(() => asked === 1, "account A's directory asked");
-    // another tab signs in as B while A's answer is on its way
     await accountStore.set("session", sessionOf("acct-b", "google"));
     answer();
     await mounted;
@@ -425,7 +406,6 @@ describe("the hosted shell's front page", () => {
     let asked = 0;
     const accountFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       asked += 1;
-      // account B's directory cannot be read
       if ((new Headers(init?.headers).get("authorization") ?? "").endsWith("acct-b")) return ({ status: 503, ok: false, json: async () => ({}) }) as unknown as Response;
       if (asked === 2) await held;
       return ({ status: 200, ok: true, json: async () => ({ pcs: [{ server_id: desk.server_id, label: "A's PC", added_at: new Date(now - 86_400_000).toISOString(), last_seen_at: null, public_key: null, relay: AP }] }) }) as unknown as Response;
@@ -437,13 +417,11 @@ describe("the hosted shell's front page", () => {
     await until(() => rendered.length > 0 && account().pcs !== null, "account A's list drawn");
     expect(account().pcs!.map((pc) => pc.name)).toEqual(["A's PC"]);
 
-    // a second read of A is on its way when another tab signs in as B
     visible("visible");
     await until(() => asked === 2, "the second read asked");
     await accountStore.set("session", sessionOf("acct-b", "google"));
     answer();
     await until(() => asked >= 3 && account().provider === "google" && account().error !== null, "account B's failed read drawn");
-    // no skeleton under the error: the list is this device's own paired PCs, none here
     expect(account().pcs).toEqual([]);
   });
 
@@ -453,7 +431,6 @@ describe("the hosted shell's front page", () => {
     const now = Date.now();
     const directory = [{ server_id: desk.server_id, label: "Desk PC", added_at: new Date(now - 86_400_000).toISOString(), last_seen_at: new Date(now - 60_000).toISOString(), public_key: null, relay: AP }];
     let reads = 0;
-    /** holds every read after the first open until the test lets it answer, so the triggers below overlap it */
     let answer: () => void = () => {};
     const held = new Promise<void>((resolve) => { answer = resolve; });
     const accountFetch = async (input: Request | string | URL): Promise<Response> => {
@@ -469,7 +446,6 @@ describe("the hosted shell's front page", () => {
     await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
     await until(() => reads === 1 && rendered.length > 0 && account().pcs !== null, "the first read drawn");
 
-    // two visibility changes in one tick (a tab switched away and back), then the 60 s tick while that read is out
     visible("visible");
     visible("visible");
     await until(() => reads >= 2, "the read on coming into view");

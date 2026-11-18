@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { desktopUpdateBridge, readDesktopUpdate, watchDesktopUpdate, type DesktopUpdate, type DesktopUpdateBridge } from "./desktopUpdate.ts";
 
-/** a stand-in for the app's preload: `answer` settles the page's asking, `say` is the app telling of a change */
 function fakeBridge() {
   let answer: (update: unknown) => void = () => undefined;
   let fail: (error: Error) => void = () => undefined;

@@ -1,24 +1,13 @@
-/**
- * The sidebar's section heads and PC rows on the real demo client, never a live herdr session: the
- * PCs and Agents heads' counts and always-shown carets, open and folded, in both section orders; a
- * PC header's agent count traded for its actions on hover and focus (always actions under a finger,
- * also on a fine pointer with a touch screen beside it), and no count for a PC that is not connected;
- * a phone's drawer starting a workspace from each PC's own row (its + the header's last control, on the
- * column of its rows' state, the fold on the column of their ⋯, none in the top row over the drawer, and a +
- * that is off still readable there in every theme entry);
- * folded PCs one row each; and each list's edge fades following its real overflow.
- * The roster is the demo's own, or that roster on two connected PCs (the Host "Laptop" and "Work PC").
- * UI_EVIDENCE_DIR saves synthetic screenshots at 390 and 1280, light and dark.
- * Usage: bun scripts/sidebar-heads-demo-regression.ts [--only=<words in a check's name>]
- */
+/** Usage: bun scripts/sidebar-heads-demo-regression.ts [--only=<words in a check's name>] */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Page } from "playwright-core";
+import { chromium, errors, type Page } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
+import { serveDemo } from "./demo-server.ts";
 
 // the demo's one PC as two, each with the demo's own roster: only this disposable fixture rewrites it (as
 // scripts/sidebar-spacing-demo-regression.ts does)
@@ -64,12 +53,10 @@ interface Scene {
   width: number;
   mode: "light" | "dark";
   twoPcs?: boolean;
-  /** Work PC is disconnected: its + is disabled */
   workOffline?: boolean;
   grouped?: boolean;
   height?: number;
   forcedColors?: boolean;
-  /** a hybrid device: a fine primary pointer that hovers, with a touch screen beside it (any-pointer: coarse) */
   hybrid?: boolean;
   storage?: Record<string, string>;
 }
@@ -83,14 +70,11 @@ const app = mkdtempSync(join(tmpdir(), "ovis-sidebar-heads-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 
-/** What the section heads show: Agents' caret, count and fold, and that the PCs have none. */
 const heads = (page: Page) => page.evaluate(() => {
   const shown = (element: Element | null) => element !== null && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden" && Number(getComputedStyle(element).opacity) > 0.99;
-  // the number in view, and the words a screen reader and the tooltip say for it (one and the same)
   const number = (count: Element | null) => shown(count) ? (count!.querySelector('[aria-hidden="true"]') ?? count)!.textContent!.trim() : null;
   const pcs = document.querySelector(".pcs-sidebar")!, agents = document.querySelector(".agents-sidebar")!;
   return {
-    // the PCs list has no head: nothing above its PCs, so it starts right under the logo
     pcsHead: pcs.querySelectorAll(":scope > :not(.machine-list)").length,
     agentsFolded: agents.classList.contains("is-collapsed"),
     agentsCaret: shown(agents.querySelector(".agent-section-toggle .agent-section-caret")),
@@ -100,7 +84,6 @@ const heads = (page: Page) => page.evaluate(() => {
   };
 });
 
-/** One PC's header: whether its agent count or its actions are in view, where they sit, and its fold. */
 const pcHeader = (page: Page, pc: string) => page.evaluate((pc) => {
   const group = document.querySelector<HTMLElement>(`section.machine-group[aria-label="PC ${pc}"]`)!;
   const header = group.querySelector(".machine-header")!;
@@ -121,30 +104,41 @@ const pcHeader = (page: Page, pc: string) => page.evaluate((pc) => {
   };
 }, pc);
 
-/** A PC header's trailing controls in a phone's drawer, beside the columns of the rows under it: what the + is and
- *  where it and the fold sit, measured against the rows and each other, never as a pixel count. */
-const pcTrailing = (page: Page, pc: string) => page.evaluate((pc) => {
+const readPcTrailing = ({ pc, waitFor }: { readonly pc: string; readonly waitFor?: "both" | "add" }) => {
   const group = document.querySelector<HTMLElement>(`section.machine-group[aria-label="PC ${pc}"]`)!;
   const header = group.querySelector<HTMLElement>(".machine-header")!;
   const box = (element: Element | null) => { const r = element?.getBoundingClientRect(); return r ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } : null; };
   const centre = (element: Element | null) => { const r = element?.getBoundingClientRect(); return r ? r.left + r.width / 2 : null; };
-  // a tap on the middle of the control lands on it, not on a neighbour drawn over it
-  const takesTap = (element: Element | null) => { const r = element?.getBoundingClientRect(); return r !== undefined && element!.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); };
+  const hit = (element: Element | null) => { const r = element?.getBoundingClientRect(); return r && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); };
   const add = header.querySelector<HTMLButtonElement>(".machine-new"), fold = header.querySelector<HTMLElement>(".machine-toggle");
+  const addHit = hit(add), foldHit = hit(fold);
+  const addTakesTap = add?.contains(addHit ?? null), foldTakesTap = fold?.contains(foldHit ?? null);
+  if (waitFor && (!addTakesTap || (waitFor === "both" && !foldTakesTap))) return null;
   const row = group.querySelector(".workspace-header");
   return {
-    add: { box: box(add)!, glyph: centre(add?.querySelector("svg") ?? null)!, takesTap: takesTap(add), disabled: add?.disabled ?? null },
-    fold: { box: box(fold)!, glyph: centre(fold?.querySelector("svg") ?? null)!, takesTap: takesTap(fold) },
+    add: { box: box(add)!, glyph: centre(add?.querySelector("svg") ?? null)!, takesTap: addTakesTap, hit: addHit?.getAttribute("class") ?? addHit?.tagName, disabled: add?.disabled ?? null },
+    fold: { box: box(fold)!, glyph: centre(fold?.querySelector("svg") ?? null)!, takesTap: foldTakesTap, hit: foldHit?.getAttribute("class") ?? foldHit?.tagName },
     title: box(header.querySelector(".machine-title"))!,
-    // the columns the rows under this header draw: a row's ⋯, and the cell its state is said in
     menuColumn: centre(row?.querySelector(".row-menu-toggle svg") ?? null),
     stateColumn: centre(row?.querySelector(".sidebar-pane-meta") ?? null),
     drawerRight: document.querySelector(".sidebar")!.getBoundingClientRect().right,
   };
-}, pc);
+};
 
-/** How a PC's + reads on the sidebar: its glyph's ink at the button's own opacity over the sidebar's surface, as a
- *  WCAG contrast ratio. */
+async function pcTrailing(page: Page, pc: string, waitFor: "both" | "add" = "both") {
+  // Scrolling the list (including its clamp after a fold) can leave the header clipped until the next paint.
+  let at;
+  try {
+    const snapshot = await page.waitForFunction(readPcTrailing, { pc, waitFor });
+    at = await snapshot.jsonValue();
+  } catch (error) {
+    if (!(error instanceof errors.TimeoutError)) throw error;
+    at = await page.evaluate(readPcTrailing, { pc });
+  }
+  assert.ok(at);
+  return at;
+}
+
 const addContrast = (page: Page, pc: string) => page.evaluate((pc) => {
   const rgb = (color: string): number[] => {
     const srgb = /^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)/.exec(color);
@@ -165,10 +159,8 @@ const addContrast = (page: Page, pc: string) => page.evaluate((pc) => {
   return (hi + 0.05) / (lo + 0.05);
 }, pc);
 
-/** How many agent rows the Agents list holds for one PC (each PC of the fixture runs the demo's agents). */
 const agentRowsOn = (page: Page, machine: string) => page.locator(`.agents-sidebar .agent-item[data-machine="${machine}"]`).count();
 
-/** A list's edge fades as painted: the mask's fade at each edge in px (0 is none), and how far it scrolls. */
 const fades = (page: Page, list: string) => page.locator(list).evaluate((element) => {
   const style = getComputedStyle(element);
   const masked = style.maskImage !== "none" && style.maskImage !== "";
@@ -180,7 +172,6 @@ const fades = (page: Page, list: string) => page.locator(list).evaluate((element
   };
 });
 
-/** Scrolls a list to a share of its scroll, then waits (on the list's own state, no fixed sleep) for its fades. */
 async function expectFades(page: Page, list: string, at: number | null, want: { top: boolean; bottom: boolean }, message: string): Promise<void> {
   if (at !== null) await page.locator(list).evaluate((element, at) => { element.scrollTop = (element.scrollHeight - element.clientHeight) * at; }, at);
   try {
@@ -200,20 +191,11 @@ try {
   writeFileSync(join(app, "two-pcs.js"), TWO_PCS);
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, '<script src="./demo-transport.js"></script><script src="./two-pcs.js"></script><script type="module"'));
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    let file: string;
-    try { file = decodeURIComponent(new URL(request.url).pathname.slice(1)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return await body.exists() ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix: "/" });
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     let hybridBrowser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
     try {
-      /** Each check is a fresh device: its own preferences, nothing shared with the last. */
       const check = async (name: string, scene: Scene, run: (page: Page, label: string) => Promise<void>) => {
         if (only !== undefined && !name.includes(only)) return;
         const phone = scene.width <= 768;
@@ -236,13 +218,12 @@ try {
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(`http://127.0.0.1:${server.port}/`);
-          await page.locator(".conn-live").waitFor({ state: "attached" });
+          await page.locator(".agents-sidebar .agent-item").first().waitFor({ state: "attached" });
           if (phone) {
             await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
             // CDP touch dispatch has no actionability wait: wait for the drawer's slide to reach the screen
             await page.waitForFunction(() => (document.querySelector(".sidebar.is-open")?.getBoundingClientRect().left ?? -1) >= -0.5);
           }
-          await page.locator(".agents-sidebar .agent-item").first().waitFor({ state: "attached" });
           if (scene.twoPcs) await page.waitForFunction((offline) => document.querySelectorAll(".machine-list .machine-group .machine-workspaces").length === 2 && document.querySelectorAll(".machine-list .machine-group.is-offline").length === offline, scene.workOffline ? 1 : 0);
           await page.evaluate(() => document.fonts.ready);
           await run(page, label);
@@ -260,14 +241,12 @@ try {
         for (const grouped of [false, true]) {
           const scene: Scene = { width, mode, twoPcs: true, grouped };
           await check("section heads show their carets, with no count", scene, async (page, label) => {
-            // the drawer starts Agents folded on a phone; open both for the first look
             const agentsToggle = page.locator(".agent-section-toggle");
             if (await agentsToggle.getAttribute("aria-expanded") !== "true") await agentsToggle.click();
             const open = await heads(page);
             assert.ok(open.agentRows > 0 && open.machines === 2, `${label}: the fixture shows two PCs and agents`);
             assert.equal(open.pcsHead, 0, `${label}: the PCs have no head, no caret and no count`);
             assert.equal(open.agentsCaret, true, `${label}: the open Agents head shows its caret at rest`);
-            // the compact list (the default) is herdr-app's: its head says no count, open or folded
             assert.equal(open.agentsCount, null, `${label}: the open Agents head says no count`);
             if (!grouped) await shot(page, "open", scene);
             await agentsToggle.click();
@@ -282,17 +261,12 @@ try {
           const phone = width <= 768;
           const agentsOnWork = await agentRowsOn(page, "work");
           assert.ok(agentsOnWork > 0, `${label}: Work PC runs agents`);
-          // the header in view, and the pointer resting away from the sidebar
           await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-header').scrollIntoViewIfNeeded();
           if (!phone) await page.mouse.move(width - 8, 600);
           const rest = await pcHeader(page, "Work PC");
-          // the words count the PC's agents whatever they are doing: a resting one is not "running"
           assert.equal(rest.countWords, `${agentsOnWork} agents`, `${label}: the count's words say what it counts`);
-          // no tooltip: a pointer never reaches the count (it lets presses through to the + under it, and a hover hides it)
           assert.equal(rest.countTitle, null, `${label}: the count claims no tooltip a pointer cannot reach`);
           if (phone) {
-            // under a finger nothing hovers: the fold and the PC's own + always show, each a finger's size, and the
-            // count stays out; the top row over the drawer draws no + of its own
             assert.equal(rest.count, null, `${label}: no count in view under a finger`);
             assert.ok(rest.toggle && rest.add, `${label}: the fold and the + show under a finger`);
             for (const [control, box] of [["fold", rest.toggleBox!], ["+", rest.addBox!]] as const) assert.ok(box.width >= 44 && box.height >= 44, `${label}: the ${control} is a finger's 44 px (${box.width}x${box.height})`);
@@ -311,7 +285,6 @@ try {
             assert.deepEqual(hovered.name, rest.name, `${label}: the name never moves`);
             await page.mouse.move(width - 8, 600);
             assert.equal((await pcHeader(page, "Work PC")).count, String(agentsOnWork), `${label}: the count comes back when the pointer leaves`);
-            // the keyboard: the focus coming into the first PC's header shows its actions
             await page.locator('section.machine-group[aria-label="PC Laptop"] .machine-header').locator(':is(button, [role="button"][tabindex="0"])').first().focus();
             assert.equal(await page.evaluate(() => document.activeElement?.closest("section.machine-group")?.getAttribute("aria-label")), "PC Laptop", `${label}: the focus is in the first PC's header`);
             const focused = await pcHeader(page, "Laptop");
@@ -321,7 +294,6 @@ try {
             await page.keyboard.press("Shift+Tab");
             assert.equal((await pcHeader(page, "Laptop")).count, String(await agentRowsOn(page, "local")), `${label}: the count comes back when the focus leaves`);
           }
-          // a pointer on the name folds the PC as its caret does
           await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-name').click();
           assert.equal((await pcHeader(page, "Work PC")).expanded, false, `${label}: a press on the name folds the PC`);
           await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-name').click();
@@ -337,7 +309,6 @@ try {
               first: box(laptop!).top,
               laptop: { top: box(laptop!).top, bottom: box(laptop!).bottom, header: box(laptop!.querySelector(".machine-header")!).height, lastRow: lastRow ? box(lastRow).bottom : null },
               work: { top: box(work!).top, bottom: box(work!).bottom, header: box(work!.querySelector(".machine-header")!).height },
-              // a connected PC's state line is clipped: it keeps no height of its own to lengthen the scroll
               clippedState: Math.max(...[...document.querySelectorAll(".machine-list .machine-state.visually-hidden")].map((line) => box(line).height)),
             };
           });
@@ -355,7 +326,6 @@ try {
         await check("each list fades only at an edge with rows past it", { width, mode, twoPcs: true, height: 640 }, async (page, label) => {
           const agentsToggle = page.locator(".agent-section-toggle");
           if (await agentsToggle.getAttribute("aria-expanded") !== "true") await agentsToggle.click();
-          // Resting agents now start folded; this scenario needs their rows to exercise real overflow.
           await page.locator(".agent-resting-label button").click();
           assert.equal(await page.locator(".agent-resting-label button").getAttribute("aria-expanded"), "true");
           for (const list of [".machine-list", ".agent-list-contents"]) {
@@ -366,11 +336,9 @@ try {
             if (list === ".agent-list-contents") await shot(page, "fades-middle", { width, mode });
             await expectFades(page, list, 1, { top: true, bottom: false }, `${label}: ${list} at its end fades its head alone`);
           }
-          // every PC folded, and the PC list holds all its rows: no fade
           await page.locator(".machine-list").evaluate((element) => { element.scrollTop = 0; });
           for (const pc of ["Laptop", "Work PC"]) await page.getByRole("button", { name: `Collapse ${pc}`, exact: true }).click();
           await page.waitForFunction(() => !document.querySelector(".machine-list .machine-workspaces"));
-          // a window tall enough for both folded PCs beside the open Agents
           await page.setViewportSize({ width, height: 900 });
           await page.waitForFunction(() => { const list = document.querySelector(".machine-list")!; return list.scrollHeight - list.clientHeight <= 1; });
           await expectFades(page, ".machine-list", null, { top: false, bottom: false }, `${label}: a PC list that holds all its rows fades neither edge`);
@@ -386,7 +354,6 @@ try {
           const add = header.locator(".machine-new");
           await header.scrollIntoViewIfNeeded();
           assert.equal(await add.isDisabled(), true, `${label}: the offline PC's + is disabled`);
-          // its snapshot is the last one seen: it counts no agents as running now
           assert.equal((await pcHeader(page, "Work PC")).countWords, null, `${label}: a disconnected PC says no agents running`);
           if (width > 768) {
             await page.mouse.move(width - 8, 600);
@@ -396,7 +363,6 @@ try {
             const opacity = Number(await add.evaluate((element) => getComputedStyle(element).opacity));
             assert.ok(opacity > 0.3 && opacity < 0.9, `${label}: the shown disabled + keeps its dim (${opacity})`);
           } else {
-            // a finger has no hover to wait for: the disabled + is in its cell, dimmed
             const opacity = Number(await add.evaluate((element) => getComputedStyle(element).opacity));
             assert.ok(opacity > 0.3 && opacity < 0.9, `${label}: the phone drawer's disabled + keeps its dim (${opacity})`);
           }
@@ -407,15 +373,12 @@ try {
           assert.equal(lone.pcsHead, 0, `${label}: and no PCs head above it`);
         });
       }
-      // a phone's drawer starts a workspace from its PC's own row: the + is found by its role, as the header's last
-      // control, and placed against the rows under it and the fold beside it
       for (const width of [360, 390]) for (const mode of ["light", "dark"] as const) await check("a phone's drawer has each PC's + on its own row", { width, mode, twoPcs: true }, async (page, label) => {
         const header = (pc: string) => page.locator(`section.machine-group[aria-label="PC ${pc}"] .machine-header`);
         assert.equal(await page.locator(".app-header .new-workspace-button").count(), 0, `${label}: the top row over the drawer draws no +`);
         const open: Record<string, Awaited<ReturnType<typeof pcTrailing>>> = {};
         for (const pc of ["Laptop", "Work PC"]) {
           await header(pc).scrollIntoViewIfNeeded();
-          // the fold's caret repeats the title and is hidden from a screen reader, so the last button by role is the +
           const add = header(pc).getByRole("button").last();
           assert.equal(await add.evaluate((button) => button.classList.contains("machine-new")), true, `${label}: ${pc}'s last control is its +`);
           assert.ok((await add.getAttribute("aria-label") ?? "").includes(pc), `${label}: ${pc}'s + names the PC it makes the workspace on`);
@@ -426,18 +389,17 @@ try {
           assert.ok(Math.abs(at.fold.glyph - at.menuColumn!) <= 1, `${label}: ${pc}'s fold is on the column of its rows' ⋯ (${at.fold.glyph} vs ${at.menuColumn})`);
           for (const [control, box] of [["fold", at.fold.box], ["+", at.add.box]] as const) assert.ok(box.width >= 44 && box.height >= 44, `${label}: ${pc}'s ${control} is a finger's 44 px (${box.width}x${box.height})`);
           assert.ok(Math.abs(at.add.box.left - at.fold.box.right) <= 0.5, `${label}: ${pc}'s fold ends where its + starts, so the two share no tap (${at.fold.box.right} vs ${at.add.box.left})`);
-          assert.ok(at.add.takesTap && at.fold.takesTap, `${label}: a tap on the middle of ${pc}'s + and of its fold lands on each`);
+          assert.ok(at.add.takesTap && at.fold.takesTap, `${label}: a tap on the middle of ${pc}'s + and of its fold lands on each (hit ${at.add.hit} and ${at.fold.hit})`);
           assert.ok(at.add.box.right <= at.drawerRight + 0.5, `${label}: ${pc}'s + ends inside the drawer (${at.add.box.right} of ${at.drawerRight})`);
         }
-        // folded, a PC is one row and its + is still on it, where it was
         for (const pc of ["Laptop", "Work PC"]) await page.getByRole("button", { name: `Collapse ${pc}`, exact: true }).click();
         await page.waitForFunction(() => !document.querySelector(".machine-list .machine-workspaces"));
         for (const pc of ["Laptop", "Work PC"]) {
-          const folded = await pcTrailing(page, pc);
-          assert.ok(folded.add.takesTap, `${label}: folded, ${pc} still offers its +`);
+          await header(pc).scrollIntoViewIfNeeded();
+          const folded = await pcTrailing(page, pc, "add");
+          assert.ok(folded.add.takesTap, `${label}: folded, ${pc} still offers its + (hit ${folded.add.hit})`);
           assert.ok(Math.abs(folded.add.box.left - open[pc]!.add.box.left) <= 0.5 && Math.abs(folded.title.right - open[pc]!.title.right) <= 0.5, `${label}: folding ${pc} moves neither its + nor its name's room`);
         }
-        // each + starts the workspace on its own PC: the dialog it opens is that PC's
         for (const pc of ["Work PC", "Laptop"]) {
           await header(pc).getByRole("button").last().tap();
           const dialog = page.locator(".new-session-modal");
@@ -449,15 +411,12 @@ try {
           await page.waitForFunction(() => (document.querySelector(".sidebar.is-open")?.getBoundingClientRect().left ?? -1) >= -0.5);
         }
       });
-      // a + that is off (its PC away) is in view at rest under a finger, and in a window that narrow on a hybrid
-      // device, whose mouse hides no action: every theme entry draws it readable, and dimmer than one that is on
       for (const hybrid of [false, true]) await check("a phone's drawer keeps a + that is off readable in every theme", { width: 390, mode: "dark", twoPcs: true, workOffline: true, hybrid }, async (page, label) => {
         assert.deepEqual(await page.evaluate(() => [matchMedia("(pointer: fine)").matches, matchMedia("(any-pointer: coarse)").matches]), [hybrid, true], `${label}: the browser answers as ${hybrid ? "a hybrid device" : "a phone"}`);
         assert.equal(await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-new').isDisabled(), true, `${label}: the PC that is away has its + off`);
         for (const mode of ["dark", "light"] as const) {
           await page.emulateMedia({ colorScheme: mode });
           for (const { id } of SUPPORTED_ENTRIES.filter((entry) => entry.mode === mode)) {
-            // as lib/themeBoot.ts applyThemeEntry sets them
             await page.evaluate(({ id, mode }) => { const root = document.documentElement; root.dataset["theme"] = mode; root.dataset["palette"] = id; root.style.colorScheme = mode; }, { id, mode });
             const off = await addContrast(page, "Work PC"), on = await addContrast(page, "Laptop");
             assert.ok(off >= 3, `${label}: ${id}/${mode} draws the + that is off at ${off.toFixed(2)}:1, under 3:1`);
@@ -465,7 +424,6 @@ try {
           }
         }
       });
-      // a fine pointer with a touch screen beside it: a finger may come next, so the actions never hide
       for (const mode of ["light", "dark"] as const) await check("a hybrid device always shows a PC's actions", { width: 1280, mode, twoPcs: true, hybrid: true }, async (page, label) => {
         assert.deepEqual(await page.evaluate(() => [matchMedia("(hover: hover) and (pointer: fine)").matches, matchMedia("(any-pointer: coarse)").matches]), [true, true], `${label}: the browser answers as a hybrid device`);
         await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-header').scrollIntoViewIfNeeded();
@@ -477,7 +435,6 @@ try {
         assert.equal(rest.count, null, `${label}: no count in view over the actions`);
         assert.equal(rest.countWords, `${await agentRowsOn(page, "work")} agents`, `${label}: a screen reader still hears the count`);
       });
-      // forced colors paint every edge in full: a fade there is only lost text
       await check("forced colors fade no edge", { width: 1280, mode: "dark", twoPcs: true, height: 640, forcedColors: true }, async (page, label) => {
         await page.locator(".machine-list").evaluate((element) => { element.scrollTop = (element.scrollHeight - element.clientHeight) / 2; });
         await page.waitForFunction(() => document.querySelector(".machine-list")!.scrollTop > 0);

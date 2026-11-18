@@ -144,12 +144,15 @@ describe("agent catalog commands", () => {
     expect(problems(codex, "npm install -g @openai/codex-helper")).not.toEqual([]);
     expect(problems(codex, "npm i -g openai-codex@latest")).not.toEqual([]);
     expect(problems(codex, "echo installed")).not.toEqual([]);
+    // a command that installs several packages has each of them checked, not only the first
     expect(problems(codex, "npm install -g @openai/codex left-pad").filter((problem) => problem.includes("installs npm:left-pad"))).toHaveLength(1);
     expect(problems(codex, "npm i -g left-pad @openai/codex").filter((problem) => problem.includes("installs npm:left-pad"))).toHaveLength(1);
     expect(problems(codex, "npm install -g @openai/codex @openai/codex").filter((problem) => problem.includes("installs npm:"))).toEqual([]);
+    // a flag between or after the packages neither hides a package nor passes unremarked
     const flagged = problems(codex, "npm install -g @openai/codex --ignore-scripts left-pad");
     expect(flagged.filter((problem) => problem.includes("installs npm:left-pad"))).toHaveLength(1);
     expect(flagged.filter((problem) => problem.includes("passes npm --ignore-scripts"))).toHaveLength(1);
+    // anything after an approved command, in any shell's syntax, is not the vendor's command
     for (const extra of [" && touch /tmp/unapproved", "; touch /tmp/unapproved", " | tee /tmp/x", " $(touch /tmp/x)", "\ntouch /tmp/x"]) {
       expect(problems(claude, `curl -fsSL https://claude.ai/install.sh | bash${extra}`)).not.toEqual([]);
       expect(problems(codex, `npm install -g @openai/codex${extra}`)).not.toEqual([]);

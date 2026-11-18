@@ -37,7 +37,6 @@ describe("where a device that starts in the inbox starts", () => {
   it("starts in the mode on a phone whose address is the app's own start, or names a pane", () => {
     expect(startsInInbox(true, true, null, true)).toBe(true);
     expect(startsInInbox(true, true, readLink("?pane=w1%3Ap1&view=chat"), true)).toBe(true);
-    // Settings open at the start, or a New workspace link, is still the app's own start under it
     expect(startsInInbox(true, true, readLink("?settings=appearance"), true)).toBe(true);
   });
 
@@ -68,7 +67,6 @@ describe("a fresh navigation", () => {
   it("is a page the browser navigated to, on an entry the app has written nothing on", () => {
     expect(freshNavigation("navigate", null)).toBe(true);
     expect(freshNavigation("prerender", null)).toBe(true);
-    // a browser that does not say how the page was loaded: the entry's state alone tells
     expect(freshNavigation(undefined, null)).toBe(true);
   });
 

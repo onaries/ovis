@@ -13,7 +13,6 @@ import navigation from "../fixtures/pi-ask-navigation.json";
 import system from "../fixtures/pi-ask-system-theme.json";
 import { ANSI_RE, type OmoAsk } from "./shared.ts";
 
-// A fake RPC endpoint on a unique pipe/socket. Never connects to a real Herdr session.
 async function withPane(initial: string, run: (pane: {
   screen: string; status: string; sent: string[]; visible?: string; scroll: number; onSent?: (key: string) => void;
   bind(questions: OmoAsk["questions"]): void;
@@ -65,7 +64,6 @@ async function withPane(initial: string, run: (pane: {
       if (request.method === "session.snapshot") return reply({ snapshot: { panes: [{ pane_id: id, agent: "pi", agent_status: pane.status, terminal_id: id, focused: false }], layouts: [] } });
       if (request.method === "pane.read") return reply({ read: { text: request.params.format === "ansi" ? pane.visible ?? pane.screen : pane.screen.replace(ANSI_RE, "") } });
       if (request.method === "pane.get") return reply({ pane: { pane_id: id, scroll: { offset_from_bottom: pane.scroll } } });
-      // pi holds the pane's input: its key-driven cards answer only then
       if (request.method === "pane.process_info") return reply({ process_info: { foreground_processes: [{ pid: 2147483646, argv: ["pi"] }] } });
       if (request.method === "agent.get") return reply({ agent: nativeCall ? { agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value: session } } : {} });
       if (request.method === "pane.send_keys" || request.method === "pane.send_text") {
@@ -160,7 +158,6 @@ test.each(["first\nsecond", "first\rsecond", "first\r\nsecond", "\nanswer", "ans
     const card = await pane.card();
     const original = pane.screen;
     let moves = 0;
-    // Allow the real custom-input focus path: rejection must be validation, not a stale cursor.
     // Any premature Enter would close the question and expose a later screen to the remaining input.
     pane.onSent = key => {
       if (key === "down") pane.screen = ++moves === 1 ? fixtures["single-second"] : fixtures["single-custom-empty"];
@@ -396,7 +393,6 @@ const closingScreen = "Question complete\nEnter to select · ↑/↓ to navigate
 test.each([fixtures.single, fixtures.multi, fixtures.review])("Pi ask successful answer does not flash fallback keys while blocked status catches up %#", async screen => {
   await withPane(screen, async pane => {
     const card = await pane.card();
-    // The widget has closed, but its hint and the preceding blocked snapshot can outlive it.
     pane.onSent = key => { if (key === "enter") pane.screen = closingScreen; };
     const choice = card.multi_select ? { option_indices: [0] } : { option_index: 0 };
     expect(await pane.answer(card.id, choice)).toBe(200);

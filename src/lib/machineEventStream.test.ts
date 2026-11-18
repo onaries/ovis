@@ -22,7 +22,6 @@ class Socket implements MachineEventSocket {
   }
   tell(message: ServerMessage) { for (const handler of this.messages) handler(message); }
   lose() { this.machineEventsAvailable = null; for (const handler of this.disconnects) handler(); }
-  /** a 4008 close, as HerdrSocket tells it: the connection ends, then output stops until an attach */
   stall() {
     this.lose();
     this.outputStopped = true;
@@ -33,11 +32,9 @@ class Socket implements MachineEventSocket {
 function scenario(socket = new Socket()) {
   const heard: string[] = [];
   const events: MachineEvent[] = [];
-  /** the PCs as the roster has them */
   const roster = new Map<string, Machine>();
   let fallback: EventStreamHandlers | undefined;
   let fallbackOpens = 0, fallbackStops = 0;
-  // the settle deadline runs only when the test says it has passed
   const waiting = new Set<() => void>();
   const stop = keepMachineEvents(socket, {
     opened: () => { heard.push("open"); }, lost: () => { heard.push("lost"); }, closed: () => { heard.push("closed"); },
@@ -83,7 +80,6 @@ describe("machine notifications over the existing terminal socket", () => {
     tab.socket.offer(true);
     tab.socket.tell({ type: "machine-event", event: broken as MachineEvent });
     tab.socket.tell({ type: "machine-event", event: pushed as MachineEvent });
-    // the socket's other handlers still hear each frame: nothing was thrown out of this one
     expect(after).toEqual(["machines", "machine-message"]);
     expect(tab.events).toEqual([kept]);
     expect(tab.heard).toEqual(["open", "unreadable remote", "unreadable remote"]);
@@ -158,7 +154,6 @@ describe("machine notifications over the existing terminal socket", () => {
     tab.socket.tell({ type: "machine-events-ended" });
     expect(tab.heard).toEqual(["open", "lost"]);
     expect(tab.counts()).toEqual([1, 0]);
-    // a frame the ended subscription left behind, or a later snapshot on the same connection, changes nothing
     tab.socket.tell({ type: "machine-event", event });
     tab.socket.tell({ type: "features", features: ["machine-events"], connection: "c" });
     expect(tab.events).toEqual([]);
@@ -178,7 +173,6 @@ describe("machine notifications over the existing terminal socket", () => {
     tab.socket.offer(true);
     expect(tab.counts()).toEqual([1, 1]);
     expect(tab.socket.requests).toEqual([true]);
-    // an ordinary reconnect that answers in time never opens SSE
     tab.socket.lose(); expect(tab.waiting.size).toBe(1);
     tab.socket.offer(true); expect(tab.waiting.size).toBe(0);
     expect(tab.counts()).toEqual([1, 1]);

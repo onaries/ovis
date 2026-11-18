@@ -1,25 +1,9 @@
 /**
- * A phone's Back closes what is open, one thing at a time, and never leaves the app with something
- * still on the screen. At 390x844 by touch: the workspace drawer; a row's ⋯ menu over the drawer,
- * then the drawer; the New workspace dialog opened from the drawer, the agent list and the folder
- * browser inside it, then the dialog; the header's More sheet; the terminal's find bar, which goes
- * and leaves the terminal shown; the drawer with another pane opened before it, which stays the
- * pane shown; Files after a file opened from it closed by its X, or by Back; Add PC opened from Settings' Add
- * a connection, which stays up as Settings closes under it, then closes by Back with nothing of
- * Settings left. On its side (844x390) a menu is a
- * popover, and Back closes it the same. Back on the first screen, with nothing open, leaves the app.
- * A tablet (1180x820, by touch) lays the app out as a desktop does, the sidebar and a panel beside
- * the pane, and Back is still the system's: a row's menu, a tab's close confirmation, Files with a
- * document or a diff opened from it, and a menu over a web page docked beside the pane.
- * With the browser's Navigation API taken away, as in a Chromium before 102, the app keeps each
- * entry's place in its state: a menu over the drawer and Files after Back closed a file close the same.
- *
  * Chromium's own Back skips every entry of a page that added one with no tap since the user's last
  * Back or Forward, which leaves the app with the surface still up, and a script cannot press that
  * button. So each entry the app adds is counted with the taps since the user last moved in the
  * history (a step the page takes by itself ends nothing: Chromium counts a tap through it): none
  * may be added with no tap behind it.
- * On demo fixtures; UI_EVIDENCE_DIR=<dir> keeps the screenshots.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -30,6 +14,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { serveDemo } from "./demo-server.ts";
 
 type Screen = { label: string; width: number; height: number };
 type Entry = { taps: number; keys: string };
@@ -42,10 +27,6 @@ const evidence = process.env["UI_EVIDENCE_DIR"];
 if (evidence) mkdirSync(evidence, { recursive: true });
 const keep = async (page: Page, name: string): Promise<void> => { if (evidence) await page.screenshot({ path: join(evidence, `phone-back-${name}.png`) }); };
 
-/**
- * The app on the api pane, reached from a blank page: one step back from it leaves the app. `settings` are
- * this device's, beside the language. Without `navigationApi` the browser's is taken away before the app loads.
- */
 async function open(browser: Browser, origin: string, screen: Screen, run: (page: Page, entries: Entry[]) => Promise<void>, settings: Record<string, string> = {}, navigationApi = true, pane = panes.api): Promise<void> {
   const context = await browser.newContext({ viewport: { width: screen.width, height: screen.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, locale: "en-US" });
   const entries: Entry[] = [];
@@ -89,14 +70,11 @@ async function open(browser: Browser, origin: string, screen: Screen, run: (page
   } finally { await context.close(); }
 }
 
-/** The surface on top holds the history's entry: Back is its own. */
 const entryHeld = (page: Page): Promise<unknown> => page.waitForFunction(() => typeof (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === "string");
 const drawerOpen = (page: Page): Promise<unknown> => page.locator("#workspace-drawer.is-open").waitFor();
 const drawerClosed = (page: Page): Promise<unknown> => page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
-/** The pane the address names: the one shown, at any width. */
 const paneShown = (page: Page): Promise<string | null> => page.evaluate(() => new URLSearchParams(location.search).get("pane"));
 
-/** The system's Back, as one step back in the tab's history. */
 async function back(page: Page): Promise<void> {
   await page.goBack({ waitUntil: "commit" });
 }
@@ -113,17 +91,8 @@ try {
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
   writeFileSync(index, html.replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n<script type="module"`));
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    let file: string;
-    try { file = decodeURIComponent(new URL(request.url).pathname.slice(1)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix: "/" });
   const origin = `http://127.0.0.1:${server.port}`;
-  // a page on another port of this PC, for the panel beside the pane: it frames none of the app's own port
   const pages = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><title>Report</title><h1>Report</h1>", { headers: { "content-type": "text/html; charset=utf-8" } }) });
   let browser: Browser | undefined;
   try {
@@ -138,7 +107,6 @@ try {
       await drawerClosed(page);
       await stillHere(page, origin, shown, "the drawer");
       await keep(page, "drawer-after-back");
-      // with nothing open, the first screen is where Back leaves the app
       await back(page);
       await page.waitForURL("about:blank");
     });
@@ -154,7 +122,6 @@ try {
       await back(page);
       await menu.waitFor({ state: "detached" });
       assert.equal(await page.locator("#workspace-drawer.is-open").count(), 1, "a row's menu over the drawer: Back closes the menu and leaves the drawer");
-      // the drawer has the entry again: the next Back, with no tap between, is the drawer's
       await entryHeld(page);
       await back(page);
       await drawerClosed(page);
@@ -167,7 +134,6 @@ try {
       const openDialog = async (): Promise<void> => {
         await page.locator(".drawer-toggle").tap();
         await drawerOpen(page);
-        // the demo's one PC is the Host, with no header of its own: New workspace is the row closing its list
         await page.locator(".machine-list .machine-new-row").tap();
         await dialog.waitFor();
         await entryHeld(page);
@@ -209,10 +175,7 @@ try {
       await sheet.waitFor({ state: "detached" });
       await stillHere(page, origin, shown, "the header's More sheet");
 
-      // Find in terminal, from the same sheet: Back closes the bar and keeps the terminal
       await page.locator(".header-more-button").tap();
-      // More folds the find items into Find… only where it also carries the pane's search (Tabs on a phone, In the header);
-      // with the row under the header (the default) Find in terminal is More's own item
       const findGroup = sheet.getByRole("button", { name: "Find…" });
       const findItem = sheet.getByRole("button", { name: "Find in terminal" });
       await findGroup.or(findItem).first().waitFor();
@@ -228,7 +191,6 @@ try {
       await page.locator(".lens-toggle").tap();
       await page.locator(".pane-column.is-chat").waitFor();
 
-      // another pane opened first: Back with the drawer open closes the drawer, and does not go to the pane before
       await page.locator(".drawer-toggle").tap();
       await drawerOpen(page);
       await page.locator(".sidebar .workspace-select", { hasText: "flaky-retry-test" }).first().tap();
@@ -243,8 +205,6 @@ try {
       await stillHere(page, origin, moved, "the drawer over a pane opened after another");
     });
 
-    // a file opened from Files and closed by its X: the file steps back by itself, which is no Back of
-    // the user's, so Files, on top again, has the entry at once and the next Back closes it
     await open(browser, origin, UPRIGHT, async (page) => {
       const shown = await paneShown(page);
       await page.locator(".header-more-button").tap();
@@ -264,7 +224,7 @@ try {
     });
 
     // the same file closed by Back: Files is in front again with no tap since, where the browser's
-    // Back would skip an entry made now. Files takes the entry that Back left, and the next Back closes it
+    // Back would skip an entry made now.
     await open(browser, origin, UPRIGHT, async (page) => {
       const shown = await paneShown(page);
       await page.locator(".header-more-button").tap();
@@ -278,8 +238,6 @@ try {
       await viewer.waitFor({ state: "detached" });
       assert.equal(await files.count(), 1, "a file closed by Back leaves Files up under it");
       await entryHeld(page);
-      // the entry Files took still named the file when it was gone onto: the file is not shown again,
-      // read once whatever that traversal set off has been drawn
       await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
       assert.equal(await viewer.count(), 0, "the entry Files takes after Back does not bring its file back");
       await keep(page, "files-after-file-back");
@@ -288,8 +246,6 @@ try {
       await stillHere(page, origin, shown, "Files after Back closed a file opened from it");
     });
 
-    // Add PC opens as Settings closes (Add, in Add a connection's SSH tab): Settings steps back by
-    // itself, which is no Back for Add PC, and Add PC's entry lies over the one Settings opened over
     await open(browser, origin, UPRIGHT, async (page) => {
       const shown = await paneShown(page);
       await page.locator(".drawer-toggle").tap();
@@ -312,7 +268,6 @@ try {
       await addPc.waitFor({ state: "detached" });
       await stillHere(page, origin, shown, "Add PC opened from Settings");
       assert.equal(await settings.count(), 0, "Add PC opened from Settings: Back closes Add PC and does not bring Settings back");
-      // nothing of Settings is left under it: from here Back leaves the app
       await back(page);
       await page.waitForURL("about:blank");
     });
@@ -329,7 +284,6 @@ try {
       await stillHere(page, origin, shown, "a menu with the phone on its side");
     });
 
-    // a tablet: the sidebar stays beside the pane, a row's menu is a popover, and the tab strip is in the header
     await open(browser, origin, TABLET, async (page) => {
       const shown = await paneShown(page);
       assert.equal(await page.locator(".drawer-toggle").isVisible(), false, "a tablet keeps the sidebar beside the pane: there is no drawer");
@@ -341,7 +295,6 @@ try {
       await back(page);
       await menu.waitFor({ state: "detached" });
       await stillHere(page, origin, shown, "a row's menu on a tablet");
-      // with nothing open, the first screen is where Back leaves the app
       await back(page);
       await page.waitForURL("about:blank");
     });
@@ -357,7 +310,6 @@ try {
       await page.locator(".tab-strip-tab").nth(1).waitFor();
       const tabs = await page.locator(".tab-strip-tab").count();
       assert.equal(tabs, 2, "a tablet's busy tab among others: the web pane's tab and a new terminal");
-      // only the active tab shows its close: back to the web pane's tab, then close it
       await page.locator(".tab-strip-tab").first().tap();
       await page.locator(".tab-strip-item.is-active").first().getByRole("button", { name: busyTab, exact: true }).waitFor();
       const here = await paneShown(page);
@@ -371,7 +323,6 @@ try {
       assert.equal(await page.locator(".tab-strip-tab").count(), tabs, "a tab's close confirmation on a tablet: Back closes the question and no tab");
     }, {}, true, panes.web);
 
-    // Files on a tablet, a dialog as on a desktop: a document and a change each open over it, and Back closes one thing at a time
     await open(browser, origin, TABLET, async (page) => {
       const shown = await paneShown(page);
       const files = page.getByRole("dialog", { name: "Files", exact: true });
@@ -399,7 +350,6 @@ try {
       await stillHere(page, origin, shown, "Files on a tablet");
     });
 
-    // a web page beside the pane, where a tablet docks it: a menu opened over it is Back's, and the page stays
     await open(browser, origin, TABLET, async (page) => {
       const shown = await paneShown(page);
       await page.locator(".header-more-button").tap();
@@ -429,7 +379,7 @@ try {
     }, { webLinks: "panel" });
 
     // a Chromium with no Navigation API (before 102) tells the app neither which entry the history is on nor
-    // how to go onto one: the app keeps each entry's place in its state, and Back closes one thing at a time the same
+    // how to go onto one
     await open(browser, origin, UPRIGHT, async (page) => {
       const shown = await paneShown(page);
       await page.locator(".drawer-toggle").tap();
@@ -441,13 +391,11 @@ try {
       await back(page);
       await menu.waitFor({ state: "detached" });
       assert.equal(await page.locator("#workspace-drawer.is-open").count(), 1, "with no Navigation API, a row's menu over the drawer: Back closes the menu and leaves the drawer");
-      // the history went onto the drawer's entry again, by the places the app keeps: the next Back is the drawer's
       await entryHeld(page);
       await back(page);
       await drawerClosed(page);
       await stillHere(page, origin, shown, "with no Navigation API, the drawer under a menu");
 
-      // a file opened from Files and closed by Back: Files takes the entry that Back left, and the next Back closes it
       await page.locator(".header-more-button").tap();
       await page.getByRole("dialog", { name: "More", exact: true }).getByRole("button", { name: "Browse files", exact: true }).tap();
       const files = page.getByRole("dialog", { name: "Files", exact: true });

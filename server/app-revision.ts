@@ -23,5 +23,4 @@ export function buildRevision(root = ASSETS, env: Record<string, string | undefi
 
 /** what it was when this server started: a dist/ rebuilt since is not the server that runs */
 const atStart = buildRevision();
-/** This app's build, replaceable in tests. */
 export const appBuild = { revision: (): string | undefined => atStart };

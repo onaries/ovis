@@ -45,7 +45,7 @@ describe("canServe", () => {
       try {
         held = Bun.serve({ hostname: "::1", port: 0, fetch: () => new Response() });
       } catch {
-        return; // no IPv6 loopback here: the server would not open ::1 either
+        return;
       }
       if (await canBind("127.0.0.1", held.port!)) holder = held;
       else await held.stop(true);

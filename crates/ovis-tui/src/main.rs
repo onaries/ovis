@@ -1,6 +1,4 @@
-//! `ovis tui`: herdr-core's terminals in this terminal, as herdr shows them: the sidebar of
-//! workspaces and agents with their state, tabs, splits and herdr's keys. The screen is hc-tui
-//! (https://github.com/followcat/hc-tui), run with the settings below.
+//! The screen is hc-tui (https://github.com/followcat/hc-tui), run with the settings below.
 mod args;
 
 use std::ffi::{OsStr, OsString};
@@ -66,12 +64,10 @@ fn run(options: &args::Options) -> Result<(), String> {
     let embed = Embed {
         // nothing typed while a terminal's connection is down is sent once it is back
         discard_input_on_recovery: true,
-        // a phone-width screen shows the focused terminal, not its tab's whole split
         solo_on_narrow: true,
         // Ovis never starts an engine on its own: a core started here would also inherit this
         // program's environment
         no_core_start: true,
-        // the user runs ovis tui: hc-tui's own version would read as its version
         hide_version_badge: true,
     };
     tokio::runtime::Builder::new_current_thread()
@@ -81,7 +77,6 @@ fn run(options: &args::Options) -> Result<(), String> {
         .block_on(hc_tui::cli::run_embedded(&endpoint, &env, embed))
 }
 
-/// What to tell the user when the local core does not answer; this program never starts one.
 fn core_down(endpoint: &Endpoint) -> Option<String> {
     let Endpoint::Local(local) = endpoint else {
         return None;

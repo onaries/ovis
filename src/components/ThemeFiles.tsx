@@ -7,7 +7,6 @@ import type { Mode } from "../lib/themes.ts";
 import { SettingsRow } from "./SettingsControls.tsx";
 import "./ThemeFiles.css";
 
-/** What a theme file holds and how the app reads it, for whoever writes one. */
 const THEME_FILE_HELP = "https://github.com/devswha/ovis/blob/main/docs/themes.md";
 
 function refusal(t: Translate, error: ThemeFileError | "full", key = ""): string {
@@ -22,24 +21,13 @@ function refusal(t: Translate, error: ThemeFileError | "full", key = ""): string
   }
 }
 
-/** The sides an imported theme has, in words. */
 const sidesOf = (t: Translate, theme: CustomTheme): string => [theme.dark && t("Dark"), theme.light && t("Light")].filter(Boolean).join(" · ");
 
-/**
- * What an imported theme is called where it is named alone (its card, its Remove button): its name,
- * and its sides too when another imported theme looks to have the same name (a dark file and a
- * light file nobody renamed), so the two are told apart.
- */
 export function themeLabel(t: Translate, theme: CustomTheme, themes: readonly CustomTheme[]): string {
   const key = nameKey(theme.name);
   return themes.some((entry) => entry.id !== theme.id && nameKey(entry.name) === key) ? `${theme.name} · ${sidesOf(t, theme)}` : theme.name;
 }
 
-/**
- * Settings → Appearance, under the theme cards: a theme from a file of colours (lib/customThemes.ts),
- * and the imported ones with a way to remove each. An imported theme is chosen at once for the side
- * it has (both when it has both); `onImported` is told which, so the picker can show those cards.
- */
 export function ThemeFiles({ onImported }: { onImported: (sides: readonly Mode[]) => void }) {
   const { settings, update } = useSettings();
   const t = useT();
@@ -47,12 +35,10 @@ export function ThemeFiles({ onImported }: { onImported: (sides: readonly Mode[]
   const [status, setStatus] = useState<{ text: string; failed: boolean } | null>(null);
   const custom = settings.customThemes;
 
-  // an import on its way into the settings: what it came to is read off the list it made
   const [pending, setPending] = useState<{ theme: CustomTheme; sides: readonly Mode[] } | null>(null);
   useEffect(() => {
     if (pending === null) return;
     setPending(null);
-    // the list filled meanwhile, in another tab of this browser
     if (!custom.themes.some((entry) => entry.id === pending.theme.id)) return setStatus({ text: refusal(t, "full"), failed: true });
     onImported(pending.sides);
     setStatus({ text: t("Imported {name}.", { name: pending.theme.name }), failed: false });
@@ -67,7 +53,6 @@ export function ThemeFiles({ onImported }: { onImported: (sides: readonly Mode[]
     if ("error" in result) return fail(result.error, result.key);
     const { theme } = result;
     const sides: Mode[] = theme.dark && theme.light ? ["dark", "light"] : [theme.dark ? "dark" : "light"];
-    // onto the list as it is now, not as it was when this was drawn: another tab may have imported since
     update((current) => {
       const next = withImported(current.customThemes, theme);
       return next === null ? {} : { customThemes: next };
@@ -84,7 +69,6 @@ export function ThemeFiles({ onImported }: { onImported: (sides: readonly Mode[]
         description={t("Adds a theme from a file of colors: a Base16 scheme, or a file with a dark and a light side. Only colors are read from it; the theme is chosen at once and joins the cards above.")}
         condition={status !== null && <span className={status.failed ? "settings-condition" : "settings-hint"} role={status.failed ? "alert" : "status"}>{status.text}</span>}
       >
-        {/* beside the button, not in the description: a page without sentences still says where the format is written down */}
         <span className="settings-actions theme-file-actions">
           <a className="settings-link" href={THEME_FILE_HELP} target="_blank" rel="noreferrer">{t("File format")}</a>
           <button type="button" className="btn" onClick={() => picker.current?.click()}>{t("Import")}</button>

@@ -29,7 +29,6 @@ process.env["OVIS_BUNDLE_MANIFEST"] = resolve(`remote-bundles/manifest-${process
 const sockets: WebSocket[] = [];
 let port = 0;
 let originalKey = "";
-/** when a setup job was last seen saying connected (performance.now()): a failed PC request says how long ago */
 let lastConnectedAt: number | undefined;
 
 function command(args: string[], input?: string): void {
@@ -49,10 +48,6 @@ async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> 
   assert.ok(r.ok, r.ok ? "" : failure + await pcWhenFailed(path));
   return r.json() as Promise<T>;
 }
-/**
- * Diagnostic only, read once a request to one PC's route has already failed: how /api/machines shows that PC right
- * then. A PC that dropped its connection says so in its state, and `error` names the way it was lost.
- */
 async function pcWhenFailed(path: string): Promise<string> {
   const id = /^\/api\/machines\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?]|$)/.exec(path)?.[1];
   if (!id) return "";
@@ -155,7 +150,6 @@ try {
   ws.send(JSON.stringify({ type: "role", mode: "observe" }));
   ws.send(JSON.stringify({ type: "attach", pane_id: paneId, cols: 80, rows: 24, flow_control: "ack" }));
   await until(async () => frames, (list) => list.some((m) => m.type === "pty-data"), "remote terminal paint");
-  // a mirror paints too (pty-data), on a grid it fixes: the remote PC has Node, so this must be herdr's own attach (#265)
   assert.ok(!frames.some((m) => m.type === "pane-geometry" && m.fixed === true), "remote terminal is attached, not mirrored");
   ws.send(JSON.stringify({ type: "input", pane_id: paneId, text: "forbidden\n" }));
   await until(async () => frames, (list) => list.some((m) => m.type === "error" && m.code === "read_only"), "observe enforcement");

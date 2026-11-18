@@ -11,7 +11,6 @@ const answered = `${JSON.stringify({ type: "event_msg", timestamp: "2026-11-12T0
 const pane = (status: string) => ({ pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", agent: "codex", agent_status: status, cwd: root });
 
 let rollouts = 0;
-/** a hub whose Codex pane reads `text` as its rollout; `looked` resolves once codexRest has read it and told what it found */
 function codexHub(text: string) {
   const path = join(root, `rollout-${++rollouts}.jsonl`);
   writeFileSync(path, text);
@@ -27,11 +26,9 @@ function codexHub(text: string) {
   const looked = async () => {
     await reads.promise;
     reads = Promise.withResolvers<void>();
-    // what the read found is told in the callbacks after it: one turn of the event loop
     await new Promise<void>((resolve) => setImmediate(resolve));
   };
   const restore = () => { lookups.mockRestore(); read.mockRestore(); };
-  /** the lookup a status event set off has answered, and what it found is told */
   const settled = async () => {
     await (lookups.mock.results.at(-1)?.value as Promise<unknown> | undefined)?.catch(() => undefined);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -47,19 +44,16 @@ describe("a Codex pane whose turn ended in an error", () => {
       handlers.onStatus("w1:p1", "working", "codex");
       h.herdrSays(pane("idle"));
       handlers.onStatus("w1:p1", "idle", "codex");
-      // no finish is told while the rollout is read: a browser would play its sound for it
       expect(h.last().status).toBe("working");
       await h.looked();
       expect(h.last().status).toBe("idle");
       expect(h.alerts).toEqual(["working", "idle"]);
       expect(h.failures).toEqual(["w1:p1"]);
-      // herdr's own DONE for the pane, in a snapshot or an event, changes nothing and tells nothing again
       h.herdrSays(pane("done"));
       expect((await h.snapshot()).panes[0]!.agent_status).toBe("idle");
       handlers.onStatus("w1:p1", "done", "codex");
       expect(h.last().status).toBe("idle");
       expect(h.failures).toEqual(["w1:p1"]);
-      // the next turn is a turn like any other
       handlers.onStatus("w1:p1", "working", "codex");
       expect(h.last().status).toBe("working");
     } finally { h.restore(); }
@@ -114,7 +108,6 @@ describe("a Codex pane whose turn ended in an error", () => {
       handlers.onStatus("w1:p1", "done", "codex");
       await h.settled();
       expect(h.read).not.toHaveBeenCalled();
-      // too soon: not again
       h.herdrSays(pane("done"));
       await h.snapshot();
       expect(h.lookups).toHaveBeenCalledTimes(1);
@@ -134,7 +127,6 @@ describe("a Codex pane whose turn ended in an error", () => {
       handlers.onStatus("w1:p1", "done", "codex");
       await h.looked();
       expect(h.last().status).toBe("idle");
-      // the retry's end is written after herdr read the pane at rest: the next read finds it
       writeFileSync(h.path, `${failed}${JSON.stringify({ type: "event_msg", timestamp: "2026-11-12T05:56:00.000Z", payload: { type: "task_started", turn_id: "retry" } })}\n${JSON.stringify({ type: "event_msg", timestamp: "2026-11-12T05:56:01.000Z", payload: { type: "task_complete", turn_id: "retry", last_agent_message: "Done", error: null } })}\n`);
       h.herdrSays(pane("done"));
       await h.snapshot();
@@ -151,7 +143,6 @@ describe("a Codex pane whose turn ended in an error", () => {
       handlers.onStatus("w1:p1", "done", "codex");
       await h.looked();
       expect(h.last().status).toBe("idle");
-      // the user sends again: Codex writes the retry's start before herdr reads the pane at work
       const started = `${failed}${JSON.stringify({ type: "event_msg", timestamp: "2026-11-12T05:56:00.000Z", payload: { type: "task_started", turn_id: "retry" } })}\n`;
       writeFileSync(h.path, started);
       h.herdrSays(pane("idle"));
@@ -159,7 +150,6 @@ describe("a Codex pane whose turn ended in an error", () => {
       await h.looked();
       expect(h.last().status).toBe("idle");
       expect(h.alerts).toEqual(["working", "idle"]);
-      // herdr at `unknown` at rest is that failed rest too
       h.herdrSays(pane("unknown"));
       expect((await h.snapshot()).panes[0]!.agent_status).toBe("idle");
     } finally { h.restore(); }

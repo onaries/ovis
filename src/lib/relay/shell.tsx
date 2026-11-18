@@ -1,4 +1,3 @@
-/** Hosted-shell routing and the pairing state machine. */
 // allow: SIZE_OK - One state-machine closure shares attempt ownership across connection, cancellation and admission handlers.
 import { createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,12 +16,14 @@ import { onLazyChunkFailure } from "../lazyChunk.ts";
 import { setTransport } from "../transport.ts";
 import { takeEntryUrl } from "./boot.ts";
 import { nativeDirectSocket, nativeDirectTailnet } from "./directSocket.ts";
-import { enrollmentOf, indexedDeviceStore, indexedPendingPush, ServerIdentityChangedError } from "./device.ts";
+import { enrollmentOf, indexedDeviceStore, indexedPendingPush, ServerIdentityChangedError, type RelayDevice } from "./device.ts";
 import { failureOf, forgedOffer, forgetsDevice, iosBrowserTab, keyMismatch, offerOf, pairsAgainWithoutKey, shellEntry, sheetContext, keepSheetContext, typedJoin, keepTypedJoin, dashboardHash, keepConfirmedPc, takeConfirmedPc, keepDeviceOnlyPc, deviceOnlyPc, keepConfirmedSignIn, confirmedSignIn } from "./shellState.ts";
 import type { Attempt, RelayShellMount, RelayShellState, SheetJoin } from "./shellState.ts";
 import { openRelayTransport, type RelayTransport } from "./transport.ts";
 import { offerFromCode, TypedCodeError } from "./pairCode.ts";
-import { ConsentChangedError, createAccountController } from "./accountController.ts";
+import { ADMISSION_WAIT_MS, ConsentChangedError, createAccountController } from "./accountController.ts";
+import { AccountPcError } from "../account/join.ts";
+import { refusalOf } from "./firstLink.ts";
 import { createPcSweep } from "./pcSweep.ts";
 import { createUpdateFlow, loadObservedVersions, observedVersions, reloadPage, freshShellNext, forgetSavedPc } from "./updateFlow.ts";
 export type { RelayShellMount } from "./shellState.ts";
@@ -50,12 +51,20 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
   let comparison: { name: string | null; digits: string; matched: () => void; typed: boolean } | null = null;
   let challenge = 0, checked = false;
   const enrolling = new Set<RelayTransport>();
+  // a first link each PC refused, by its id, until a failure screen for that PC says it (linkRefused)
+  const refusedLinks = new Map<string, unknown>();
+  // a marked code's pairing, by PC, until its new row's link passes, with the record of an older pairing that its PAIR
+  // replaced (`older`), so a refused link leaves the device the record of the row the PC kept
+  const markedPairings = new Map<string, { older?: RelayDevice }>();
+  // the account steps of a pairing still in front of the person (its connecting screen): a Cancel ends them
+  let frontSteps: AbortController | null = null;
+  // a marked code's enrollment while its first link may still be on its way, by PC (failed waits for its answer)
+  const linking = new Map<string, Promise<void>>();
   const directSocket = nativeDirectSocket();
   const directTailnet = directSocket ? nativeDirectTailnet() : undefined;
   const findByCode = mount.findByCode ?? offerFromCode;
   const pendingPush = mount.pendingPush ?? indexedPendingPush;
   const registerPending = (serverId: string): void => {
-    // with this device's alert choices, as the app's own registration sends them, which then skips it
     registerPendingPush(serverId, pendingPush, withAlertFilters(alertPrefs(loadSettings()), readAlertFilters())).catch((error: unknown) => {
       console.warn("Ovis: the PC did not take this device's new push subscription", error);
     });
@@ -77,16 +86,13 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
   let pressed: "unlisted" | "listed" | "own" | undefined;
   // bumped by every press and by everything that ends one (Not now, Back, another link): a press whose read lands later does nothing
   let press = 0;
-  // the sign-in, or its directory, was not read in time: what was not read says nothing, as after a read that failed
   let unanswered = false;
   let readWait: ReturnType<typeof setTimeout> | undefined;
   // the sign-in each confirm that names an account was drawn for (kept off the rendered state: it holds the tokens)
   const drawnFor = new WeakMap<RelayShellState, AccountSession>();
   const accountChanged = async (): Promise<void> => {
-    // a sign-in still finishing has not been read: its answer decides what the confirm says
     const read = account.state?.kind !== "signing-in";
     if (read) accountRead = true;
-    // an answer came, or there is no directory to wait for
     if (read && (account.state?.kind !== "signed-in" || account.state.pcs !== null)) unanswered = false;
     if (app === null && shown?.kind === "confirm") show(confirmOf(shown.offer));
     else if (frontUp()) { if (sheetJoin && shown) show(shown); else await showFront(); }
@@ -110,7 +116,6 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     if (signIn !== undefined && (said === "listed" || said === "unlisted")) drawnFor.set(state, signIn);
     return state;
   };
-  /** A confirm still "checking" when the wait runs out is drawn without what was not read (the sign-in, or its directory), so its button works. */
   const waitForRead = (): void => {
     clearTimeout(readWait);
     // fixed wait: a sign-in or an account service that takes longer than this counts as one that did not answer
@@ -120,11 +125,6 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
       show(confirmOf(shown.offer));
     }, ACCOUNT_READ_WAIT_MS);
   };
-  /**
-   * Reads the sign-in and its directory again, with the confirm on "checking" meanwhile, then draws what holds now and
-   * hands it to `after`. Nothing happens once the press was ended (`press` moved), and a service that does not answer
-   * in time is not waited for.
-   */
   const readAgain = (offer: RelayOffer, after: (now: Extract<RelayShellState, { kind: "confirm" }>) => void, asked?: Extract<RelayShellState, { kind: "confirm" }>): void => {
     const mine = ++press;
     confirming = true;
@@ -188,18 +188,31 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     if (last !== attempt) return;
     comparison = null;
     if (pairsAgainWithoutKey(error, { ...attempt, codeless: attempt.codeless === true })) {
-      // a Cancel or another link while the key goes ends this recovery: the newer attempt owns the screen
-      await store.remove(attempt.offer.server_id);
+      await forgetRow(attempt);
       if (last !== attempt) return;
       await connect({ ...attempt, refreshed: true });
       return;
     }
-    let failure = failureOf(error, { code: attempt.code, paired: attempt.paired, compared: attempt.compared === true, codeless: attempt.codeless === true });
+    // the PC ends a refused row's sessions as it answers that row's first link, and the end may come here first: a
+    // marked pairing's link still on its way is waited for, bounded, so its refusal decides what is kept
+    const inFlight = linking.get(attempt.offer.server_id);
+    if (inFlight !== undefined && refusedLinks.get(attempt.offer.server_id) === undefined) {
+      // fixed wait: a link answer that takes longer than the admission's own bound counts as none
+      await Promise.race([inFlight, new Promise<void>((resolve) => { setTimeout(resolve, ADMISSION_WAIT_MS); })]);
+      if (last !== attempt) return;
+    }
+    // a first link this PC refused (linkRefused): its words say more than the end of the session that may follow it
+    const refused = refusedLinks.get(attempt.offer.server_id);
+    const restored = refused === undefined ? "none" : await reopenOlder(attempt);
+    if (restored === "restored") { refusedLinks.delete(attempt.offer.server_id); return; }
+    if (last !== attempt) return;
+    let failure = refusalOf(error) ?? failureOf(error, { code: attempt.code, paired: attempt.paired, compared: attempt.compared === true, codeless: attempt.codeless === true });
     if (failure === "revoked") {
       const saved = await store.get(attempt.offer.server_id);
       if (last !== attempt) return;
-      // a link whose answer was lost: the PC may hold the account key now, so that key is tried once before anything is forgotten
-      if (saved?.pending_key && !attempt.retriedPending) {
+      // a link whose answer was lost: the PC may hold the account key now, so that key is tried once before anything is
+      // forgotten; a link the PC refused never gave it that key
+      if (refused === undefined && saved?.pending_key && !attempt.retriedPending) {
         const { pending_key: pending, ...rest } = saved;
         await store.update(saved.server_id, () => ({ ...rest, private_key: pending.private_key, public_spki: pending.public_spki }));
         if (last !== attempt) return;
@@ -208,16 +221,24 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
       }
       if (saved?.introduced_at !== undefined && Date.now() - saved.introduced_at < INTRODUCED_GRACE_MS) failure = "not-added-yet";
     }
-    if (forgetsDevice(failure)) await store.remove(attempt.offer.server_id).catch(() => undefined);
+    // forgotten once the PC ended the pairing: its session ended, a sign-in was refused, or it turned a new pairing's
+    // first link away (refusalOf: the code ended, the link was for another account than the one it was set up for, or
+    // the account did not confirm the device), which ends that row and leaves no older record to reopen
+    markedPairings.delete(attempt.offer.server_id);
+    // the attempt's own row only, read and deleted in one write: a Forget or a newer pairing made since stands
+    const rowEnded = restored === "none" && refused instanceof AccountPcError && refusalOf(refused) !== null;
+    if (forgetsDevice(failure) || rowEnded) await forgetRow(attempt).catch(() => undefined);
     if (last !== attempt) return;
+    refusedLinks.delete(attempt.offer.server_id);
     const mismatch = error instanceof ServerIdentityChangedError && error.saved !== undefined && error.offered !== undefined
       ? keyMismatch(attempt.offer.server_id, [{ key: error.saved, from: "saved" }, { key: error.offered, from: "link" }]) : null;
-    show({ kind: "failed", failure, name: attempt.offer.name ?? null, detail: null, server_id: attempt.offer.server_id, ...(mismatch ? { mismatch } : {}) });
+    show({ kind: "failed", failure: (refused === undefined ? null : refusalOf(refused)) ?? failure, name: attempt.offer.name ?? null, detail: null, server_id: attempt.offer.server_id, ...(mismatch ? { mismatch } : {}) });
   };
 
   const connect = async (attempt: Attempt): Promise<void> => {
-    // digits shown on an earlier try say nothing about how this one fails
     attempt.compared = false;
+    // nor does a link refused before a new pairing
+    if (!attempt.paired) refusedLinks.delete(attempt.offer.server_id);
     last = attempt;
     opening?.abort();
     const controller = new AbortController();
@@ -225,8 +246,21 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     show({ kind: "connecting", name: attempt.offer.name ?? null });
     let opened: RelayTransport;
     try {
+      // a saved pairing signs in with the row its record names: that row is the one this attempt may forget
+      if (attempt.paired && attempt.row === undefined) {
+        attempt.row = (await store.get(attempt.offer.server_id))?.device_id ?? null;
+        if (controller.signal.aborted) return;
+      }
       const prepared = await account.prepare(attempt.offer, controller.signal, consentOf(attempt));
       attempt.accountEnrollment = prepared.accountKey !== undefined;
+      if (!attempt.paired) {
+        const marked = attempt.offer.code !== undefined && attempt.offer.admission === 1;
+        const saved = marked ? await store.get(attempt.offer.server_id) : undefined;
+        // a Cancel, or another link, while the record was read: what a refused link restores is the newer attempt's
+        if (controller.signal.aborted) return;
+        if (marked) markedPairings.set(attempt.offer.server_id, saved?.device_id != null ? { older: saved } : {});
+        else markedPairings.delete(attempt.offer.server_id);
+      }
       opened = await open(attempt.offer, {
         store, label, signal: controller.signal,
         ...prepared,
@@ -250,9 +284,7 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
       });
     } catch (error) {
       if (controller.signal.aborted) return;
-      // the sign-in the confirm named is not the one stored any more
       if (error instanceof ConsentChangedError && last === attempt) {
-        // nothing was paired: the question is asked again
         if (!attempt.paired && entry.offer === attempt.offer) { last = null; opening = null; readAgain(attempt.offer, () => undefined); return; }
         // a PC this page already paired opens with the key it holds, and joins no account
         if (attempt.paired) { await connect({ ...attempt, accountless: true }); return; }
@@ -266,13 +298,16 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     // nor to the account of another sign-in than the one the confirm named: only its id crosses the reload
     keepConfirmedSignIn(attempt.signIn ? { server_id: attempt.offer.server_id, sign_in_id: attempt.signIn.sign_in_id ?? null } : null);
     if (controller.signal.aborted) { opened.close(); return; }
+    // the row the PC admitted this session as, which its channel saved: only it may be replaced by an older record, or
+    // forgotten. Not read from the store again, where another tab may have saved a newer pairing of this PC since
+    attempt.row = opened.deviceId ?? null;
     opening = null;
     comparison = null;
     // the PC admitted this phone: a pairing code is spent, and every later attempt (Try again on
     // the update screen included) signs with the saved device key instead of pairing again
     const { code, ...saved } = attempt.offer;
     const fresh = !attempt.paired || attempt.fresh === true;
-    const enrolled: Attempt = { offer: saved, code: false, paired: true, accountEnrollment: attempt.accountEnrollment === true, retryEnrollment: attempt.retryEnrollment === true, ...(fresh ? { fresh: true, introducible: attempt.paired ? attempt.introducible === true : !attempt.code } : {}), ...(attempt.accountless ? { accountless: true } : {}), ...(attempt.signIn ? { signIn: attempt.signIn } : {}) };
+    const enrolled: Attempt = { offer: saved, code: false, paired: true, accountEnrollment: attempt.accountEnrollment === true, retryEnrollment: attempt.retryEnrollment === true, ...(attempt.row === undefined ? {} : { row: attempt.row }), ...(fresh ? { fresh: true, introducible: attempt.paired ? attempt.introducible === true : !attempt.code } : {}), ...(attempt.accountless ? { accountless: true } : {}), ...(attempt.signIn ? { signIn: attempt.signIn } : {}) };
     last = enrolled;
     if (code !== undefined && entry.offer !== null) entry = { ...entry, offer: null };
     transport = opened;
@@ -291,36 +326,101 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     last = { ...attempt, fresh: false };
   };
   const openPc = (): void => { if (app === null && shown?.kind === "ready" && transport && last) enterApp(transport, last); };
-  /** `settled`: told once nothing more of the enrollment ends or renews the session (accountController.ts, EnrollOptions). */
-  const enroll = (opened: RelayTransport, attempt: Attempt, settled?: () => void): void => {
+  /**
+   * A first link the PC refused (refusalOf): its new row there is gone. Kept for the failure screen, which says why
+   * instead of the session's end that follows; while the pairing's own connecting screen is up, that screen comes now,
+   * and the app is not opened over the row. True when the refusal was one of those.
+   */
+  const linkRefused = (opened: RelayTransport, attempt: Attempt, error: unknown): boolean => {
+    if (attempt.fresh !== true || refusalOf(error) === null) return false;
+    refusedLinks.set(attempt.offer.server_id, error);
+    if (app === null && last === attempt && transport === opened && shown?.kind === "connecting") {
+      transport = null;
+      void failed(error, attempt);
+    }
+    return true;
+  };
+  /** Forgets the attempt's own row (Attempt.row), or the saved record when the attempt never knew one. */
+  const forgetRow = async (attempt: Attempt): Promise<void> => {
+    if (attempt.row === null) return;
+    if (attempt.row === undefined) await store.remove(attempt.offer.server_id);
+    else await store.removeRow(attempt.offer.server_id, attempt.row);
+  };
+  /**
+   * The record of a saved pairing that paired again from a marked code and whose new link was refused: saved again, and
+   * the PC opened with it, as it was before the scan. Only while the refused row's own record is the saved one, checked
+   * in the same write: a Forget or a newer pairing made since (another tab) stands ("superseded"). "none": there is none.
+   */
+  const reopenOlder = async (attempt: Attempt): Promise<"restored" | "none" | "superseded"> => {
+    const kept = markedPairings.get(attempt.offer.server_id);
+    const older = kept?.older;
+    if (older === undefined) return "none";
+    markedPairings.delete(attempt.offer.server_id);
+    let superseded = false;
+    try {
+      await store.update(older.server_id, (current) => {
+        if (current === undefined || attempt.row == null || current.device_id !== attempt.row) { superseded = true; throw new DOMException("The refused pairing was replaced", "AbortError"); }
+        return older;
+      });
+    } catch (error) {
+      if (superseded) return "superseded";
+      // a store that cannot keep the record says why
+      void failed(error, attempt);
+      return "restored";
+    }
+    // a Cancel or another link meanwhile owns the screen
+    if (last === attempt) void connect({ offer: offerOf(older), code: false, paired: true, accountEnrollment: attempt.accountEnrollment === true, ...(attempt.signIn ? { signIn: attempt.signIn } : {}) });
+    return "restored";
+  };
+  const enroll = (opened: RelayTransport, attempt: Attempt, settled?: () => void, signal?: AbortSignal): void => {
     // the confirm said this device gets a key of its own: a sign-in stored since then adds nothing to its account here
     if (attempt.accountless) return;
     enrolling.add(opened);
-    void account.enroll(opened, attempt.offer.server_id, attempt.fresh === true, attempt.fresh === true && attempt.introducible === true, { consent: consentOf(attempt), ...(settled ? { settled } : {}) }).then((enrollment) => {
+    const done = account.enroll(opened, attempt.offer.server_id, attempt.fresh === true, attempt.fresh === true && attempt.introducible === true, { consent: consentOf(attempt), ...(settled ? { settled } : {}), ...(signal ? { signal } : {}) }).then((enrollment) => {
+      // the new row's link passed (or none was needed): the record it replaced is no longer kept
+      markedPairings.delete(attempt.offer.server_id);
       if (app === null && last === attempt && shown?.kind === "ready") show({ ...shown, enrollment });
     }, (error: unknown) => {
+      if (linkRefused(opened, attempt, error)) return;
       console.warn("Ovis: this PC did not join the account yet", error instanceof Error ? error.name : error);
       if (app === null && last === attempt && shown?.kind === "ready") show({ ...shown, enrollment: "failed" });
     }).finally(() => { enrolling.delete(opened); if (transport !== opened) opened.close(); });
+    if (attempt.fresh === true && markedPairings.has(attempt.offer.server_id)) {
+      const settledLink = done.then(() => undefined, () => undefined);
+      linking.set(attempt.offer.server_id, settledLink);
+      void settledLink.then(() => { if (linking.get(attempt.offer.server_id) === settledLink) linking.delete(attempt.offer.server_id); });
+    }
   };
   const updates = createUpdateFlow(mount.shellVersion ?? __APP_VERSION__, {
     show, failed, reload: mount.reload ?? (() => reloadPage(entry.serverId)),
+    // a marked pairing's first link has not passed: the record a refusal restores is kept in this page only
+    holdsReload: (attempt) => markedPairings.has(attempt.offer.server_id),
     accepted: (opened, attempt) => {
       if (transport !== opened) return;
-      // adding this PC to the account failed on an earlier open: it stops here, where Try again is, before the app
       if (attempt.retryEnrollment) { last = attempt; show({ kind: "ready", name: attempt.offer.name ?? null, server_id: attempt.offer.server_id, enrollment: attempt.accountEnrollment ? "pending" : "local" }); enroll(opened, attempt); return; }
       // paired with the account's key just now: the PC's row for this device joins the account by a link, which ends
       // the row's other sessions (this one too), and the session then signs in again. Both happen here, behind the
       // connecting screen, before the app has a terminal for them to end; the rest of the enrollment goes on behind the app
       if (attempt.fresh && attempt.accountEnrollment && !attempt.accountless) {
-        // an admission after an update hands a copy of the attempt: this one is the latest
         last = attempt;
         show({ kind: "connecting", name: attempt.offer.name ?? null });
         let waited: ReturnType<typeof setTimeout> | undefined;
-        const enter = (): void => { clearTimeout(waited); if (transport !== opened || last !== attempt || app !== null) return; enterApp(opened, attempt); };
+        // a Cancel on this screen ends the account steps too: no link, no store write, no app after it
+        const steps = new AbortController();
+        frontSteps?.abort();
+        frontSteps = steps;
+        const enter = (): void => {
+          clearTimeout(waited);
+          // past this point the steps go on behind the app, as any enrollment does, and a Cancel no longer ends them
+          if (frontSteps === steps) frontSteps = null;
+          if (steps.signal.aborted || transport !== opened || last !== attempt || app !== null) return;
+          enterApp(opened, attempt);
+        };
+        // a marked pairing's row can do nothing but link until its first link passes: its connecting screen and its
+        // Cancel stay until that link is answered (settled, or a refusal said) or the attempt ends
         // fixed wait: a PC that takes longer than this over the account's steps is opened without them
-        waited = setTimeout(enter, ACCOUNT_STEPS_WAIT_MS);
-        enroll(opened, attempt, enter);
+        if (!markedPairings.has(attempt.offer.server_id)) waited = setTimeout(enter, ACCOUNT_STEPS_WAIT_MS);
+        enroll(opened, attempt, enter, steps.signal);
         return;
       }
       enterApp(opened, attempt);
@@ -341,7 +441,6 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
   const confirmed = (): void => {
     const asked = shown, offer = entry.offer;
     if (offer === null || asked?.kind !== "confirm" || asked.account === "checking") return;
-    // the Add-a-PC sheet's confirm has wording of its own, kept fresh by the front page's reads; with no account there is nothing to read
     if (sheetJoin !== null || !account.enabled) { pair(); return; }
     const named = drawnFor.get(asked);
     // a confirm that names an account was drawn for a sign-in: without one, there is nothing it can be held to
@@ -355,7 +454,7 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
     }, asked);
   };
   const consentOf = (attempt: Attempt): AccountSession | null | undefined => attempt.accountless ? null : attempt.signIn;
-  const cancelAttempt = (): void => { press++; confirming = false; comparison = null; last = null; opening?.abort(); opening = null; updates.cancel(); if (transport && !enrolling.has(transport)) transport.close(); transport = null; };
+  const cancelAttempt = (): void => { press++; confirming = false; comparison = null; last = null; opening?.abort(); opening = null; frontSteps?.abort(); frontSteps = null; updates.cancel(); if (transport && !enrolling.has(transport)) transport.close(); transport = null; };
   const retry = (): void => {
     if (shown?.kind === "ready" && shown.enrollment === "failed" && transport && last) { show({ ...shown, enrollment: "pending" }); enroll(transport, last); return; }
     if (last === null || !(shown?.kind === "failed" || shown?.kind === "outdated" || shown?.kind === "compare" && shown.wrong)) return;
@@ -408,7 +507,6 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
   const forget = (): void => {
     const serverId = last?.offer.server_id ?? entry.serverId, name = last?.offer.name ?? null;
     cancelAttempt(); entry = { ...entry, offer: null };
-    // what a confirm left for a reload goes with the pairing it was for
     if (serverId !== null && deviceOnlyPc() === serverId) keepDeviceOnlyPc(null);
     if (serverId !== null && confirmedSignIn()?.server_id === serverId) keepConfirmedSignIn(null);
     void (async () => { if (serverId !== null) { account.cancelEnrollment(serverId); await forgetSavedPc(serverId, store); } show({ kind: "forgotten", name }); })();
@@ -449,7 +547,7 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
 
 
   // read, not taken: this load may itself be reloaded or interrupted before the PC opens, and the load after it must
-  // find them too. They go when the app opens (enterApp), when a confirm is acted on (connect), or with a Forget
+  // find them too.
   const deviceOnly = deviceOnlyPc(), namedSignIn = confirmedSignIn();
   if (arrived()) return;
   if (entry.serverId !== null) {

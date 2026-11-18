@@ -37,6 +37,11 @@ looked for an update. Each screen is `herdr pane read --source visible --format 
 `draft-empty` at rest, `draft-typed` with `leftover draft` typed into the box, `draft-slash` with `/mo` typed and
 the command list open. Redacted: the shell's user name and host read `tester0` and `host000`, at their width.
 
+`pi/powerline-draft-*-200.ansi`: recorded 2026-11-17 on herdr-core (hc, 200 columns) through Ovis's own
+`pane.read --source visible --format ansi`, pi 1.5.2 with the pi-powerline-footer 0.22.0 extension (its status
+bar above the editor) in a scratch folder: `draft-empty` at rest, `draft-typed` with `2` typed, `draft-multiline`
+with `line1`, Shift+Enter, `line2`. Only the screen's last 20 rows are kept (the status bar and the editor).
+
 ## `<agent>/draft-*` for gjc, muse, qwen, cline and dsh-tui: the chat send's draft check
 
 Recorded 2026-11-12 in the agent lab (`~/.dori-sa/agent-lab`, its own HOME and pinned installs, update checks off)

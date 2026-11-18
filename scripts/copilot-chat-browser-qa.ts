@@ -1,4 +1,3 @@
-/** Owned native Copilot-shaped fixture -> Herdr -> HTTP -> built React chat. */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -100,7 +99,6 @@ console.log("fixture ready");`);
   if (await head.getAttribute("aria-expanded") !== "true") await head.click();
   await log.locator(".work-row-head").first().click();
   await log.locator(".chat-tool-more").click();
-  // a long whole output opens folded to its head: its own Show all unfolds it
   await log.locator(".chat-tool-io.is-whole + .chat-tool-result-more[aria-expanded=false]").click();
   await log.getByText(/COPILOT_OUTPUT_END/).waitFor();
   await log.locator(".work-row-head").nth(1).click();
@@ -126,7 +124,6 @@ console.log("fixture ready");`);
     + event("tool.execution_complete", { toolCallId: "finish-call", success: true, result: { content: "done" } })
     + event("session.task_complete", { summary: "Autopilot finished this task." }));
   await log.getByText("Autopilot finished this task.", { exact: true }).waitFor();
-  // Capture readable conversation, not a 6 KiB expanded tool detail.
   if (await head.getAttribute("aria-expanded") === "true") await head.click();
   if (process.env.UI_EVIDENCE_DIR) {
     mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });

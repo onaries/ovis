@@ -4,7 +4,6 @@ import { fileUriPath } from "../../shared/fileUri.ts";
 import { bareNameLinks, createWebLinkOpener, hyperlinkFilter, isWebLink, terminalFileLinks } from "./terminalFileLinks.ts";
 
 describe("openWebLink", () => {
-  // which path a click takes; what a real browser does with it is scripts/external-link-tab-regression.ts
   it("opens a new tab unless asked to reuse, and falls back to one whenever the reused tab is gone or refused", () => {
     const clicked: Record<string, string>[] = [];
     const opened: { closed: boolean; location: { href: string }; focus: () => void; focused: number }[] = [];
@@ -63,7 +62,6 @@ describe("openWebLink", () => {
   });
 });
 
-/** a plain press of the primary button, as xterm hands one to a link */
 const click = { button: 0 } as MouseEvent;
 const written = (term: Terminal, text: string) => new Promise<void>((resolve) => term.write(text, resolve));
 
@@ -82,7 +80,6 @@ describe("isWebLink", () => {
 });
 
 describe("hyperlinkFilter", () => {
-  /** which cells of row `y` xterm underlines (a hyperlink is drawn underlined), as a string of 0/1 */
   const underlined = (term: Terminal, y: number, cols: number) => Array.from({ length: cols },
     (_, x) => term.buffer.active.getLine(y)?.getCell(x)?.isUnderline() ? "1" : "0").join("");
   const filtered = () => {
@@ -110,7 +107,6 @@ describe("hyperlinkFilter", () => {
   it("lets a link that replaces an open one through, so the open one ends where it should", async () => {
     const term = filtered();
     await written(term, "\x1b]8;;https://example.com\x1b\\ab\x1b]8;;omo-panel:x\x1b\\cd\x1b]8;;\x1b\\ef\x1b]8;;omo-panel:y\x1b\\gh");
-    // `cd` is a link xterm draws, as before; `gh` opens with nothing open and is dropped
     expect(underlined(term, 0, 8)).toBe("11110000");
   });
 
@@ -177,7 +173,6 @@ describe("terminal file links", () => {
       expect(fileUriPath(uri)).toBeNull();
     // a control character written encoded is refused too: the server trimmed `%0A` and opened /etc/hosts
     for (const uri of ["file:///etc/hosts%0A", "file:///tmp/a%1B.md", "file:///tmp/a%7F.md"]) expect(fileUriPath(uri)).toBeNull();
-    // an apostrophe belongs to the name
     expect(fileUriPath("file:///tmp/Bob's-notes.md")).toBe("/tmp/Bob's-notes.md");
     // a Windows drive path loses the slash a URI puts before it
     expect(fileUriPath("file:///C:/Users/Alice/readme.md")).toBe("C:/Users/Alice/readme.md");
@@ -189,7 +184,6 @@ describe("terminal file links", () => {
     await written(term, "(src/a.ts)".repeat(700));
     expect(terminalFileLinks(term.buffer.active, 1, () => {})).toHaveLength(20);
     term.dispose();
-    // past a bundle's length it is no prose with paths in it, and is left alone
     const blob = new Terminal({ cols: 200, rows: 60, allowProposedApi: true });
     await written(blob, "(src/a.ts)".repeat(900));
     expect(terminalFileLinks(blob.buffer.active, 1, () => {})).toEqual([]);
@@ -199,7 +193,6 @@ describe("terminal file links", () => {
   it("does not link the tail of a line whose beginning scrolled off", async () => {
     const term = new Terminal({ cols: 20, rows: 2, scrollback: 0, allowProposedApi: true });
     await written(term, "file:///work/abcdefghijk/subdir/App.tsx\r\n");
-    // the top row now starts in the middle of the address: `hijk/subdir/App.tsx` is no path of its own
     expect(term.buffer.active.getLine(0)?.isWrapped).toBe(true);
     expect(terminalFileLinks(term.buffer.active, 1, () => {})).toEqual([]);
     term.dispose();
@@ -226,7 +219,6 @@ describe("terminal file links", () => {
   it("ends a link on the last cell of a wide character", async () => {
     const term = new Terminal({ cols: 80, allowProposedApi: true });
     await written(term, "file:///tmp/한글");
-    // 12 narrow cells, then two characters of two cells each
     expect(terminalFileLinks(term.buffer.active, 1, () => {})[0]?.range).toEqual({ start: { x: 1, y: 1 }, end: { x: 16, y: 1 } });
     term.dispose();
   });
@@ -241,13 +233,11 @@ describe("terminal file links", () => {
     await written(term, "\r\u001b[2Kopen src/new.ts");
     links[0]?.activate(click);
     expect(opened).toEqual([]);
-    // the same link grown by a letter is another file
     await written(term, "\r\u001b[2Kopen src/foo.ts");
     const grown = terminalFileLinks(term.buffer.active, 1, (path) => opened.push(path));
     await written(term, "x");
     grown[0]?.activate(click);
     expect(opened).toEqual([]);
-    // a link still shown opens
     terminalFileLinks(term.buffer.active, 1, (path) => opened.push(path))[0]?.activate(click);
     expect(opened).toEqual(["src/foo.tsx"]);
     term.dispose();
@@ -264,7 +254,6 @@ describe("terminal file links", () => {
   });
   it("leaves a bare file name alone: only a path with a folder in it, or a file URI, is a link", async () => {
     const term = new Terminal({ cols: 120, allowProposedApi: true });
-    // what `ls` and `git status` print: a tap to focus the pane must not open the file viewer
     await new Promise<void>((resolve) => term.write("README.md package.json main.c\r\n M src/App.tsx\r\n?? ./notes.txt ~/x/a.md /etc/hosts.conf", resolve));
     const texts = (line: number) => terminalFileLinks(term.buffer.active, line, () => {}).map((link) => link.text);
     expect(texts(1)).toEqual([]);
@@ -288,7 +277,6 @@ describe("terminal file links", () => {
       name?.activate(click);
       name?.activate(mac ? ctrl : cmd);
       expect(opened).toEqual([]);
-      // xterm reads the decorations as the pointer reaches the link: the key held is drawn
       bare.update(mac ? cmd : ctrl);
       expect({ ...name?.decorations }).toEqual({ pointerCursor: true, underline: true });
       name?.activate(mac ? cmd : ctrl);
@@ -339,19 +327,15 @@ describe("terminal file links", () => {
     expect(drawn()).toEqual({ pointerCursor: true, underline: true });
     ctrl(false);
     expect(drawn()).toEqual({ pointerCursor: false, underline: false });
-    // drawn under the key, left for blank cells of the row, the key let go, then back: plain text
     ctrl(true);
     leave(first);
     ctrl(false);
     hover(first);
     expect(drawn()).toEqual({ pointerCursor: false, underline: false });
-    // and the other way: left as text, the key held away from it, then back: a link
     leave(first);
     ctrl(true);
     hover(first);
     expect(drawn()).toEqual({ pointerCursor: true, underline: true });
-    // the pointer moves on to a path with a folder, drawn as a link without the key: letting go
-    // of the key must not undraw it through the bare name it left
     leave(first);
     expect(folder?.decorations).toBeUndefined();
     hover(folder);

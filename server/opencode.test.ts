@@ -34,12 +34,10 @@ let stores = 0;
 let ids = 0;
 const T0 = Date.parse("2026-10-07T09:00:00Z");
 
-/** A store of its own, and a writer that appends rows the way OpenCode's service does (`seq` grows with gaps). */
 function store(session = "ses_test1") {
   const path = join(root, `opencode-${++stores}.db`);
   const db = new Database(path, { create: true });
   opened.push(db);
-  // These stores test committed visibility and locking, not crash durability.
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF");
   db.exec(SCHEMA);
   db.query("INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'Test', '2.0.24', ?, ?)").run(session, root, T0, T0);
@@ -79,12 +77,10 @@ CREATE INDEX part_message_id_id_idx ON part (message_id, id);
 CREATE INDEX part_session_idx ON part (session_id);
 `;
 
-/** A 1.x store (`session`/`message`/`part`, no `session_v2`), and a writer that appends like OpenCode's service. */
 function storeV1(session = "ses_old1") {
   const path = join(root, `opencode-v1-${++stores}.db`);
   const db = new Database(path, { create: true });
   opened.push(db);
-  // These stores test committed visibility and locking, not crash durability.
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF");
   db.exec(SCHEMA_V1);
   db.query("INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'Old', '1.18.32', ?, ?)").run(session, root, T0, T0);
@@ -143,7 +139,6 @@ describe("where OpenCode keeps its store", () => {
     expect(opencodeSessionId(session("ses_eea6b0be2ffef1CA3bgZXhfSW2"))).toBe("ses_eea6b0be2ffef1CA3bgZXhfSW2");
     expect(opencodeSessionId(session("ses_eea6b0be2ffef1CA3bgZXhfSW2", "pi"))).toBeNull();
     expect(opencodeSessionId(session("/home/u/session.jsonl", "opencode", "path"))).toBeNull();
-    // only herdr's own integration binds the pane
     expect(opencodeSessionId({ agent_session: { agent: "opencode", kind: "id", source: "something-else", value: "ses_abc" } })).toBeNull();
     for (const value of ["ses_", "ses_../x", "ses_a b", "msg_abc", "ses_a'; DROP TABLE x"]) expect(opencodeSessionId(session(value))).toBeNull();
     expect(opencodeSessionId({ agent_session: null })).toBeNull();
@@ -301,7 +296,6 @@ describe("OpenCode's rows as a conversation", () => {
       ["assistant", [{ kind: "text", text: "Started.", phase: "final_answer" }]],
       ["user", [{ kind: "notice", text: "sleep 30 && echo ok\nok", source: "shell" }]],
       ["assistant", [{ kind: "text", text: "It printed ok.", phase: "final_answer" }]],
-      // a background subagent that ended leaves its card, with its answer
       ["user", [{ kind: "task_result", tasks: [{
         id: "ses_child", title: "Find sources", agent: "web-search", model: null, status: "completed",
         duration_ms: null, turns: null, tool_calls: null, tokens: null, result: "Three sources.",
@@ -336,7 +330,6 @@ describe("OpenCode's rows as a conversation", () => {
   it("shows a command the user ran once, with its output, and leaves instructions and switches out", () => {
     const turns = opencodeTurns([
       record("shell", { metadata: { background: true }, time: { created: T0 }, shellID: "sh_2", command: "git diff", status: "exited", exit: 0, output: { output: "diff --git a/x b/x\n", size: 19, truncated: false } }),
-      // the copy OpenCode hands its model with the next prompt
       record("synthetic", { metadata: { source: "shell", shellID: "sh_2", state: "completed", exit: 0 }, time: { created: T0 + 1 }, text: "The following shell command was executed by the user:\n<shell id=\"sh_2\">\ndiff\n</shell>" }),
       record("system", { metadata: { notice: "instructions" }, time: { created: T0 + 2 }, text: "New instructions apply from: AGENTS.md", description: "Instructions updated" }),
       record("agent-switched", { time: { created: T0 + 3 }, agent: "plan", previous: "build" }),
@@ -398,7 +391,6 @@ describe("a page of an OpenCode session", () => {
     expect(oldest.cursor).toBeNull();
     const all = [...oldest.turns, ...middle.turns, ...newest.turns].filter((turn) => turn.role === "user").map((turn) => (turn.parts[0] as { text: string }).text);
     expect(all).toEqual(Array.from({ length: 120 }, (_, n) => `p${n}`));
-    // `since` keeps a page from reaching back past a held start
     const since = page(opencodeConversation(s.path, s.session, { before: newest.cursor!, since: middle.cursor! }));
     expect(since.turns).toEqual(middle.turns);
     expect(since.cursor).toBe(middle.cursor);
@@ -412,7 +404,6 @@ describe("a page of an OpenCode session", () => {
     expect(prompts(newest.turns)).toEqual(Array.from({ length: 10 }, (_, n) => `p${110 + n}`));
     const older = page(opencodeConversation(s.path, s.session, { before: newest.cursor!, prompts: 10 }));
     expect(prompts(older.turns)).toEqual(Array.from({ length: 10 }, (_, n) => `p${100 + n}`));
-    // the page a reader that asks for no size gets is the one it always had
     expect(page(opencodeConversation(s.path, s.session)).turns.length).toBe(100);
   });
 
@@ -424,7 +415,6 @@ describe("a page of an OpenCode session", () => {
     expect(held.cursor).toBe(newest.cursor);
     s.prompt("p60"); s.answer("a60"); s.idle();
     const moved = page(opencodeConversation(s.path, s.session, { from: newest.cursor! }));
-    // the newest page moved one prompt on: the chat fetches the turn in between with before + since
     expect(moved.cursor).not.toBe(newest.cursor);
     const between = page(opencodeConversation(s.path, s.session, { before: moved.cursor!, since: newest.cursor! }));
     expect(between.turns.map((turn) => turn.parts)).toEqual([[{ kind: "text", text: "p10" }], [{ kind: "text", text: "a10", phase: "final_answer" }]]);
@@ -451,20 +441,15 @@ describe("a page of an OpenCode session", () => {
     const staged = page(opencodeConversation(s.path, s.session));
     expect(staged.turns.at(-1)!.parts).toEqual([{ kind: "text", text: "a59", phase: "final_answer" }]);
     expect(staged.history_id).not.toBe(before.history_id);
-    // the next prompt commits it: the rows are deleted and the session holds no revert
     const { seq } = s.db.query<{ seq: number }, [string]>("SELECT seq FROM session_message WHERE id = ?").get(undone)!;
     s.db.query("DELETE FROM session_message WHERE session_id = ? AND seq >= ?").run(s.session, seq);
     s.db.query("UPDATE session_v2 SET revert = NULL WHERE id = ?").run(s.session);
     s.prompt("instead");
     const committed = page(opencodeConversation(s.path, s.session));
     expect(committed.turns.at(-1)!.parts).toEqual([{ kind: "text", text: "instead" }]);
-    // a chat holding pages from before keeps them while its cursors still name rows: the deletion
-    // only took turns after them
     expect(committed.history_id).toBe(before.history_id);
     expect(page(opencodeConversation(s.path, s.session, { from: before.cursor! })).cursor).toBe(before.cursor);
 
-    // an /undo reaching past the chat's held start deleted the row its cursor names: refused, also
-    // on a cold read after a restart, so the chat drops the pages holding the deleted turns
     const held = page(opencodeConversation(s.path, s.session, { from: before.cursor! })).cursor!;
     const deeper = Number(held.split(":").at(-1)) - 1;
     s.db.query("DELETE FROM session_message WHERE session_id = ? AND seq >= ?").run(s.session, deeper);
@@ -542,7 +527,6 @@ describe("a page of an OpenCode session", () => {
     const s = store();
     expect(opencodeConversation(s.path, "ses_missing")).toEqual({ kind: "unavailable", reason: "session_not_found" });
     expect(opencodeConversation(s.path, "../etc")).toEqual({ kind: "unavailable", reason: "no_session_id" });
-    // a store with neither the 2.x nor the whole 1.x table set is not one this reader can page
     const v1 = join(root, "v1.db");
     const old = new Database(v1, { create: true });
     opened.push(old);
@@ -560,7 +544,6 @@ describe("a page of an OpenCode session", () => {
 
 describe("where a page starts", () => {
   it("pages a store the same way through the fallback that measures rows without octet_length", () => {
-    // three rows past the 16 MB window: the newest page starts mid-turn, the older one reaches back
     const s = store();
     s.prompt("big");
     for (let n = 0; n < 3; n++) s.add("assistant", { time: { created: T0 }, content: [{ type: "text", text: `${n}${"é".repeat(3_000_000)}` }] });
@@ -591,14 +574,12 @@ describe("where a page starts", () => {
   const rows = (...spec: [string, number][]): RowMeta[] => spec.map(([type, size], index) => ({ id: `msg_${index}`, seq: (spec.length - index) * 2, type, updated: 0, size }));
 
   it("starts at the earliest prompt inside the window, or at the floor it reaches", () => {
-    // newest first: seq 10, 8, 6, 4, 2
     expect(pageStart(rows(["assistant", 10], ["user", 10], ["assistant", 10], ["user", 10], ["assistant", 10]), 0, false, 100)).toBe(0);
     expect(pageStart(rows(["assistant", 40], ["user", 40], ["assistant", 40], ["user", 10], ["assistant", 10]), 0, false, 100)).toBe(8);
   });
 
   it("starts the newest page mid-turn when the window holds no prompt", () => {
     expect(pageStart(rows(["assistant", 60], ["assistant", 60], ["user", 10]), 0, false, 100)).toBe(6);
-    // a single row past the window is still the page
     expect(pageStart(rows(["assistant", 500], ["user", 10]), 0, false, 100)).toBe(4);
   });
 
@@ -635,12 +616,10 @@ describe("what a page refers to", () => {
     expect(opencodeImage(s.path, s.session, `opencode:${pasted}:1`)).toBeNull();
     expect(opencodeImage(s.path, s.session, `${pasted}:0`)).toBeNull();
 
-    // another session's message is not this pane's
     s.db.query("INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated) VALUES ('ses_other', 'global', 's', '/', '2.0.24', 0, 0)").run();
     const foreign = s.add("user", { time: { created: T0 }, text: "x", files: [{ data: PNG.toString("base64"), mime: "image/png", source: { type: "inline" } }] }, { session: "ses_other" });
     expect(opencodeImage(s.path, s.session, `opencode:${foreign}:0`)).toBeNull();
 
-    // nor is one an /undo took back
     s.db.query("UPDATE session_v2 SET revert = ? WHERE id = ?").run(JSON.stringify({ messageID: step }), s.session);
     expect(opencodeToolOutput(s.path, s.session, read.output_ref!)).toBeNull();
     expect(opencodeImage(s.path, s.session, `opencode:${pasted}:0`)).toBeNull();
@@ -764,7 +743,6 @@ describe("an OpenCode 1.x session (session/message/part)", () => {
     const later = s.user("after undo");
     s.part(later, { type: "file", mime: "image/png", url: `data:image/png;base64,${PNG.toString("base64")}` });
 
-    // before the undo the step is readable, so the nulls after it are not passing on nothing
     const tool = page(opencodeConversation(s.path, s.session)).turns.flatMap((turn) => turn.parts)
       .find((part): part is Extract<ConversationPart, { kind: "tool" }> => part.kind === "tool")!;
     expect(tool.output_ref).toBe(`${step}:1`);
@@ -809,7 +787,6 @@ it("finds every session whose terminal title OpenCode would make this one, as it
 describe("an OpenCode at its home screen, before its first prompt (#3600)", () => {
   const HOME = readFileSync(join(import.meta.dir, "fixtures", "opencode-home-2.2.2-wide.txt"), "utf8");
   const pane = { pane_id: "oc-pane", cwd: root };
-  /** herdr's answers to `pane.process_info`, one per ask: this test's own process as the pane's OpenCode, started as `argv`. */
   function answers(...asks: (readonly string[] | number)[]) {
     const queue = [...asks];
     const spy = spyOn(herdr, "paneProcessInfo").mockImplementation(async () => {
@@ -828,18 +805,15 @@ describe("an OpenCode at its home screen, before its first prompt (#3600)", () =
   const fresh = `unwritten:opencode:oc-pane:${process.pid}:`;
 
   it.skipIf(process.platform === "win32")("greets it only while no session can be the one it shows", async () => {
-    // no store yet, or one whose sessions of this folder are all older than the process
     expect((await greet(join(root, "absent.db"), ["opencode"], ["opencode"])).id).toStartWith(fresh);
     const { path, db } = store("ses_older");
     expect((await greet(path, ["opencode"], ["opencode"])).id).toStartWith(fresh);
     for (const argv of [["opencode", "--standalone"], ["opencode", "--log-level", "debug", root], ["sh", "/usr/local/bin/opencode", "--auto"]]) {
       expect((await greet(path, argv, argv)).id).toStartWith(fresh);
     }
-    // a session of another folder made since says nothing of this pane
     const made = (id: string, directory: string) => db.query("INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'New', '2.2.2', ?, ?)").run(id, directory, Date.now(), Date.now());
     made("ses_elsewhere", join(root, "elsewhere"));
     expect((await greet(path, ["opencode"], ["opencode"])).id).toStartWith(fresh);
-    // one of its folder made since may be its first prompt's, whose report has not come yet
     made("ses_begun", root);
     expect(await greet(path, ["opencode"], ["opencode"])).toEqual({ id: null, asked: 1 });
   });
@@ -847,13 +821,11 @@ describe("an OpenCode at its home screen, before its first prompt (#3600)", () =
   it.skipIf(process.platform === "win32")("says nothing for one started on a session, a screen that is not home, or a store it cannot read", async () => {
     const { path } = store("ses_older");
     mkdirSync(join(root, "project"), { recursive: true });
-    // a flag is a flag even where a folder bears its name
     mkdirSync(join(root, "--continue"), { recursive: true });
     for (const argv of [["opencode", "-c"], ["opencode", "--continue"], ["opencode", "-s", "ses_x"], ["opencode", "--session=ses_x"], ["opencode", "--prompt", "hi"],
       ["opencode", "--server", "http://127.0.0.1:4096"], ["opencode", "run", "hi"], ["opencode", "not-a-folder"], ["opencode", "project", "project"], ["node", "cli.js"]]) {
       expect(await greet(path, argv)).toEqual({ id: null, asked: 1 });
     }
-    // a session's screen asks herdr nothing
     const session = readFileSync(join(import.meta.dir, "fixtures", "opencode-session-2.2.2.txt"), "utf8");
     const herdrAnswers = answers(["opencode"]);
     try {
@@ -864,7 +836,6 @@ describe("an OpenCode at its home screen, before its first prompt (#3600)", () =
     const garbage = join(root, "not-a-store.db");
     writeFileSync(garbage, "not sqlite");
     expect((await greet(garbage, ["opencode"], ["opencode"])).id).toBeNull();
-    // asked again after the store, herdr names another process, or the same one started on a session
     expect(await greet(path, ["opencode"], process.pid + 1)).toEqual({ id: null, asked: 2 });
     expect(await greet(path, ["opencode"], ["opencode", "-c"])).toEqual({ id: null, asked: 2 });
   });

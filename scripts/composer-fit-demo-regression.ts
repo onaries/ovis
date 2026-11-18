@@ -8,9 +8,6 @@ import { composerFitDemo, draft, drawn, LONG_MODEL, measure, upload, type Case, 
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
 
-// The message box's status row and its controls, on the demo app as scripts/composer-fit-harness.ts
-// patches it: the model label fitted to what is measured there, one Stop or Send control, the
-// follow-ups sent while the agent works, and the quota in that row.
 const repo = join(import.meta.dir, "..");
 const app = mkdtempSync(join(tmpdir(), "herdr-composer-fit-demo-"));
 try {
@@ -94,8 +91,6 @@ try {
       });
       console.log("PASS streaming context updates preserve draft geometry and selection while an upload hint is visible");
 
-      // Prompt suggestions update independently while an agent works. A populated draft keeps
-      // its own viewport and insertion point when only the unused placeholder changes.
       for (const width of [390, 1440]) await withCard(browser, width, { model: LONG_MODEL, suggestion: null }, async (page) => {
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         await box.fill(Array.from({ length: 80 }, (_, i) => `Draft line ${i}: keep this text while the agent works.`).join("\n"));
@@ -127,11 +122,9 @@ try {
       });
       console.log("PASS prompt updates preserve a focused, internally scrolled draft and its mid-text caret at 390 and 1440px");
 
-      // One primary control across agents: Stop with an empty working draft, Send with text.
       for (const agent of ["claude", "codex"] as const) for (const width of [350, 390, 800, 1440]) for (const mic of [false, true]) await withCard(browser, width, { agent, model: "gpt-5.6", mic }, async (page) => {
         const rest = await measure(page);
         assert.ok(rest.stop && !rest.send && !rest.sendOptions && !rest.queue, JSON.stringify(rest));
-        // the ring only shows: a span with its number in a tooltip, nothing to press, open or focus
         assert.equal(await page.locator(".composer-context").evaluate((node) =>
           node.tagName === "SPAN" && node.getAttribute("title")?.includes("%") === true && !node.hasAttribute("aria-expanded") && !node.hasAttribute("tabindex")), true, "the context ring is display-only");
         await draft(page);
@@ -140,7 +133,6 @@ try {
         assert.ok(row.send && !row.stop && !row.sendOptions && !row.queue && row.ring, JSON.stringify(row));
         assert.equal(row.card.height, rest.card.height, "Send replaces Stop on the same row");
         if (width >= 800) {
-          // a press on the ring does nothing: no number opens and the row is drawn as before
           await page.locator(".composer-context").click();
           const pressed = await measure(page);
           assert.equal(pressed.draw, row.draw, `${agent} ${width}px: a press on the ring leaves the row as drawn`);
@@ -168,8 +160,6 @@ try {
         assert.equal(await page.locator(".pending-message-bubble").count(), 0);
       });
 
-      // Queued text is not a transcript turn. Its selectable bubble has no action: the explicit
-      // Send now button acts on the ID, and X discards it. The current fixture turn keeps running.
       for (const agent of ["claude", "codex"] as const) for (const width of [350, 390, 1440]) await withCard(browser, width, { agent, model: "gpt-5.6" }, async (page) => {
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         await box.fill("check the first pending change");
@@ -282,7 +272,6 @@ try {
         assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).inputValue(), "hold this");
         assert.equal(await page.locator(".pending-message-bubble").count(), 0);
         assert.match(await page.locator(".composer-note").textContent() ?? "", /Update this PC/);
-        // the reason sits on the box's top edge, the box's width, not under it
         const [noteBox, surfaceBox] = await Promise.all([page.locator(".composer-note").boundingBox(), page.locator(".composer-surface").boundingBox()]);
         assert.ok(noteBox && surfaceBox && noteBox.y + noteBox.height <= surfaceBox.y + 1, "the note is above the message box");
         assert.ok(noteBox && surfaceBox && Math.abs(noteBox.width - surfaceBox.width) <= 1 && Math.abs(noteBox.x - surfaceBox.x) <= 1, "and as wide as it");
@@ -301,7 +290,6 @@ try {
         assert.equal(await page.locator(".composer-status .composer-usage").count(), 0, "mobile omits the desktop quota even when sidebar limits are enabled");
         assert.equal(await page.locator(".composer-context").evaluate((node) => node.tagName === "SPAN" && !node.hasAttribute("aria-expanded")), true);
       });
-      // a pi pane draws on the plan of the provider its conversation runs at, and on none without one
       for (const [agent, provider, text, account] of [["pi", "openai-codex", "5h 22%", /sam@work\.example/], ["omo", "anthropic-subscription", "5h 38%", /Claude · sam@example\.com/]] as const) {
         await withCard(browser, 1440, { agent, model: "gpt-5.6", provider, showUsage: true }, async (page) => {
           const usage = page.locator(".composer-status .composer-usage");

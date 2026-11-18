@@ -4,13 +4,11 @@ import type { FrameClock } from "./touchWheelPacer.ts";
 export const FLING_HORIZON_MS = 100;
 /** A finger that has not moved for this long before it lifts had stopped: no fling (Android's `ASSUME_POINTER_STOPPED_TIME`). */
 export const FLING_STOPPED_MS = 40;
-/** Slowest lift, in CSS pixels per millisecond, that flings; a slower one is a drag that ends where the finger does. */
 export const FLING_MIN_VELOCITY = 0.3;
 /** A stroke that has not travelled this far, in CSS pixels, is a tap that jittered and never flings (Android's touch slop, 8 dp). */
 export const FLING_SLOP_PX = 8;
 /** Fastest fling, in CSS pixels per millisecond (Android's maximum fling velocity, 8000 dp/s). */
 export const FLING_MAX_VELOCITY = 8;
-/** A fling ends once it is this slow, in CSS pixels per millisecond. */
 export const FLING_STOP_VELOCITY = 0.02;
 /** The speed a fling keeps per millisecond (UIScrollView's normal deceleration rate). */
 export const FLING_DECELERATION = 0.998;
@@ -18,22 +16,13 @@ export const FLING_DECELERATION = 0.998;
 const FLING_MAX_FRAME_MS = 50;
 
 export interface VelocityTracker {
-  /** Forget the samples: a new touch, or a stroke that stopped scrolling. */
   reset(): void;
-  /** The finger at `position` (its travel so far, in pixels) at `time` (milliseconds). */
   add(time: number, position: number): void;
-  /** The finger's speed in pixels per millisecond when it lifts at `time`, or 0 when it does not fling. */
   release(time: number): number;
 }
 
-/**
- * The finger's speed at the lift, from its travel over the last {@link FLING_HORIZON_MS}: 0 when
- * it had stopped ({@link FLING_STOPPED_MS}), never went past {@link FLING_SLOP_PX}, or was slower than {@link FLING_MIN_VELOCITY}, and at
- * most {@link FLING_MAX_VELOCITY} either way. The sign is the travel's.
- */
 export function createVelocityTracker(): VelocityTracker {
   let samples: Array<{ time: number; position: number }> = [];
-  /** the farthest the stroke got from where it began: under the slop it is a tap, however fast its jitter */
   let reach = 0;
   return {
     reset() { samples = []; reach = 0; },
@@ -41,7 +30,6 @@ export function createVelocityTracker(): VelocityTracker {
       if (!Number.isFinite(time) || !Number.isFinite(position)) return;
       reach = Math.max(reach, Math.abs(position));
       samples.push({ time, position });
-      // keep one sample from before the horizon: the travel across it still counts
       while (samples.length > 2 && time - samples[1]!.time > FLING_HORIZON_MS) samples.shift();
     },
     release(time) {
@@ -70,14 +58,8 @@ export function flingStep(velocity: number, elapsed: number): { travel: number; 
 }
 
 export interface TouchFling {
-  /**
-   * Glide from `velocity`: each animation frame hands `travel` its pixels and stops the fling when
-   * it answers false. `done` runs once when the glide slows to a stop by itself, never after a
-   * cancel or a false. A new start cancels the fling before it.
-   */
   start(velocity: number, travel: (pixels: number) => boolean, done: () => void): void;
   cancel(): void;
-  /** Cancel, and stop the frame clock for good (the terminal is gone). */
   dispose(): void;
   readonly active: boolean;
 }
@@ -87,7 +69,6 @@ const browserFrames: FrameClock = {
   cancel: (handle) => cancelAnimationFrame(handle),
 };
 
-/** A swipe's glide after the finger lifts, one step per animation frame on `frames`, timed by `now`. */
 export function createTouchFling(frames: FrameClock = browserFrames, now: () => number = () => performance.now()): TouchFling {
   let frame: number | null = null;
   let disposed = false;

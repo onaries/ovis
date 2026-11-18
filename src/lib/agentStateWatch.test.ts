@@ -9,13 +9,9 @@ describe("the watch the state stamps go by", () => {
   let end: () => void;
   let unseen: UnseenLook[];
 
-  /** the page runs for a while: its timers fire as the clock moves */
   const runs = (ms: number): void => { jest.advanceTimersByTime(ms); };
-  /** the page does not run for a while: the clock moves and no timer of it fires */
   const sleeps = (ms: number): void => { jest.setSystemTime(new Date(Date.now() + ms)); };
-  /** a read of the roster, asked and answered now */
   const reads = (): void => { stateWatch.read(stateWatch.asked()); };
-  /** a stream that opened and sent its own first roster */
   const streams = (): void => { stateWatch.subscription("opened"); stateWatch.pushed(); };
 
   beforeEach(() => {
@@ -62,7 +58,6 @@ describe("the watch the state stamps go by", () => {
     sleeps(60 * MIN);
     expect(stateWatch.blind()).toBe(true);
 
-    // what the stream held back while the page slept, and the answer to a read from before it, say what was
     stateWatch.heard();
     stateWatch.pushed();
     stateWatch.read(askedBefore);
@@ -72,7 +67,6 @@ describe("the watch the state stamps go by", () => {
     reads();
     expect(unseen).toEqual(["first"]);
     expect(stateWatch.blind()).toBe(false);
-    // the stream, still open, tells of what changes from here on
     runs(10 * MIN);
     expect(stateWatch.blind()).toBe(false);
   });
@@ -80,7 +74,6 @@ describe("the watch the state stamps go by", () => {
   it("dates what a stream brings when it reconnects soon, and reads a long loss as a first look", () => {
     streams();
     runs(2 * MIN);
-    // heard from a moment before it is lost
     stateWatch.heard();
     stateWatch.subscription("lost");
     runs(30 * SEC);
@@ -119,7 +112,6 @@ describe("the watch the state stamps go by", () => {
     reads();
     expect(unseen).toEqual(["undated"]);
 
-    // heard from a moment ago, the stream is alive: a read then finds what just changed
     runs(10 * MIN);
     stateWatch.heard();
     reads();
@@ -131,11 +123,9 @@ describe("the watch the state stamps go by", () => {
     runs(10 * MIN);
     reads();
     expect(unseen).toEqual(["undated"]);
-    // the socket, probed as the tab was shown again, did not answer twice
     runs(6 * SEC);
     stateWatch.subscription("lost");
     expect(unseen).toEqual(["undated", "first"]);
-    // the loss is told once
     stateWatch.subscription("closed");
     expect(unseen).toEqual(["undated", "first"]);
   });
@@ -143,13 +133,11 @@ describe("the watch the state stamps go by", () => {
   it("knows its PCs only as of the last roster or event once a silent stream has ended: the stream may have been dead since", () => {
     streams();
     runs(10 * MIN);
-    // a hidden tab is shown again, and its socket finds the connection dead before the roster read answers
     stateWatch.subscription("lost");
     expect(stateWatch.blind()).toBe(true);
     reads();
     expect(unseen).toEqual(["first"]);
 
-    // so for the stream that opens again in a hidden tab: its roster cannot date what the last one left unsaid
     streams();
     runs(10 * MIN);
     stateWatch.subscription("lost");
@@ -164,7 +152,6 @@ describe("the watch the state stamps go by", () => {
       runs(30 * SEC);
       reads();
     }
-    // no read took a silence at its word, so the stream's end takes nothing back
     stateWatch.subscription("lost");
     expect(stateWatch.blind()).toBe(false);
     runs(20 * SEC);
@@ -175,16 +162,13 @@ describe("the watch the state stamps go by", () => {
   it("dates nothing at the first roster of a stream that took over from one that had said nothing for long", () => {
     streams();
     runs(10 * MIN);
-    // the terminal's socket takes the events over from the event stream, which is stopped with no word of its end
     stateWatch.subscription("opened");
     stateWatch.pushed();
     expect(unseen).toEqual(["undated"]);
-    // from there on it tells as any stream does: what it brings after a quiet while is dated
     runs(10 * MIN);
     stateWatch.pushed();
     expect(unseen).toEqual(["undated"]);
 
-    // it vouched for nothing before its first roster: its end soon after takes nothing back
     runs(10 * MIN);
     stateWatch.subscription("opened");
     stateWatch.pushed();
@@ -192,7 +176,6 @@ describe("the watch the state stamps go by", () => {
     stateWatch.subscription("lost");
     expect(unseen).toEqual(["undated", "undated"]);
 
-    // one that takes over from a stream heard from a moment ago finds what the page knew
     streams();
     runs(10 * MIN);
     stateWatch.heard();
@@ -216,7 +199,6 @@ describe("the watch the state stamps go by", () => {
     stateWatch.subscription("lost");
     expect(unseen).toEqual(["undated", "undated"]);
 
-    // and a stream that ends without any read having trusted its silence is a stream that reconnects
     streams();
     runs(10 * SEC);
     stateWatch.subscription("lost");
@@ -242,7 +224,6 @@ describe("the watch the state stamps go by", () => {
     end = stateWatch.keep((look) => { unseen.push(look); });
     expect(stateWatch.blind()).toBe(false);
 
-    // the stream the page before it had does not vouch for this one: a read, then two quiet minutes, and the page is blind
     reads();
     runs(2 * MIN);
     expect(stateWatch.blind()).toBe(true);

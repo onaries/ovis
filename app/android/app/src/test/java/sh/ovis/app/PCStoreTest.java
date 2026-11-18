@@ -26,7 +26,6 @@ import org.junit.rules.Timeout;
 public class PCStoreTest {
     private static final String OVIS = "{\"ok\":true,\"auth\":{\"required\":true,\"authenticated\":false},\"bridge_protocol\":1}";
 
-    /** A probe that never gives up hangs here instead of passing. */
     @Rule
     public final Timeout timeout = Timeout.seconds(20);
 
@@ -34,7 +33,6 @@ public class PCStoreTest {
 
     private final List<String> requestLines = Collections.synchronizedList(new ArrayList<>());
 
-    /** A server on 127.0.0.1 answering every request with `status`, `location` and `body`. */
     private String serve(int status, String location, String body) throws IOException {
         return serve(status, location, body.getBytes(StandardCharsets.UTF_8));
     }
@@ -48,7 +46,6 @@ public class PCStoreTest {
         });
     }
 
-    /** A server that answers 200 and then sends its headers, or its body, one byte at a time, never finishing. */
     private String serveSlowly(boolean headers) throws IOException {
         return listen((line, out) -> {
             String head = headers ? "HTTP/1.1 200 Test\r\nX-Slow: " : "HTTP/1.1 200 Test\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n";
@@ -92,7 +89,6 @@ public class PCStoreTest {
         return "http://127.0.0.1:" + server.getLocalPort();
     }
 
-    /** An address whose /api/health redirects `redirects` times in a row before it reaches `end`. */
     private String redirecting(int redirects, String end) throws IOException {
         String next = end;
         for (int i = 0; i < redirects; i++) next = serve(302, next + "/api/health?scope=bridge", "");
@@ -103,7 +99,6 @@ public class PCStoreTest {
         return PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, new ArrayList<>());
     }
 
-    /** A server answering a GET of /api/health with `health` (200, or 404 when null) and any other path with `page`. */
     private String servePaths(String health, String page) throws IOException {
         return listen((line, out) -> {
             boolean asksHealth = line != null && line.startsWith("GET /api/health");
@@ -126,12 +121,9 @@ public class PCStoreTest {
     @Test
     public void anOvisServerOfAnyVersionOrTheHostedAppIsOvis() throws IOException {
         assertEquals("ovis", check(serve(200, null, OVIS) + "/?pair=123456").kind);
-        // before bridge_protocol (0.1): ok, herdr and auth
         assertEquals("ovis", check(serve(200, null, "{\"ok\":true,\"herdr\":{\"version\":\"0.4\"},\"auth\":{\"required\":false,\"authenticated\":true}}") + "/").kind);
-        // app.ovis.sh answers every path with its page
         String shell = "<!doctype html><html><head><meta name=\"ovis-shell\" content=\"relay\" /></head></html>";
         assertEquals("ovis", check(serve(200, null, shell) + "/").kind);
-        // a copy behind Caddy answers /api/health with 404 and its scope with the page
         requestLines.clear();
         String copy = servePaths(null, shell);
         assertEquals("ovis", check(copy + "/s/0123456789abcdef0123456789abcdef/#offer=abc").kind);
@@ -160,7 +152,6 @@ public class PCStoreTest {
             assertEquals("HTTP " + status, found.detail);
             assertTrue(found.opens());
         }
-        // no /api/health and no page either: the WebView shows that HTTP error itself
         assertEquals("unsure", check(servePaths(null, null) + "/").kind);
     }
 
@@ -169,7 +160,6 @@ public class PCStoreTest {
         long later = System.nanoTime() + 60_000_000_000L;
         // Android's HttpURLConnection, for a closed port: no errno in the message, no cause
         assertEquals("refused", PCStore.failureKind(new java.net.ConnectException("Failed to connect to /192.168.0.10:7317"), later));
-        // a PC that is off on the same network
         IOException off = new java.net.ConnectException("Failed to connect to /192.168.0.11:7317");
         off.initCause(new java.net.NoRouteToHostException("connect failed: EHOSTUNREACH (No route to host)"));
         assertEquals("no-answer", PCStore.failureKind(off, later));
@@ -264,27 +254,22 @@ public class PCStoreTest {
         assertEquals(escaped, probe(escaped + "/"));
         // nested deeper than the stack would take, inside the size limit
         assertNull(probe(serve(200, null, "[".repeat(60000)) + "/"));
-        // malformed UTF-8, a byte 0xFF inside a string
         byte[] start = "{\"ok\":true,\"auth\":{},\"bridge_protocol\":1,\"x\":\"".getBytes(StandardCharsets.UTF_8);
         byte[] malformed = java.util.Arrays.copyOf(start, start.length + 3);
         malformed[start.length] = (byte) 0xFF;
         malformed[start.length + 1] = '"';
         malformed[start.length + 2] = '}';
         assertNull(probe(serve(200, null, malformed) + "/"));
-        // whitespace around the value is JSON
         String ovis = serve(200, null, " \n" + OVIS + "\r\n");
         assertEquals(ovis, probe(ovis + "/"));
     }
 
     @Test
     public void theWayToOvisNeverGoesOverPublicHttpOrFromHttpsToHttp() {
-        // https to http, on the redirect itself or on a later hop of the probe
         assertEquals("http://pc.example.com", PCStore.insecureHop("https://pc.example.com", Collections.singletonList("http://pc.example.com")));
         assertEquals("http://100.64.0.2", PCStore.insecureHop("https://pc.tail1234.ts.net", Collections.singletonList("http://100.64.0.2")));
         assertEquals("http://public.example.com", PCStore.insecureHop("http://100.64.0.1", java.util.Arrays.asList("https://candidate.example.com", "http://public.example.com")));
-        // a public http address, which the connect screen warns before
         assertEquals("http://203.0.113.5:7421", PCStore.insecureHop("http://100.64.0.1", Collections.singletonList("http://203.0.113.5:7421")));
-        // a tailnet or home address, or https all the way
         assertNull(PCStore.insecureHop("http://100.64.0.1", Collections.singletonList("http://pc.tail1234.ts.net:7421")));
         assertNull(PCStore.insecureHop("http://192.168.1.5", Collections.singletonList("http://mypc.local:7421")));
         assertNull(PCStore.insecureHop("http://10.0.2.2:7491", Collections.singletonList("http://localhost:7492")));
@@ -295,14 +280,12 @@ public class PCStoreTest {
     @Test
     public void aSignInInFrontOfThePcIsRefusedOnlyOverInsecureHttp() {
         List<String> probed = Collections.singletonList("https://team.cloudflareaccess.com");
-        // a sign-in in front of the PC (no Ovis at the end): judged by where the redirect itself leads
         assertNull(PCStore.refusedHop("https://ovis.example.com", "https://team.cloudflareaccess.com/cdn-cgi/access/login", null, probed));
         assertNull(PCStore.refusedHop("http://100.64.0.1", "http://auth.tail1234.ts.net/sign_in", null, Collections.emptyList()));
         assertEquals("http://team.example.com", PCStore.refusedHop("https://ovis.example.com", "http://team.example.com/login", null, Collections.emptyList()));
         assertEquals("http://auth.example.com", PCStore.refusedHop("http://100.64.0.1", "http://auth.example.com/sign_in", null, Collections.emptyList()));
         // an address with no origin Java can read (an underscore in the host) is refused, not a crash
         assertEquals("https://auth_server.corp.example/login", PCStore.refusedHop("https://ovis.example.com", "https://auth_server.corp.example/login", null, Collections.emptyList()));
-        // an Ovis server: judged by the whole way the probe went
         assertNull(PCStore.refusedHop("http://100.64.0.1", "https://pc.example.com/", "https://pc.example.com", Collections.singletonList("https://pc.example.com")));
         assertEquals("http://pc.example.com", PCStore.refusedHop("https://a.example.com", "https://b.example.com/", "http://pc.example.com", java.util.Arrays.asList("https://b.example.com", "http://pc.example.com")));
     }
@@ -345,7 +328,6 @@ public class PCStoreTest {
         String offer = scope + "#offer=eyJ2IjoxfQ";
         assertEquals(scope, PCStore.scopeKey(scope, offer));
         assertEquals(scope, PCStore.scopeKey(scope, scope));
-        // another origin, a scope without its slash or with more than a path, or a page outside the scope
         assertNull(PCStore.scopeKey(scope, "https://evil.example/s/0123456789abcdef0123456789abcdef/#offer=x"));
         assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", offer));
         assertNull(PCStore.scopeKey(scope + "?x=1", offer));
@@ -356,7 +338,6 @@ public class PCStoreTest {
         assertTrue(PCStore.belongs("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", scope));
         assertFalse(PCStore.belongs("https://app.ovis.sh/s/fedcba9876543210fedcba9876543210/", scope));
         assertFalse(PCStore.belongs("https://app.ovis.sh/", scope));
-        // a PC saved by its origin before relay PCs: any page of that origin, as before
         assertTrue(PCStore.belongs("https://pc.tail1234.ts.net/settings?x=1", "https://pc.tail1234.ts.net"));
         assertFalse(PCStore.belongs("https://pc.tail1234.ts.net:8443/", "https://pc.tail1234.ts.net"));
         assertEquals("https://pc.tail1234.ts.net", PCStore.origin("https://pc.tail1234.ts.net"));
@@ -384,15 +365,12 @@ public class PCStoreTest {
             assertNull(escape, PCStore.scopeKey(scope, escape));
             assertFalse(escape, PCStore.belongs(escape, scope));
         }
-        // the scope's own segments: another PC whose id starts with this one's, and the scope without its slash
         assertFalse(PCStore.belongs("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef0/", scope));
         assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", scope + "#offer=x"));
         assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/../" + other, scope));
-        // pages deeper in the scope, and a name with dots that is not a dot segment
         assertEquals(scope, PCStore.scopeKey(scope, scope + "~render?x=1#offer=eyJ2IjoxfQ"));
         assertTrue(PCStore.belongs(scope + "deep/er/page.v2..html", scope));
         assertTrue(PCStore.belongs(scope + "caf%C3%A9/", scope));
-        // a PC saved by its origin is unchanged
         assertTrue(PCStore.belongs("https://pc.tail1234.ts.net/a/../b", "https://pc.tail1234.ts.net"));
     }
 
@@ -456,21 +434,15 @@ public class PCStoreTest {
         String id = "0123456789abcdef0123456789abcdef";
         String home = "http://desktop.lan:7317";
         java.util.List<String> saved = java.util.Arrays.asList(home, scope, "https://laptop.example.ts.net");
-        // a PC at its own address: the origin its endpoint was kept under, with the pane in the query
         assertArrayEquals(new String[] { home, home + "/?machine=local&ws=w1&pane=w1%3Ap1&view=chat" },
             PCStore.alertLink(saved, home, id, null, "w1", "w1:p1"));
-        // another PC of the roster, and a name that needs escaping
         assertArrayEquals(new String[] { home, home + "/?machine=build%20box&pane=w2%3Ap3&view=chat" },
             PCStore.alertLink(saved, home, null, "build box", null, "w2:p3"));
-        // a relay PC shares the hosted shell's origin with every other: its relay ID names it, the pane in the fragment
         assertArrayEquals(new String[] { scope, scope + "#machine=local&ws=w1&pane=w1%3Ap1&view=chat" },
             PCStore.alertLink(saved, "https://app.ovis.sh", id, "local", "w1", "w1:p1"));
-        // no endpoint found for it on this phone: the relay ID alone still names a saved relay PC
         assertArrayEquals(new String[] { scope, scope + "#machine=local&pane=w1%3Ap1&view=chat" },
             PCStore.alertLink(saved, null, id, null, null, "w1:p1"));
-        // a direct PC that also has a relay ID opens at the address that subscribed, not through the relay
         assertEquals("https://laptop.example.ts.net", PCStore.alertLink(saved, "https://laptop.example.ts.net", id, null, null, "w1:p1")[0]);
-        // nothing to open: no pane, a PC this phone does not keep, or no PC named at all (an older PC)
         assertNull(PCStore.alertLink(saved, home, id, null, null, null));
         assertNull(PCStore.alertLink(saved, home, id, null, null, ""));
         assertNull(PCStore.alertLink(saved, "http://forgotten.lan:7317", null, null, null, "w1:p1"));
@@ -479,7 +451,6 @@ public class PCStoreTest {
         assertNull(PCStore.alertLink(saved, null, null, null, null, "w1:p1"));
         // a relay ID never moves an alert from a saved address to the hosted shell
         assertNull(PCStore.alertLink(java.util.Collections.singletonList(scope), "http://forgotten.lan:7317", id, null, null, "w1:p1"));
-        // with "Your PCs" (the hosted shell's own origin) saved too, a relay alert still opens its PC
         java.util.List<String> withList = java.util.Arrays.asList(home, scope, "https://app.ovis.sh");
         assertArrayEquals(new String[] { scope, scope + "#machine=local&pane=w1%3Ap1&view=chat" },
             PCStore.alertLink(withList, "https://app.ovis.sh", id, null, null, "w1:p1"));
@@ -492,7 +463,6 @@ public class PCStoreTest {
         String home = "http://desktop.lan:7317";
         String laptop = "https://laptop.example.ts.net";
         java.util.List<String> saved = java.util.Arrays.asList(home, scope, laptop, "https://app.ovis.sh");
-        // the PC whose page is up: that page is handed the pane as public/sw.js posts it, and nothing opens
         PCStore.AlertTap same = PCStore.alertTap(saved, home, home + "/?machine=local&pane=w1%3Ap0", home, id, null, "w1", "w1:p1");
         assertNull(same.address);
         org.json.JSONObject selection = new org.json.JSONObject(same.selection);
@@ -509,18 +479,15 @@ public class PCStoreTest {
         assertEquals(odd, relaySelection.getString("pane_id"));
         assertEquals("build box", relaySelection.getString("machine_id"));
         assertFalse(relaySelection.has("workspace_id"));
-        // another saved PC is open: the alert's PC opens on the pane, as a switch of PC does
         PCStore.AlertTap other = PCStore.alertTap(saved, laptop, laptop + "/", home, id, null, "w1", "w1:p1");
         assertNull(other.selection);
         assertEquals(home, other.pc);
         assertEquals(home + "/?machine=local&ws=w1&pane=w1%3Ap1&view=chat", other.address);
-        // its own PC with no page of it up (a first load under the cover, the error page, a sign-in in front of it): opened
         for (String shown : new String[] { null, "https://sso.example.com/login", scope }) {
             PCStore.AlertTap opened = PCStore.alertTap(saved, home, shown, home, id, null, null, "w1:p1");
             assertNull(shown, opened.selection);
             assertEquals(home + "/?machine=local&pane=w1%3Ap1&view=chat", opened.address);
         }
-        // an alert that names no saved PC, or no pane: nothing, whatever is open
         assertNull(PCStore.alertTap(saved, home, home + "/", "http://forgotten.lan:7317", null, null, null, "w1:p1"));
         assertNull(PCStore.alertTap(saved, home, home + "/", home, id, null, null, null));
     }
@@ -533,10 +500,8 @@ public class PCStoreTest {
         java.util.List<String> saved = java.util.Arrays.asList(home, scope);
         String homeAddress = home + "/?machine=local&pane=w1%3Ap1&view=chat";
         String scopeAddress = scope + "#machine=local&pane=w1%3Ap1&view=chat";
-        // the app, as public/sw.js isAppWindow takes it: handed the pane, nothing reloads
         for (String shown : new String[] {
             home, home + "/", home + "/index.html", home + "/?machine=local&pane=w1%3Ap0", home + "/?read=", home + "/?read=+%20%C2%A0",
-            // a PC's own server reads its query only
             home + "/#read=notes.md",
         }) {
             PCStore.AlertTap tap = PCStore.alertTap(saved, home, shown, home, null, null, null, "w1:p1");
@@ -546,7 +511,6 @@ public class PCStoreTest {
         for (String shown : new String[] { scope, scope + "#machine=local&pane=w1%3Ap0", scope + "?machine=local#read=notes.md" }) {
             assertNotNull(shown, PCStore.alertTap(saved, scope, shown, "https://app.ovis.sh", id, null, null, "w1:p1").selection);
         }
-        // a markdown reader (query, or the hosted shell's fragment) and other pages that are not the app: opened at the alert's address
         for (String shown : new String[] {
             home + "/?read=notes.md", home + "/?machine=local&read=docs%2Fa.md", home + "/?%72ead=notes.md",
             home + "/api/file?path=a.html", home + "/ws", home + "/social-preview.png", home + "/notes.md",
@@ -576,21 +540,15 @@ public class PCStoreTest {
     @Test
     public void backIsThePagesOnlyOverAnotherPageOfTheSamePlace() {
         String pc = "https://pc.tail1234.ts.net";
-        // a sheet's or a pane's entry over a page of the PC
         assertTrue(PCStore.pageTakesBack(pc + "/?pane=w1%3Ap2", pc + "/?pane=w1%3Ap1", pc));
-        // the PC's first page: nothing behind it, or the sign-in that led to it
         assertFalse(PCStore.pageTakesBack(pc + "/", null, pc));
         assertFalse(PCStore.pageTakesBack(pc + "/", "https://login.example.com/authorize", pc));
-        // a sign-in in front of the PC, and the app's error page over a PC that did not answer
         assertFalse(PCStore.pageTakesBack("https://login.example.com/step2", "https://login.example.com/authorize", pc));
         assertFalse(PCStore.pageTakesBack("https://localhost/error.html", pc + "/", pc));
-        // another port on the PC's host is another place
         assertFalse(PCStore.pageTakesBack(pc + "/", "https://pc.tail1234.ts.net:8443/", pc));
-        // a relay PC, within its scope only
         String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
         assertTrue(PCStore.pageTakesBack(scope + "?pane=a", scope, scope));
         assertFalse(PCStore.pageTakesBack(scope, "https://app.ovis.sh/", scope));
-        // before a PC is chosen, the app's own pages: the demo over the connect screen
         assertTrue(PCStore.pageTakesBack("https://localhost/demo/index.html", "https://localhost/", "https://localhost"));
         assertFalse(PCStore.pageTakesBack("https://localhost/", null, "https://localhost"));
     }

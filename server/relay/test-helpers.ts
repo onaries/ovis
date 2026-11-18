@@ -22,7 +22,6 @@ export function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** Event barriers fail boundedly; no sleeps or polling of mutable state. */
 export async function bounded<T>(promise: Promise<T>, milliseconds = 10_000): Promise<T> {
   const failure = deferred<T>();
   const timer = setTimeout(() => failure.reject(new Error("Relay test event timed out")), milliseconds);
@@ -53,10 +52,6 @@ export class TestClock implements MuxClock {
   }
 }
 
-/**
- * A phone's side of one relay carrier over `transport`: the protected handshake and HELLO, then whatever the test
- * has it send. `admitted` and `error` settle only when that thing happens.
- */
 export async function relayPhone(transport: Transport, serverPublicKey: string) {
   const welcome = deferred<Extract<SessionFrame, { type: typeof FrameType.WELCOME }>>();
   const admitted = deferred<{ device_id: string }>();
@@ -88,12 +83,10 @@ export async function relayPhone(transport: Transport, serverPublicKey: string) 
   const greeting = (await bounded(welcome.promise)).payload;
   return {
     admitted: admitted.promise, error: error.promise,
-    /** PAIR with `code`, as a device holding `keys`. */
     async pair(code: string, keys: CryptoKeyPair) {
       engine.sendSession({ type: FrameType.PAIR, flags: 0, stream_id: 0,
         payload: { code, label: "New phone", public_key: Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url") } });
     },
-    /** AUTH as the paired `device` of the PC `serverId`. */
     async auth(device: { id: string; keys: CryptoKeyPair }, serverId: string) {
       const signature = Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, device.keys.privateKey,
         Buffer.concat([Buffer.from("ovis-relay-auth/1"), Buffer.from(greeting.nonce, "base64url"), Buffer.from(serverId)]))).toString("base64url");
@@ -140,10 +133,6 @@ export function relayFixture(serveOnly = false, options: NonNullable<Parameters<
   };
 }
 
-/**
- * A PC whose devices.json already holds one account member (docs/account.md, "Account members"),
- * written before the server starts, as a PC that an account device linked to would hold it.
- */
 export async function relayAccountFixture(role: "drive" | "watch" = "drive", account = "acct_1", options: NonNullable<Parameters<typeof createServer>[0]> = {}) {
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
   const publicKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
@@ -253,7 +242,6 @@ export async function relayConnection(fixture: ReturnType<typeof relayFixture>,
       return (await bounded(beforeClose(authenticated.promise))).payload;
     },
     async flush() {
-      // Subscribe to idle transitions on both senders, including their receipt replies.
       let budget = 10_000;
       do {
         if (--budget === 0) throw new Error("Relay senders did not quiesce");

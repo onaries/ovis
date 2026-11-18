@@ -10,7 +10,6 @@ const failure = (index: number, message = "AssertionError: broken"): RankedFailu
   script: `scripts/s${index}-regression.ts`, site: `scripts/s${index}-regression.ts:${index + 1}`, message,
   failed: index % 2, flaky: 3, main: 2, runId: 44_000_000_000 + index, branch: `fix/b${index}`, createdAt: "2026-11-17T06:00:00Z",
 });
-/** The cells of each table row, split on the pipes that are not escaped. */
 const tableRows = (body: string): string[][] =>
   body.split("\n").filter((line) => line.startsWith("| ")).map((line) => line.slice(2, -2).split(/(?<!\\)\|/).map((cell) => cell.trim()));
 const rankedRows = (body: string): string[][] => tableRows(body).filter((cells) => cells.some((cell) => cell.includes("/actions/runs/")));

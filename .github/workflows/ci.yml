@@ -14,8 +14,7 @@ on:
         type: string
   # hosted_only (pages.yml's validation and the Release's, through release-validate.yml): every job GitHub-hosted and no
   # Actions cache restored, since every job of the caller's run can write the artifacts it publishes
-  # (scripts/privileged-jobs-workflow.test.ts). ci.yml's own runs and relay-deploy leave it unset, and run as before
-  # (scripts/light-runner-workflow.test.ts)
+  # (scripts/privileged-jobs-workflow.test.ts).
   workflow_call:
     inputs:
       hosted_only:
@@ -30,8 +29,7 @@ concurrency:
   # push cancels the one still waiting and takes its place, so a burst of merges runs main's checks at most
   # twice instead of once per merge on the self-hosted PC, and the newest run covers the merges in between.
   # Pages deploys only a successful push run of main (a cancelled one's Website run skips building), so a
-  # manual run gets a group of its own and never replaces a waiting push run. A pull request still cancels
-  # its superseded run.
+  # manual run gets a group of its own and never replaces a waiting push run.
   group: validation-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-manual' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
@@ -49,6 +47,7 @@ jobs:
       draft: ${{ steps.filter.outputs.draft }}
       linux: ${{ steps.route.outputs.linux }}
       fast: ${{ steps.route.outputs.fast }}
+      ratchet_base: ${{ steps.ratchet.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,10 +69,37 @@ jobs:
           # only in ci.yml's own runs: a workflow that calls ci.yml (relay-deploy on a push to main, say) is named otherwise
           LINUX_LABELS: ${{ github.workflow == 'CI' && vars.CI_LINUX_SELF_HOSTED_LABELS || '' }}
           MAIN_LABELS: ${{ vars.CI_MAIN_SELF_HOSTED_LABELS }}
-          SELF_HOSTED_CAPACITY: ${{ vars.CI_SELF_HOSTED_CAPACITY }}
           FAST_LABELS: ${{ vars.CI_FAST_SELF_HOSTED_LABELS }}
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"
+      # A push to main: the latest main commit in this push's history whose CI push run passed (of the last 100), for Fast checks'
+      # ratchets to compare with. A waiting push run that a newer push replaces (the concurrency group above) never
+      # runs, so the next run takes its change in too; a re-run keeps its old commit, so a later green one is no base
+      # for it. Empty for any other event, and when none is found or the API does not answer after three tries:
+      # Fast checks then fails rather than compare with less.
+      - id: ratchet
+        name: Find the last main commit CI passed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$EVENT_NAME" != push ] || [ "$REF" != refs/heads/main ]; then exit 0; fi
+          for try in 1 2 3; do
+            if passed=$(gh run list --repo "$REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 100 --json headSha --jq '.[].headSha'); then
+              # the latest in history, not in the list's order: a run's date says nothing of where its commit stands
+              best=
+              for sha in $passed; do
+                git merge-base --is-ancestor "$sha" HEAD || continue
+                if [ -z "$best" ] || git merge-base --is-ancestor "$best" "$sha"; then best=$sha; fi
+              done
+              if [ -n "$best" ]; then echo "base=$best" >> "$GITHUB_OUTPUT"; exit 0; fi
+              echo "::warning::No passed CI push run of main is in this push's history."; exit 0
+            fi
+            sleep $((try * 5))
+          done
+          echo "::warning::The Actions API did not list main's passed CI runs."
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -88,19 +114,17 @@ jobs:
           # Only a pull request may skip the heavy jobs as docs-only. Every other event validates in
           # full, including workflow_call for a release (release-validate.yml) and manual pages.yml
           # dispatches, where github.event_name is the caller's event and a docs-only last commit must
-          # not skip release validation. A Release run takes main's push run in place of its own call
-          # only when no job of it was skipped (scripts/release-ci-reuse.ts).
+          # not skip release validation.
           if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$BASE_SHA" ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD || echo "")
+          CHANGED=$(git diff --no-renames --name-only "$BASE_SHA" HEAD || echo "")
           if [ -z "$CHANGED" ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Docs-only: under docs/, any *.md or *.txt, the root LICENSE, or an issue template.
-          if echo "$CHANGED" | grep -qvE '^docs/|\.(md|txt)$|^LICENSE$|^\.github/ISSUE_TEMPLATE/'; then
+          if grep -q '^server/fixtures/' <<< "$CHANGED" || grep -qvE '^docs/|\.(md|txt)$|^LICENSE$|^\.github/ISSUE_TEMPLATE/' <<< "$CHANGED"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
@@ -143,11 +167,8 @@ jobs:
     name: Native macOS session identity
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # mac: fork pull requests stay on macos-15; ci.yml's own same-repository runs off main take the repository variable
-    # CI_MAC_LABELS (a JSON label list such as ["self-hosted","self-hosted-ovis-mac"]), macos-15 while it is unset. A release
-    # never validates on the Mac: a workflow that calls ci.yml (Release validation) runs under its own name, and main's
-    # run, which a Release run may take in place of its own, stays on macos-15 (scripts/release-ci-reuse.test.ts)
-    runs-on: ${{ inputs.hosted_only && 'macos-15' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '"macos-15"') }}
+    # mac: fork pull requests stay on macos-15
+    runs-on: ${{ inputs.hosted_only && 'macos-15' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && vars.CI_MAC_LABELS || '"macos-15"') }}
     timeout-minutes: 5
     env:
       HERDR_TEST_MODE: unit
@@ -174,13 +195,11 @@ jobs:
       # The Mac runner's job-started.sh (scripts/self-hosted-runner/README.md "Mac runner") under macOS's bash and
       # jq: the job it allows, alone. Its refusals may kill and run only isolated, never on this host: in the Linux
       # container of the check "Hook kill tests (container)" (hook-kill-tests.yml), through procps ps.
-      # A step of its own, as -t would filter the files above too.
       - name: Runner job-started hook allows a job on macOS
         if: needs.changes.outputs.draft != 'true'
         run: bun test ./scripts/self-hosted-runner.test.ts -t 'job-started hook runs a job from this repository'
   rust-pty-host:
-    # The Rust PTY host (crates/pty-sidecar) is the default where it is installed or built, and its
-    # PtySession checks skip without a build. The self-hosted runners have no Rust toolchain, so this job always runs on
+    # The self-hosted runners have no Rust toolchain, so this job always runs on
     # GitHub's image, which has one: it builds the host and runs the same checks on it as on Node.
     name: Rust PTY host
     needs: changes
@@ -222,8 +241,7 @@ jobs:
           OVIS_PTY_SIDECAR: rust
         run: bun test ./server/pty/session.test.ts
   herdr-core-live:
-    # The hc client (server/herdr-core/connection.ts) against a real herdr-core, in a core of its
-    # own (server/herdr-core/live.test.ts). hc is pinned by version and sha256 from herdr-core's
+    # hc is pinned by version and sha256 from herdr-core's
     # release server, and only this step sees it: a failed download or checksum fails the job.
     name: herdr-core live contract
     needs: changes
@@ -297,21 +315,20 @@ jobs:
           node: 'true'
           cache: ${{ inputs.hosted_only && 'none' || 'save' }}
       - run: bun install --frozen-lockfile
-      # The base: for a push to main the commit before the whole push (EVENT_BASE); for a pull request
+      # The base: for a pull request
       # its merge commit's first parent, which is main's head now (the event's base.sha stays where the
       # pull request was opened). The shallow checkout does not hold it, so it is fetched, and a fetch
       # that fails fails the job: a ratchet never passes without its base.
       - name: Fetch the base the ratchets compare with
+        env:
+          LAST_GREEN: ${{ needs.changes.outputs.ratchet_base }}
         run: |
           if [ -z "$EVENT_BASE" ]; then echo "No base in this run: the ratchets compare with nothing."; exit 0; fi
-          if [ "$GITHUB_EVENT_NAME" = push ]; then base=$EVENT_BASE; else base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}'); fi
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -z "$LAST_GREEN" ]; then echo "::error::No passed main commit to compare the ratchets with (see Detect changes)."; exit 1; fi
+          if [ "$GITHUB_EVENT_NAME" = push ]; then base=$LAST_GREEN; else base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}'); fi
           git fetch --no-tags --depth=1 origin "$base"
           echo "RATCHET_BASE=$base" >> "$GITHUB_ENV"
       - run: bun run check fast
-      # A release (package.json's version not tagged yet) must raise REMOTE_BUNDLE_VERSION when the
-      # bundle's inputs changed, record the telemetry Worker deploy and carry its patch notes. Only the
-      # change that bumps the version against BASE_SHA counts, so PRs merged before the Release run
-      # pass. The checkout is shallow, so the tags and the base it compares with are fetched first.
       - name: Release guards
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -341,9 +358,6 @@ jobs:
     timeout-minutes: 50
     env:
       CHECK_DIR: ${{ github.workspace }}/.ci
-      # The herdr-backed lanes of every runner on the self-hosted PC share check.ts's slots
-      # (scripts/self-hosted-runner/run.sh): at most CHECK_MAX_RUNS at once, and a lane that finds
-      # them taken waits its turn instead of failing. A hosted runner has the slots to itself.
       CHECK_MAX_RUNS: 6
       CHECK_WAIT_SECONDS: 2400
     steps:
@@ -389,9 +403,6 @@ jobs:
     timeout-minutes: 50
     env:
       CHECK_DIR: ${{ github.workspace }}/.ci
-      # The herdr-backed lanes of every runner on the self-hosted PC share check.ts's slots
-      # (scripts/self-hosted-runner/run.sh): at most CHECK_MAX_RUNS at once, and a lane that finds
-      # them taken waits its turn instead of failing. A hosted runner has the slots to itself.
       CHECK_MAX_RUNS: 6
       CHECK_WAIT_SECONDS: 2400
     steps:
@@ -463,9 +474,6 @@ jobs:
     timeout-minutes: 50
     env:
       CHECK_DIR: ${{ github.workspace }}/.ci
-      # The herdr-backed lanes of every runner on the self-hosted PC share check.ts's slots
-      # (scripts/self-hosted-runner/run.sh): at most CHECK_MAX_RUNS at once, and a lane that finds
-      # them taken waits its turn instead of failing. A hosted runner has the slots to itself.
       CHECK_MAX_RUNS: 6
       CHECK_WAIT_SECONDS: 2400
     steps:
@@ -498,7 +506,6 @@ jobs:
           key: playwright-workspace-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
       - run: bun run build
         if: needs.changes.outputs.draft != 'true'
-      # the relay end-to-end run drives the hosted shell, and its media part encodes a video
       - run: bun run build:shell
         if: needs.changes.outputs.draft != 'true'
       - name: Pinned ffmpeg for the relay media run
@@ -510,7 +517,6 @@ jobs:
       - name: Browser regression (parallel)
         if: needs.changes.outputs.draft != 'true'
         env:
-          # Every script of scripts/ci-browser.sh except the browser-main runs.
           BROWSER_EXCLUDE: scripts/ui-regression.ts,scripts/ui-terminal-regression.ts,scripts/ui-ime-regression.ts,scripts/ui-access-regression.ts,scripts/ui-contexts-regression.ts,scripts/ui-contexts-layout-regression.ts
           BROWSER_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           BROWSER_WORKERS: ${{ runner.environment == 'self-hosted' && '6' || '3' }}

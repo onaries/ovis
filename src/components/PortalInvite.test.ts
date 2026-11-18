@@ -8,7 +8,6 @@ import { PortalInvite } from "./PortalInvite.tsx";
 
 const credential = (...allow: string[]): PortalAuth => ({ method: "credential", allow, issuer: null, client_id: null });
 
-/** English, whatever the machine running the test prefers. */
 function render(auth: PortalAuth): string {
   const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
@@ -29,7 +28,6 @@ describe("Invite someone", () => {
     for (const [label, pressed] of [["1 day", false], ["7 days", false], ["30 days", true], ["90 days", false]] as const) {
       expect(html).toContain(`<button type="button" aria-pressed="${pressed}"><span data-label="${label}">${label}</span></button>`);
     }
-    // no name yet: nothing to create, and nothing to warn about
     expect(html).toMatch(/<button type="submit" class="btn btn-primary" disabled="">Create link<\/button>/);
     expect(html).not.toContain("portal-warning");
   });

@@ -1,7 +1,4 @@
 name: Website
-# Builds site/ into the GitHub Pages site (https://herdrweb.dev/) after CI succeeds for a push to
-# main: the installers, the pages that forward to https://ovis.sh/, and the browser demo, which is
-# the app itself, so any client change is a site change.
 on:
   workflow_run:
     workflows: [CI]
@@ -47,7 +44,6 @@ jobs:
       - uses: ./.github/actions/setup-ci
         with:
           cache: none
-      # the demo is a Vite build of the client
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-site.ts
       - id: source
@@ -56,8 +52,6 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
-  # Whether the built commit is still main's head, in a job with no environment: a run that main has moved past
-  # skips the deploy job instead of recording a deployment it never made, and ends with a notice, not red.
   current:
     if: >-
       always() && github.ref == 'refs/heads/main' &&

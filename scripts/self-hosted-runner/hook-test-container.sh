@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # The hook kill tests (the isolated tests of scripts/self-hosted-runner.test.ts) in one throwaway, confined container of
-# the image hook-test.Dockerfile builds. .github/workflows/hook-kill-tests.yml runs this on GitHub's hosted runner; a
-# person runs it the same way:
-#   hook-test-container.sh <image> <checkout with node_modules> <empty output directory>
+# the image hook-test.Dockerfile builds.
 # The container starts detached, prints its proofs of confinement first, and waits for a go file that this script
 # writes only after `docker inspect` shows the confining settings; it bounds itself (timeouts inside it, --rm). This
 # script signals nothing and removes nothing: a container still there at its end is reported by its name.
@@ -12,7 +10,6 @@ image=${1:?$usage}
 src=$(cd "${2:?$usage}" && pwd)
 out=$(cd "${3:?$usage}" && pwd)
 name=ovis-hook-kill-tests
-# every test of the hook: the one that runs a job it allows and the seven isolated ones, none skipped
 expected="0 fail;8 pass;"
 gone() { [ -z "$(docker ps -a --filter "name=^/$name\$" --format '{{.Names}}')" ]; }
 test -d "$src/node_modules" || { echo "STOP: $src has no node_modules: run bun install --frozen-lockfile --ignore-scripts there first"; exit 1; }

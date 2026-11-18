@@ -30,7 +30,6 @@ function show(status) {
   document.getElementById("retry").hidden = !failed;
 }
 
-/** the update the app has downloaded (main.ts UpdateLine), or null: shown here even when its line was closed in Ovis */
 function showUpdate(update) {
   document.getElementById("update").hidden = update === null;
   if (update === null) return;
@@ -45,12 +44,12 @@ void desktop.status().then(show);
 
 const install = document.getElementById("update-install");
 install.addEventListener("click", () => {
-  // answered only when Ovis keeps running (a .deb's password prompt cancelled): then it may be pressed again
+  // answered when Ovis keeps running (a .deb's password prompt cancelled), so it may be pressed again; also when a
+  // .deb installed, a moment before Ovis quits
   install.disabled = true;
   const again = () => { install.disabled = false; };
   window.ovisUpdate.install().then(again, again);
 });
-// the app may tell of a download before its answer to the asking arrives: that answer was read before it, and is dropped
 let updateTold = false;
 window.ovisUpdate.onChange((update) => {
   updateTold = true;

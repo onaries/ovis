@@ -21,13 +21,11 @@ import { RECORDED_STALE_AFTER_MS } from "../shared/usage.ts";
 import { AHEAD_MS, byLength, claudeLimit, EPOCH_MS_FROM, readStore, resetOf } from "./usage-recorded-pi.ts";
 
 const PREFIX = "usage_cache:report:anthropic:";
-/** The key after every key that starts with PREFIX: the two bound a search on the table's own index. */
 const AFTER_PREFIX = "usage_cache:report:anthropic;";
 const MAX_ROWS = 200;
 const MAX_VALUE_LENGTH = 16_384;
 const MAX_LIMITS = 32;
 
-/** Only rows shaped as Gajae Code writes them, and only those it still keeps. */
 const ROWS = `
   SELECT key, value
   FROM cache

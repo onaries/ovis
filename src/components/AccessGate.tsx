@@ -11,7 +11,6 @@ import { userErrorMessage, type UserError } from "../lib/userError.ts";
 
 
 export interface AccessGateProps {
-  /** why the server refused this browser, when it said */
   reason: AccessRefusal | null;
   /** the unconsumed address code to display; automatic submission must claim it first */
   initialCode: string;
@@ -58,7 +57,6 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
     }
   };
 
-  // a scanned QR code brings the code along: no typing on the phone
   useEffect(() => {
     if (!scanned.current) return;
     scanned.current = false;
@@ -96,7 +94,6 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
     <main className="access-gate-screen">
       <div className="access-gate" data-testid="token-gate">
         <img src="/icons/icon-192.png?v=sheep1" alt="" width="44" height="44" className="access-gate-mark" />
-        {/* the title names the task on this screen, not the app (G-140); the mark above carries the brand */}
         <h1 id="access-gate-title" className="access-gate-title">
           {t(reason === "token_required" ? "Unlock" : "Pair this device")}
         </h1>
@@ -153,7 +150,6 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
         {error !== null && (
           <p id="access-gate-error" className="access-gate-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>
         )}
-        {/* in the iOS app (app/) this page is all there is: the way back to its list of PCs */}
         {inNativeApp() && (
           <p className="access-gate-copy"><button type="button" className="btn" onClick={() => void changePc()}>{t("Change PC")}</button></p>
         )}

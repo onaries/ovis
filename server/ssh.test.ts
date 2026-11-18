@@ -84,8 +84,7 @@ esac
 echo ran
 `;
 
-// `ssh-keygen -l -f <known_hosts>` for the ed25519 lines the stand-in ssh learns. CI's runner
-// image has no OpenSSH, so the real one cannot be relied on.
+// CI's runner image has no OpenSSH, so the real one cannot be relied on.
 const FAKE_SSH_KEYGEN = String.raw`#!/bin/sh
 for file; do :; done
 exec "$FAKE_BUN" -e '
@@ -168,7 +167,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
 
   it("tells a refused connection through Git's ssh that Windows' agent service is not read", async () => {
     const { ssh } = fixture({ FAKE_PASSPHRASE: "secret" }, { onPath: false });
-    // what discovery marks on Windows, which this POSIX stand-in cannot reach
     const own = ssh as unknown as { client: { git?: true } };
     own.client = { ...own.client, git: true };
     await expect(ssh.start()).rejects.toThrow("does not read Windows' ssh-agent service");
@@ -251,7 +249,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
 
   describe("forwards", () => {
     for (const [how, extra] of [["", {}], [" behind a ProxyJump", { FAKE_JUMP: "1" }], [" with LogVerbose", { FAKE_LOG_VERBOSE: "1" }]] as const) it(`opens the loopback port, and its ending ends the connection${how}`, async () => {
-      // the tunnel ends at its first connection: forward() waits for ssh's word, never connecting itself
       const { ssh, ask } = fixture({ FAKE_TUNNEL_ENDS_AT: "1", ...extra });
       await ssh.start(ask("unused"));
       const ended = Promise.withResolvers<void>();
@@ -273,7 +270,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
       await ssh.start(ask("unused"));
       const gate = join(root, "auth");
       await Bun.$`mkfifo ${gate}`;
-      // ssh never gets past authentication: only the close can end the wait
       process.env["FAKE_AUTH_GATE"] = gate;
       const free = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
       const port = free.port;
@@ -284,7 +280,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
         try { const pid = Number(readFileSync(join(root, "holder.pid"), "utf8")); return Number.isInteger(pid) && pid > 0 ? pid : null; } catch { return null; }
       };
       cleanups.push(() => { const pid = holderPid(); if (pid !== null) try { process.kill(pid); } catch {} });
-      // close once the tunnel's ssh runs and its stderr has a second holder, not while forward() still reads the config
       const holding = Promise.withResolvers<void>();
       const watcher = watch(root, (_event, name) => { if (name === "holder.pid" && holderPid() !== null) holding.resolve(); });
       cleanups.push(() => watcher.close());
@@ -312,7 +307,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
         } } });
         cleanups.push(() => squatter.stop(true));
         const opened = forward(port, remotePort);
-        // ssh is still authenticating while the other process holds the port; now it gets on to its bind
         await writeFile(gate, "\n");
         return opened;
       };
@@ -334,7 +328,6 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
 
   it("leaves no folder behind for connections that never start, and removes a started one's on close", async () => {
     const { root, ssh, ask } = fixture();
-    // a setup that was cancelled before connecting, or a test that stubs start and close
     const idle = Array.from({ length: 20 }, () => new SshConnection({ destination: "pc" }, join(root, "state"), undefined, false, false));
     expect(idle.map((connection) => connection["dir"]).filter((dir) => dir && existsSync(dir))).toEqual([]);
     await ssh.start(ask("unused"));

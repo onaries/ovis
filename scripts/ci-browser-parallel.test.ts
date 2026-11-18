@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { processStart } from "./check.ts";
 import { parseLaneLog } from "./ci-flakes.ts";
-import { programName, processName, failureSite, longestFirst, scriptTimeoutSeconds, serialBrowserScripts, shardScripts, stopReport, stopRun } from "./ci-browser-parallel.ts";
+import { programName, processName, failureSite, longestFirst, quarantineNote, quarantineStatus, scriptTimeoutSeconds, serialBrowserScripts, shardScripts, stopReport, stopRun } from "./ci-browser-parallel.ts";
+import { QUARANTINE, QUARANTINE_MAX_DAYS } from "./ci-browser-quarantine.ts";
 import type { StopIo } from "./ci-browser-parallel.ts";
 
 /** A killed process that its parent (a subreaper, say) has not reaped yet is a zombie: not alive. */
@@ -14,7 +15,6 @@ const alive = (pid: number): boolean => {
   try { return readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "")[0] !== "Z"; } catch { return true; }
 };
 
-/** The command every stand-in the stub starts runs. */
 const STAND_IN = ["sleep", "1000"];
 
 const commandLine = (pid: number): string[] | null => {
@@ -59,11 +59,6 @@ const STARTED = [
   "}",
 ].join("\n");
 
-/**
- * Runs the lane on one stub script whose last step is `end`, after it has started a process that
- * keeps the script's output open (as a stray server would) and one that ignores SIGTERM and writes
- * nowhere, and returns what the lane printed and wrote.
- */
 async function runStub(end: string, timeoutSeconds: string) {
   const dir = mkdtempSync(join(tmpdir(), "browser-parallel-test-"));
   const bin = join(dir, "bin");
@@ -94,7 +89,6 @@ async function runStub(end: string, timeoutSeconds: string) {
       text, code, signal: child.signalCode,
       retried: existsSync(join(logs, "ui-regression.attempt-1.log")),
       summary: JSON.parse(readFileSync(join(logs, "summary.json"), "utf8")),
-      // both stand-ins were recorded, and neither still runs
       leftAlive: [leftover, stubborn].map((file) => standIn(readFileSync(file, "utf8"))).filter((pid) => pid !== null),
     };
   } finally {
@@ -109,10 +103,8 @@ async function runStub(end: string, timeoutSeconds: string) {
   }
 }
 
-/** The run has ended: stopRun does not wait out a grace in real time. */
 const ran = Promise.resolve();
 
-/** A stand-in for the process table whose clock moves by hand: each read of the table takes 10 ms of it, so a grace ends after a counted number of reads. */
 function stubIo(parts: Omit<StopIo, "marked" | "now" | "graceMs"> & { marked?: StopIo["marked"] }, graceMs: number): StopIo {
   let clock = 0;
   return { ...parts, processes: async () => { clock += 10; return parts.processes(); }, marked: parts.marked ?? (() => true), now: () => clock, graceMs };
@@ -145,7 +137,6 @@ describe("parallel browser script deadline", () => {
   }, 20_000);
 
   it("names what SIGKILL did not end within the grace, and says it was NOT stopped", async () => {
-    // a process table: 11 ends on SIGTERM, 12 on SIGKILL, 13 on neither (a process no signal ends)
     const alive = new Set([11, 12, 13]);
     const sent: string[] = [];
     const io = stubIo({
@@ -160,7 +151,6 @@ describe("parallel browser script deadline", () => {
       running: (pid) => alive.has(pid),
       command: (pid) => `stub-${pid}`,
     }, 50);
-    // the run never finishes: its output stays held
     const stop = await stopRun(io, ran);
     expect(sent).toEqual(["SIGTERM 11", "SIGTERM 12", "SIGTERM 13", "SIGKILL 12", "SIGKILL 13"]);
     expect(stop).toEqual({ stopped: 2, survivors: ["13 (stub-13)"], unsure: false });
@@ -171,7 +161,6 @@ describe("parallel browser script deadline", () => {
     const lateIo = stubIo({
       processes: async () => [...late],
       signal: (_pids, name) => { if (name === "SIGKILL") killed = true; return []; },
-      // gone at the second look after SIGKILL
       running: (() => { let looks = 0; return (pid: number) => !(killed && ++looks > 1) && late.has(pid); })(),
       command: () => "slow",
     }, 50);
@@ -181,7 +170,6 @@ describe("parallel browser script deadline", () => {
   });
 
   it("kills and names a process the run forks after the first look, and not a pid that was reused", async () => {
-    // 12 ignores SIGTERM and forks 14 when SIGKILL lands; 14 ends on SIGKILL, and it forks 15, which no signal ends
     const alive = new Set([12]);
     const marked = new Set([12]);
     const sent: string[] = [];
@@ -252,7 +240,6 @@ describe("parallel browser script deadline", () => {
   });
 
   it("does not name a process that ended by itself between the scan and the mark check", async () => {
-    // 12 forks 14 and 15 on SIGKILL; both have no mark by the check. 14 has ended by itself, 15 still runs
     const alive = new Set([12]);
     const found = new Set([12]);
     const sent: string[] = [];
@@ -269,7 +256,6 @@ describe("parallel browser script deadline", () => {
       marked: () => false,
       command: (pid) => `stub-${pid}`,
     }, 50);
-    // marked() is false for the first ones too, but 12 is signalled in the first rounds, which do not check it
     const stop = await stopRun(io, ran);
     expect(sent).toEqual(["SIGTERM 12", "SIGKILL 12"]);
     expect(stop.survivors).toEqual(["15 (stub-15)"]);
@@ -360,7 +346,6 @@ TypeError: closed
   });
 
   it("does not say a run was stopped cleanly when a process was forked as the last kill landed", async () => {
-    // 12 forks 14 on SIGKILL and 14 forks 15 on it; the grace is over by the last read, so 15 is never read
     const alive = new Set([12]);
     const marked = new Set([12]);
     const io = stubIo({
@@ -393,9 +378,7 @@ TypeError: closed
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("ends a recorded stand-in only, never another process its pid names", async () => {
     const start = (command: string[]) => Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
     const recorded = start(STAND_IN);
-    // the same command, but the record is of an earlier process that had its pid
     const later = start(STAND_IN);
-    // started when the record says, but another command
     const other = start(["sleep", "999"]);
     const startOf = (pid: number) => processStart(pid) ?? "";
     const records = [
@@ -437,10 +420,8 @@ describe("parallel browser script order", () => {
   it("starts a script the table does not hold before the longest one it does", () => {
     const timings = { "a.ts": 10, "b.ts": 300, "c.ts": 50 };
     expect(longestFirst(["a.ts", "new.ts", "c.ts", "b.ts"], timings)).toEqual(["new.ts", "b.ts", "c.ts", "a.ts"]);
-    // several of them keep the listed order among themselves, wherever the list holds them
     expect(longestFirst(["a.ts", "new-1.ts", "b.ts", "new-2.ts", "c.ts", "new-3.ts"], timings))
       .toEqual(["new-1.ts", "new-2.ts", "new-3.ts", "b.ts", "c.ts", "a.ts"]);
-    // seconds that are not a number time nothing
     expect(longestFirst(["a.ts", "odd.ts", "b.ts"], { ...timings, "odd.ts": Number.NaN })).toEqual(["odd.ts", "b.ts", "a.ts"]);
   });
 
@@ -456,8 +437,6 @@ describe("parallel browser shards", () => {
   it("splits the scripts by estimated time into disjoint shards that together hold every script once", () => {
     const scripts = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];
     const timings = { "a.ts": 200, "b.ts": 100, "c.ts": 100, "d.ts": 90, "e.ts": 10 };
-    // longest first to the least-loaded shard: a -> 1; b -> 2; c -> 2 (100 < 200); d -> 1 (a tie goes to
-    // the first); e -> 2 (200 < 290)
     expect(shardScripts(scripts, timings, "1/2")).toEqual(["a.ts", "d.ts"]);
     expect(shardScripts(scripts, timings, "2/2")).toEqual(["b.ts", "c.ts", "e.ts"]);
     const listed = serialBrowserScripts();
@@ -467,12 +446,9 @@ describe("parallel browser shards", () => {
   });
 
   it("counts a script the table does not hold as the median in a shard's load, and deals it out in that place", () => {
-    // median 100. Longest first: a -> 1; new (100, listed before b) -> 2; b -> 2 (100 < 300); c -> 2.
-    // Dealt out first, as the workers start it, new would take shard 1 and a shard 2.
     const timings = { "a.ts": 300, "b.ts": 100, "c.ts": 20 };
     expect(shardScripts(["new.ts", "a.ts", "b.ts", "c.ts"], timings, "1/2")).toEqual(["a.ts"]);
     expect(shardScripts(["new.ts", "a.ts", "b.ts", "c.ts"], timings, "2/2")).toEqual(["new.ts", "b.ts", "c.ts"]);
-    // every script 100: new-1 -> 1; new-2 -> 2; a -> 1. Counted as nothing, a would go first and both of them to shard 2.
     const even = { "a.ts": 100, "b.ts": 100, "c.ts": 100 };
     expect(shardScripts(["new-1.ts", "new-2.ts", "a.ts"], even, "1/2")).toEqual(["new-1.ts", "a.ts"]);
     expect(shardScripts(["new-1.ts", "new-2.ts", "a.ts"], even, "2/2")).toEqual(["new-2.ts"]);
@@ -486,7 +462,6 @@ describe("parallel browser shards", () => {
       const shards = Array.from({ length: total }, (_, k) => shardScripts(listed, half, `${k + 1}/${total}`));
       expect(shards.flat().sort()).toEqual([...listed].sort());
       for (const shard of shards) expect(shard).toEqual(listed.filter((script) => shard.includes(script)));
-      // the same split every time it is computed, as each job computes it for itself
       expect(shards).toEqual(Array.from({ length: total }, (_, k) => shardScripts(listed, half, `${k + 1}/${total}`)));
     }
   });
@@ -548,6 +523,66 @@ describe("parallel browser output timestamps", () => {
       expect(summary).toContain('"script": "scripts/ui-regression.ts"');
       expect(summary).toContain('"code": 0');
       expect(summary).not.toContain("timestamp");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("browser flake quarantine", () => {
+  const entry = { until: "2026-12-02", issue: 4026 };
+
+  it("excuses a listed script through its end date, and no longer after it", () => {
+    expect(quarantineStatus("scripts/a.ts", {}, "2026-11-18")).toEqual({ state: "unlisted" });
+    expect(quarantineStatus("scripts/a.ts", { "scripts/a.ts": entry }, "2026-12-02")).toEqual({ state: "quarantined", entry });
+    expect(quarantineStatus("scripts/a.ts", { "scripts/a.ts": entry }, "2026-12-03")).toEqual({ state: "ended", entry });
+  });
+
+  it("names the issue of a quarantined script, and the fix for one that fails the lane", () => {
+    expect(quarantineNote({ state: "quarantined", entry })).toContain("until 2026-12-02 (#4026)");
+    for (const status of [{ state: "unlisted" } as const, { state: "ended", entry } as const]) {
+      expect(quarantineNote(status)).toContain("fails the lane");
+      expect(quarantineNote(status)).toContain("scripts/ci-browser-quarantine.ts");
+    }
+    expect(quarantineNote({ state: "ended", entry })).toContain("ran out after 2026-12-02");
+  });
+
+  it("lists only scripts the lane runs, each with its issue and an end date at most the limit ahead", () => {
+    const lane = serialBrowserScripts();
+    const today = new Date().toISOString().slice(0, 10);
+    const limit = new Date(Date.parse(`${today}T00:00:00Z`) + QUARANTINE_MAX_DAYS * 86_400_000).toISOString().slice(0, 10);
+    const wrong = Object.entries(QUARANTINE).flatMap(([script, { until, issue }]) => [
+      ...(lane.includes(script) ? [] : [`${script}: not in scripts/ci-browser.sh`]),
+      ...(/^\d{4}-\d\d-\d\d$/.test(until) && !Number.isNaN(Date.parse(`${until}T00:00:00Z`)) && new Date(`${until}T00:00:00Z`).toISOString().startsWith(until) ? [] : [`${script}: until "${until}" is not a YYYY-MM-DD date`]),
+      ...(until <= limit ? [] : [`${script}: until ${until} is more than ${QUARANTINE_MAX_DAYS} days ahead (${limit} at most)`]),
+      ...(Number.isInteger(issue) && issue > 0 ? [] : [`${script}: issue ${issue} is not an issue number`]),
+    ]);
+    expect(wrong).toEqual([]);
+  });
+
+  it("fails the lane when a script that is not quarantined passes only on its second run", async () => {
+    const script = serialBrowserScripts().find((name) => !(name in QUARANTINE))!;
+    const name = script.replace(/^scripts\//, "").replace(/\.ts$/, "");
+    const dir = mkdtempSync(join(tmpdir(), "browser-parallel-test-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "bash"), '#!/bin/sh\nprintf "/stub/chrome\\\\n"\n', { mode: 0o755 });
+    writeFileSync(join(bin, "bun"), `#!/bin/sh\nif [ "$1" = scripts/demo-build.ts ]; then exit 0; fi\nif [ -e ${dir}/ran ]; then echo "PASS on the second run"; exit 0; fi\ntouch ${dir}/ran\necho "AssertionError: a stub race"\nexit 1\n`, { mode: 0o755 });
+    try {
+      const child = Bun.spawn([process.execPath, "scripts/ci-browser-parallel.ts"], {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BROWSER_SCRIPTS: script, BROWSER_EXCLUDE: "", BROWSER_SHARD: "", BROWSER_RETRY: "", CHECK_DIR: dir, GITHUB_ACTIONS: "", GITHUB_STEP_SUMMARY: "" },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+      });
+      const [text, , code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code).toBe(1);
+      expect(text).toContain(`FLAKY ${script} (`);
+      expect(text).toContain("It is not quarantined, so it fails the lane");
+      expect(parseLaneLog(text)).toEqual([{ script, outcome: "flaky", site: null, message: "AssertionError: a stub race" }]);
+      const summary = JSON.parse(readFileSync(join(dir, "browser-logs", "summary.json"), "utf8"));
+      expect(summary.flaky).toEqual([script]);
+      expect(summary.notQuarantined).toEqual([script]);
+      expect(existsSync(join(dir, "browser-logs", `${name}.attempt-1.log`))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

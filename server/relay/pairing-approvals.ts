@@ -9,7 +9,6 @@ export const MAX_PENDING_APPROVALS = 3;
 /** How long after the owner copies a link without a code this PC takes comparisons, as a Bluetooth device in pairing mode. */
 export const PAIRING_WINDOW_MS = 10 * 60_000;
 
-/** The file calls that take the saved window away, swappable in tests. */
 export const pairingWindowFs = { rmSync, truncateSync };
 
 /** How a waiting comparison ended: approved (by this PC when `by` is absent, else by that account member) or not. */
@@ -20,9 +19,7 @@ export type RemoteDecision = { outcome: "decided"; device_id: string } | { outco
 
 interface Waiting {
   request: RelayPairingRequest & { intent: PairingIntent };
-  /** when the comparison runs out, on this PC's clock */
   expiresAt: number;
-  /** the new device's key, and the id its row will have (accountDeviceId) */
   key: string;
   deviceId: string;
   /** an account join taken outside the pairing window: shown to account members only (docs/account.md, design 5.3) */
@@ -164,7 +161,7 @@ export class RelayPairingApprovals {
    */
   private forget(): boolean {
     if (!this.path) return true;
-    try { pairingWindowFs.rmSync(this.path, { force: true }); return true; } catch { /* truncated below */ }
+    try { pairingWindowFs.rmSync(this.path, { force: true }); return true; } catch {}
     try { pairingWindowFs.truncateSync(this.path, 0); return true; }
     catch (error) {
       console.warn(JSON.stringify({ event: "relay.pairing_window.forget_failed", error: error instanceof Error ? error.message : String(error) }));
@@ -187,7 +184,6 @@ export class RelayPairingApprovals {
     this.cancelExpiry?.();
     this.cancelExpiry = undefined;
     for (const entry of [...this.waiting.values()]) if (!entry.membersOnly) entry.finish({ approved: false });
-    // nothing was open and what is saved already reads as closed: nothing to write, whatever the disk allows
     if (!this.path || (!open && this.savedClosed())) return true;
     // a file that cannot be rewritten must not bring the window back at the next start: absent reads as closed
     return this.save() || this.forget();
@@ -210,7 +206,10 @@ export class RelayPairingApprovals {
   /** Whether a comparison taken now is this PC's own to decide: asked while its add-me screen waited. */
   localOnlyOpen(now = this.now()): boolean { return now < this.localOnlyUntil; }
 
-  /** Outside the window a comparison is refused before any prompt, so nobody the owner did not invite can raise one. */
+  /**
+   * Outside the window a comparison is refused before any prompt, so nobody the owner did not invite can raise one;
+   * only a join the account service holds a fresh admission for is taken then, for account members alone (session.ts accountJoin).
+   */
   windowOpen(now = this.now()): boolean { return now < this.windowUntil; }
 
   /** `left_ms` is counted on each telling, so a window whose clock differs from this PC's still counts down right. */
@@ -261,9 +260,6 @@ export class RelayPairingApprovals {
     };
     // fixed when the phone asked (session.ts), so a window that closes before its digits are shown changes nothing
     const localOnly = !(device.membersOnly ?? false) && (device.localOnly ?? this.localOnlyOpen());
-    // the PC's own windows are told, so their prompt asks for the digits to be typed on the other device.
-    // It follows this PC's window, not the other device's screen: a phone that pairs by an ordinary link
-    // while the add-me window is still open shows digits to compare, and the prompt's words hold for both.
     this.waiting.set(id, { request: { id, label, digits, expires_at: new Date(expiresAt).toISOString(), intent: device.intent, ...(localOnly ? { local_only: true as const } : {}) },
       expiresAt, key: device.key, deviceId: device.deviceId, membersOnly: device.membersOnly ?? false, localOnly, vouched: device.vouched ?? false, choices: decoys(digits), finish });
     this.changed();

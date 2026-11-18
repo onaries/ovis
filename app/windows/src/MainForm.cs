@@ -33,7 +33,7 @@ namespace Ovis
             {
                 Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             }
-            catch (ArgumentException) { } // no icon in a build without one
+            catch (ArgumentException) { }
 
             var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = Padding.Empty };
             root.Controls.Add(Header());
@@ -86,7 +86,6 @@ namespace Ovis
         private void Render()
         {
             SuspendLayout();
-            // Enter presses Install only on the screen that shows it
             AcceptButton = null;
             // a cleared control keeps its window handle until disposed: each Check again would leak them
             var replaced = body.Controls.Cast<Control>().Where(control => control != logBox).ToList();
@@ -142,7 +141,6 @@ namespace Ovis
             AcceptButton = install;
         }
 
-        /// <summary>Install and Update both need Git for Windows: while it is missing, getting it is the step shown.</summary>
         private bool GitStep()
         {
             if (!model.GitMissing) return false;

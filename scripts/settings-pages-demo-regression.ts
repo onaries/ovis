@@ -6,7 +6,7 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
-import { openSettingsFolds, openSettingsPage, themeSide } from "./settings-page.ts";
+import { openSettingsFolds, openSettingsPage, pressInSettings, sheetRisen, themeSide } from "./settings-page.ts";
 import { PAGES, SETTINGS, closeSettings, dialogOf, historyHolds, openSettings } from "./settings-pages-harness.ts";
 import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
@@ -17,23 +17,17 @@ import baseline from "../src/lib/themes.legacy-baseline.json";
 import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 import { openLens } from "./header-lens.ts";
 
-// Settings on the unmodified app over the demo's fixture transport: every page fits a phone, and
-// the browser's Back button steps out of the dialog instead of out of the app. All files and
-// HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
+// All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 
-/** The Settings entry of the current history state, as the app wrote it. */
 const entryOf = (page: Page): Promise<{ page: string | null; keyBar: boolean; depth: number } | null> =>
   page.evaluate(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] as never ?? null);
-/** Controls and text that reach past their card, and cards past the page's box: a row wider than its card is cut there. */
 const cutOff = (page: Page): Promise<string[]> => page.locator(".settings-body:not([hidden]), .settings-key-bar-body").evaluate((body) => {
   const edge = body.getBoundingClientRect();
   const out = [...body.querySelectorAll<HTMLElement>("button, input, select, a, .settings-card, .settings-row, .theme-cards")]
     .filter((node) => {
       const box = node.getBoundingClientRect();
-      // a control is held by its card, where it has one; a card by the page
       const card = node.classList.contains("settings-card") ? null : node.closest<HTMLElement>(".settings-card");
-      // a theme card is held by the row of cards that scrolls sideways on purpose; the row itself is checked against its card
       if (!node.classList.contains("theme-cards") && node.closest(".theme-cards")) return false;
       const within = card ? card.getBoundingClientRect() : edge;
       return box.width > 0 && (box.right > within.right + 0.5 || box.left < within.left - 0.5);
@@ -45,12 +39,9 @@ const cutOff = (page: Page): Promise<string[]> => page.locator(".settings-body:n
 interface HeldSteps { holdSteps: (timers?: boolean) => void; releaseSteps: () => void; releaseTimers: () => void; heldSteps: () => number; landed: number }
 
 /**
- * Settings closed and opened again before the browser lands the step back off the closed one's entry,
- * as on a slow phone or a loaded runner (#2000): the app's address bar writes its address on that
- * entry meanwhile, and the step is still Settings' own when it lands. The dialog stays open, and its
- * entry is made again. The step is held here until Settings is open again, and the timers the page
- * sets meanwhile start only once it has landed: a step that lands after Settings' landing deadline is
- * no longer known for its own, and a slow runner must not reach that deadline before the step lands.
+ * The step is held here until Settings is open again, and the timers the page sets meanwhile start
+ * only once it has landed: a step that lands after Settings' landing deadline is no longer known for
+ * its own, and a slow runner must not reach that deadline before the step lands.
  */
 async function lateCloseStep(browser: import("playwright-core").Browser, url: string): Promise<void> {
   for (const width of [1440, 390] as const) {
@@ -62,7 +53,6 @@ async function lateCloseStep(browser: import("playwright-core").Browser, url: st
         const held: (() => void)[] = [];
         let holding = false;
         const setTimer = window.setTimeout.bind(window), clearTimer = window.clearTimeout.bind(window);
-        // a timer set while held: its arguments until it starts, then the id it started with
         const timers = new Map<number, Parameters<typeof setTimeout> | number>();
         let holdingTimers = false, heldId = 0;
         window.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
@@ -115,8 +105,6 @@ async function lateCloseStep(browser: import("playwright-core").Browser, url: st
       await page.evaluate(() => (window as unknown as HeldSteps).releaseTimers());
       await closeSettings(page);
       if (width === 390) {
-        // a phone's palette is a sheet: closed, it steps back off its own entry, and Settings opened
-        // before that step lands is no Back of the user's either
         await page.keyboard.press("ControlOrMeta+Shift+K");
         await page.locator(".command-palette input[type='search']").waitFor();
         await page.evaluate(() => (window as unknown as HeldSteps).holdSteps(false));
@@ -166,7 +154,6 @@ const checkSelectArrows = async (page: Page): Promise<void> => {
 
 try {
   await buildDemoApp(app);
-  // the same loop as scripts/settings-rows-demo-regression.ts, which has a second root: each Settings demo script loads the same index.html
   for (const [dir, extra] of [[app, ""]] as const) {
     const index = join(dir, "index.html");
     writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>${extra}${DEMO_FILE_PREVIEW_SCRIPT}\n    <script type="module"`));
@@ -214,14 +201,12 @@ try {
           await openSettings(page);
           for (const name of PAGES) {
             await openSettingsPage(page, label(name), label("Back to settings"));
-            // what a page asks the server for (devices, the phone address, the accounts) has arrived
             await page.waitForFunction((loading) => ![...document.querySelectorAll(".settings-body [role='status']")].some((node) => loading.includes(node.textContent?.trim() ?? "")),
               [label("Loading…")]);
             if (name === "Appearance" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${language}.png`), animations: "disabled" });
             await checkSelectArrows(page);
             if (name === "Agents") await page.locator(".usage-accounts-row").first().waitFor();
             if (name === "Chat") {
-              // Voice input is Chat's group; its OpenAI key is in Chat's More settings
               await openSettingsFolds(page);
               await page.locator(".voice-key").waitFor();
               const dictation = page.getByLabel(label("Dictation language"), { exact: true });
@@ -233,19 +218,14 @@ try {
               await dictation.selectOption("auto");
             }
             if (name === "Agents") {
-              // the demo's PC has Claude Code, Codex, Oh My Pi, pi and Hermes; its accounts go under their
-              // agent, and the rest (Cursor, OpenCode, whose agent is not on the PC) under Other accounts
               const body = page.locator(".settings-body:not([hidden])");
               await body.locator(".agents-item").first().waitFor();
               assert.equal(await body.locator("[role='alert']").count(), 0, "the Agents page shows no error");
               assert.deepEqual(await body.locator(".agents-item").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent"))), ["claude", "codex", "omp", "pi", "hermes"]);
               assert.deepEqual(await body.locator("[data-section='other-accounts'] .usage-provider-heading > span:not(.usage-account-count):not(.agent-mark)").allTextContents(), ["Cursor", "OpenCode"]);
-              // herdr-app's rows: no group captions on this page
               assert.deepEqual(await body.locator("h3").allTextContents(), []);
-              // an agent's own settings are in its row: Claude Code's permission mode for New tab
               await body.locator(".agents-item[data-agent='claude'] .agents-toggle").click();
               await body.locator(".agents-item[data-agent='claude']").getByLabel(label("Permission mode"), { exact: true }).waitFor();
-              // and the model and effort New tab fills in for it: a name its --model takes is kept, any other is said why
               const claudeRow = body.locator(".agents-item[data-agent='claude']");
               const launchDefaults = () => page.evaluate(() => { const stored = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}"); return [stored.claudeLaunchModel ?? "", stored.claudeLaunchEffort ?? ""]; });
               await claudeRow.getByLabel(label("Model"), { exact: true }).fill("opus");
@@ -258,13 +238,10 @@ try {
               await claudeRow.getByLabel(label("Effort"), { exact: true }).selectOption("");
               await page.waitForFunction(() => { const stored = JSON.parse(localStorage.getItem("ovis:settings")!); return stored.claudeLaunchModel === "" && stored.claudeLaunchEffort === ""; });
               await body.locator(".agents-item[data-agent='claude'] .agents-toggle").click();
-              // herdr's integrations no row shows, each with its command; one with neither its agent nor its
-              // hook on the PC (copilot, cursor, antigravity-cli) is not listed at all (#2738)
               assert.deepEqual(await body.locator("[data-section='integrations'] .settings-label").allTextContents(), ["opencode"]);
               assert.equal(await body.locator("[data-section='integrations-missing']").count(), 0);
               const install = (target: string): string => `herdr integration install ${target}`;
               const copyLabel = (target: string): string => label("Copy the command for {name}").replace("{name}", target);
-              // a row opens on its accounts and herdr's session resume
               const codex = body.locator(".agents-item[data-agent='codex']");
               await codex.locator(".agents-toggle").tap();
               assert.equal(await codex.locator(".agents-toggle").getAttribute("aria-expanded"), "true");
@@ -276,7 +253,6 @@ try {
               await copy.tap();
               await codex.getByRole("button", { name: copyLabel("codex"), exact: true }).filter({ hasText: label("Copied") }).waitFor();
               assert.equal(await page.evaluate(() => navigator.clipboard.readText()), install("codex"));
-              // a move within Codex's row swaps its two accounts and leaves Claude's place in the meters' order
               const second = codex.locator(".usage-accounts-row").nth(1);
               const moved = await second.locator(".usage-accounts-account").textContent();
               await second.locator(".usage-accounts-actions .icon-button").first().tap();
@@ -284,7 +260,6 @@ try {
               const order = await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!).usageOrder as string[]);
               assert.ok(order[0]!.startsWith("claude"), `Claude keeps the first place: ${order.join(", ")}`);
               assert.equal(await codex.locator(".usage-accounts-row").first().locator(".usage-accounts-account").textContent(), moved);
-              // a Check again that fails after a good read keeps the rows it had, and says why beside them
               await page.evaluate(() => {
                 const passing = window.fetch;
                 (window as unknown as { restoreCatalog: () => void }).restoreCatalog = () => { window.fetch = passing; };
@@ -302,14 +277,10 @@ try {
               await codex.locator(".agents-toggle").tap();
             }
             if (name === "Appearance" && language === "en") {
-              // each legacy palette-mode is written to the document and saved, and its blocks of styles.css
-              // reach the page: every color token computes to the frozen baseline's used value
-              // (src/lib/themes.legacy-baseline.json), and the --term-* tokens to the theme xterm is given.
               // The build minifies colors (rgba() to #rrggbbaa), so both sides are compared as the browser
               // computes them on a probe: a color, a box-shadow, or a border for `2px solid <color>`
               const themes = page.getByRole("group", { name: "Theme", exact: true });
               const pickers = { dark: themeSide(page, "dark"), light: themeSide(page, "light") };
-              // both sides' cards offer every theme, the side's own kind first (Q1: any theme on either side)
               for (const side of ["dark", "light"] as const) {
                 const listed = await pickers[side].listed();
                 assert.deepEqual([...listed].sort(), [...THEME_IDS].sort(), `the ${side} cards list every theme once`);
@@ -318,7 +289,6 @@ try {
                 assert.deepEqual(kinds, [...kinds].sort((a, b) => Number(b) - Number(a)), `the ${side} cards list the side's own kind first`);
               }
               const drawn = (mode: string, id: string): Promise<unknown> => page.waitForFunction(([mode, id]) => document.documentElement.dataset.theme === mode && document.documentElement.dataset.palette === id && getComputedStyle(document.documentElement).colorScheme === mode, [mode, id]);
-              /** The theme keys of the saved record and of the second key old code never touches. */
               const stored = () => page.evaluate(() => {
                 const record = JSON.parse(localStorage.getItem("ovis:settings")!) as Record<string, string>;
                 const themes = JSON.parse(localStorage.getItem("ovis:themes")!) as Record<string, string>;
@@ -328,7 +298,6 @@ try {
                 const xterm = terminalTheme(mode, id);
                 return ([["--term-bg", xterm.background], ["--term-fg", xterm.foreground], ["--term-cursor", xterm.cursor], ["--term-selection", xterm.selectionBackground]] as const).map(([name, value]) => [`xterm ${name}`, value] as const);
               };
-              /** The expected tokens the page computes differently, as `name: want -> got`. */
               const drift = (expected: (readonly [string, string])[]): Promise<string[]> => page.evaluate((expected) => {
                 const root = getComputedStyle(document.documentElement);
                 const probe = document.body.appendChild(document.createElement("div"));
@@ -358,8 +327,6 @@ try {
                 assert.deepEqual(await drift([...Object.entries(combos[key]!.resolved), ...xtermTokens(mode, id)]), [], `${key}: the page computes the frozen colors, and --term-* as the theme xterm is given`);
                 if (key === "catppuccin/dark" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `catppuccin-palette-${width}.png`), fullPage: true });
               }
-              // a herdr pair: Tokyo Night on the dark side fills the untouched light side with Tokyo Night Day, each
-              // side draws its own row with its xterm colors, and the look follows the mode toggle
               await themes.getByRole("button", { name: "Dark", exact: true }).tap();
               await pickers.light.selectOption("amber");
               await pickers.dark.selectOption("tokyo-night");
@@ -371,17 +338,14 @@ try {
               await drawn("light", "tokyo-night-day");
               assert.equal((await stored()).palette, "tokyo-night-day", "the legacy palette mirrors the side the mode draws");
               assert.deepEqual(await drift(xtermTokens("light", "tokyo-night-day")), [], "tokyo-night-day/light: --term-* as the theme xterm is given");
-              // any theme on either side (Q1): a dark theme picked for the light side draws dark in Light mode
               await pickers.light.selectOption("tokyo-night");
               await drawn("dark", "tokyo-night");
               assert.deepEqual(await stored(), { palette: "tokyo-night", darkTheme: "tokyo-night", lightTheme: "tokyo-night", second: { darkTheme: "tokyo-night", lightTheme: "tokyo-night" } }, "a dark theme on the light side is kept as chosen");
               assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!).theme), "light", "the mode stays Light while the row drawn is dark");
-              // a side chosen by hand keeps its theme when the other side picks a pair
               await themes.getByRole("button", { name: "Dark", exact: true }).tap();
               await pickers.dark.selectOption("gruvbox");
               await drawn("dark", "gruvbox");
               assert.deepEqual(await stored(), { palette: "gruvbox", darkTheme: "gruvbox", lightTheme: "tokyo-night", second: { darkTheme: "gruvbox", lightTheme: "tokyo-night" } }, "a light side chosen by hand is not filled with the pair's sibling");
-              // the pages after this one are checked on the default theme
               await pickers.dark.selectOption("amber");
               await pickers.light.selectOption("amber");
               await drawn("dark", "amber");
@@ -393,12 +357,10 @@ try {
           await page.locator(".key-bar-settings").waitFor();
           assert.deepEqual(await cutOff(page), [], `Key bar fits a ${width}px phone (${language})`);
           await page.getByRole("button", { name: label("Back to settings"), exact: true }).tap();
-          // the quick replies are text fields beside a Remove button each: both stay in the card
           if (language === "en") {
             await openSettingsPage(page, "Chat");
             const replies = page.locator(".quick-replies-list li");
             assert.ok(await replies.count() > 0);
-            // the list is edited only while the replies show; off, the row stands alone
             const showReplies = page.getByRole("switch", { name: "Show above the message box", exact: true });
             await showReplies.tap();
             await page.locator(".quick-replies-list").waitFor({ state: "detached" });
@@ -421,10 +383,8 @@ try {
               const active = menu?.querySelector('[aria-selected="true"]');
               if (!menu || !active) return false;
               const box = menu.getBoundingClientRect(), row = active.getBoundingClientRect();
-              // the terminal commands end the list, so the last row is the last of them
               return active === [...menu.querySelectorAll('[role="option"]')].at(-1) && active.textContent?.includes("terminal-setup") && row.top >= box.top && row.bottom <= box.bottom;
             });
-            // Enter right after the keystroke that narrows the list, before React's next render, completes the row
             await page.evaluate(async () => {
               const box = document.querySelector<HTMLTextAreaElement>(".composer-text")!;
               Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "/comments");
@@ -440,7 +400,6 @@ try {
             await composer.press("Tab");
             await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".composer-text")?.value === "/pr-comments ");
             assert.equal(await composer.inputValue(), "/pr-comments ");
-            // a key typed after a completion, before the next frame (a busy phone), stays where it was typed
             await composer.fill("/comments");
             await menu.getByRole("option").filter({ hasText: "pr-comments" }).waitFor();
             await page.evaluate(() => {
@@ -471,7 +430,6 @@ try {
       const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
         await phone.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
-        // every move of the history, for historyHolds to tell when a step never lands
         await phone.addInitScript(() => {
           const trace: string[] = [];
           (window as unknown as { historyTrace: string[] }).historyTrace = trace;
@@ -483,8 +441,6 @@ try {
           addEventListener("popstate", () => note("popstate"), true);
           note("loaded");
         });
-        // a load that was asked to hold its steps back keeps them until the app has drawn itself, as a
-        // slow device does, and notes whether Settings was ever shown
         await phone.addInitScript(() => {
           if (sessionStorage.getItem("hold-steps-back") !== "1") return;
           sessionStorage.removeItem("hold-steps-back");
@@ -504,8 +460,6 @@ try {
         const dialog = dialogOf(page);
         const list = dialog.getByRole("tablist");
 
-        // Back steps out one screen at a time: the key bar editor, the page, the list, and only then nothing.
-        // The address names the pane shown (lib/deepLink.ts) once the roster is in: that is where Back returns
         await page.waitForFunction(() => new URLSearchParams(window.location.search).has("pane"));
         const before = page.url();
         await openSettings(page);
@@ -527,7 +481,6 @@ try {
         await page.locator(".conn-live").waitFor({ state: "attached" });
         console.log("PASS Back on a phone leaves the key bar editor, then the page, then the list, and stays in the app");
 
-        // the dialog's own Back control takes the same entry off: the next Back is not spent on it
         await openSettings(page);
         await openSettingsPage(page, "Chat");
         await dialog.getByRole("button", { name: "Back to settings", exact: true }).tap();
@@ -537,14 +490,14 @@ try {
         await page.locator(".settings-dialog").waitFor({ state: "detached" });
         console.log("PASS the Back control in the dialog and the system Back button share one history");
 
-        // closing from the deepest screen leaves no entry behind, and Forward does not reopen what the X closed by itself
         await openSettings(page);
         await openSettingsPage(page, "Terminal");
         await dialog.getByRole("button", { name: "Edit key bar", exact: true }).tap();
+        await page.getByRole("dialog", { name: "Key bar", exact: true }).waitFor();
+        await sheetRisen(page);
         await page.getByRole("button", { name: "Close settings", exact: true }).tap();
         await page.locator(".settings-dialog").waitFor({ state: "detached" });
         await historyHolds(page, "the X from the key bar editor", () => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
-        // and a new opening starts on the list, with one entry
         await openSettings(page);
         await list.waitFor();
         await historyHolds(page, "a new opening", () => (history.state as Record<string, { depth: number }> | null)?.["ovis:settings"]?.depth === 1);
@@ -563,8 +516,6 @@ try {
         assert.deepEqual(errors, []);
         console.log("PASS the X from the key bar editor and a reload leave no Settings entry in the history");
 
-        // a link to Settings opens it, and a reload there closes it as well: the entry the reload
-        // steps back to is the one the link opened, whose address names Settings still
         await page.goto(`${url}?settings=about`);
         await dialog.getByRole("tabpanel", { name: "About", exact: true }).waitFor();
         await historyHolds(page, "a link to Settings", () => (history.state as Record<string, { page: string; depth: number }> | null)?.["ovis:settings"]?.page === "about");
@@ -575,8 +526,6 @@ try {
         assert.deepEqual(errors, []);
         console.log("PASS a link to Settings opens it, and a reload there closes it");
 
-        // another script's entries pushed while Settings is open bury its entries: Back out of them
-        // closes Settings, and the next Back steps over the buried entries instead of opening them again
         await page.goto(url);
         await page.locator(".conn-live").waitFor({ state: "attached" });
         await openSettings(page);
@@ -619,7 +568,7 @@ try {
             await openSettings(page);
             await openSettingsPage(page, "Appearance");
             for (const mode of ["light", "dark"]) {
-              await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: mode === "dark" ? "Dark" : "Light", exact: true }).click();
+              await pressInSettings(page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: mode === "dark" ? "Dark" : "Light", exact: true }));
               await page.waitForFunction((mode) => document.documentElement.dataset.theme === mode, mode);
               await checkSelectArrows(page);
               await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${mode}.png`), animations: "disabled" });
@@ -644,7 +593,6 @@ try {
         await openSettingsPage(page, "Appearance");
         await checkSelectArrows(page);
         if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "select-arrows-desktop.png"), animations: "disabled" });
-        // a select on Appearance (the theme pickers are cards now): Interface font
         const themePicker = page.getByLabel("Interface font", { exact: true });
         await themePicker.focus();
         await page.keyboard.press("ArrowDown");
@@ -655,15 +603,12 @@ try {
         assert.equal(await themePicker.locator("..").locator("svg").evaluate((arrow) => getComputedStyle(arrow).display), "none");
         await page.emulateMedia({ forcedColors: "none" });
         await checkSelectArrows(page);
-        await page.keyboard.press("Escape");
-        await page.locator(".settings-dialog").waitFor({ state: "detached" });
-        // Settings is opened again below: its close's step back lands first, or, landing over a second late,
-        // it is taken for a Back and closes the Settings opened meanwhile (settingsHistory's landing deadline)
-        await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
+        // A row's help can take Escape first. Use Close for the theme cases and let its history step land before reopening.
+        await closeSettings(page);
         for (const id of ["dracula", "nord", "vesper", "black"]) {
           await openSettings(page);
           await openSettingsPage(page, "Appearance");
-          await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Dark", exact: true }).click();
+          await pressInSettings(page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Dark", exact: true }));
           await themeSide(page, "dark").selectOption(id);
           await page.waitForFunction((id) => document.documentElement.dataset.palette === id && document.documentElement.dataset.theme === "dark", id);
           assert.equal(await themeSide(page, "light").inputValue(), "amber", `${id} has no sibling pre-fill`);
@@ -675,16 +620,14 @@ try {
           assert.notEqual(surfaces[0], surfaces[2], `${id} border differs from input surface`);
           await checkSelectArrows(page);
           if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${id}-appearance-1280.png`), animations: "disabled" });
-          await page.keyboard.press("Escape");
-          await page.locator(".settings-dialog").waitFor({ state: "detached" });
-          await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
+          await closeSettings(page);
           await page.locator(".composer-text").waitFor();
           if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${id}-chat-1280.png`), animations: "disabled" });
         }
         await openSettings(page);
         await openSettingsPage(page, "Appearance");
         await themeSide(page, "light").selectOption("dracula");
-        await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Light", exact: true }).click();
+        await pressInSettings(page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Light", exact: true }));
         await page.waitForFunction(() => document.documentElement.dataset.palette === "dracula" && document.documentElement.dataset.theme === "dark" && getComputedStyle(document.documentElement).colorScheme === "dark");
         assert.equal(await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Light", exact: true }).getAttribute("aria-pressed"), "true");
         assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!).theme), "light");
@@ -699,25 +642,25 @@ try {
         await page.waitForFunction(() => document.documentElement.dataset.palette === "codex" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
         if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads codex light, the default.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
         console.log("PASS dark-only themes on either side, distinct borders, no siblings, and unknown-id reload");
-        // the reload was made with Settings open: its step out of Settings' entry lands before Settings opens again
         await historyHolds(page, "the reload with Settings open", () => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         await openSettings(page);
-        // beside the list, turning pages is one step however many are turned
         for (const name of ["Chat", "Shortcuts", "About"]) await openSettingsPage(page, name);
         await page.waitForFunction(() => (history.state as Record<string, { page: string; depth: number }> | null)?.["ovis:settings"]?.page === "about");
         assert.equal((await entryOf(page))?.depth, 1);
         await page.goBack();
         await page.locator(".settings-dialog").waitFor({ state: "detached" });
-        // Forward opens it where it was
         await page.goForward();
         await dialogOf(page).getByRole("tabpanel", { name: "About", exact: true }).waitFor();
+        const close = dialogOf(page).getByRole("button", { name: "Close settings", exact: true });
+        await close.hover({ force: true });
+        await close.focus();
+        await page.locator(".settings-help, .settings-row-sentence").waitFor({ state: "hidden" });
         await page.keyboard.press("Escape");
         await page.locator(".settings-dialog").waitFor({ state: "detached" });
         await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         assert.deepEqual(errors, []);
         console.log("PASS on a desktop Back closes Settings in one step, Forward reopens its page, Escape takes the entry off");
 
-        // the window changes width with Settings open: the steps Back takes are the ones now shown
         await openSettings(page);
         await openSettingsPage(page, "Terminal");
         await page.setViewportSize({ width: 390, height: 844 });
@@ -732,7 +675,6 @@ try {
         await dialogOf(page).getByRole("button", { name: "Edit key bar", exact: true }).click();
         await page.getByRole("dialog", { name: "Key bar", exact: true }).waitFor();
         await page.setViewportSize({ width: 1280, height: 800 });
-        // the rebuilt stack, not the step the widening passes through
         await page.waitForFunction(() => { const entry = (history.state as Record<string, { page: string; keyBar: boolean; depth: number }> | null)?.["ovis:settings"]; return entry?.depth === 2 && entry.page === "terminal" && entry.keyBar === true; });
         await page.goBack();
         await dialogOf(page).getByRole("tabpanel", { name: "Terminal", exact: true }).waitFor();
@@ -743,8 +685,6 @@ try {
         assert.deepEqual(errors, []);
         console.log("PASS a window that changes width with Settings open keeps Back to the steps it shows");
 
-        // a link to a file and Settings opens the preview (a panel beside the pane at this width) under
-        // Settings; a reload there closes Settings and keeps the file, and Back then steps out of both
         const infra = panes.omp;
         await page.goto(`${url}?ws=${infra.split(":")[0]}&pane=${encodeURIComponent(infra)}&file=README.md&settings=about`);
         await dialogOf(page).getByRole("tabpanel", { name: "About", exact: true }).waitFor();

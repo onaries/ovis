@@ -31,7 +31,6 @@ function session() {
   return {
     path,
     parent: (entry: unknown) => appendFileSync(path, json(entry)),
-    /** the pair of files of one subagent, its transcript as (minute, usage) steps */
     agent(id: string, options: { description?: string; type?: string; toolUseId?: string; shape?: string; steps?: [number, number][] } = {}) {
       writeFileSync(join(dir, `agent-${id}.meta.json`), JSON.stringify({ agentType: options.type ?? "reviewer", description: options.description ?? `task ${id}`, toolUseId: options.toolUseId ?? `toolu_${id}`, spawnDepth: 1, requestShape: options.shape ?? "background" }));
       const file = join(dir, `agent-${id}.jsonl`);
@@ -44,7 +43,6 @@ function session() {
       appendFileSync(file, json({ isSidechain: true, sessionId: "11111111-1111-4111-8111-111111111111", agentId: id, type: "user", timestamp: at(minute), message: { role: "user", content: "x" } }));
       appendFileSync(file, json({ isSidechain: true, sessionId: "11111111-1111-4111-8111-111111111111", agentId: id, type: "assistant", timestamp: at(minute), message: { id: `m${minute}`, model: "claude-opus-5", usage: { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: output }, content: Array.from({ length: tools }, () => ({ type: "tool_use", id: "t", name: "Read", input: {} })) } }));
     },
-    /** a Bash call sent to the background, by the session or (`file`) by a subagent */
     bash(taskId: string, minute: number, options: { description?: string; command?: string; file?: string } = {}) {
       const write = (entry: unknown) => options.file ? appendFileSync(options.file, json({ isSidechain: true, ...(entry as object) })) : this.parent(entry);
       write({ type: "assistant", timestamp: at(minute), message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_${taskId}`, name: "Bash", input: { command: options.command ?? "bun test", ...(options.description === undefined ? {} : { description: options.description }), run_in_background: true } }] } });
@@ -75,7 +73,6 @@ describe("claudeSubagents", () => {
     expect(claudeSubagents(s.path, true, NOW)).toEqual([{
       id: "a1", title: "Review the parser", category: "reviewer", model: "claude-opus-5", status: "running",
       started_at: at(1), ended_at: null, turns: 2, tool_calls: 2,
-      // the last request held 2 + 100 + 5 + 30 tokens: not the sum of both requests
       tokens: 137,
       detail_kind: "claude-subagent",
     }]);
@@ -109,7 +106,6 @@ describe("claudeSubagents", () => {
     s.agent("a1");
     s.notify("a1", 3);
     expect(ids(s.path)).toEqual(["a1:completed"]);
-    // resumed with another message: it works again, and its next notification ends it again
     s.work("a1", 5, 40);
     expect(ids(s.path)).toEqual(["a1:running"]);
     s.notify("a1", 6, { toolUseId: "toolu_resume" });
@@ -163,12 +159,10 @@ describe("claudeSubagents", () => {
     const s = session();
     const file = s.agent("a1");
     expect(claudeSubagents(s.path, true, NOW)[0]?.turns).toBe(2);
-    // a torn last line is read once it is whole
     appendFileSync(file, '{"type":"assistant","timestamp":"');
     expect(claudeSubagents(s.path, true, NOW)[0]?.turns).toBe(2);
     appendFileSync(file, `${at(9)}","message":{"id":"m9","content":[]}}\n`);
     expect(claudeSubagents(s.path, true, NOW)[0]?.turns).toBe(3);
-    // the same answer from a cold read
     const warm = claudeSubagents(s.path, true, NOW);
     forgetSubagents();
     expect(claudeSubagents(s.path, true, NOW)).toEqual(warm);
@@ -179,10 +173,8 @@ describe("claudeSubagents", () => {
     const file = s.agent("big", { steps: [] });
     const line = json({ type: "assistant", timestamp: at(1), message: { id: "x", content: [], padding: "p".repeat(1000) } });
     const turn = (n: number) => line.replace('"id":"x"', `"id":"m${n}"`);
-    // 10 MB of lines, each a request of its own
     writeFileSync(file, Array.from({ length: 10_000 }, (_, n) => turn(n)).join(""));
     const first = claudeSubagents(s.path, true, NOW)[0]!.turns;
-    // a count that is not the whole is not shown as one
     expect(first).toBeNull();
     expect(claudeSubagents(s.path, true, NOW)[0]!.turns).toBe(10_000);
   });
@@ -193,7 +185,6 @@ describe("claudeSubagents", () => {
     const line = json({ type: "assistant", timestamp: at(1), message: { id: "x", model: "claude-opus-5", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "tool_use", id: "t", name: "Read", input: {} }], padding: "p".repeat(1000) } });
     // 10 MB of lines, each a request of its own: more than one read's budget
     writeFileSync(file, Array.from({ length: 10_000 }, (_, n) => line.replace('"id":"x"', `"id":"m${n}"`)).join(""));
-    // a file thread's caches start cold: its first answer is all it gives
     const [task] = runFileTask({ op: "claude-tasks", path: s.path, live: true, since: null }) as OmoTask[];
     expect([task!.turns, task!.tool_calls, task!.tokens, task!.model]).toEqual([10_000, 10_000, 2, "claude-opus-5"]);
   });
@@ -209,7 +200,6 @@ describe("claudeSubagents", () => {
     s.parent({ type: "user", timestamp: at(30), message: { role: "user", content: "later" } });
     s.work("busy", 31, 1);
     s.notify("busy", 32);
-    // the first read takes the whole window: no call before the notice is reached says "running"
     expect(ids(s.path)).toEqual(["busy:completed"]);
   });
 
@@ -233,7 +223,6 @@ describe("subagentDetails", () => {
 
 describe("backgroundAgentDetail", () => {
   const SESSION = "11111111-1111-4111-8111-111111111111";
-  /** one assistant entry: its blocks, under a message id of its own */
   /** a record of the agent a1's own file, as Claude Code writes it: the sidechain of its session and agent */
   const own = (entry: object, id = "a1") => json({ isSidechain: true, sessionId: SESSION, agentId: id, ...entry });
   const assistant = (minute: number, content: unknown[], extra: object = {}) => own({ type: "assistant", timestamp: at(minute), message: { id: `m${minute}`, model: "claude-opus-5", content, stop_reason: "tool_use" }, ...extra });
@@ -243,7 +232,6 @@ describe("backgroundAgentDetail", () => {
     return read.detail;
   };
 
-  /** the detail, with every byte the transcript's own descriptor gave the read: the bytes in all, and the spans read, in order */
   const reading = (path: string) => {
     const opened = new Map<number, string>();
     const spans: Array<[number, number]> = [];
@@ -260,7 +248,6 @@ describe("backgroundAgentDetail", () => {
     const size = statSync(join(path, "..", SESSION, "subagents", "agent-a1.jsonl")).size;
     return { detail, spans, size, total: spans.reduce((sum, [from, to]) => sum + to - from, 0) };
   };
-  /** `head` and then records of about 4 KiB, the last one padded so that the file is `bytes` long */
   const filled = (head: string, bytes: number): string => {
     let out = head;
     for (let index = 1; Buffer.byteLength(out, "utf8") < bytes; index++) {
@@ -285,7 +272,6 @@ describe("backgroundAgentDetail", () => {
     expect(detailOf(s.path, "a1")).toEqual({
       agent_id: "a1", session_id: SESSION, title: "Review the parser", agent: "reviewer",
       prompt: "Review src/parser.ts for off-by-one errors",
-      // the thinking, the tool's answer and the later instruction are not the agent's own activity
       events: [
         { kind: "text", text: "Reading the parser first.", at: at(2) },
         { kind: "tool", text: 'Read {"file_path":"src/parser.ts"}', at: at(2) },
@@ -294,10 +280,8 @@ describe("backgroundAgentDetail", () => {
       ],
       truncated: false, incomplete: false, limits: DETAIL_LIMITS,
     });
-    // the list says which rows can be opened: a subagent, not a command
     s.bash("b1", 4, { description: "Run the suite" });
     expect(claudeSubagents(s.path, true, NOW).map((task) => [task.id, task.detail_kind])).toEqual([["a1", "claude-subagent"], ["b1", null]]);
-    // a file not written yet says so with nothing in it, not with an activity it does not know
     s.agent("a2", { steps: [] });
     expect(detailOf(s.path, "a2")).toMatchObject({ prompt: null, events: [], truncated: false, incomplete: false });
   });
@@ -308,14 +292,12 @@ describe("backgroundAgentDetail", () => {
     writeFileSync(file, [
       own({ type: "user", timestamp: at(1), message: { role: "user", content: "go" } }),
       assistant(2, [{ type: "text", text: "first" }]),
-      // a complete record over its size, a line that is no record, and a trailing record still being written
       assistant(3, [{ type: "text", text: "x".repeat(70_000) }]),
       "not a record\n",
       assistant(4, [{ type: "text", text: "second" }]),
       assistant(5, [{ type: "text", text: "torn" }]).slice(0, -20),
     ].join(""));
     expect(detailOf(s.path, "a1")).toMatchObject({ prompt: "go", events: [{ kind: "text", text: "first" }, { kind: "text", text: "second" }], truncated: false, incomplete: true });
-    // a meta file being written, or over its size, is no agent yet
     writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), "{ torn");
     expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" });
     writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "reviewer", description: "x".repeat(70_000) }));
@@ -326,7 +308,6 @@ describe("backgroundAgentDetail", () => {
     const s = session();
     const file = s.agent("a1", { steps: [] });
     const prompt = own({ type: "user", timestamp: at(0), message: { role: "user", content: "the dispatch" } });
-    // records of 4 KiB that each carry one short event: the windows cut the file, not the text budget
     const record = (index: number) => assistant(index, [{ type: "text", text: `e${index}` }], { pad: "p".repeat(4000) });
     const indexOf = (event: { text: string }) => Number(event.text.slice(1));
     writeFileSync(file, prompt + Array.from({ length: 100 }, (_, index) => record(index + 1)).join(""));
@@ -334,7 +315,6 @@ describe("backgroundAgentDetail", () => {
     expect(large.prompt).toBe("the dispatch");
     expect(large.truncated).toBe(true);
     const indexes = large.events.map(indexOf);
-    // the start of the file and its end, each window's records in order, once each, and a gap between that neither read
     expect(new Set(indexes).size).toBe(indexes.length);
     expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
     const gap = indexes.findIndex((index, position) => position > 0 && index !== indexes[position - 1]! + 1);
@@ -346,14 +326,12 @@ describe("backgroundAgentDetail", () => {
     const tail = (100 - indexes[gap]! + 1) * 4096;
     expect(head).toBeLessThanOrEqual(64 * 1024);
     expect(tail).toBeLessThanOrEqual(DETAIL_LIMITS.max_read_bytes - 64 * 1024);
-    // the reads themselves: what the transcript's descriptor gave, at most the budget, no byte twice, the head and the end
     const over = reading(s.path);
     expect(over.size).toBeGreaterThan(DETAIL_LIMITS.max_read_bytes);
     expect(over.total).toBe(DETAIL_LIMITS.max_read_bytes);
     expect(over.spans[0]![0]).toBe(0);
     expect(over.spans.at(-1)![1]).toBe(over.size);
     for (let index = 1; index < over.spans.length; index++) expect(over.spans[index]![0]).toBeGreaterThanOrEqual(over.spans[index - 1]![1]);
-    // at the budget the file is read whole; a byte over it, the two windows, and still not a byte more than the budget
     writeFileSync(file, filled(prompt, DETAIL_LIMITS.max_read_bytes));
     const atBudget = reading(s.path);
     expect([atBudget.size, atBudget.total, atBudget.detail.truncated]).toEqual([DETAIL_LIMITS.max_read_bytes, DETAIL_LIMITS.max_read_bytes, false]);
@@ -361,18 +339,15 @@ describe("backgroundAgentDetail", () => {
     const byteOver = reading(s.path);
     expect([byteOver.size, byteOver.total, byteOver.detail.truncated]).toEqual([DETAIL_LIMITS.max_read_bytes + 1, DETAIL_LIMITS.max_read_bytes, true]);
     expect(byteOver.detail.prompt).toBe("the dispatch");
-    // a file that fits the read budget is read whole
     writeFileSync(file, prompt + Array.from({ length: 40 }, (_, index) => record(index + 1)).join(""));
     const whole = detailOf(s.path, "a1");
     expect(whole.events.map(indexOf)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
     expect(whole).toMatchObject({ truncated: false, incomplete: false });
-    // more events than the cap: the newest are kept, and said to be a part
     writeFileSync(file, prompt + Array.from({ length: 200 }, (_, index) => assistant(index + 1, [{ type: "text", text: `e${index + 1}` }])).join(""));
     const capped = detailOf(s.path, "a1");
     expect(capped.events).toHaveLength(DETAIL_LIMITS.max_events);
     expect(capped.events.map(indexOf)).toEqual(Array.from({ length: DETAIL_LIMITS.max_events }, (_, index) => 200 - DETAIL_LIMITS.max_events + index + 1));
     expect(capped.truncated).toBe(true);
-    // more text than the budget: the newest events that fit, whole, and the prompt before them
     writeFileSync(file, prompt + Array.from({ length: 10 }, (_, index) => assistant(index + 1, [{ type: "text", text: `${index + 1}:${"t".repeat(20 * 1024)}` }])).join(""));
     const budgeted = detailOf(s.path, "a1");
     const bytes = budgeted.events.reduce((sum, event) => sum + Buffer.byteLength(event.text, "utf8"), Buffer.byteLength(budgeted.prompt ?? "", "utf8"));
@@ -424,7 +399,6 @@ describe("backgroundAgentDetail", () => {
     const linkedTranscript = join(s.path, "..", "33333333-3333-4333-8333-333333333333.jsonl");
     symlinkSync(s.path, linkedTranscript);
     expect(backgroundAgentDetail(linkedTranscript, "a1")).toEqual({ refusal: "unavailable" });
-    // a session with no subagents folder has no agent to read
     expect(backgroundAgentDetail(join(s.path, "..", "none.jsonl"), "a1")).toEqual({ refusal: "unavailable" });
     writeFileSync(join(s.path, "..", "none.jsonl"), "");
     expect(backgroundAgentDetail(join(s.path, "..", "none.jsonl"), "a1")).toEqual({ refusal: "not_found" });
@@ -465,7 +439,7 @@ describe("backgroundAgentDetail", () => {
     }
     const restore = (): void => {
       for (const folder of [subagents, sessionDir]) {
-        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch { /* not swapped */ }
+        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch {}
       }
     };
     const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
@@ -509,7 +483,6 @@ describe("backgroundAgentDetail", () => {
     const s = session();
     const sessionDir = join(s.path, "..", SESSION);
     s.agent("a1");
-    // read a while after the folder was written: its listing is kept
     setSystemTime(new Date(Date.now() + 5000));
     try {
       expect(claudeSubagentState(s.path, true, NOW).running).toBe(1);
@@ -543,10 +516,6 @@ describe("backgroundAgentDetail", () => {
     }
   });
 
-  /**
-   * `before` runs once, just before the `nth` open of a file named `name`, and `after` just after it: whichever way the
-   * read opens it, through `detailIo` or straight through `fs`.
-   */
   function onOpen(name: string, nth: number, before: () => void, after: () => void = () => undefined): { acted: () => boolean; restore: () => void } {
     const { openSync } = detailIo;
     let seen = 0;
@@ -592,7 +561,6 @@ describe("backgroundAgentDetail", () => {
     const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-link-"));
     roots.push(outside);
     const elsewhere = join(outside, "agent-a1.jsonl");
-    // what the outside transcript would say: it ended its turn at minute 30
     const ended = own({ type: "assistant", timestamp: at(30), message: { id: "m30", model: "outside-model", stop_reason: "end_turn", content: [] } });
     writeFileSync(elsewhere, ended);
     const cases: Array<[string, 1 | 2, (file: string) => void]> = [
@@ -613,7 +581,6 @@ describe("backgroundAgentDetail", () => {
       let tasks: OmoTask[];
       try { tasks = claudeSubagentState(s.path, true, NOW).tasks; } finally { hook.restore(); }
       const said = JSON.stringify(tasks);
-      // replaced before the whole read, nothing is told of it; before the tail's, only what the whole read found
       expect([label, hook.acted(), said.includes(at(30)), nth === 1 ? tasks : tasks.map((task) => task.status)]).toEqual([label, true, false, nth === 1 ? [] : ["running"]]);
     }
   });
@@ -630,13 +597,11 @@ describe("backgroundAgentDetail", () => {
     writeFileSync(join(outsideSession, "subagents", "agent-a1.jsonl"), own({ type: "assistant", timestamp: at(30), message: { id: "m30", model: "outside-model", stop_reason: "end_turn", content: [] } }));
     const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
     const back = (folder: string) => (): void => { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } };
-    const restore = (): void => { for (const folder of [subagents, sessionDir]) { try { back(folder)(); } catch { /* not swapped */ } } };
+    const restore = (): void => { for (const folder of [subagents, sessionDir]) { try { back(folder)(); } catch {} } };
     const folders: Array<[string, string, string]> = [["the subagents folder", subagents, join(outsideSession, "subagents")], ["the session folder", sessionDir, outsideSession]];
     s.agent("a1", { description: "inside" });
     for (const [what, folder, target] of folders) {
-      // after the listing, before the transcript is looked at; and before it is opened
       type Hook = { acted: () => boolean; restore: () => void };
-      // swapped at the transcript's first look, the one after the listing
       const atLook = (): Hook => {
         const { lstatSync: look } = fs;
         let acted = false;
@@ -675,7 +640,6 @@ describe("backgroundAgentDetail", () => {
     // an NTFS file ID can pass 2^53: looked at as 2^53 + 1 and opened as 2^53, two files read as one number
     const big = 2n ** 53n;
     const as = <T extends object>(stat: T, ino: bigint): T => Object.assign(Object.create(Object.getPrototypeOf(stat) as object) as T, stat, { ino: typeof (stat as { ino: unknown }).ino === "bigint" ? ino : Number(ino) });
-    // the file opened as 2^53; replaced only after the first look, every later look sees it too
     for (const replaced of [false, true]) {
       let looked = big + 1n;
       const looks = spyOn(fs, "lstatSync").mockImplementation(((path: string, options?: object) => { const stat = look(path, options); return path === file && stat ? as(stat, looked) : stat; }) as typeof look);
@@ -700,7 +664,6 @@ describe("backgroundAgentDetail", () => {
     writeFileSync(join(outside, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "x", description: "outside title", toolUseId: "toolu_a1" }));
     const old = join(outside, "subagents", "agent-a1.jsonl");
     writeFileSync(old, own({ type: "user", timestamp: at(1), message: { role: "user", content: "outside" } }));
-    // last written two days before the read: an agent the read would skip as old for a while
     utimesSync(old, (NOW - 48 * 60 * 60 * 1000) / 1000, (NOW - 48 * 60 * 60 * 1000) / 1000);
     // in a process of its own where no descriptor names its file, as off Linux: the files are read by their path, and
     // the subagents folder is swapped for a link to the outside one at the first look at a transcript, then put back
@@ -737,10 +700,8 @@ describe("backgroundAgentDetail", () => {
       writeFileSync(file, first + assistant(2, [{ type: "text", text: "working" }]) + later);
       expect([first.slice(0, 16), detailOf(s.path, "a1")]).toMatchObject([first.slice(0, 16), { prompt: null, events: [{ kind: "text", text: "working" }], incomplete: true }]);
     }
-    // a meta entry before the dispatch is none, and leaves it to come
     writeFileSync(file, own({ type: "user", isMeta: true, timestamp: at(0), message: { role: "user", content: "caveat" } }) + own({ type: "user", timestamp: at(1), message: { role: "user", content: "the dispatch" } }) + later);
     expect(detailOf(s.path, "a1")).toMatchObject({ prompt: "the dispatch", incomplete: false });
-    // a head window that holds no whole record has no prompt either; the tail's instruction is not it
     writeFileSync(file, own({ type: "user", timestamp: at(1), message: { role: "user", content: "y".repeat(300_000) } }) + later);
     expect(detailOf(s.path, "a1")).toMatchObject({ prompt: null, events: [], incomplete: true, truncated: true });
   });
@@ -763,10 +724,8 @@ describe("backgroundAgentDetail", () => {
     }
     writeFileSync(file, own(dispatch));
     expect(detailOf(s.path, "a1").prompt).toBe("secret dispatch");
-    // a meta file that names no agent type is no subagent's
     writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), JSON.stringify({ description: "no type", toolUseId: "toolu_a1" }));
     expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" });
-    // a background command the session started is a command, whatever files bear its id
     s.bash("b1", 4, { description: "Run the suite" });
     s.agent("b1", { steps: [] });
     expect([backgroundCommand(s.path, "b1"), backgroundCommand(s.path, "a1")]).toEqual([true, false]);
@@ -779,7 +738,6 @@ describe("backgroundAgentDetail", () => {
     const subagents = join(sessionDir, "subagents");
     const file = s.agent("a1", { description: "inside", steps: [] });
     writeFileSync(file, own({ type: "user", timestamp: at(1), message: { role: "user", content: "inside dispatch" } }));
-    // elsewhere, a session folder of the same names whose records claim this session and agent
     const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-swap-"));
     roots.push(outside);
     const outsideSession = join(outside, SESSION);
@@ -788,7 +746,7 @@ describe("backgroundAgentDetail", () => {
     writeFileSync(join(outsideSession, "subagents", "agent-a1.jsonl"), own({ type: "user", timestamp: at(1), message: { role: "user", content: "outside secret" } }));
     const restore = (): void => {
       for (const folder of [subagents, sessionDir]) {
-        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch { /* not swapped */ }
+        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch {}
       }
     };
     const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
@@ -824,7 +782,6 @@ describe("backgroundAgentDetail", () => {
     const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-moved-"));
     roots.push(outside);
     const { openSync, readSync } = detailIo;
-    /** the detail, with `act` run once at the first read of the file whose name ends in `name` */
     const during = (name: string, act: () => void) => {
       const opened = new Map<number, string>();
       let acted: boolean = false;
@@ -837,13 +794,10 @@ describe("backgroundAgentDetail", () => {
     };
     const replaced = (path: string, words: string) => (): void => { renameSync(path, join(outside, `${basename(path)}.${words}`)); writeFileSync(path, own({ type: "user", timestamp: at(1), message: { role: "user", content: words } })); };
     const restore = (path: string, words: string): void => { renameSync(join(outside, `${basename(path)}.${words}`), path); };
-    // the transcript moved out of the session while it is read, and another file put at its path
     expect(during("agent-a1.jsonl", replaced(file, "moved"))).toEqual([true, { refusal: "unavailable" }]);
     restore(file, "moved");
-    // the meta file likewise
     expect(during("agent-a1.meta.json", () => { renameSync(meta, join(outside, "agent-a1.meta.json.moved")); writeFileSync(meta, JSON.stringify({ agentType: "x" })); })).toEqual([true, { refusal: "unavailable" }]);
     restore(meta, "moved");
-    // a read the disk fails is a store not readable now, never an agent gone
     expect(during("agent-a1.meta.json", () => { throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }); })).toEqual([true, { refusal: "unavailable" }]);
     expect(during("agent-a1.jsonl", () => { throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }); })).toEqual([true, { refusal: "unavailable" }]);
     // a session folder that cannot be looked into, nor its subagents folder opened (root looks into anything)
@@ -905,7 +859,6 @@ describe("ClaudeSubagentStatus", () => {
     now += 1000;
     await status.refresh([pane("p1", "claude")]);
     expect(status.sessionOf("p1")!.read).toBe(first);
-    // A new process can resume the same transcript with no known start time.
     pid++;
     now += 1000;
     await status.refresh([pane("p1", "claude")]);
@@ -1048,7 +1001,6 @@ describe("ClaudeSubagentStatus", () => {
     s.parent({ type: "user", timestamp: at(4), message: { content: [{ type: "tool_result", tool_use_id: "toolu_a2", content: "done" }] } });
     status.poll();
     expect(status.countOf("p1")).toBe(1);
-    // Reuse the agent ID and metadata size/mtime, but not the completed call's identity.
     renameSync(dir, `${dir}.second`);
     mkdirSync(dir);
     s.agent("a2", { toolUseId: "toolu_b2" });
@@ -1093,7 +1045,6 @@ describe("ClaudeSubagentStatus", () => {
     await status.refresh([pane("p1", "claude"), pane("p2", "codex"), pane("p3", null)]);
     expect(told).toEqual([["p1", 2]]);
     expect(status.countOf("p1")).toBe(2);
-    // the same session is not looked up again, and an unchanged count is not told again
     await status.refresh([pane("p1", "claude"), pane("p2", "codex")]);
     status.poll();
     s.notify("a1", 3);
@@ -1114,7 +1065,6 @@ describe("ClaudeSubagentStatus", () => {
     await status.refresh([pane("p1", null)]);
     expect(told).toEqual([["p1", 1], ["p1", 0]]);
     expect(status.sessionOf("p1")).toEqual({ path: s.path, live: false, startedAt: null, read: expect.any(Number) });
-    // gone with the pane
     await status.refresh([]);
     expect(status.sessionOf("p1")).toBeNull();
   });
@@ -1140,7 +1090,6 @@ describe("ClaudeSubagentStatus", () => {
     type Session = ReturnType<typeof session>;
     const rest = (s: Session, minute: number) => s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(minute) });
     const fire = (s: Session, minute: number) => s.parent({ type: "system", subtype: "scheduled_task_fire", timestamp: at(minute), taskKind: "loop", taskId: "591b6f5a" });
-    /** A fire dated by its own timestamp (`ms`, on the tracker's clock), or carrying none (null). */
     const firedAt = (s: Session, ms: number | null) => s.parent({ type: "system", subtype: "scheduled_task_fire", ...(ms === null ? {} : { timestamp: new Date(ms).toISOString() }), taskKind: "loop", taskId: "591b6f5a" });
     const answer = (s: Session, minute: number) => s.parent({ type: "assistant", timestamp: at(minute), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "checked" }] } });
     /**
@@ -1155,7 +1104,6 @@ describe("ClaudeSubagentStatus", () => {
       scheduledTaskId: "591b6f5a", scheduledFireId: "0b6c1d7e", timestamp: written,
       message: { role: "user", content: "check the deploy" },
     });
-    /** A tracker that has read a session at rest, and each word it gave of the queue's hold as it changed. */
     const tracked = async (s: Session, clock: () => number = () => NOW) => {
       const told: boolean[] = [];
       const status: ClaudeSubagentStatus = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => { told.push(status.loopHolds("p1")); }, now: clock });
@@ -1173,19 +1121,16 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // herdr reads the pane at rest until it reads the resumed turn: in every snapshot, and in an event of the turn before
         status.quiet("p1", false);
         status.quiet("p1", true);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // what the turn writes is no rest
         answer(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
         rest(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
-        // the hold was told as it came and as it went
         expect(told).toEqual([false, true, false]);
       } finally { status.stop(); }
     });
@@ -1194,12 +1139,10 @@ describe("ClaudeSubagentStatus", () => {
       const s = session();
       s.prompt(1);
       rest(s, 2);
-      // written 57 minutes before the tracker's first read
       fire(s, 3);
       const { status } = await tracked(s);
       try {
         expect(status.loopHolds("p1")).toBe(false);
-        // nothing read later makes that fire hold: its turn may have been interrupted long ago
         answer(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
@@ -1214,18 +1157,15 @@ describe("ClaudeSubagentStatus", () => {
       const s = session();
       s.prompt(1);
       rest(s, 2);
-      // a wakeup that fired 20 s before the server started, or before the pane's session was found
       firedAt(s, NOW - 20_000);
       let now = NOW;
       const { status, told } = await tracked(s, () => now);
       try {
-        // nothing says its turn is over, and herdr may still read the pane at rest
         expect(status.loopHolds("p1")).toBe(true);
         expect(told).toEqual([true]);
         status.quiet("p1", true);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // to the millisecond LOOP_HOLD_MS after the fire was written, not after it was found
         now = NOW - 20_000 + LOOP_HOLD_MS - 1;
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1244,7 +1184,6 @@ describe("ClaudeSubagentStatus", () => {
       const { status, told } = await tracked(s);
       try {
         expect(status.loopHolds("p1")).toBe(true);
-        // herdr's working after a rest word of its own, heard in an event since the server started, and its rest word again
         status.quiet("p1", true);
         status.busy("p1", "herdr");
         status.quiet("p1", true);
@@ -1271,25 +1210,20 @@ describe("ClaudeSubagentStatus", () => {
           const status: ClaudeSubagentStatus = new ClaudeSubagentStatus({ resolve: async () => found ? { path: s.path, startedAt: null } : null, onChange: () => { told.push(status.loopHolds("p1")); }, now: () => now });
           await status.refresh([pane("p1", "claude")]);
           try {
-            // herdr says the pane works: its word for the resumed turn, or a late one for the turn before the fire
             status.quiet("p1", false);
             status.busy("p1", "herdr");
             if (!found) {
-              // heard while the pane's session was still looked for, and kept through the lookup
               found = true;
               now += 5000;
               await status.refresh([pane("p1", "claude")]);
               expect(status.sessionOf("p1")?.path).toBe(s.path);
             }
-            // the fire holds for what is left of its time
             expect(status.loopHolds("p1")).toBe(true);
             expect(told.at(-1)).toBe(true);
-            // herdr's rest word next lets nothing go, nor does its working after that
             status.quiet("p1", true);
             status.busy("p1", "herdr");
             status.poll();
             expect(status.loopHolds("p1")).toBe(true);
-            // the turn's rest, or the fire's own time, ends the hold, and is told
             if (end === "rest") rest(s, 3); else now = NOW - 1000 + LOOP_HOLD_MS;
             status.poll();
             expect(status.loopHolds("p1")).toBe(false);
@@ -1317,7 +1251,6 @@ describe("ClaudeSubagentStatus", () => {
       const s = session();
       s.prompt(1);
       rest(s, 2);
-      // a clock set back since, or a transcript copied from a PC whose clock runs ahead
       firedAt(s, NOW + 60 * 60 * 1000);
       let now = NOW;
       const { status, told } = await tracked(s, () => now);
@@ -1340,11 +1273,9 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // the clock is set back ten minutes with the hold standing, and its turn writes no rest
         now = NOW - 10 * 60_000;
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // the hold's time runs from that poll at the latest, not from a start ten minutes ahead of this clock
         now += LOOP_HOLD_MS - 1;
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1356,13 +1287,9 @@ describe("ClaudeSubagentStatus", () => {
     });
 
     it("ends a hold a minute after the poll that finds the clock set back to before it began, and one set back by less a minute after it began by the clock as it is", async () => {
-      // [how far into the hold the clock goes back, by how much, how long the hold then stands from the poll that finds it so]
       const steps: [number, number, number][] = [
-        // to before the hold began, by less than its time: it holds from that poll, for LOOP_HOLD_MS and no longer
         [10_000, 30_000, LOOP_HOLD_MS],
         [59_000, 59_001, LOOP_HOLD_MS],
-        // by less than its age: nothing tells a clock set back from one that was not, so the hold stands for what the
-        // clock as it is now leaves of its time. Never longer than LOOP_HOLD_MS past that poll, and told when it ends
         [50_000, 40_000, LOOP_HOLD_MS - 10_000],
         [59_000, 58_000, LOOP_HOLD_MS - 1000],
       ];
@@ -1375,13 +1302,11 @@ describe("ClaudeSubagentStatus", () => {
         try {
           fire(s, 3);
           status.poll();
-          // a poll that finds the clock gone on moves nothing, half a second into the hold or later
           now += 500;
           status.poll();
           now += into - 500;
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // the clock is set back with the hold standing, and its turn writes no rest
           now -= back;
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -1397,20 +1322,16 @@ describe("ClaudeSubagentStatus", () => {
     });
 
     it("brings no hold back when this PC's clock is set back after the hold ran out its time", async () => {
-      // the pane's files as the polls after the hold find them: read again at each poll, or quiet since before the
-      // hold ended, when a poll that finds them as they were reads nothing
       for (const files of ["read at each poll", "quiet, and read by no later poll"] as const) {
         const s = session();
         s.prompt(1);
         rest(s, 2);
-        // quiet files are older than this clock by more than a second (a folder's change time is this PC's own)
         let now = files === "read at each poll" ? NOW : Date.now() + 5000;
         const { status, told } = await tracked(s, () => now);
         try {
           fire(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // its turn writes no rest: the hold runs out its time, and the pane's poll says so
           now += LOOP_HOLD_MS;
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
@@ -1419,20 +1340,15 @@ describe("ClaudeSubagentStatus", () => {
           status.poll();
           now += 6000;
           status.poll();
-          // the clock is set back ten minutes, to before the hold began: by that clock its time is not up
           now -= 10 * 60_000;
-          // the hold that ended stays ended. One that stood again would hold a queue that was told nothing, and where
-          // no poll reads the files no word would follow when its time was up a second time
           expect(status.loopHolds("p1")).toBe(false);
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
           expect(status.loopHoldsNow("p1")).toBe(false);
-          // nor later, as that clock comes to the hold's first minute again
           now += 9 * 60_000 + 30_000;
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
           expect(told).toEqual([false, true, false]);
-          // the next fire holds as any does
           fire(s, 4);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -1454,12 +1370,10 @@ describe("ClaudeSubagentStatus", () => {
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
         const before = told.length;
-        // a turn interrupted on a Claude Code that writes no rest for it, or whose process was killed
         now += 1;
         expect(status.loopHolds("p1")).toBe(false);
         status.poll();
         expect(told.slice(before)).toEqual([false]);
-        // and what is written later, which is no fire and no self-resumed prompt, brings no hold back
         answer(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
@@ -1476,7 +1390,6 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 3);
         status.poll();
         expect(told.at(-1)).toBe(true);
-        // a snapshot's lookup of a session whose process is not known replaces what is kept of the pane
         const before = status.sessionOf("p1");
         now += 30_000;
         await status.refresh([pane("p1", "claude")]);
@@ -1486,24 +1399,17 @@ describe("ClaudeSubagentStatus", () => {
         now = NOW + LOOP_HOLD_MS;
         await status.refresh([pane("p1", "claude")]);
         expect(status.sessionOf("p1")).toEqual(before);
-        // the queue still hears that nothing holds it: no status event may come to say so
         expect(told.at(-1)).toBe(false);
       } finally { status.stop(); }
     });
 
     it("holds from the fire to the resumed turn's rest or its time, whatever herdr says of the pane and whenever it says it", async () => {
       const words: ((status: ClaudeSubagentStatus) => void)[] = [
-        // herdr tells a turn at work: the resumed one on time, or the one before it late
         (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); },
-        // and then reads the pane at rest: the turn before's rest, or the resumed turn interrupted with no rest written
         (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); status.quiet("p1", true); },
-        // and then tells a turn at work again
         (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); status.quiet("p1", true); status.busy("p1", "herdr"); },
-        // its working with no rest word heard in an event before it (the server just started), then its rest word
         (status) => { status.quiet("p1", false); status.busy("p1", "herdr"); status.quiet("p1", true); },
-        // the same working word twice: a snapshot read the change, then its event came
         (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); status.busy("p1", "herdr"); status.quiet("p1", true); },
-        // the chat's own send
         (status) => status.busy("p1", "chat", Date.parse(at(3))),
       ];
       for (const say of words) {
@@ -1525,12 +1431,10 @@ describe("ClaudeSubagentStatus", () => {
                 status.poll();
                 expect(status.loopHolds("p1")).toBe(true);
                 expect(told.at(-1)).toBe(true);
-                // what the resumed turn writes is no rest
                 resumes(s, 5);
                 answer(s, 5);
                 status.poll();
                 expect(status.loopHolds("p1")).toBe(true);
-                // only its rest, or its time, ends the hold, and is told
                 if (end === "rest") rest(s, 6); else now += LOOP_HOLD_MS;
                 status.poll();
                 expect(status.loopHolds("p1")).toBe(false);
@@ -1548,7 +1452,6 @@ describe("ClaudeSubagentStatus", () => {
       rest(s, 2);
       const { status, told } = await tracked(s);
       try {
-        // both fires are written in the scheduler's one tick, then the first loop's prompt and turn
         fire(s, 3);
         fire(s, 3);
         resumes(s, 3);
@@ -1558,7 +1461,6 @@ describe("ClaudeSubagentStatus", () => {
         rest(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
-        // the second loop's prompt runs at once: herdr still tells the first loop's turn, or its rest
         resumes(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1580,18 +1482,15 @@ describe("ClaudeSubagentStatus", () => {
         let now = NOW;
         const { status, told } = await tracked(s, () => now);
         try {
-          // two loops due in one tick: both fires, then the first loop's prompt and turn, which is interrupted and writes no rest
           fire(s, 3);
           fire(s, 3);
           resumes(s, 3);
           answer(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // 12 s later the second loop's prompt runs, or another task fires: that turn is another one
           now += 12_000;
           if (next === "another fire") fire(s, 3.2); else resumes(s, 3.2);
           status.poll();
-          // it holds for its own time, past the end of the first one's
           now = NOW + LOOP_HOLD_MS;
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -1613,7 +1512,6 @@ describe("ClaudeSubagentStatus", () => {
         let now = NOW;
         const { status, told } = await tracked(s, () => now);
         try {
-          // its fire carries no taskKind: it holds as a loop's does, before the turn's prompt is written
           s.parent({ type: "system", subtype: "scheduled_task_fire", isSidechain: false, timestamp: at(3), taskId: "7c2e9a10" });
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -1623,7 +1521,6 @@ describe("ClaudeSubagentStatus", () => {
           if (end === "rest") rest(s, 4); else now += LOOP_HOLD_MS;
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
-          // told as it came and as it went; the prompt, which begins the turn shown, tells the same hold once more
           expect(told).toEqual([false, true, true, false]);
         } finally { status.stop(); }
       }
@@ -1640,7 +1537,6 @@ describe("ClaudeSubagentStatus", () => {
         s.parent({ type: "attachment", subtype: "scheduled_task_fire", timestamp: at(3), taskKind: "loop", taskId: "591b6f5a" });
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
-        // the session's own is what holds
         fire(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1685,14 +1581,12 @@ describe("ClaudeSubagentStatus", () => {
           let now = NOW;
           const { status, told } = await tracked(s, () => now);
           try {
-            // a loop turn interrupted, which writes no rest, or one that never wrote its prompt: its hold runs out
             fire(s, 3);
             if (before === "a turn") { resumes(s, 3); answer(s, 3); }
             status.poll();
             now += LOOP_HOLD_MS;
             status.poll();
             expect(status.loopHolds("p1")).toBe(false);
-            // minutes later the next wakeup: another fire, or a scheduled task's prompt
             if (next === "fire") fire(s, 8); else resumes(s, 8, false);
             status.poll();
             expect(status.loopHolds("p1")).toBe(true);
@@ -1714,7 +1608,6 @@ describe("ClaudeSubagentStatus", () => {
           rest(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
-          // seconds later, inside the time the first fire would have held for
           if (next === "fire") fire(s, 3.1); else resumes(s, 3.1);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -1729,7 +1622,6 @@ describe("ClaudeSubagentStatus", () => {
       rest(s, 2);
       const { status } = await tracked(s);
       const scheduled = { turnOrigin: "scheduled", wakeupSource: "loop_wakeup" };
-      /** each is read by itself, and its turn brought to rest before the next */
       const holdsNothing = (write: () => void) => {
         write();
         status.poll();
@@ -1738,16 +1630,12 @@ describe("ClaudeSubagentStatus", () => {
         status.poll();
       };
       try {
-        // a prompt of the person's that quotes the keys, and one that holds them in an object inside it
         holdsNothing(() => s.parent({ type: "user", timestamp: at(3), permissionMode: "default", origin: { kind: "human" }, turnOrigin: "human", message: { role: "user", content: 'why "turnOrigin":"scheduled" and "wakeupSource":"loop_wakeup"?' } }));
         holdsNothing(() => s.parent({ type: "user", timestamp: at(3), permissionMode: "default", origin: { kind: "human" }, turnOrigin: "human", message: { role: "user", content: "and this?" }, attached: scheduled }));
-        // a subagent's entry that carries them, however its line is spaced
         holdsNothing(() => s.parent({ type: "user", isSidechain: true, isMeta: true, ...scheduled, timestamp: at(3), message: { role: "user", content: "check" } }));
         holdsNothing(() => appendFileSync(s.path, `{"type":"user","isSidechain": true,"isMeta":true,"turnOrigin":"scheduled","wakeupSource":"loop_wakeup","timestamp":"${at(3)}","message":{"role":"user","content":"check"}}\n`));
-        // an entry that is no prompt, though it holds a user entry inside it
         holdsNothing(() => s.parent({ type: "assistant", ...scheduled, timestamp: at(3), message: { role: "assistant", content: [{ type: "text", text: "on it" }] } }));
         holdsNothing(() => s.parent({ type: "api-request", ...scheduled, timestamp: at(3), params: { messages: [{ type: "user" }] } }));
-        // the session's own prompt with those keys is what holds
         resumes(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1761,9 +1649,7 @@ describe("ClaudeSubagentStatus", () => {
       fire(s, 3);
       const { status, told } = await tracked(s);
       try {
-        // the fire read first is history, written 57 minutes ago
         expect(status.loopHolds("p1")).toBe(false);
-        // another file takes the transcript's place, of the same size: what was read of the one before says nothing of it
         copyFileSync(s.path, `${s.path}.new`);
         renameSync(`${s.path}.new`, s.path);
         status.poll();
@@ -1772,7 +1658,6 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 5);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // the turn's rest ends the hold, and is told
         rest(s, 6);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
@@ -1788,24 +1673,20 @@ describe("ClaudeSubagentStatus", () => {
       const { status, told } = await tracked(s, () => now);
       try {
         expect(status.loopHoldsNow("p1")).toBe(false);
-        // a fire no poll has read: as the last poll left it nothing holds, and the read made now finds it
         fire(s, 3);
         expect(status.loopHolds("p1")).toBe(false);
         expect(status.loopHoldsNow("p1")).toBe(true);
         expect(told.at(-1)).toBe(true);
-        // so with the resumed turn's rest
         rest(s, 4);
         expect(status.loopHolds("p1")).toBe(true);
         expect(status.loopHoldsNow("p1")).toBe(false);
         expect(told.at(-1)).toBe(false);
-        // and with a hold whose time ran out since the last poll, with nothing written
         fire(s, 5);
         expect(status.loopHoldsNow("p1")).toBe(true);
         now += LOOP_HOLD_MS;
         const before = told.length;
         expect(status.loopHoldsNow("p1")).toBe(false);
         expect(told.slice(before)).toEqual([false]);
-        // nothing is told twice
         expect(status.loopHoldsNow("p1")).toBe(false);
         expect(told.slice(before)).toEqual([false]);
       } finally { status.stop(); }
@@ -1820,18 +1701,14 @@ describe("ClaudeSubagentStatus", () => {
       const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => { changes++; }, now: () => now });
       await status.refresh([pane("p1", "claude")]);
       try {
-        // herdr says the pane works with no turn written: that word waits for its turn, and the pane is told of
         status.busy("p1", "herdr");
         const told = changes;
-        // it began none in the time a signal is shown working (BUSY_HOLD_MS), and a subagent started meanwhile
         now += 5000;
         s.agent("a1", { steps: [[3, 1]] });
-        // the read made for a wakeup's hold finds none: it ages no signal, counts nothing, and tells nothing
         expect(status.loopHoldsNow("p1")).toBe(false);
         expect(changes).toBe(told);
         expect(status.holdsQueue("p1")).toBe(false);
         expect(status.countOf("p1")).toBe(0);
-        // the pane's own poll does
         status.poll();
         expect(changes).toBe(told + 1);
         expect(status.holdsQueue("p1")).toBe(true);
@@ -1851,7 +1728,6 @@ describe("ClaudeSubagentStatus", () => {
         await status.refresh([pane("p1", "claude")]);
         expect(status.sessionOf("p1")).toBeNull();
         expect(status.loopHoldsNow("p1")).toBe(false);
-        // found by a snapshot's lookup, the fire written a second before holds
         found = true;
         await status.refresh([pane("p1", "claude", "s2")]);
         expect(status.loopHoldsNow("p1")).toBe(true);
@@ -1867,7 +1743,6 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 3);
         expect(status.loopHoldsNow("p1")).toBe(true);
         if (gone === "the pane left Claude") await status.refresh([pane("p1", "codex")]); else status.stop();
-        // the resumed turn's rest is written, and no read made for the hold opens the transcript
         rest(s, 4);
         const opened = spyOn(detailIo, "openSync");
         try {
@@ -1878,7 +1753,6 @@ describe("ClaudeSubagentStatus", () => {
     });
 
     it("reads the hold anew from another file found in the transcript's place since the pane's last poll, by what that file says alone", async () => {
-      // the file read before holds, and the one in its place tells of no self-resumed turn
       {
         const s = session();
         s.prompt(1);
@@ -1893,8 +1767,6 @@ describe("ClaudeSubagentStatus", () => {
           expect(told.at(-1)).toBe(false);
         } finally { status.stop(); }
       }
-      // the file read before came to rest past its fire, and the one in its place has a fire written a second ago
-      // with no rest after it, right where the one before's stood: the place of a fire in one file says nothing of another's
       {
         const s = session();
         s.prompt(1);
@@ -1909,7 +1781,6 @@ describe("ClaudeSubagentStatus", () => {
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
           renameSync(`${s.path}.other`, s.path);
-          // it holds as a fire found at any transcript's first read does: for what is left of its time
           expect(status.loopHoldsNow("p1")).toBe(true);
           expect(told.at(-1)).toBe(true);
           now = NOW - 1000 + LOOP_HOLD_MS;
@@ -1931,13 +1802,11 @@ describe("ClaudeSubagentStatus", () => {
         rest(s, 4);
         status.poll();
         expect(status.loopHolds("p1")).toBe(false);
-        // the same file written anew without that prompt, then the next wakeup's fire: it ends before where the first one did
         const before = statSync(s.path);
         writeFileSync(s.path, readFileSync(s.path, "utf8").replace(json(long), ""));
         fire(s, 5);
         expect(statSync(s.path).ino).toBe(before.ino);
         expect(statSync(s.path).size).toBeLessThan(before.size);
-        // it is no fire the pane took account of: it holds
         if (first === "the pane's poll") status.poll();
         expect(status.loopHoldsNow("p1")).toBe(true);
         expect(told.at(-1)).toBe(true);
@@ -1956,7 +1825,6 @@ describe("ClaudeSubagentStatus", () => {
         fire(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // a turn_duration entry with no timestamp is no rest the transcript's turns go by, and none for the hold
         s.parent({ type: "system", subtype: "turn_duration", isSidechain: false });
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
@@ -1974,12 +1842,10 @@ describe("ClaudeSubagentStatus", () => {
       rest(s, 2);
       const { status } = await tracked(s);
       try {
-        // a turn of the person's at work, and a task that comes due meanwhile, whose fire Claude writes then
         s.prompt(3);
         fire(s, 3);
         status.poll();
         expect(status.loopHolds("p1")).toBe(true);
-        // that turn's rest ends the hold as any rest does: which turn a fire began is not kept
         rest(s, 4);
         expect(status.loopHoldsNow("p1")).toBe(false);
         // the task's turn begins at once, and holds from its own prompt on. A known bound: nothing holds between
@@ -1993,7 +1859,6 @@ describe("ClaudeSubagentStatus", () => {
 
     describe("a turn resumed on a background task's notice", () => {
       const block = (id = "bq1") => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${id}</tool-use-id>\n<status>completed</status>\n<summary>Background command "bun test" completed (exit code 0)</summary>\n</task-notification>`;
-      /** The notice as Claude queues it when the task ends, and as it takes it off its queue to begin a turn on it. */
       const queued = (s: Session, minute: number) => s.parent({ type: "queue-operation", operation: "enqueue", timestamp: at(minute), content: block() });
       const taken = (s: Session, minute: number) => s.parent({ type: "queue-operation", operation: "dequeue", timestamp: at(minute) });
       /**
@@ -2006,7 +1871,6 @@ describe("ClaudeSubagentStatus", () => {
         type: "user", isSidechain: false, origin: { kind: "task-notification" }, permissionMode: "auto", turnOrigin: "task_notification", timestamp: written,
         message: { role: "user", content: block() },
       });
-      /** A task that ends with the session at rest: its notice is queued and taken off the queue, and its turn's prompt written. */
       const notices = (s: Session, minute: number) => { queued(s, minute); taken(s, minute); prompt(s, minute); };
 
       it("holds the queue from the prompt of the notice's turn to that turn's rest, whatever herdr reads the pane as", async () => {
@@ -2015,7 +1879,6 @@ describe("ClaudeSubagentStatus", () => {
         rest(s, 2);
         const { status, told } = await tracked(s);
         try {
-          // the notice queued, and taken off the queue, tells of no turn yet
           queued(s, 3);
           taken(s, 3);
           status.poll();
@@ -2023,32 +1886,25 @@ describe("ClaudeSubagentStatus", () => {
           prompt(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // herdr reads the pane at rest until it reads that turn: in every snapshot, and in an event of the turn before
           status.quiet("p1", false);
           status.quiet("p1", true);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // what the turn writes is no rest
           answer(s, 4);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
           rest(s, 4);
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
-          // the hold was told as it came and as it went
           expect(told).toEqual([false, true, false]);
         } finally { status.stop(); }
       });
 
       it("holds to that turn's rest or its time, whatever herdr says of the pane and whenever it says it", async () => {
         const words: ((status: ClaudeSubagentStatus) => void)[] = [
-          // herdr tells a turn at work: the notice's on time, or the one before it late
           (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); },
-          // and then reads the pane at rest: the turn before's rest, or the notice's turn interrupted with no rest written
           (status) => { status.quiet("p1", true); status.busy("p1", "herdr"); status.quiet("p1", true); },
-          // its working with no rest word heard in an event before it (the server just started), then its rest word
           (status) => { status.quiet("p1", false); status.busy("p1", "herdr"); status.quiet("p1", true); },
-          // the chat's own send
           (status) => status.busy("p1", "chat", Date.parse(at(3))),
         ];
         for (const say of words) {
@@ -2071,7 +1927,6 @@ describe("ClaudeSubagentStatus", () => {
                 answer(s, 5);
                 status.poll();
                 expect(status.loopHolds("p1")).toBe(true);
-                // only its rest, or its time, ends the hold, and is told
                 if (end === "rest") rest(s, 6); else now += LOOP_HOLD_MS;
                 status.poll();
                 expect(status.loopHolds("p1")).toBe(false);
@@ -2095,12 +1950,10 @@ describe("ClaudeSubagentStatus", () => {
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
           const before = told.length;
-          // a turn interrupted on a Claude Code that writes no rest for it, or whose session writes none at all
           now += 1;
           expect(status.loopHolds("p1")).toBe(false);
           status.poll();
           expect(told.slice(before)).toEqual([false]);
-          // and what that turn writes later brings no hold back
           answer(s, 4);
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
@@ -2111,14 +1964,12 @@ describe("ClaudeSubagentStatus", () => {
         const s = session();
         s.prompt(1);
         rest(s, 2);
-        // the files are older than this clock by more than a second: a poll that finds them as they were reads nothing
         let now = Date.now() + 5000;
         const { status, told } = await tracked(s, () => now);
         try {
           notices(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // a session that writes no rest: the hold runs out its minute, and two polls follow
           now += LOOP_HOLD_MS;
           status.poll();
           expect(told).toEqual([false, true, false]);
@@ -2126,7 +1977,6 @@ describe("ClaudeSubagentStatus", () => {
           status.poll();
           now += 6000;
           status.poll();
-          // the clock is set back ten minutes
           now -= 10 * 60_000;
           status.poll();
           expect(status.loopHolds("p1")).toBe(false);
@@ -2140,7 +1990,6 @@ describe("ClaudeSubagentStatus", () => {
         s.prompt(1);
         rest(s, 2);
         const { status } = await tracked(s);
-        /** each is read by itself, and its turn brought to rest before the next */
         const holdsNothing = (write: () => void) => {
           write();
           status.poll();
@@ -2149,7 +1998,6 @@ describe("ClaudeSubagentStatus", () => {
           status.poll();
         };
         try {
-          // the notice in Claude's queue, taken off it, and taken into a turn already at work: none begins a turn
           holdsNothing(() => queued(s, 3));
           holdsNothing(() => taken(s, 3));
           holdsNothing(() => s.parent({ type: "attachment", timestamp: at(3), attachment: { type: "queued_command", commandMode: "task-notification", prompt: block() } }));
@@ -2157,7 +2005,6 @@ describe("ClaudeSubagentStatus", () => {
           // transcripts of this PC), and one an older Claude Code marks as its own
           holdsNothing(() => s.parent({ type: "user", isSidechain: false, origin: { kind: "task-notification" }, permissionMode: "auto", timestamp: at(3), message: { role: "user", content: block() } }));
           holdsNothing(() => s.parent({ type: "user", isMeta: true, timestamp: at(3), message: { role: "user", content: block() } }));
-          // a prompt of the person's that quotes the key, and one that holds it in an object inside it
           holdsNothing(() => s.parent({ type: "user", timestamp: at(3), permissionMode: "default", origin: { kind: "human" }, turnOrigin: "human", message: { role: "user", content: 'why "turnOrigin":"task_notification"?' } }));
           holdsNothing(() => s.parent({ type: "user", timestamp: at(3), permissionMode: "default", origin: { kind: "human" }, turnOrigin: "human", message: { role: "user", content: "and this?" }, attached: { turnOrigin: "task_notification" } }));
           // the prompt of a turn of another origin, with the keys Claude Code writes on it (read from the transcripts of
@@ -2165,13 +2012,10 @@ describe("ClaudeSubagentStatus", () => {
           // the SDK. Only a scheduled turn's prompt and a notice's hold: any other origin holds nothing, as before
           holdsNothing(() => s.parent({ type: "user", isMeta: true, isSidechain: false, origin: { kind: "peer" }, permissionMode: "auto", turnOrigin: "peer", timestamp: at(3), message: { role: "user", content: "the build is green" } }));
           holdsNothing(() => s.parent({ type: "user", isSidechain: false, permissionMode: "auto", turnOrigin: "sdk", timestamp: at(3), message: { role: "user", content: "next" } }));
-          // a subagent's entry that carries it, however its line is spaced
           holdsNothing(() => s.parent({ type: "user", isSidechain: true, origin: { kind: "task-notification" }, turnOrigin: "task_notification", timestamp: at(3), message: { role: "user", content: block() } }));
           holdsNothing(() => appendFileSync(s.path, `{"type":"user","isSidechain": true,"turnOrigin":"task_notification","timestamp":"${at(3)}","message":{"role":"user","content":"notice"}}\n`));
-          // an entry that is no prompt, though it holds a user entry inside it
           holdsNothing(() => s.parent({ type: "assistant", turnOrigin: "task_notification", timestamp: at(3), message: { role: "assistant", content: [{ type: "text", text: "on it" }] } }));
           holdsNothing(() => s.parent({ type: "api-request", turnOrigin: "task_notification", timestamp: at(3), params: { messages: [{ type: "user" }] } }));
-          // the session's own prompt with that key is what holds
           prompt(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
@@ -2199,7 +2043,6 @@ describe("ClaudeSubagentStatus", () => {
         rest(s, 2);
         const { status } = await tracked(s);
         try {
-          // a turn of the person's at work, and a task that ends meanwhile: its notice waits in Claude's queue
           s.prompt(3);
           queued(s, 3);
           expect(status.loopHoldsNow("p1")).toBe(false);
@@ -2222,7 +2065,6 @@ describe("ClaudeSubagentStatus", () => {
         rest(s, 2);
         const { status } = await tracked(s);
         try {
-          // seen once in the transcripts of this PC: the prompt stands inside a turn that had not rested
           s.prompt(3);
           answer(s, 3);
           prompt(s, 3);
@@ -2239,12 +2081,10 @@ describe("ClaudeSubagentStatus", () => {
         let now = NOW;
         const { status, told } = await tracked(s, () => now);
         try {
-          // a notice's turn that ends with no rest written
           notices(s, 3);
           answer(s, 3);
           status.poll();
           expect(status.loopHolds("p1")).toBe(true);
-          // 12 s later another task ends: its turn is another one, and holds for its own time
           now += 12_000;
           notices(s, 3.2);
           status.poll();
@@ -2286,16 +2126,13 @@ describe("ClaudeSubagentStatus", () => {
         const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: (_paneId, running, turnRunning, promptAt, resting) => { seen.push({ running, turnRunning, promptAt, resting }); }, now: () => NOW });
         await status.refresh([pane("p1", "claude")]);
         try {
-          // the session rests on its background subagent (#2069)
           expect(seen.at(-1)).toEqual({ running: 1, turnRunning: 1, promptAt: Date.parse(at(1)), resting: true });
           expect(status.restsOn("p1")).toBe(true);
-          // another task's notice begins a turn: the rest is gone, and the person's last prompt is still the one before
           notices(s, 3);
           status.poll();
           expect(seen.at(-1)).toEqual({ running: 1, turnRunning: 1, promptAt: Date.parse(at(1)), resting: false });
           expect(status.restsOn("p1")).toBe(false);
           expect(status.holdsQueue("p1")).toBe(false);
-          // and at that turn's rest the session rests on its subagent again
           rest(s, 4);
           status.poll();
           expect(seen.at(-1)).toEqual({ running: 1, turnRunning: 1, promptAt: Date.parse(at(1)), resting: true });
@@ -2313,7 +2150,6 @@ describe("claudeSubagents reading", () => {
   it("keeps a failed open or read unfinished instead of reporting the end of the file", () => {
     const s = session();
     for (const path of [join(s.path, "..", "missing.jsonl"), join(s.path, "..")]) {
-      // the identity of what is there, if anything: each is refused for what it is
       const exact = ((): string => { try { const stat = lstatSync(path, { bigint: true }); return `${stat.dev}:${stat.ino}`; } catch { return "0:0"; } })();
       expect(readLines(path, 0, { size: 10, exact }, 10, () => { throw new Error("no line should be read"); }, false)).toEqual({ offset: 0, skipping: false, more: true, failed: true });
     }
@@ -2323,12 +2159,10 @@ describe("claudeSubagents reading", () => {
     const s = session();
     const big = s.agent("big", { steps: [] });
     const next = s.agent("next", { steps: [] });
-    // `big` takes all but a little of the budget; `next` starts with a line larger than what is left
     writeFileSync(big, Array.from({ length: 7_900 }, (_, n) => assistant(`b${n}`, "p".repeat(1000))).join(""));
     writeFileSync(next, assistant("n1", "q".repeat(400_000)));
     utimesSync(big, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
     const turns = () => claudeSubagents(s.path, true, NOW).find((task) => task.id === "next")?.turns;
-    // a whole file of one entry too long to tell its end from: not listed until it is read
     expect(turns()).toBeUndefined();
     expect(turns()).toBe(1);
     expect(claudeSubagents(s.path, true, NOW).find((task) => task.id === "next")?.model).toBe("claude-opus-5");
@@ -2352,7 +2186,6 @@ describe("claudeSubagents reading", () => {
     s.parent({ type: "assistant", timestamp: at(1), message: { role: "assistant", content: ["q", "batch"].map((id) => ({ type: "tool_use", id: `toolu_${id}`, name: "Agent", input: { note: "<task-notification>" } })) } });
     const quoted = '<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n<summary>Agent "x" finished</summary>\n</task-notification>';
     s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_q", content: `it said ${quoted}` }] } });
-    // one entry: the answer of one agent beside the notice of another
     s.parent({ type: "user", timestamp: at(5), message: { role: "user", content: [
       { type: "tool_result", tool_use_id: "toolu_batch", content: "done" },
       { type: "text", text: quoted.replace("<task-id>x", "<task-id>bg").replace('"x"', '"task bg"') },
@@ -2363,13 +2196,11 @@ describe("claudeSubagents reading", () => {
   it("takes whichever of the answer and the notice is newest, and the acknowledgement of a launch for neither", () => {
     const s = session();
     s.agent("sync", { shape: "foreground", toolUseId: "toolu_sync" });
-    // no requestShape at all: the immediate acknowledgement does not end a background agent
     s.agent("noshape", { shape: "", toolUseId: "toolu_noshape" });
     s.parent({ type: "assistant", timestamp: at(1), message: { role: "assistant", content: ["sync", "noshape"].map((id) => ({ type: "tool_use", id: `toolu_${id}`, name: "Agent", input: {} })) } });
     s.parent({ type: "user", timestamp: at(1), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_noshape", content: [{ type: "text", text: "Async agent launched successfully.\nagentId: noshape" }] }] } });
     s.parent({ type: "user", timestamp: at(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_sync", content: "answer" }] } });
     expect(ids(s.path).sort()).toEqual(["noshape:running", "sync:completed"]);
-    // resumed with a message: running again until it notifies, and then that notice is the end
     s.work("sync", 6, 5);
     expect(ids(s.path).sort()).toEqual(["noshape:running", "sync:running"]);
     s.notify("sync", 8, { toolUseId: "toolu_resumed" });
@@ -2392,7 +2223,6 @@ describe("claudeSubagents reading", () => {
     expect([...subagentDetails(s.path, ["x/../../../secret", "..", "a/b"])]).toEqual([]);
     const block = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "x" finished</summary>\n</task-notification>`;
     expect(taskNotification(block("x/../../../secret"))).toBeNull();
-    // a line that only mentions the tag, in a tool result, is no notification
     const result = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: block("fine") }] } });
     expect(lineNotifications(result)).toEqual([]);
     expect(lineNotifications(JSON.stringify({ type: "user", message: { role: "user", content: block("fine") } }))).toHaveLength(1);
@@ -2523,7 +2353,6 @@ describe("ClaudeSubagentStatus upkeep", () => {
     expect(status.sessionOf("p1")).toEqual({ path: s.path, live: true, startedAt: 42, read: expect.any(Number) });
     status.poll();
     expect(told).toEqual([]);
-    // a message to it was written before, and the session is idle: only its own file moves
     s.work("a1", 5, 1);
     // An append can share the previous write's coarse filesystem clock tick.
     utimesSync(file, old, old);
@@ -2558,7 +2387,6 @@ describe("ClaudeSubagentStatus upkeep", () => {
     const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => { looked += 1; }, now: () => now });
     await status.refresh([pane("claude")]);
     expect(looked).toBe(1);
-    // An unchanged poll does not notify again.
     status.poll();
     expect(looked).toBe(1);
   });
@@ -2607,7 +2435,6 @@ describe("claudeSubagents reading, upkeep", () => {
     writeFileSync(next, assistant("n1", "q".repeat(400_000)));
     utimesSync(big, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
     const turns = () => claudeSubagents(s.path, true, NOW).find((task) => task.id === "next")?.turns;
-    // a whole file of one entry too long to tell its end from: not listed until it is read
     expect(turns()).toBeUndefined();
     expect(turns()).toBe(1);
   });
@@ -2618,7 +2445,6 @@ describe("claudeSubagents reading, upkeep", () => {
     s.agent("a2", { steps: [[1, 1]] });
     s.notify("a2", 3);
     expect(ids(s.path).sort()).toEqual(["a1:running", "a2:completed"]);
-    // more than the first read takes arrives at once
     appendFileSync(s.path, json({ type: "user", timestamp: at(4), message: { role: "user", content: "f".repeat(1000) } }).repeat(30_000));
     const state = claudeSubagentState(s.path, true, NOW);
     expect(state.settled).toBe(false);
@@ -2717,7 +2543,6 @@ describe("ClaudeSubagentStatus process", () => {
 describe("claudeSubagents, an agent's own turn", () => {
   const entry = (file: string, value: unknown) => appendFileSync(file, json({ isSidechain: true, ...(value as object) }));
   const assistant = (file: string, minute: number, stop: string | null, kind = "text") => entry(file, { type: "assistant", timestamp: at(minute), message: { id: `m${minute}${kind}`, model: "claude-haiku-4-5", stop_reason: stop, content: [{ type: kind, text: "x" }] } });
-  /** a teammate: no notification, no toolUseId, a name of its own */
   const teammate = (s: ReturnType<typeof session>, id: string) => {
     writeFileSync(join(s.path, "..", "11111111-1111-4111-8111-111111111111", "subagents", `agent-${id}.meta.json`), JSON.stringify({ agentType: "local-harness-map", name: "local-harness-map", spawnDepth: 0, requestShape: "background", taskKind: "in_process_teammate", teamName: "session-1" }));
     const file = join(s.path, "..", "11111111-1111-4111-8111-111111111111", "subagents", `agent-${id}.jsonl`);
@@ -2725,7 +2550,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     entry(file, { type: "user", timestamp: at(1), message: { role: "user", content: "map it" } });
     return file;
   };
-  /** a lead's shutdown request at 5, the teammate's SendMessage answer at 6 and that call's result at 7 */
   const shutdown = (file: string, result: { success: boolean; message: string; request_id: string }) => {
     entry(file, { type: "user", timestamp: at(5), message: { role: "user", content: `<teammate-message teammate_id="team-lead">${JSON.stringify({ type: "shutdown_request", request_id: result.request_id })}</teammate-message>` } });
     assistant(file, 6, "tool_use", "tool_use");
@@ -2737,7 +2561,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     const file = teammate(s, "alocal-harness-map-f7b05717a4a23081");
     assistant(file, 2, null, "thinking");
     assistant(file, 3, "end_turn");
-    // bookkeeping after the end is not a message to it
     entry(file, { type: "attachment", timestamp: at(4), attachment: { type: "queued_command" } });
     expect(claudeSubagents(s.path, true, NOW)).toMatchObject([{ id: "alocal-harness-map-f7b05717a4a23081", title: "local-harness-map", category: "local-harness-map", status: "completed", ended_at: at(3) }]);
   });
@@ -2765,7 +2588,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     expect(claudeSubagents(s.path, true, NOW)).toMatchObject([{ id: "draft-t1", status: "completed", ended_at: at(7) }]);
   });
 
-  /** the lead's TaskStop at `minute`: called with what it was asked to stop, answered with a task id of its own */
   const stop = (s: ReturnType<typeof session>, minute: number, asked: string, answered: string) => {
     s.parent({ type: "assistant", timestamp: at(minute), message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_stop_${minute}`, name: "TaskStop", input: { task_id: asked } }] } });
     s.parent({ type: "user", timestamp: at(minute), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_stop_${minute}`, content: "{}" }] }, toolUseResult: { message: `Successfully stopped task: ${answered} (map it)`, task_id: answered, task_type: "in_process_teammate", command: "map it" } });
@@ -2776,7 +2598,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     const file = teammate(s, "alocal-harness-map-f7b05717a4a23081");
     s.bash("bsh", 2, { description: "Run the IME probe", file });
     assistant(file, 3, "tool_use", "tool_use");
-    // the answer's task id is none of the teammate's own
     stop(s, 4, "local-harness-map", "t9glutltm");
     expect(claudeSubagents(s.path, true, NOW).map((task) => `${task.id}:${task.status}:${task.ended_at?.slice(14, 16) ?? "-"}`)).toEqual([
       "alocal-harness-map-f7b05717a4a23081:cancelled:04", "bsh:cancelled:04",
@@ -2810,7 +2631,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     const file = teammate(s, "kept");
     assistant(file, 2, "tool_use", "tool_use");
     s.parent({ type: "assistant", timestamp: at(3), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_failed", name: "TaskStop", input: { task_id: "local-harness-map" } }] } });
-    // an answer that names a task id still stops nothing when it is an error
     s.parent({ type: "user", timestamp: at(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_failed", is_error: true, content: "No task found" }] }, toolUseResult: { task_id: "kept" } });
     expect(ids(s.path)).toEqual(["kept:running"]);
   });
@@ -2820,7 +2640,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     const old = teammate(s, "old-holder");
     assistant(old, 2, "tool_use", "tool_use");
     stop(s, 3, "local-harness-map", "t1");
-    // a new teammate under the same name, its file not written yet
     const fresh = teammate(s, "fresh-holder");
     writeFileSync(fresh, "");
     expect(ids(s.path).filter((task) => task.startsWith("fresh-holder"))).not.toContain("fresh-holder:cancelled");
@@ -2848,7 +2667,6 @@ describe("claudeSubagents, an agent's own turn", () => {
     const file = s.agent("bg", { steps: [[1, 1]] });
     assistant(file, 2, "end_turn");
     expect(claudeSubagents(s.path, true, NOW)).toMatchObject([{ id: "bg", status: "completed", ended_at: at(2) }]);
-    // its notice, written after, is newer and says it failed
     s.notify("bg", 3, { status: "failed" });
     expect(claudeSubagents(s.path, true, NOW)).toMatchObject([{ id: "bg", status: "failed", ended_at: at(3) }]);
   });
@@ -2890,12 +2708,10 @@ describe("claudeSubagents, background commands", () => {
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
     s.parent({ type: "assistant", timestamp: at(3), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } });
     s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
-    // what Claude writes between turns moves nothing
     s.parent({ type: "last-prompt", lastPrompt: "go" });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 1, resting: true });
     forgetSubagents();
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(true);
-    // the subagent's notice is a next turn's request first
     s.parent({ type: "api-request", timestamp: at(4) });
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
   });
@@ -2918,7 +2734,6 @@ describe("claudeSubagents, background commands", () => {
     s.prompt(1);
     s.agent("review", { steps: [[2, 1]] });
     s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
-    // a local command: caveat, echo, output
     s.parent({ type: "user", isMeta: true, timestamp: at(4), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } });
     s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>" } });
     s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" } });
@@ -3058,20 +2873,29 @@ describe("claudeSubagents, background commands", () => {
     const file = s.agent("a1", { steps: [[12, 1]] });
     s.bash("review", 13, { file });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 3 });
-    // the notice of one starts a turn of its own, which is the same work going on
     s.notify("suite", 20, command('x" completed (exit code 0)'));
     s.parent({ type: "user", timestamp: at(20), origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>\n<task-id>suite</task-id>\n</task-notification>" } });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 3, turnRunning: 2 });
     // a prompt typed at rest, as older Claude Code writes it (no origin): a new turn
     s.prompt(30, null);
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 3, turnRunning: 0 });
-    // one typed while the turn works is handed to it on the way: the same turn
     s.bash("lint", 31);
     s.parent({ type: "attachment", timestamp: at(32), attachment: { type: "queued_command", commandMode: "prompt", prompt: "and the docs" } });
-    // nor is another session's message, or an interruption: neither carries a permission mode
     s.parent({ type: "user", timestamp: at(33), message: { role: "user", content: "Another Claude session sent a message: <teammate-message>hi</teammate-message>" } });
     s.parent({ type: "user", timestamp: at(34), message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 1 });
+    // nor an hc note typed in for a child terminal, which Claude records as the person's
+    s.parent({ type: "user", timestamp: at(35), origin: { kind: "human" }, permissionMode: "bypassPermissions", message: { role: "user", content: '<hc from="t79 worker">Green commit, moving on.</hc>' } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 1 });
+    // nor several notes typed as one paste, which Claude wraps when it is long
+    s.parent({ type: "user", timestamp: at(35), origin: { kind: "human" }, permissionMode: "bypassPermissions", message: { role: "user", content: '<pasted_content id="p1">\n<hc>t3 exited (signal 1)</hc>\n<hc>t4 is blocked (waiting)</hc>\n</pasted_content id="p1">' } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 1 });
+    // the same, its wrapper and notes in text blocks of their own, which the chat reads a line each
+    s.parent({ type: "user", timestamp: at(35), origin: { kind: "human" }, permissionMode: "bypassPermissions", message: { role: "user", content: ['<pasted_content id="p2">', "<hc>t3 exited (signal 1)</hc>", "<hc>t4 is blocked (waiting)</hc>", '</pasted_content id="p2">'].map((text) => ({ type: "text", text })) } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 1 });
+    // a prompt the person gave with a picture is theirs, whatever its text
+    s.parent({ type: "user", timestamp: at(36), origin: { kind: "human" }, permissionMode: "bypassPermissions", message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "" } }, { type: "text", text: "<hc>hello</hc>" }] } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 4, turnRunning: 0 });
   });
 
   it("tells the pane's running count and what of it is the turn's when either changes", async () => {
@@ -3128,7 +2952,6 @@ describe("claudeSubagents, before the files are read through", () => {
     pastParentWindow(s.path);
     expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "suite")).toMatchObject(ended);
     forgetSubagents();
-    // Real workers use their own wall clock; keep their fixture inside the recent-task window.
     const shift = Date.now() - NOW;
     for (const path of [s.path, file]) writeFileSync(path, fs.readFileSync(path, "utf8").replace(/"timestamp":"([^"]+)"/g, (_match, timestamp: string) => `"timestamp":"${new Date(Date.parse(timestamp) + shift).toISOString()}"`));
     const recentEnd = { ...ended, ended_at: new Date(Date.parse(at(3)) + shift).toISOString() };
@@ -3165,7 +2988,6 @@ describe("claudeSubagents, before the files are read through", () => {
     });
     try {
       await status.refresh([pane]);
-      // a history still being read holds nothing: the pane is as it would be without it
       expect(status.holdsQueue("p1")).toBe(false);
       await waitCommandHistory(s.path, statSync(s.path).size);
       status.poll();
@@ -3214,7 +3036,6 @@ describe("claudeSubagents, before the files are read through", () => {
       expect(status.restsOn("p1")).toBe(true);
       expect(await waitCommandHistory(s.path, statSync(s.path).size)).toMatchObject({ complete: true, ends: [] });
       status.poll();
-      // the command still runs: it is counted, and the session's own turn still rests
       expect(status.countOf("p1")).toBe(1);
       expect(status.holdsQueue("p1")).toBe(false);
       expect(status.restsOn("p1")).toBe(true);
@@ -3231,7 +3052,6 @@ describe("claudeSubagents, before the files are read through", () => {
     const history = await waitCommandHistory(s.path, statSync(s.path).size);
     expect(history!.ends.map((end) => end.id)).toContain("bash_1");
     expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "bash_1")).toMatchObject({ status: "running", started_at: at(50), ended_at: null });
-    // its own later end does end it
     s.notify("bash_1", 55, { summary: "Background command finished", carriers: ["queue"] });
     expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "bash_1")).toMatchObject({ status: "completed", started_at: at(50), ended_at: at(55) });
   });
@@ -3273,7 +3093,6 @@ describe("claudeSubagents, before the files are read through", () => {
     forgetSubagents();
     await waitCommandHistory(s.path, statSync(s.path).size);
     expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "suite")).toMatchObject({ status: "completed" });
-    // the notice is rewritten in place (another command's, of the same length) and the transcript grows
     const rewritten = Buffer.from(notice.toString("utf8").replaceAll("suite", "other"));
     const fd = fs.openSync(s.path, "r+");
     fs.writeSync(fd, rewritten, 0, rewritten.length, before);
@@ -3295,7 +3114,6 @@ describe("claudeSubagents, before the files are read through", () => {
     forgetSubagents();
     const history = await waitCommandHistory(s.path, statSync(s.path).size);
     expect(history!.ends.map((end) => end.id)).toEqual(["suite"]);
-    // rewritten and grown after the evidence was read, before the task list's read takes it
     const rewritten = Buffer.from(notice.toString("utf8").replaceAll("suite", "other"));
     const fd = fs.openSync(s.path, "r+");
     fs.writeSync(fd, rewritten, 0, rewritten.length, before);
@@ -3308,10 +3126,8 @@ describe("claudeSubagents, before the files are read through", () => {
     const s = session();
     const file = s.agent("review", { steps: [[1, 1]] });
     s.bash("same", 2, { file });
-    // an earlier use's notice, with no call to tie it to any launch
     s.parent({ type: "queue-operation", operation: "enqueue", timestamp: at(2), content: "<task-notification>\n<task-id>same</task-id>\n<status>completed</status>\n<summary>Background command finished</summary>\n</task-notification>" });
     expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "running", ended_at: null });
-    // its own call's notice in that millisecond ends it: the command finished at once
     s.notify("same", 2, { summary: "Background command finished", carriers: ["queue"] });
     expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "completed", ended_at: at(2) });
   });
@@ -3319,7 +3135,6 @@ describe("claudeSubagents, before the files are read through", () => {
   it("ends a command stopped in its launch's very millisecond, written after it in the same transcript", () => {
     const s = session();
     s.bash("same", 2);
-    // TaskStop's answer names no Bash call: the transcript's order says it came after the launch
     s.parent({ type: "user", timestamp: at(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_stop" }] }, toolUseResult: { task_id: "same", task_type: "local_bash" } });
     expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "cancelled", ended_at: at(2) });
   });
@@ -3352,7 +3167,6 @@ describe("claudeSubagents, before the files are read through", () => {
     try {
       await status.refresh([pane]);
       expect(commandHistorySize().sessions).toBe(1);
-      // a replaced transcript tells the tracker's watch, in a microtask still to run
       const copy = `${s.path}.copy`;
       fs.copyFileSync(s.path, copy);
       fs.renameSync(copy, s.path);
@@ -3360,7 +3174,6 @@ describe("claudeSubagents, before the files are read through", () => {
       status.stop();
       hold();
       expect(commandHistorySize()).toMatchObject({ sessions: 0, waiting: 0 });
-      // a poll after the stop (a lookup answered late) reads nothing either
       status.poll();
       // every microtask queued so far has run once a macrotask comes round
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -3382,7 +3195,6 @@ describe("claudeSubagents, before the files are read through", () => {
     let counted: (running: number) => void = () => {};
     const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: (_pane, running) => counted(running), now: () => NOW });
     try {
-      // Already-owned cursors fill the cache before the tracker first requests its history.
       for (let index = 0; index < 16; index++) {
         const path = join(dirname(s.path), `owned-${index}.jsonl`);
         writeFileSync(path, "{}\n");
@@ -3399,7 +3211,7 @@ describe("claudeSubagents, before the files are read through", () => {
       expect(status.countOf("p1")).toBe(1);
       const drained = new Promise<void>((resolve) => { counted = (running) => { if (running === 0) resolve(); }; });
       owners.shift()!();
-      status.poll(); // Retry admission once; subsequent chunks must advance via the real watch.
+      status.poll();
       await drained;
       const history = commandHistory(s.path, statSync(s.path).size, false);
       expect(history!.through).toBeGreaterThan(2 * 1024 * 1024);
@@ -3418,7 +3230,6 @@ describe("claudeSubagents, before the files are read through", () => {
     forgetSubagents();
     wholeClaudeSubagents(s.path, true, NOW);
     const boundary = statSync(s.path).size;
-    // answered as soon as the read waits for the record, not at its deadline (the test's timeout)
     expect(await waitCommandHistory(s.path, boundary, 60_000)).toMatchObject({ complete: false, through: boundary - Buffer.byteLength(partial) });
     expect(claudeSubagentState(s.path, true, NOW).historyPending).toBe(true);
     appendFileSync(s.path, '"}\n');
@@ -3444,7 +3255,6 @@ describe("claudeSubagents, before the files are read through", () => {
     // two agents of 5.5 MB each: more than one call reads
     const big = json({ type: "user", timestamp: at(1), message: { role: "user", content: "go" } }) + Array.from({ length: 5000 }, (_, i) => body(`m${i}`, 2, null)).join("");
     for (const id of ["a", "b"]) writeFileSync(s.agent(id, { steps: [] }), big);
-    // a clock already at the end of its time: one call's read, no more
     const cut = wholeClaudeSubagents(s.path, true, NOW, null, 1, () => 1);
     expect(cut.map((task) => task.id).sort()).toEqual(["a", "b"]);
     expect(cut.some((task) => task.turns === null)).toBe(true);
@@ -3454,7 +3264,6 @@ describe("claudeSubagents, before the files are read through", () => {
 
   it("tells the status of every agent on the first call, whatever the budget has reached", () => {
     const s = session();
-    // eight idle teammates of 1.5 MB each and one agent at work: 13 MB, more than a call reads
     for (let n = 0; n < 8; n++) {
       const file = s.agent(`idle${n}`, { steps: [] });
       writeFileSync(file, json({ type: "user", timestamp: at(1), message: { role: "user", content: "go" } }) + Array.from({ length: 1500 }, (_, i) => body(`m${i}`, 2, null)).join("") + body("last", 3, "end_turn"));
@@ -3464,7 +3273,6 @@ describe("claudeSubagents, before the files are read through", () => {
     const first = claudeSubagents(s.path, true, NOW);
     expect(first.filter((task) => task.status === "running").map((task) => task.id)).toEqual(["busy"]);
     expect(first).toHaveLength(9);
-    // started at once; what it did only once it is counted through
     expect(first.every((task) => task.started_at === at(1))).toBe(true);
     expect(first.some((task) => task.turns === null)).toBe(true);
     expect(first.find((task) => task.id === "idle0")).toMatchObject({ status: "completed", ended_at: at(3) });
@@ -3478,10 +3286,8 @@ describe("claudeSubagents, before the files are read through", () => {
   it("leaves out an agent whose status cannot be told yet, rather than showing it running", () => {
     const s = session();
     const file = s.agent("long", { steps: [] });
-    // one entry larger than the tail, and more file than a call reads
     writeFileSync(file, Array.from({ length: 9000 }, (_, i) => body(`m${i}`, 2, null)).join("") + body("last", 3, "end_turn").replace('"pad":"', `"pad":"${"p".repeat(200_000)}`));
     expect(ids(s.path)).toEqual([]);
-    // read through, it ended
     for (let call = 0; call < 3; call++) ids(s.path);
     expect(ids(s.path)).toEqual(["long:completed"]);
   });
@@ -3500,7 +3306,6 @@ describe("claudeSubagents, a long-lived session's old history (#2510)", () => {
     expect(ids(s.path)).toEqual(["new1:running"]);
     const stats = spyOn(fs, "lstatSync");
     try {
-      // resumed, and one whose transcript comes after its meta file: neither is taken for old history
       s.work("old7", 50, 5);
       writeFileSync(join(dirname(files[0]!), "agent-late.meta.json"), JSON.stringify({ agentType: "reviewer", description: "task late" }));
       claudeSubagents(s.path, true, NOW + 1000);
@@ -3536,12 +3341,10 @@ describe("claudeSubagents, a long-lived session's old history (#2510)", () => {
     const s = session();
     const old = s.agent("old1");
     s.agent("new1");
-    // a clock past every write, so a poll that finds nothing changed reads nothing
     let clock = Date.now() + 5000;
     age(old, clock - 2 * DAY);
     const status = new ClaudeSubagentStatus({ resolve: () => Promise.resolve({ path: s.path, startedAt: null }), onChange: () => undefined, now: () => clock });
     await status.refresh([pane]);
-    // the next pass finds the first read whole: what it read stands until an input changes
     status.poll();
     expect(status.countOf("p1")).toBe(1);
     s.work("old1", 50, 5);
@@ -3565,7 +3368,6 @@ describe("claudeSubagents, a long-lived session's old history (#2510)", () => {
     s.work("old1", 50, 5);
     age(old, clock - 1000);
     clock += 60_000;
-    // the first pane's recheck finds it; the second must not keep its certified answer
     status.poll("p1");
     status.poll("p2");
     expect([status.countOf("p1"), status.countOf("p2")]).toEqual([2, 2]);

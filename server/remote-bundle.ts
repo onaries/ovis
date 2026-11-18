@@ -23,12 +23,10 @@ export async function bundleManifestSource(platform: string, options: BundleSour
 }
 export interface BundleFile { path: string; sha256: string; size: number }
 interface BundleFileOptions extends BundleSourceOptions {
-  /** where downloaded bundles are kept by checksum (the state directory's bundles/) */
   cacheDir?: string;
   onProgress?(done: number, total: number | null): void;
 }
 
-/** One download per checksum at a time: PCs updating together share it, and it is kept. */
 const downloads = new Map<string, { promise: Promise<void>; done: number; total: number | null; listeners: Set<(done: number, total: number | null) => void> }>();
 const CACHED_BUNDLES = 4;
 
@@ -52,7 +50,6 @@ async function download(url: string, sha256: string, cacheDir: string, report: (
   const length = Number(response.headers.get("content-length"));
   const total = Number.isFinite(length) && length > 0 ? length : null;
   await mkdir(cacheDir, { recursive: true, mode: 0o700 });
-  // a download cut short by a restart leaves its part file; nothing else will pick it up
   for (const name of await readdir(cacheDir)) {
     if (name.includes(".part-") && Date.now() - (await stat(join(cacheDir, name)).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs > 3_600_000) await rm(join(cacheDir, name), { force: true });
   }
@@ -73,7 +70,6 @@ async function download(url: string, sha256: string, cacheDir: string, report: (
     await rm(part, { force: true });
     throw error;
   }
-  // keep the newest few (one per platform is the steady state)
   const cached = (await readdir(cacheDir)).filter((name) => /^[a-f0-9]{64}\.tgz$/.test(name));
   if (cached.length > CACHED_BUNDLES) {
     const byAge = await Promise.all(cached.map(async (name) => ({ name, at: (await stat(join(cacheDir, name))).mtimeMs })));
@@ -117,7 +113,6 @@ export async function bundleFile(platform: string, signal: AbortSignal, options:
       const listener = (done: number, total: number | null) => options.onProgress?.(done, total);
       entry.listeners.add(listener);
       options.onProgress?.(entry.done, entry.total);
-      // a cancelled setup stops waiting; the shared download finishes and stays cached
       try { await Promise.race([entry.promise, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason ?? new Error("Setup cancelled")), { once: true }))]); }
       finally { entry.listeners.delete(listener); }
     }

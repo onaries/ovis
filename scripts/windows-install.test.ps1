@@ -1,22 +1,15 @@
-# Run with: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-install.test.ps1
 $ErrorActionPreference = 'Stop'
 $installer = Join-Path $PSScriptRoot '..\install.ps1'
 $originalPath = $env:PATH
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalUserProfile = $env:USERPROFILE
-# The cases below install from source (Bun and herdr's plugin checkout); the release's binary has its own cases,
-# against a local release folder, near the end
 $originalFromSource = $env:OVIS_FROM_SOURCE
 $env:OVIS_FROM_SOURCE = '1'
 $originalStateHome = $env:XDG_STATE_HOME
 $state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true; refId = 'devswha.ovis'; installedId = ''; manifestBlocked = $false; startedLegacy = $false; legacyInstalled = $false; stopStateDirs = @(); handStarted = $false; pluginSource = ''; launcherCalls = @(); failBuild = $false; cutBuild = $null; annotated = @(); moved = @(); offline = $false; releaseDown = $false; noGit = $false; serverRecord = ''; builtUnderServer = $false; gitPrefix = ''; badBinary = $false; headMoves = $false; gitFails = $false }
 $global:herdrInstallOpened = @()
-# gh is a stand-in .cmd, first on PATH: the installer runs gh as a process, and no real star is read or given.
-# mode.txt beside it is what it answers: starred, not, refuses (the star itself), upstream, signed-out, hangs or
-# lingering (it answers, and leaves a child holding its output; child.txt gets that child's PID).
 $star = @{ asked = 0; answer = ''; failAsk = $false }
 $ghStandIn = Join-Path ([IO.Path]::GetTempPath()) "herdr-installer-gh-$PID"
-# A real directory: the installer reads the installed copy to tell whether it can run on Windows.
 $pluginRoot = Join-Path ([IO.Path]::GetTempPath()) "herdr plugin with spaces $PID"
 $launcher = Join-Path $pluginRoot 'scripts\plugin.ps1'
 function Assert([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
@@ -31,9 +24,7 @@ function Get-TestCommit {
 }
 function git {
     $global:LASTEXITCODE = 0
-    # herdr's checkout, detached at the commit of the ref it was installed at, which a prefix of it names there
     if ($args[0] -eq '-C' -and $args[2] -eq 'rev-parse') {
-        # a plugin linked from a folder that is no git checkout, as git says it (the installer asks it untranslated)
         if ($state.noGit) { Write-Error 'fatal: not a git repository (or any of the parent directories): .git' -ErrorAction Continue; $global:LASTEXITCODE = 128; return }
         # git failing at the checkout's top level ($state.gitFails): as Git for Windows does, on every call, for a folder
         # another account owns (its lines as it prints them, the empty one included, and the command quoted for a POSIX
@@ -77,8 +68,6 @@ function bun {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { $state.bunVersion }
     elseif ($args[-1] -eq 'status') { 'running http://127.0.0.1:7317 (pid 1234)'; 'config: none' }
-    # the old id's stop: where it was told to look for its server's pid
-    # (a server started by hand from the checkout is found only without one)
     elseif ($args[-1] -eq 'stop' -and $args[0] -like '*legacy root*') {
         $state.stopStateDirs += "$env:HERDR_PLUGIN_STATE_DIR"
         if ($state.handStarted -and $env:HERDR_PLUGIN_STATE_DIR) { 'herdr web ui is not running' } else { 'stopped herdr web ui (pid 1234)' }
@@ -95,7 +84,6 @@ function bun {
     # in .ovis/server/from-source before it builds the packages and the client, and the version and commit in
     # source-build once they are built; it notes when a server's pid record is still there as it builds
     elseif ($args[0] -like '*\scripts\plugin-launch.ts') {
-        # a stop by its outcome alone (where it went is what the server-record cases assert), an install with the variable
         $state.launcherCalls += if ($args[-1] -eq 'stop') { 'stop' } else { "$($args[-1]) $env:OVIS_FROM_SOURCE".Trim() }
         $root = Split-Path (Split-Path $args[0])
         $serverDir = Join-Path $root '.ovis\server'
@@ -104,14 +92,10 @@ function bun {
         $keptVersion = if (Test-Path -LiteralPath $keptJson) { (Get-Content -Raw -LiteralPath $keptJson | ConvertFrom-Json).version }
         $toSource = $marked -or -not (Test-Path -LiteralPath (Join-Path $serverDir 'bin\ovis-server.exe')) -or $keptVersion -ne '1.2.3'
         if ($args[-1] -eq 'stop') {
-            # a kept binary of this version that fails its check (signature, executable or client), the release out of reach
-            # ($state.releaseDown): no binary can be had, so the stop goes to the sources
+            # a kept binary of this version that fails its check ($state.badBinary: signature, executable or client), with no
+            # release to fetch it again (out of reach, or a folder without it): no binary can be had, so the stop goes to the sources
             if ($state.badBinary) { $toSource = $true }
             if (($env:OVIS_FROM_SOURCE -eq '1' -or $toSource) -and -not (Test-Path -LiteralPath (Join-Path $root 'node_modules\all-installed'))) { $global:LASTEXITCODE = 1; return }
-            # the record it reads: in the state dir it is told, else ~\.local\state's while a pid is recorded there (a
-            # server started by hand, of any checkout), else herdr's; told the new id's dir with no live record there, the
-            # old id's beside it while a live pid is recorded in it (scripts/plugin.ts runningStateDir). A record of a pid
-            # no process has is no server.
             $handDir = Join-Path $env:USERPROFILE '.local\state\ovis'
             $live = { param($Dir) $recorded = "$(Get-Content -Raw -LiteralPath (Join-Path $Dir 'server.pid') -ErrorAction SilentlyContinue)".Trim(); $recorded -match '^\d+$' -and [bool](Get-Process -Id $recorded -ErrorAction SilentlyContinue) }
             $readDir = if ($env:HERDR_PLUGIN_STATE_DIR) { $env:HERDR_PLUGIN_STATE_DIR } elseif (Test-Path -LiteralPath (Join-Path $handDir 'server.pid')) { $handDir } else { Join-Path $env:XDG_STATE_HOME 'herdr\plugins\devswha.ovis' }
@@ -130,14 +114,9 @@ function bun {
             Set-Content -LiteralPath (Join-Path $serverDir 'source-build') -Value 'started'
             Set-Content -LiteralPath (Join-Path $serverDir 'from-source') -Value '1.2.3'
             if ($state.failBuild) { $global:LASTEXITCODE = 1; return }
-            # a build cut off: it says the marker is written, then runs until the test stops the installer, as Ctrl+C does
             if ($state.cutBuild) { $null = $state.cutBuild.Set(); Start-Sleep -Seconds 60 }
             New-Item -ItemType Directory -Force -Path (Join-Path $root 'node_modules'), (Join-Path $root 'dist') | Out-Null
             Set-Content -LiteralPath (Join-Path $root 'node_modules\all-installed'), (Join-Path $root 'dist\index.html') -Value ''
-            # the version alone where git reads no commit (no checkout, or not its top level); `started` left where HEAD
-            # moved while it built ($state.headMoves) or git failed ($state.gitFails), the build returning 0 all the same
-            # the checkout moved to another version while it built ($state.versionMoves, a pull across a version bump): its
-            # commit moved too, so `started` is left
             if ($state.versionMoves) { Set-Content -LiteralPath (Join-Path $root 'package.json') -Value '{ "version": "1.2.4" }' }
             if (-not $state.headMoves -and -not $state.gitFails -and -not $state.versionMoves) {
                 Set-Content -LiteralPath (Join-Path $serverDir 'source-build') -Value $(if ($state.noGit -or $state.gitPrefix) { '1.2.3' } else { "1.2.3 $(Get-TestCommit $state.ref)" })
@@ -168,9 +147,7 @@ function herdr {
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'link') { $state.linkedRoot = $args[2]; return 'Linked' }
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }
-                # under the id the ref's manifest names
                 $state.installed = $true; $state.installs++; $state.ref = $args[4]; $state.installedId = $state.refId
-                # what herdr's build step (scripts/plugin-launch.ts install) is told: source, or the release's binary
                 $state.pluginSource = "$env:OVIS_FROM_SOURCE"
                 Remove-Item -LiteralPath $pluginRoot -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Force -Path (Split-Path $launcher) | Out-Null
@@ -181,12 +158,10 @@ function herdr {
     }
 }
 function Invoke-WebRequest {
-    # the manifest of the ref being installed: what its id is, or a network that blocks the host
     if ("$($args[-1])" -like 'https://raw.githubusercontent.com/devswha/ovis/*/herdr-plugin.toml') {
         if ($state.manifestBlocked) { throw 'Unable to connect to the remote server' }
         return @{ Content = "name = `"Ovis`"`nid = `"$($state.refId)`"" }
     }
-    # herdr's installer, as the stand-in the test wrote: -OutFile is the last argument
     if ($args[0] -eq 'https://herdr.dev/install.cmd') { Set-Content -LiteralPath $args[-1] -Value $state.herdrInstaller -Encoding Ascii; return }
     if ($args[0] -ne 'https://bun.sh/install.ps1') { throw "Unexpected download: $args" }
     if ($state.failBun) { return @{ Content = 'param($Version)' } }
@@ -241,7 +216,6 @@ exit /b 1
     # a server a start recorded there (scripts/plugin.ts's server.pid and server.owner), and none of this PC's
     $env:XDG_STATE_HOME = Join-Path $ghStandIn 'state home'
     $ghCalls = Join-Path $ghStandIn 'calls.txt'
-    # a first install with this gh; then what the installer said, and how often it starred
     $firstInstall = {
         param([string]$Gh, [string]$Source)
         $state.installed = $false; $star.asked = 0
@@ -267,7 +241,7 @@ exit /b 1
 
     $state.bunVersion = '1.3.0'
     & $installer -Ref ''
-    Assert ($state.bunVersion -eq '1.4.2') 'An old Bun must be updated through its installer'
+    Assert ($state.bunVersion -eq '1.4.4') 'An old Bun must be updated through its installer'
     Assert ($env:PATH.EndsWith($originalPath)) "Bun's installer must not leave the session without the machine PATH"
     $state.bunVersion = '1.3.0'; $state.failBun = $true
     $failed = $false
@@ -278,15 +252,10 @@ exit /b 1
     $state.installed = $false; $state.running = $false; $state.started = $false
     & $installer -Ref 'feat/windows-install'
     Assert ($state.ref -eq 'feat/windows-install' -and -not $state.started) 'Explicit ref must install without starting herdr'
-    # without OVIS_FROM_SOURCE, herdr still builds a branch from its own sources, and the caller's variable is left as it was
     $state.installed = $false; $env:OVIS_FROM_SOURCE = ''
     & $installer -Ref 'feat/windows-install'
     Assert ($state.pluginSource -eq '1' -and -not $env:OVIS_FROM_SOURCE) "A branch must be built from its own sources (herdr's build was told '$($state.pluginSource)')"
-    # a branch an earlier installer left on the release's binary (a launcher, no from-source marker): with herdr running,
-    # a rerun stops that server and builds the checkout from its own sources before the start and the status read
     $state.running = $true; $state.started = $false; $state.launcherCalls = @(); $installs = $state.installs
-    # the release the repair asks before a stop that would need it: in reach, holding no release of this version (a
-    # branch's), or out of reach ($releaseDown: nothing listens there)
     $noReleases = Join-Path $ghStandIn 'no releases'
     New-Item -ItemType Directory -Force -Path $noReleases | Out-Null
     $noReleases = ([Uri]$noReleases).AbsoluteUri
@@ -296,7 +265,6 @@ exit /b 1
     Set-Content -LiteralPath (Join-Path $pluginRoot 'package.json') -Value '{ "version": "1.2.3" }'
     $fromSource = Join-Path $pluginRoot '.ovis\server\from-source'
     $sourceBuild = Join-Path $pluginRoot '.ovis\server\source-build'
-    # the server a start recorded (scripts/plugin.ts's server.pid and server.owner), in the test's own herdr state dir
     $state.serverRecord = Join-Path $env:XDG_STATE_HOME 'herdr\plugins\devswha.ovis\server.pid'
     # a server of this plugin running as this very process, recorded as start records it: its pid, and its creation time
     # (or another, for a record whose pid another process has taken since; or none, 'none', as a start before server.owner),
@@ -309,13 +277,10 @@ exit /b 1
         if (-not $Birth) { $Birth = "$(([DateTimeOffset](Get-CimInstance Win32_Process -Filter "ProcessId=$PID").CreationDate).ToUnixTimeMilliseconds())" }
         Set-Content -LiteralPath (Join-Path (Split-Path $state.serverRecord) 'server.owner') -Value (@{ pid = $PID; birth = @{ platform = 'win32'; value = $Birth } } | ConvertTo-Json -Compress)
     }
-    # no build of this checkout: no marker, packages or built client
     $unbuilt = {
         foreach ($name in '.ovis', 'node_modules', 'dist') { Remove-Item -LiteralPath (Join-Path $pluginRoot $name) -Recurse -Force -ErrorAction SilentlyContinue }
         if ($state.serverRecord) { Remove-Item -LiteralPath (Split-Path $state.serverRecord) -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    # a command that builds the checkout as PowerShell reads it: what it sets OVIS_FROM_SOURCE to, then the command's
-    # arguments, each whole, joined by |
     $readBuild = {
         param([string]$Line)
         $parseErrors = $null
@@ -338,19 +303,14 @@ exit /b 1
     & $onBinary
     & $installer -Ref 'feat/windows-install'
     Assert (($state.launcherCalls -join ',') -eq 'stop,install 1' -and $state.installs -eq $installs -and $state.started -and -not $env:OVIS_FROM_SOURCE) "A rerun over a branch on the release's binary must stop it and build it from source in place (launcher: $($state.launcherCalls -join ','))"
-    # the same with OVIS_FROM_SOURCE=1 set by the caller: the stop still goes to the binary, and the variable is the caller's again
     & $onBinary; $state.launcherCalls = @(); $env:OVIS_FROM_SOURCE = '1'
     & $installer -Ref 'feat/windows-install'
     Assert (($state.launcherCalls -join ',') -eq 'stop,install 1' -and $env:OVIS_FROM_SOURCE -eq '1' -and (Test-Path -LiteralPath $fromSource)) "With OVIS_FROM_SOURCE=1 set, a rerun must stop the binary and build from source (launcher: $($state.launcherCalls -join ','))"
-    # a build that fails takes back the marker the launcher wrote before it, so the next rerun builds again; it hands over
-    # the rerun, and the start of the release's binary the checkout keeps
     & $onBinary; $state.launcherCalls = @(); $env:OVIS_FROM_SOURCE = ''; $state.failBuild = $true
     $message = ''
     try { & $installer -Ref 'feat/windows-install' } catch { $message = $_.Exception.Message }
     Assert ($message -match 'bun failed' -and -not (Test-Path -LiteralPath $fromSource) -and -not $env:OVIS_FROM_SOURCE) "A failed build must stop the install and leave no from-source marker: $message"
     Assert ($message.Contains('OVIS_REF=feat/windows-install') -and $message.Contains('herdr plugin action invoke devswha.ovis.start-windows')) "A failed build must hand over the rerun and the start of the release's binary: $message"
-    # a kept binary of another version is not what the launcher's start runs: no start is handed over then (nor does its
-    # stop run it: the stop goes to the sources, here with all their packages)
     Set-Content -LiteralPath (Join-Path $pluginRoot '.ovis\server\bin\ovis-server.json') -Value '{ "version": "1.2.2" }'
     New-Item -ItemType Directory -Force -Path (Join-Path $pluginRoot 'node_modules') | Out-Null
     Set-Content -LiteralPath (Join-Path $pluginRoot 'node_modules\all-installed') -Value ''
@@ -382,16 +342,12 @@ exit /b 1
     $state.launcherCalls = @()
     & $installer -Ref 'feat/windows-install'
     Assert (($state.launcherCalls -join ',') -eq 'stop,install 1' -and (Test-Path -LiteralPath $fromSource)) "A rerun after a build cut off must build again (launcher: $($state.launcherCalls -join ','))"
-    # a build cut off where no finally runs (a closed window, a restart): the marker names the version, and neither the
-    # packages nor the client are there, so the rerun builds again (its stop going to the binary, not the unbuilt sources)
     & $onBinary; $state.launcherCalls = @()
     New-Item -ItemType Directory -Force -Path (Join-Path $pluginRoot '.ovis\server') | Out-Null
     Set-Content -LiteralPath $fromSource -Value '1.2.3'
     $message = ''
     try { & $installer -Ref 'feat/windows-install' } catch { $message = $_.Exception.Message }
     Assert (($state.launcherCalls -join ',') -eq 'stop,install 1' -and (Test-Path -LiteralPath (Join-Path $pluginRoot 'dist\index.html'))) "A marker without the packages and the client must be built again (launcher: $($state.launcherCalls -join ',')): $message"
-    # the same with no release binary kept (a source build herdr ran itself, cut off): nothing of this checkout can be
-    # running, and the launcher's stop would fail in the sources it never built, so the rerun builds without a stop
     & $unbuilt; $state.launcherCalls = @()
     New-Item -ItemType Directory -Force -Path (Join-Path $pluginRoot '.ovis\server') | Out-Null
     Set-Content -LiteralPath $fromSource -Value '1.2.3'
@@ -415,7 +371,6 @@ exit /b 1
         Assert ($message -and $state.launcherCalls.Count -eq 0) "$($case.name): nothing must be stopped or built (launcher: $($state.launcherCalls -join ',')): $message"
         if ($case.at) { Assert ($message.Contains($installedAt) -and $message.Contains($case.at)) "$($case.name) must be said with both commits ($installedAt, $($case.at)): $message" }
     }
-    # the installed commit's id, short or long, and an annotated tag at it (its commit is the tag's ^{}) are that checkout
     foreach ($case in @(@{ ref = $installedAt }, @{ ref = $installedAt.Substring(0, 5) }, @{ ref = 'tag/annotated'; tag = $true })) {
         & $onBinary; $state.launcherCalls = @()
         if ($case.tag) { $state.annotated = @($case.ref); $state.ref = $case.ref }
@@ -423,7 +378,6 @@ exit /b 1
         $state.annotated = @(); $state.ref = 'feat/windows-install'
         Assert (($state.launcherCalls -join ',') -eq 'stop,install 1' -and (Test-Path -LiteralPath $fromSource)) "$($case.ref) names the installed commit and must build that checkout (launcher: $($state.launcherCalls -join ','))"
     }
-    # a release tag keeps its binary
     $state.launcherCalls = @()
     & $installer -Ref 'v1.10.0'
     Assert ($state.launcherCalls.Count -eq 0 -and $state.installs -eq $installs) "Nothing must be rebuilt for a release tag (launcher: $($state.launcherCalls -join ','))"
@@ -443,7 +397,6 @@ exit /b 1
         @{ name = 'a build cut off in bun install over the client of an earlier one'; packages = 'some'; client = $true; stamp = 'started'; calls = 'stop,install 1' },
         @{ name = 'a build cut off in bun install over the client of an earlier one, its server running'; packages = 'some'; client = $true; stamp = 'started'; server = 'alive'; calls = 'stop'; refused = $true },
         @{ name = 'the same, the server recorded without its creation time'; packages = 'some'; client = $true; stamp = 'started'; server = 'unverified'; calls = 'stop'; refused = $true; names = { $state.serverRecord }; recover = { Remove-Item -LiteralPath $state.serverRecord } },
-        # the same, its process being Ovis (a process of the test's own stands for it): the refusal says how to stop it
         @{ name = 'the same, the process it names being Ovis'; packages = 'some'; client = $true; stamp = 'started'; server = 'unverified'; serverProcess = $true; calls = 'stop'; refused = $true; names = { $state.serverRecord }; recover = { Stop-Process -Id $serverChild.Id; $serverChild.WaitForExit() } },
         @{ name = 'a hand-started Ovis recorded in ~\.local\state, maybe of another checkout'; packages = 'some'; stamp = 'started'; server = 'alive'; byHand = $true; calls = 'stop'; refused = $true; names = { Split-Path $state.serverRecord } },
         @{ name = 'the same, with packages that load the stop: it is left running'; packages = 'all'; stamp = 'started'; server = 'alive'; byHand = $true; calls = 'stop'; refused = $true; names = { Split-Path $state.serverRecord } },
@@ -468,13 +421,8 @@ exit /b 1
             $given = $env:OVIS_FROM_SOURCE; $env:OVIS_FROM_SOURCE = '1'
             try { bun (Join-Path $pluginRoot 'scripts\plugin-launch.ts') install } finally { $env:OVIS_FROM_SOURCE = $given }
         } },
-        # nothing stopped: the release out of reach, the stop it would need is not tried (the cases after this loop)
         @{ name = 'a kept release binary of this version that fails its check, the release out of reach'; binary = $true; badBinary = $true; packages = 'some'; stamp = 'started'; releaseDown = $true; calls = ''; refused = $true; untouched = $true; names = { $keptBin }; recover = { Remove-Item -LiteralPath $keptBin -Recurse -Force } },
-        # the cause this run can act on (the binary) named first, then the server started by hand (whose record the test
-        # takes away with its profile, standing for stopping it)
         @{ name = 'the same, an Ovis started by hand recorded as running too'; binary = $true; badBinary = $true; packages = 'some'; stamp = 'started'; server = 'alive'; byHand = $true; calls = 'stop'; refused = $true; names = { $keptBin; Split-Path $state.serverRecord }; recover = { Remove-Item -LiteralPath $keptBin -Recurse -Force } },
-        # git failing at the checkout's top level: no stamp that names a commit is taken, nothing is stopped or changed,
-        # and git's words are said; the next run, git answering again, decides by the commit
         @{ name = 'a finished build of another commit, git failing at the checkout this once'; packages = 'all'; client = $true; stamp = "1.2.3 $(Get-TestCommit 'earlier')"; gitFails = 'other'; calls = ''; refused = $true; untouched = $true; names = { 'bad object HEAD'; 'nothing was stopped or changed' }; recover = { <# git answers again #> } },
         @{ name = 'a build cut off, git failing at the checkout this once'; packages = 'some'; stamp = 'started'; gitFails = 'other'; calls = ''; refused = $true; untouched = $true; names = { 'bad object HEAD' }; recover = { <# git answers again #> } },
         # a working install git distrusts every time (a folder another account owns), stamped with the version alone by a
@@ -482,12 +430,9 @@ exit /b 1
         # stand-in answering again), the next run rebuilds once and stamps the commit
         @{ name = 'a finished build stamped with the version alone, in a folder git does not trust'; packages = 'all'; client = $true; stamp = '1.2.3'; gitFails = $true; trust = $true; calls = ''; refused = $true; untouched = $true; names = { 'dubious ownership' }; recover = { <# git trusts the folder #> } },
         @{ name = 'a finished build of another commit, in a folder git does not trust'; packages = 'all'; client = $true; stamp = "1.2.3 $(Get-TestCommit 'earlier')"; gitFails = $true; trust = $true; calls = ''; refused = $true; untouched = $true; names = { 'dubious ownership' }; recover = { <# git trusts the folder #> } },
-        # both ids installed: the old id's server, stopped for the move before the checkout is read, is said, with its start
         @{ name = 'the same, the old id installed too and its server stopped for the move'; packages = 'all'; client = $true; stamp = "1.2.3 $(Get-TestCommit 'earlier')"; gitFails = $true; trust = $true; legacy = $true; calls = ''; refused = $true; untouched = $true; names = { 'dubious ownership'; 'server of the old id was stopped'; 'herdr plugin action invoke devswha.herdr-web-ui.start-windows' } },
-        # and by a refusal after this checkout's own stop: a failed build
         @{ name = 'a failed build, the old id installed too and its server stopped for the move'; packages = 'some'; stamp = 'started'; failBuild = $true; legacy = $true; calls = 'stop,install 1'; hint = $true },
         @{ name = 'a finished build of an older launcher (no stamp), git failing at the checkout'; packages = 'all'; client = $true; gitFails = $true; trust = $true; calls = '' },
-        # scripts/plugin.ts's stop, told the new id's state dir, stops a live server recorded under the old id alone
         @{ name = 'a live server recorded under the old id only, with packages that load the stop'; packages = 'all'; stamp = 'started'; server = 'alive'; legacyRecord = $true; calls = 'stop,install 1' },
         @{ name = 'a build during which the checkout moved to another commit'; packages = 'some'; stamp = 'started'; headMoves = $true; calls = 'stop,install 1' },
         @{ name = 'a build during which the checkout moved to another version'; packages = 'some'; stamp = 'started'; versionMoves = $true; calls = 'stop,install 1' },
@@ -499,14 +444,12 @@ exit /b 1
         & $unbuilt; $state.launcherCalls = @(); $state.builtUnderServer = $false
         $state.releaseDown = [bool]$case.releaseDown; $env:OVIS_RELEASES_URL = if ($case.releaseDown) { $releaseDown } else { $noReleases }; $state.noGit = [bool]$case.noGit; $state.gitPrefix = if ($case.nested) { 'plugin/' } else { '' }
         $state.badBinary = [bool]$case.badBinary; $state.headMoves = [bool]$case.headMoves; $state.versionMoves = [bool]$case.versionMoves; $state.gitFails = if ($case.gitFails) { $case.gitFails } else { $false }; $state.legacyInstalled = [bool]$case.legacy
-        # a hand-started server's record, in ~\.local\state of a user profile of the test's own (and PATH as it was after)
         $herdrRecord = $state.serverRecord; $givenProfile = $env:USERPROFILE; $givenPath = $env:PATH
         if ($case.byHand) {
             $env:USERPROFILE = Join-Path $ghStandIn 'profile'
             $state.serverRecord = Join-Path $env:USERPROFILE '.local\state\ovis\server.pid'
         }
         if ($case.legacyRecord) { $state.serverRecord = Join-Path $env:XDG_STATE_HOME 'herdr\plugins\devswha.herdr-web-ui\server.pid' }
-        # the recorded server: this process, or one the test starts (a process the refusal may tell to stop)
         $serverChild = if ($case.serverProcess) { [Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo -Property @{ FileName = "$env:SystemRoot\System32\PING.EXE"; Arguments = '-n 120 127.0.0.1'; UseShellExecute = $false; CreateNoWindow = $true })) }
         $serverPid = if ($serverChild) { $serverChild.Id } else { $PID }
         if ($case.server) {
@@ -534,11 +477,9 @@ exit /b 1
         $state.releaseDown = $false; $env:OVIS_RELEASES_URL = $noReleases; $state.noGit = $false; $state.failBuild = $false; $state.badBinary = $false; $state.headMoves = $false; $state.versionMoves = $false; $state.gitFails = $false; $state.legacyInstalled = $false
         $versionAfter = (Get-Content -Raw -LiteralPath (Join-Path $pluginRoot 'package.json') | ConvertFrom-Json).version
         Set-Content -LiteralPath (Join-Path $pluginRoot 'package.json') -Value '{ "version": "1.2.3" }'
-        # what a refusal must name, in this order: the files to remove, and the process of a server recorded as running
         $named = @(if ($case.names) { & $case.names }) + @(if ($case.server -and $case.refused) { "process $serverPid" })
         $order = @($named | ForEach-Object { $message.IndexOf($_) })
         $inOrder = -not @(for ($i = 1; $i -lt $order.Count; $i++) { if ($order[$i] -lt $order[$i - 1]) { $i } })
-        # a refused server is left running: its record is where its start wrote it
         $recordLeft = -not $case.server -or -not $case.refused -or (Test-Path -LiteralPath $state.serverRecord)
         if ($case.byHand) {
             Remove-Item -LiteralPath $env:USERPROFILE -Recurse -Force
@@ -562,19 +503,15 @@ exit /b 1
         if ($case.legacy) { Assert ($message.Contains('herdr plugin action invoke devswha.herdr-web-ui.start-windows')) "$($case.name): the old id's server, stopped for the move, must be said with its start: $message" }
         if ($case.failBuild) { Assert ($message -match 'bun failed' -and $message.Contains($pluginRoot) -eq [bool]$case.hint -and -not (Test-Path -LiteralPath $fromSource)) "$($case.name): a failed build must take the marker back, and name the checkout to find a server by only where a server no stop stopped may run ($([bool]$case.hint)): $message" }
         elseif ($case.refused) {
-            # a refusal before anything is stopped or changed (untouched) keeps the marker; one after the stop took it back
             Assert ($message -and $recordLeft -and (Test-Path -LiteralPath $fromSource) -eq [bool]$case.untouched -and -not @($named | Where-Object { -not $message.Contains($_) }) -and $inOrder -and $message.Contains("Stop-Process -Id $serverPid") -eq ($case.server -in 'alive', 'unverified')) "$($case.name): the run must be refused, naming $($named -join ' and ') in that order, with Stop-Process for a verified server, or for one that could not be verified if it is Ovis: $message"
             if ($case.recover) {
                 & $case.recover; $state.launcherCalls = @(); $message = ''
                 try { $null = & $installer -Ref 'feat/windows-install' 6>&1 } catch { $message = $_.Exception.Message }
-                # built as it is, where git reads no commit: stamped with the version alone, and taken as built
                 $expected = if ($case.nested) { '1.2.3' } else { $finished }
                 Assert (-not $message -and (Get-Content -Raw -LiteralPath $sourceBuild).Trim() -eq $expected) "$($case.name): doing what the refusal says must let the next run build, or take the folder as built (launcher: $($state.launcherCalls -join ',')): $message"
             }
         }
         elseif ($case.headMoves) { Assert (-not $message -and (Get-Content -Raw -LiteralPath $sourceBuild).Trim() -eq 'started' -and (Test-Path -LiteralPath $fromSource) -and $said -match 'moved to another commit' -and $said -match 'still runs it') "$($case.name): the build must stay unfinished, kept, and said: $message $said" }
-        # the next start ignores a marker of the version before (1.2.3): said, never that it still runs, with the build command
-        # and the steps that build it, each command on a line of its own: stop, build (read as PowerShell reads it), start
         elseif ($case.versionMoves) {
             $lines = @($said -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
             $at = @(for ($n = 0; $n -lt $lines.Count; $n++) { if ($lines[$n] -like '*not marked finished*') { $n } })
@@ -659,7 +596,6 @@ exit /b 1
         $words = @($parsed.EndBlock.Statements[0].PipelineElements[0].CommandElements | ForEach-Object { $_.Value })
         Assert (-not $parseErrors -and $words.Count -eq 6 -and $words[5] -eq $folder) "The trust command for $folder must name it as one PowerShell argument: $(Get-TrustCommand $folder)"
     }
-    # the same for the command that builds the checkout, which names the launcher's path
     $buildAst = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $installer).Path, [ref]$null, [ref]$null).Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-BuildCommand' }, $true)
     Assert ($null -ne $buildAst) 'The installer must define Get-BuildCommand'
     Invoke-Expression $buildAst.Extent.Text
@@ -674,7 +610,6 @@ exit /b 1
     try { & $installer -Ref 'broken' } catch { $failed = $_.Exception.Message -match 'herdr failed' }
     Assert ($failed -and -not $state.started) 'A failed native command must stop installation'
 
-    # A copy from a release without Windows support: installed, listed, and unable to start.
     $state.failInstall = $false; $state.running = $true; $state.installed = $false; $state.windowsRelease = $false
     $failed = $false
     try { & $installer -Ref '' } catch { $failed = $_.Exception.Message -match 'does not support Windows yet' }
@@ -682,8 +617,6 @@ exit /b 1
     $state.windowsRelease = $true; $installs = $state.installs
     & $installer -Ref ''
     Assert ($state.uninstalls -eq 1 -and $state.installs -eq $installs + 1 -and $state.started) 'A copy without Windows support must be replaced and started'
-    # release tags are a lowercase vX.Y.Z: V1.2.3 is none, so herdr builds it from source, on a fresh install (here the
-    # one that replaces a copy without Windows support) and on a rerun over a checkout left on the release's binary
     $env:OVIS_FROM_SOURCE = ''; $state.launcherCalls = @()
     Remove-Item -LiteralPath $launcher
     & $installer -Ref 'V1.2.3'
@@ -697,7 +630,6 @@ exit /b 1
     $env:OVIS_FROM_SOURCE = '1'
     Write-Host 'PASS native installer release selection, rerun, Bun bootstrap, explicit ref, stopped herdr, install failure and a copy without Windows support'
 
-    # Releases up to 0.4.13 name the plugin by its old id: told by the manifest, or by the version when it cannot be read.
     foreach ($blocked in $false, $true) {
         $state.installed = $false; $state.started = $false; $state.startedLegacy = $false
         $state.refId = 'devswha.herdr-web-ui'; $state.manifestBlocked = $blocked
@@ -723,7 +655,6 @@ exit /b 1
             Assert (-not $state.legacyInstalled -and $state.installedId -eq 'devswha.ovis' -and $state.started) 'An install under the old id must move to the new id and start'
             Assert ($null -eq $env:HERDR_PLUGIN_STATE_DIR) 'The state dir given to the old stop must not stay set for later commands'
         }
-        # a server started by hand from the old checkout: not found through herdr's dir, so the stop asks again without it
         $state.installed = $false; $state.legacyInstalled = $true; $state.stopStateDirs = @(); $state.handStarted = $true
         & $installer -Ref ''
         Assert ($state.stopStateDirs.Count -eq 2 -and $state.stopStateDirs[0] -and -not $state.stopStateDirs[1]) "A stop that found no server through herdr's dir must ask once more without it: $($state.stopStateDirs -join ' | ')"
@@ -737,7 +668,6 @@ exit /b 1
     }
     Write-Host 'PASS an install under the old id stops its server through the state dir herdr gives it, and moves'
 
-    # Browser opening is covered through a stand-in; this harness never starts a real browser.
     $savedCi = $env:CI; $savedNoOpen = $env:OVIS_NO_OPEN; $savedSsh = $env:SSH_CONNECTION
     try {
         Remove-Item Env:\CI, Env:\OVIS_NO_OPEN, Env:\SSH_CONNECTION -ErrorAction SilentlyContinue
@@ -827,7 +757,6 @@ exit /b 1
     Write-Host 'PASS star: silent when starred or on a rerun, a link without gh, an answer or a terminal, asked once at a terminal and given only on yes'
 
     # A gh that leaves a child holding its output: the call ends on its deadline and the child ends with it.
-    # Invoke-GhApi alone, from the installer's own text, so that only what it starts is looked at.
     $parsed = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $installer).Path, [ref]$null, [ref]$null)
     $ghApi = $parsed.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GhApi' }, $true)
     Assert ($null -ne $ghApi) 'The installer must define Invoke-GhApi'
@@ -847,9 +776,6 @@ exit /b 1
     Assert (-not $left) "regression (fails on main): the child gh left holding its output (PID $childPid) must not outlive the call"
     Write-Host "PASS gh deadline: a child of gh that holds its output ends with the call (PID $childPid, $([math]::Round($elapsed, 1)) s)"
 
-    # A native shim starts its output-holding child as its first action, without a PowerShell startup delay.
-    # At the assignment boundary, force the old runnable launcher to reach child-ready before proceeding.
-    # The fixed launcher must still be suspended there. The same assertion is run against both launches.
     $immediate = Join-Path $ghStandIn 'immediate shim'
     New-Item -ItemType Directory -Path $immediate | Out-Null
     Add-Type -OutputAssembly (Join-Path $immediate 'gh.exe') -OutputType ConsoleApplication -TypeDefinition @'
@@ -895,7 +821,6 @@ public static class ImmediateGh {
             $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
         }
 '@
-    # Scratch-source reversion of exactly the pre-fix runnable Start/Assign ordering; no repository file changes.
     $runnableSource = $orderedSource.Replace($suspendedLaunch.Replace("`r`n", "`n"), $runnableLaunch)
     $path = $env:PATH
     $oldReady = $env:HERDR_TEST_GH_READY; $oldChild = $env:HERDR_TEST_GH_CHILD
@@ -1027,8 +952,6 @@ console.log(key.publicKey);
     $message = ''
     try { & $installer -Ref 'v1.2.4' 6>&1 | Out-Null } catch { $message = $_.Exception.Message }
     Assert ($message -match 'not a valid signature') "The shipped installer must refuse a release its pinned key did not sign: $message"
-    # a release whose signed manifest has the shape from before schema 1 ships no compiled server this installer runs;
-    # with no plugin listed, as on a PC where the binary is what herdr runs, so the release is probed
     $kept = (Get-FileHash $exe).Hash
     $before = @($state.installed, $state.running, $state.linkedRoot)
     $state.installed = $false; $state.running = $false; $state.linkedRoot = ''
@@ -1047,8 +970,6 @@ console.log(key.publicKey);
     $state.linkedRoot = ''; $state.running = $true
     Write-Host 'PASS the release binary: installed and linked once checked, nothing to do again; a release of the old manifest shape goes to source; a corrupt binary, another key, another version and plain http refused, leaving the install as it was'
 
-    # One install at a time: a live holder's lock is waited out (the copy waits 2 s, not 600) and named, a dead holder's is
-    # taken over, and two installs started together in two processes never leave bin without a whole release.
     $env:OVIS_FROM_SOURCE = ''
     $env:OVIS_RELEASES_URL = ([Uri]$releaseDir).AbsoluteUri
     $env:LOCALAPPDATA = Join-Path $binaryScratch 'lock app data'
@@ -1101,7 +1022,6 @@ try { $null = Install-OvisBinary $Version; exit 0 } catch { Write-Output $_.Exce
     $env:OVIS_FROM_SOURCE = '1'; $env:LOCALAPPDATA = $originalLocalAppData; Remove-Item Env:\OVIS_RELEASES_URL
     Write-Host 'PASS one install at a time: a live holder waited out and named, a dead holder''s lock taken over, overlapping installs in two processes leave one whole release'
 
-    # A PC without herdr: its installer is a stand-in .cmd, and nothing of this PC's own herdr is in reach.
     $scratch = Join-Path ([IO.Path]::GetTempPath()) "herdr-installer-test-$PID"
     New-Item -ItemType Directory -Force -Path $scratch | Out-Null
     $runs = Join-Path $scratch 'runs.txt'
@@ -1124,7 +1044,6 @@ try { $null = Install-OvisBinary $Version; exit 0 } catch { Write-Output $_.Exce
     try { & $installer -Ref '' } catch { $message = $_.Exception.Message }
     Assert ($message -match 'security software' -and (& $attempts) -eq 1) "A stop without a download error must not be retried: $message"
 
-    # The second try succeeds: the script goes on to ask herdr its version, and this session has none.
     Remove-Item -LiteralPath $runs -Force
     $state.herdrInstaller = "@echo off`r`necho run>>`"$runs`"`r`nif exist `"$marker`" exit /b 0`r`necho.>`"$marker`"`r`n$slow`r`nexit /b 1"
     $message = ''

@@ -6,7 +6,6 @@ import { chromium } from "playwright-core";
 import type { SetupJob, SetupRequest } from "../shared/machines.ts";
 import { sheetEntryLeft } from "./sheets-settled.ts";
 
-// Render the real dialog against synthetic setup responses. No SSH host or herdr is used.
 const repo = join(import.meta.dir, "..");
 const root = mkdtempSync(join(tmpdir(), "herdr-machine-dialog-"));
 try {
@@ -109,7 +108,6 @@ try {
             await page.route("**/api/machines/setup**", async (route) => {
               if (route.request().method() === "POST") {
                 selected.push(route.request().postDataJSON());
-                // what the server sends for a PC that runs both its own Ovis and herdr sessions (server/machines.ts)
                 job = { id: "found", machine_id: "fixture", target: { destination: "fixture-only" },
                   phase: selected.length === 1 ? "failed" : "connected", step: selected.length === 1 ? "Connection failed" : "Connected",
                   action_required: selected.length === 1 ? "choose_herdr" : null,
@@ -127,11 +125,9 @@ try {
             const shots = join(process.env.UI_EVIDENCE_DIR || join(repo, "evidence"), "found-herdr"); mkdirSync(shots, { recursive: true });
             for (const theme of ["light", "dark"]) {
               await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
-              // the picture is taken once the buttons' colours have settled, not mid-transition
               await page.waitForFunction(() => document.getAnimations().every((animation) => !(animation instanceof CSSTransition) || animation.playState !== "running"));
               await page.screenshot({ path: join(shots, `choice-${width}-${theme}.png`) });
             }
-            // a choice to make is not a failure: the dialog asks, and this PC's own Ovis is its first, main answer
             assert.equal(await dialog.getByText("Connection failed").count(), 0, "a needed choice does not read as a failed connection");
             await dialog.getByText("Choose this PC's Ovis server or a running herdr session.", { exact: true }).waitFor();
             const answers = dialog.locator(".machine-action button");
@@ -208,7 +204,6 @@ try {
             console.log(`PASS ${width}px: stopped core offers explicit new herdr and clears its chosen Ovis`);
           }
           {
-            // an address edited while the first request is still in flight: its answer never offers that PC's sessions here
             let release!: () => void;
             const held = new Promise<void>((resolve) => { release = resolve; });
             const sent: SetupRequest[] = [];

@@ -10,7 +10,6 @@ afterEach(() => mock.restore());
 
 const QUEUE_SCREEN = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  GPT-6-Sol xhigh · ~/lab · Context 97% left\n";
 
-/** Codex blocked only by its collapsed question queue; `exitsOnRead`: it exits while that screen is read. */
 function codexQueue(exitsOnRead: boolean) {
   let alive = true;
   const writes: string[] = [];
@@ -25,7 +24,6 @@ function codexQueue(exitsOnRead: boolean) {
   spyOn(herdr, "agentPrompt").mockImplementation(async () => { throw new herdr.HerdrError("agent_blocked", "questions collapsed"); });
   spyOn(herdr, "paneRead").mockImplementation(async (options) => {
     if (exitsOnRead) alive = false;
-    // with colours (the box's read before the send, composer.ts freeAgentInput), Codex's placeholder is dim
     const text = options.format === "ansi" ? QUEUE_SCREEN.replace("Ask Codex to do anything", "\u001b[2mAsk Codex to do anything\u001b[0m") : QUEUE_SCREEN;
     return { text } as Awaited<ReturnType<typeof herdr.paneRead>>;
   });
@@ -37,7 +35,6 @@ function codexQueue(exitsOnRead: boolean) {
   return { writes, send };
 }
 
-// the queue's screen is Codex's only while Codex still runs once it is read
 it("types nothing when Codex exits while its collapsed queue is read", async () => {
   const { writes, send } = codexQueue(true);
   await expect(send(false)).rejects.toMatchObject({ code: "agent_blocked" });

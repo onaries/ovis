@@ -10,10 +10,8 @@ interface Props {
   messages: PendingMessageView[];
   active?: boolean;
   connected: boolean;
-  /** the pane's agent, which names the input a refusal is about */
   agent?: string | null;
   blocked: boolean;
-  /** a terminal command's peek has the pane: the rows stay, taking no input */
   inert?: boolean;
   unsaved: boolean;
   isBusy: (id: string) => boolean;
@@ -24,13 +22,12 @@ interface Props {
 }
 
 /**
- * What a row says of its state. A held message waits for Send now only while this connection
- * holds it on the bridge: a copy restored from storage (another tab's live hold, or one from before
- * a reload) is reviewed first, since the tab that held it may still send it.
+ * A held message waits for Send now only while this connection holds it on the bridge: a copy
+ * restored from storage (another tab's live hold, or one from before a reload) is reviewed first,
+ * since the tab that held it may still send it.
  */
 export function pendingStatus(message: Pick<PendingMessageView, "state" | "error" | "serverOwned" | "waiting">, busy: boolean, t: (text: string, vars?: Vars) => string): string {
-  // what it waits for besides its turn: its pane shows the agent at rest, and one on its way would say Sending for as
-  // long. Only of a row the bridge still has: a copy kept after the connection dropped keeps the field it was last
+  // Only of a row the bridge still has: a copy kept after the connection dropped keeps the field it was last
   // told, and the bridge sends nothing of it by itself
   if (message.waiting === "omp_starting" && message.serverOwned && (message.state === "queued" || message.state === "sending")) return t("Waiting for omp to start…");
   if (busy) return t("Sending…");
@@ -39,7 +36,6 @@ export function pendingStatus(message: Pick<PendingMessageView, "state" | "error
   if (message.error?.code === "transcript_unconfirmed" || message.error?.code === "pi_transcript_target_changed") return t("Sent to Pi · transcript confirmation unavailable");
   if (message.state === "held" && !message.error && message.serverOwned) return t("Waits for Send now");
   if (message.state === "uncertain") {
-    // #511: a paste left in the terminal's input line says where it is
     if (message.error?.code === "pasted_not_sent") return submitNote(message.error.code, message.error.message);
     return (message.error ? openCodeRefusalNote(message.error.code, message.error.message, t) ?? grokQueueNote(message.error.code, message.error.message, t) : null)
       ?? t("Not confirmed. Check the terminal before sending again.");

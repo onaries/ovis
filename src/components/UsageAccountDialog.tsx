@@ -19,7 +19,6 @@ type Step = { readonly kind: "provider" } | { readonly kind: "hub"; readonly ret
 
 export function UsageAccountDialog({ editHub, provider: preset = null, hub, onHubChanged, onAccountsChanged, onLocalLogin, onClose }: {
   readonly editHub: boolean;
-  /** an agent's own Add account or Sign in: the dialog starts at that provider's methods, past the choice of provider */
   readonly provider?: UsageProviderId | null;
   readonly hub: CLIProxyStatus | null;
   readonly onHubChanged: (status: CLIProxyStatus) => void;
@@ -42,7 +41,6 @@ export function UsageAccountDialog({ editHub, provider: preset = null, hub, onHu
     return () => controller.abort();
   }, [t, preset, editHub]);
   const surface = useFocusTrap<HTMLDivElement>(true);
-  // Back closes the dialog, as Escape does, not Settings under it
   usePhoneSheetBack(() => { onClose(); });
   const content = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {

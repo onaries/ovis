@@ -13,22 +13,15 @@ import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
 import type { UsageLoginRequest } from "../../shared/usage-login.ts";
 
-/** chips the strip holds when its width cannot be measured (before layout, or a test without one) */
 const FALLBACK_CHIPS = 4;
 
 function level(window: UsageWindow | null): string {
   return window !== null && window.used_percent >= HIGH_PERCENT ? " is-high" : "";
 }
 
-/**
- * Why the numbers shown are old or missing; null while they are fresh. Another tool's record standing in for them is
- * neither, so a read that failed or was slowed down has nothing to explain there: of the sign-in only what is the
- * user's to mend is told, an expiry or a keychain the server cannot open.
- */
 function problemText(t: Translate, usage: ProviderUsage, offered: boolean): string | null {
   const name = PROVIDER_NAME[usage.id];
   if (usage.recorded && (usage.problem === "failed" || usage.problem === "rate_limited")) return null;
-  // where the popover offers Sign in again, it need not say how
   return usage.problem === "expired" ? offered ? t("Sign-in expired.") : t("Sign-in expired. Open {name} to renew it.", { name })
     : usage.problem === "rate_limited" ? t("{name} asked to slow down. These are the last numbers.", { name })
     : usage.problem === "failed" ? t("{name} could not be reached.", { name })
@@ -36,19 +29,16 @@ function problemText(t: Translate, usage: ProviderUsage, offered: boolean): stri
     : null;
 }
 
-/** An expired sign-in or an unreachable provider is an error; slowed down or locked, the last numbers stand. */
 function isError(usage: ProviderUsage): boolean {
   return usage.problem === "expired" || usage.problem === "failed";
 }
 
-/** Another limit of the plan, not the one shown, that is near running out: the strip's tooltip names it. */
 function otherHigh(usage: ProviderUsage, shown: UsageWindow | null): UsageWindow | null {
   return usage.windows.find((window) => window !== shown && window.used_percent >= HIGH_PERCENT) ?? null;
 }
 
 function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCount; glance: UsageGlance }) {
   const window = glanceWindow(usage, glance);
-  // a problem fades a sign-in's own numbers, old by then; a record standing in for them is drawn as the record it is
   return (
     <span className={`usage-chip${level(window)}${usage.problem && !usage.recorded ? " has-problem" : ""}${usage.recorded ? " is-recorded" : ""}${usage.recorded?.stale ? " is-stale" : ""}`}>
       <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
@@ -58,7 +48,6 @@ function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCoun
   );
 }
 
-/** Usage beyond the plan: its amount, and a meter when it runs against a cap. */
 function CreditsRow({ credits, count }: { credits: UsageCredits; count: UsageCount }) {
   const t = useT();
   const label = credits.kind === "spend" ? t("Usage credits") : t("Credits");
@@ -91,7 +80,6 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
         {usage.plan && <span className="usage-plan">{usage.plan}</span>}
         {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
       </header>
-      {/* another tool's record is never shown as a reading of our own: who recorded it, and when, comes first */}
       {recorded && <p className="usage-note usage-recorded">{recorded.map((line) => <span key={line}>{line}</span>)}</p>}
       {problem && <p className={`usage-note${isError(usage) ? " is-problem" : ""}`}>{problem}</p>}
       {offered && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} onFollow={onFollow} />}
@@ -111,7 +99,6 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
             {reset && <span className="usage-row-reset">{t("Resets in {time}", { time: reset })}</span>}
             <span className="usage-row-value">{meterText(window, count)}</span>
             <span className="usage-bar" role="meter" aria-label={windowLabel(window)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value} aria-valuetext={meterText(window, count)}>
-              {/* a sliver above 0 still shows as a bar, not a dot */}
               <span style={{ width: value > 0 ? `max(4px, ${value}%)` : 0 }} />
             </span>
           </div>
@@ -133,32 +120,22 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
   );
 }
 
-/**
- * The plan limits of the subscriptions signed in on the server's PC, beside Settings: per
- * provider its logo and the limit chosen in Settings (week or session); the whole strip opens every limit
- * with its reset time.
- */
 /** `watching`: a watching device is not offered what it cannot turn on or sign in to */
 export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a sign-in tab; a watching device has none */ readonly onLocalLogin?: (paneId: string) => void; readonly watching?: boolean }) {
   const t = useT();
   const { settings } = useSettings();
   const { report, loading, refresh } = useUsage(settings.showUsage);
   const [open, setOpen] = useState(false);
-  // an account hidden in Settings is left out of the strip and the popover alike
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
   const drawn = settings.showUsage && shown.length > 0;
-  // Back closes the popover, as Escape does, and leaves the drawer it is in
   usePhoneSheetBack(() => setOpen(false), open && drawn);
-  // Sign in again from the popover, followed in a dialog of its own: the popover closes as it opens
   const [following, setFollowing] = useState<Extract<UsageLoginRequest, { provider: "claude" | "codex" }> | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLButtonElement>(null);
   const [room, setRoom] = useState<{ all: number; folding: number } | null>(null);
 
-  // turned off in Settings, or with no account left to show, the popover closes: its listener and the clock go with it
   useEffect(() => { if (!drawn) setOpen(false); }, [drawn]);
-  // reset countdowns and run-out warnings move on between reports, popover closed or open
   useEffect(() => {
     if (!settings.showUsage) return;
     setNow(Date.now());
@@ -174,7 +151,6 @@ export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a si
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
-  // Escape and focus belong to the meters only while focus is in them: other dialogs keep theirs
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== "Escape" || !open) return;
     event.stopPropagation();
@@ -200,7 +176,6 @@ export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a si
       const gap = parseFloat(style.columnGap) || 0;
       const chip = widestChip.current + gap;
       const available = root.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0) + gap;
-      // "+N" in the 2xs mono face, with its gap
       const more = 3 * parseFloat(getComputedStyle(root).fontSize) * 0.45 + gap;
       const all = Math.floor(available / chip), folding = Math.max(1, Math.floor((available - more) / chip));
       setRoom((last) => last?.all === all && last.folding === folding ? last : { all, folding });

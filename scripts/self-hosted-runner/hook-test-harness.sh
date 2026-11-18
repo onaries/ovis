@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test harness of job-started.sh (scripts/self-hosted-runner.test.ts): the only place a test starts the hook,
 # which may kill, and only after one of two guards has passed: before that it starts no hook and no parent of one
-# (the container guard runs stat, and its orphan check one bash that reads a FIFO).
+# (the container guard runs stat and readlink, and its orphan check one bash that reads a FIFO).
 #   namespace: PID 1 of a PID namespace of its own, started as
 #     unshare --user --map-root-user --pid --fork --mount-proc --kill-child bash hook-test-harness.sh <token> ...
 #     It is PID 1, PID 1 of /proc carries the run's <token> (so /proc is this namespace's), and no other
@@ -19,15 +19,6 @@
 #     container's real Runner.Worker. It notes every process above it (pid and start time) and reports whether
 #     all of them still run after the case.
 # Any doubt exits 97, and the tests skip. The harness signals nothing: whether a process lives is read from /proc.
-#
-# Then: hook-test-harness.sh <guard> <parent> <output>. <parent> is the process that starts the hook: worker (a
-# copy of bash named Runner.Worker), nested (the worker with a shell between it and the hook), renamed (the
-# worker, its name rewritten to systemd), posing (a copy named systemd, its name rewritten to Runner.Worker),
-# named:<name> (a copy named <name>), gone (a parent that ends between the hook's start and its refusal), leaves
-# (a copy named systemd that ends once the hook says it blocks), or probe (the guard alone). <output> is open, or closed: the hook writes to a pipe nobody reads. The environment
-# carries the hook's (GITHUB_*), HOOK, HOOK_PATH (its PATH) and HARNESS_DIR (a directory of the test's own).
-# It prints one line:
-#   report parent=<exit status|running|gone> hook=<ended|blocked|unproven|silent> next=<ran|no> decoys=<alive|dead> above=<alive|dead>
 set -u
 
 marker=/opt/runner-hooks/ovis-runner-image
@@ -58,8 +49,7 @@ in_runner_container() {
 }
 
 # The probe's own: every process /proc shows is this harness or one above it. Builtins only, so this check
-# starts no process; the guard's stat and readlink have ended and been reaped before it. The line above is
-# read from each /proc/<pid>/stat (field 4); the list of what /proc shows is a glob.
+# starts no process; the guard's stat and readlink have ended and been reaped before it.
 alone_in_namespace() {
   local -A line_of_mine=()
   local pid=$$ stat entry
@@ -123,7 +113,6 @@ state() {
   if [[ ${line%% *} == Z ]]; then echo gone; else echo running; fi
 }
 
-# Every process above this harness, before it starts anything: none of them may end while the case runs.
 above=()
 pid=$$
 while stat_of "$pid" && [[ $ppid_of =~ ^[1-9][0-9]*$ ]] && (( ${#above[@]} < 64 )); do
@@ -172,7 +161,6 @@ if [[ $output == closed ]]; then
   # $1: a FIFO whose only reader is closed before the hook starts, so its first write raises SIGPIPE
   script="${prefix}mkfifo \"\$1\" && exec 4<>\"\$1\" 5>\"\$1\" 4<&- && $run >&5 2>&5; echo \"next step ran\""
 elif [[ $parent == gone || $parent == leaves ]]; then
-  # $1: the parent ends once the harness opens this FIFO and closes it again
   script="$run & read -r _ <\"\$1\"; exit 0"
   mkfifo "$dir/fifo"
   if [[ $parent == gone ]]; then mkfifo "$GITHUB_EVENT_PATH"; fi
@@ -186,8 +174,6 @@ exec 3<"$dir/out"
 
 parent_status=""
 if [[ $parent == gone ]]; then
-  # The hook's jq opening its event proves the hook runs, its $PPID the parent; then the parent
-  # ends and is reaped, and only then does the event arrive and the hook refuse it.
   exec 4>"$GITHUB_EVENT_PATH"
   : >"$dir/fifo"
   wait "$pid"
@@ -196,11 +182,6 @@ if [[ $parent == gone ]]; then
   exec 4>&-
 fi
 
-# The hook's output, read as it comes, up to 20 s for each line, until its end (EOF: every writer gone) or the
-# line in which the hook says it blocks. With a parent that lives on, that line and persists() decide: blocked
-# when the block holds, unproven otherwise; then whatever the hook and its parent wrote meanwhile is read.
-# With leaves, the harness then lets the parent end and reads on to the hook's own end; with gone, the parent
-# has ended already, and the hook ends after that line too.
 blocks_line='this hook blocks \(pid ([0-9]+)\)'
 hook=silent next=no
 while :; do

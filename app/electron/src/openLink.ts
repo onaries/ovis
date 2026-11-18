@@ -1,25 +1,12 @@
 /**
- * Links that show a pane in the app's window: `ovis://open?ws=<workspace>&pane=<pane>&view=terminal|chat`,
- * with `machine=<pc>` for another PC, as the server's own deep links name them (src/lib/deepLink.ts).
- * Another program on this computer opens one (`open "ovis://open?…"` on a Mac, the URL as the
- * app's argument elsewhere) and the window selects that pane, as the same address opened in the
- * window would (src/lib/deepLink.ts resolveLink), without reloading the page.
- *
  * A link is read here only to be passed on: it becomes a query of the deep link's own names, which
  * the window's page reads as any address of its own. Nothing else of it is kept, so a link can never
  * send the window to another address, path or scheme, and one that names no pane is no link.
- *
- * The scheme is shared by host: `ovis://open` is this, the desktop app's; `ovis://account/callback`
- * is the phone apps' sign-in (src/lib/account/native.ts), which only brings this window forward.
  */
 
 export const LINK_SCHEME = "ovis";
 
-/**
- * the names a link passes on: the place of a pane, nothing that opens a file, a dialog or Settings.
- * The page reads them as src/lib/deepLink.ts readLink does (src/lib/notificationTarget.ts linkTarget),
- * which also drops a `view` it does not draw; a name added there is not passed on until it is added here.
- */
+/** the names a link passes on: the place of a pane, nothing that opens a file, a dialog or Settings. */
 const NAMES = ["machine", "ws", "pane", "view"] as const;
 /** no name a link passes on is longer: herdr's ids and a PC's name are short */
 const VALUE_MAX = 256;
@@ -58,7 +45,6 @@ export function argvLinkQuery(argv: readonly string[]): string | null {
   return null;
 }
 
-/** What main reads of its window's page as a link waits (main.ts tellLink): null with no window. */
 export type LinkPage = { ours: boolean; loadingMainFrame: boolean };
 
 /**
@@ -71,11 +57,6 @@ export function tellsLink(pending: string | null, page: LinkPage | null, loaded:
   return pending !== null && page !== null && page.ours && (loaded || !page.loadingMainFrame);
 }
 
-/**
- * The preload's side of a link (preload.ts `ovisLink`): main tells a link as soon as the page has
- * loaded, which may be before the page listens, so the newest one that came before is held for the
- * listener and told to it as it starts listening. A listener set later takes the place of the last.
- */
 export function linkHold(): { receive(query: unknown): void; onOpen(listener: (query: string) => void): void } {
   let held: string | null = null;
   let listening: ((query: string) => void) | null = null;

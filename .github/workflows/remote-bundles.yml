@@ -15,6 +15,7 @@ on:
       - 'package.json'
       - 'bun.lock'
       - '.github/workflows/remote-bundles.yml'
+      - '.github/actions/setup-ci/**'
   workflow_dispatch:
   push:
     tags: ['remote-v*']
@@ -34,22 +35,18 @@ jobs:
           - { os: ubuntu-24.04-arm, pty: linux-arm64 }
           - { os: macos-15, pty: darwin-universal }
           - { os: macos-15-intel, pty: darwin-universal }
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(matrix.os == 'macos-15' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_MAC_LABELS || toJSON(matrix.os)) }}
     env:
-      # the Rust PTY host each bundle carries beside its Node sidecar (scripts/pty-sidecar.ts)
       HERDR_BUNDLE_PTY_SIDECAR: ${{ github.workspace }}/pty-sidecar/ovis-pty-sidecar-${{ matrix.pty }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-ci
         with:
-          bun-version: 1.4.2
-          no-cache: true
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
+          bun-version: 1.4.4
+          node: 'true'
+          cache: none
       - run: bun install --frozen-lockfile
       - run: bun run typecheck && bun run build
       - run: bun scripts/pty-sidecar.ts build ${{ matrix.pty }} pty-sidecar
@@ -59,8 +56,6 @@ jobs:
         with:
           name: remote-${{ matrix.os }}
           path: remote-bundles/*
-  # Windows bundles are the compiled server alone (scripts/server-artifact.ts), assembled on Linux; the smoke job
-  # below runs the result on a real Windows runner against herdr's own installer
   bundle-windows:
     timeout-minutes: 20
     # release publishes its bundle: GitHub-hosted whatever the runner variables say, and no shared cache (scripts/privileged-jobs-workflow.test.ts)
@@ -71,7 +66,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
           no-cache: true
       - run: bun install --frozen-lockfile
       - run: bun run typecheck && bun run build
@@ -90,7 +85,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
           no-cache: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -117,7 +112,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
           no-cache: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

@@ -13,11 +13,7 @@ function handedOut(): [number, number] {
   return [32768, 65535];
 }
 
-/**
- * The ports to pick from, first and last, given the ones the system hands out: a stretch of at
- * least a thousand that holds none of them, or null when the system hands out nearly every port.
- * From 20000 up when that fits: server/updater.test.ts picks its own below it.
- */
+/** From 20000 up when that fits: server/updater.test.ts picks its own below it. */
 export function quietRange(first: number, last: number): [number, number] | null {
   const stretches: [number, number][] = [[20_000, first - 1], [last + 1, 65_535], [1024, Math.min(first - 1, 19_999)]];
   return stretches.find(([from, to]) => to - from + 1 >= 1000) ?? null;
@@ -34,7 +30,6 @@ const given = new Set<number>();
  */
 export function quietPort(): number {
   const range = quietRange(...handedOut());
-  // a host that hands out nearly every port has no such port: one of the system's, as before
   if (range === null) {
     const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
     const port = probe.port;
@@ -49,7 +44,7 @@ export function quietPort(): number {
       Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } }).stop(true);
       given.add(port);
       return port;
-    } catch { /* taken: another one */ }
+    } catch {}
   }
   throw new Error(`no free port from ${from} to ${to}`);
 }

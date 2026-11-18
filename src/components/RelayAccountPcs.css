@@ -1,4 +1,3 @@
-/* the account's PCs in Add a connection → Ovis relay: rows as the SSH tab's, and the digits while one waits for approval */
 .relay-account-pcs {
   margin-block-end: var(--space-3);
 }
@@ -11,7 +10,6 @@
   padding-block-end: var(--space-2);
 }
 
-/* on a phone the state goes under the name (ConnectPhoneDialog.css); with no source tag, the button keeps the row's end */
 @media (max-width: 480px) {
   .relay-account-pc .connect-found-row > .btn {
     margin-inline-start: auto;

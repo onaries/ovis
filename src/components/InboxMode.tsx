@@ -1,9 +1,3 @@
-/**
- * What the inbox mode's shell draws around a thread (App.tsx decides where; the list is InboxList.tsx): a phone
- * thread's title in the app's header, and from 769px the zone that floats over the pane (the name chip and the
- * thread's round controls) and the line that stands in a pane with no thread (the column's rail is InboxRail.tsx).
- * Each piece is one of the app's own primitives with its tokens.
- */
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { Inbox } from "lucide-react";
 
@@ -25,24 +19,19 @@ import { displayPaneTitle } from "./Sidebar.tsx";
 import "./InboxMode.css";
 
 export interface ThreadProps {
-  /** every PC of the roster: a thread may be a pane of a PC this device hides from its lists */
   machines: readonly Machine[];
   activity: SidebarActivity;
   machineId: string;
   pane: HerdrPane;
-  /** the connection's own word, which stands in the state's place while it has something to say */
   connection: HeaderConnection;
   watching: boolean;
-  /** more than one PC is shown: the PC's name stands before the state's word */
   severalPcs: boolean;
 }
 
-/** What a thread says of its agent: the mark and the name its row in the list draws, and its state in words. */
 function threadFacts({ machines, activity, machineId, pane, connection, watching, severalPcs }: ThreadProps, t: Translate) {
   const machine = machines.find((candidate) => candidate.id === machineId);
   const row = agentRoster(machines, { byActivity: false, seqs: activity.seqs, pinned: [] }).rest
     .find((candidate) => candidate.machine.id === machineId && candidate.entry.pane.pane_id === pane.pane_id);
-  // a pane that runs no agent is named as its tab is, and is the terminal it shows
   const state = machine !== undefined && machine.state !== "connected" ? t("Offline")
     : row ? inboxStateWord(agentGroup(inboxStatus(row, activity)), t) : t("Terminal");
   const said = connection !== null ? t(connection === "connected" ? "Connected" : "Reconnecting…")
@@ -55,10 +44,6 @@ function threadFacts({ machines, activity, machineId, pane, connection, watching
   };
 }
 
-/**
- * A phone thread's title, in the header between Back and the monitor button: the agent's mark, its name over one
- * line that says its state, as the classic header says the place under a pane's title.
- */
 export function ThreadTitle(props: ThreadProps) {
   const t = useT();
   const { machines, activity, machineId, pane, connection, watching, severalPcs } = props;
@@ -74,10 +59,6 @@ export function ThreadTitle(props: ThreadProps) {
   );
 }
 
-/**
- * The wide thread's name chip: the mark, the name and, after it, the state's word. It floats centred over the pane
- * where the classic shell has a header, and is not a control.
- */
 function ThreadChip(props: ThreadProps) {
   const t = useT();
   const { machines, activity, machineId, pane, connection, watching, severalPcs } = props;
@@ -91,11 +72,6 @@ function ThreadChip(props: ThreadProps) {
   );
 }
 
-/**
- * The zone over the wide pane: the chip on the pane's middle and the thread's controls at its end, on one centre
- * line with the column's top controls. `thread` is null where no chip is drawn (no agent chosen, or the shell's
- * note stands in its place); the note's status line is there either way, as it is in the classic header.
- */
 export function ThreadTop({ thread, note, controls }: { thread: ThreadProps | null; note: ReactNode; controls: ReactNode }) {
   return (
     <div className={`thread-top${thread === null && controls === null ? " is-empty" : ""}`}>
@@ -108,13 +84,6 @@ export function ThreadTop({ thread, note, controls }: { thread: ThreadProps | nu
   );
 }
 
-/**
- * The mode's shell before the app knows whether this device may open it (App.tsx): what a page that opens on the
- * mode's own address paints first. The list's surface with one line where its rows will be, the screen on a phone
- * and the column beside an empty pane from 769px, at the width the column will have, its rail an empty surface so
- * that nothing shifts when the list arrives. No control is drawn: nothing answers yet. Never the classic shell's
- * header or sidebar, which a page that opens in the mode never shows.
- */
 export function InboxConnecting({ wide, sidebarWidth = null }: { wide: boolean; sidebarWidth?: number | null }) {
   const t = useT();
   const shown = useAnnouncedText(t("Connecting to Ovis…"));
@@ -136,16 +105,11 @@ export function InboxConnecting({ wide, sidebarWidth = null }: { wide: boolean; 
   );
 }
 
-/** A wide pane with no agent chosen: the one line that stands where the thread would. */
 export function InboxUnchosen() {
   const t = useT();
   return <p className="inbox-unchosen" role="status">{t("Choose one from the list to open its chat here.")}</p>;
 }
 
-/**
- * The way into the mode at the sidebar's foot where the Ovis mark at its head is not drawn (a phone's drawer, a
- * collapsed sidebar's peek): a row of the footer's own, above its gear.
- */
 export function InboxFootEntry({ onOpen }: { onOpen(): void }) {
   const t = useT();
   return (

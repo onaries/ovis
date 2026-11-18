@@ -30,10 +30,9 @@ const root = resolve(import.meta.dir, "..");
 const token = "machine-contract-owner";
 const headers = { authorization: `Bearer ${token}`, "x-herdr-update": "1", "x-herdr-machine": "1" };
 /**
- * Where the state folders of launched servers are made. The profile walks its state folder's path at start
- * and refuses one under a folder another account may write: a TMPDIR the walk refuses (a group-writable
- * folder whose group cannot be shown to be private) leaves these folders in root's sticky /tmp, where every
- * CI runner has them. Nothing else of these tests goes there (`scratch`).
+ * The profile walks its state folder's path at start and refuses one under a folder another account
+ * may write: a TMPDIR the walk refuses (a group-writable folder whose group cannot be shown to be
+ * private) leaves these folders in root's sticky /tmp, where every CI runner has them.
  */
 const parent = trustRefusal(realpathSync(tmpdir()), harmlessGroups(), true) === null ? tmpdir() : "/tmp";
 function folder(under: string, prefix = "ovis-machine-profile-") {
@@ -41,16 +40,13 @@ function folder(under: string, prefix = "ovis-machine-profile-") {
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-/** A state folder a launched server walks. */
 const state = () => folder(parent);
-/** A folder nothing walks: a launched server's HOME, an in-process server's state. */
 const scratch = () => folder(tmpdir());
 /** The local owner's call: on the profile's socket in its state folder, addressed as the command line addresses it. */
 function owner(stateDir: string, path: string, init: RequestInit = {}) {
   return fetch(`http://localhost${path}`, { ...init, unix: join(stateDir, "serve.sock") });
 }
 const upgrade = { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" };
-/** A device paired at the machine's own address before: a row with no relay key, whose cookie is `secret`. */
 function cookieRow(stateDir: string, secret: string): string {
   const id = "machine-contract-cookie-row";
   const at = new Date().toISOString();
@@ -59,11 +55,9 @@ function cookieRow(stateDir: string, secret: string): string {
   ] }), { mode: 0o600 });
   return id;
 }
-/** A state folder a profile has taken before: its marker, as the profile writes it. */
 function marked(stateDir: string) {
   writeFileSync(join(stateDir, "machine-profile.json"), '{"profile":"machine"}', { mode: 0o600 });
 }
-/** Every entry under `dir` with its bytes: what a refusal must leave as it was. */
 function contents(dir: string) {
   return (readdirSync(dir, { recursive: true }) as string[]).sort().map((name) => {
     const path = join(dir, name);
@@ -71,10 +65,6 @@ function contents(dir: string) {
     return [name, entry.isFile() ? readFileSync(path, "base64") : entry.isDirectory() ? "folder" : "other"];
   });
 }
-/**
- * A herdr at `socket` that answers ping with protocol 22, and counts the connections it gets. `refuse` names one
- * method it answers with an error of its own instead, whose message is `refuse.message`, or closes the connection on.
- */
 function fakeHerdr(socket: string, refuse?: { method: string; message: string } | { method: string; close: true }) {
   let connections = 0;
   const listener = Bun.listen<{ line: string }>({ unix: socket, socket: {
@@ -97,17 +87,15 @@ function fakeHerdr(socket: string, refuse?: { method: string; message: string } 
  * with no link in it (macOS's temporary folder is reached through one), as the profile requires of a herdr socket.
  */
 const herdrConfig = () => realpathSync(folder(parent, "ovis-h-"));
-/** The start of a selected socket's refusal, which tools match on; the walk's reason for the owner may follow it. */
 const unsafeSocket = expect.stringMatching(/^The selected herdr socket cannot be used safely by this account/);
 /**
- * The PATH a launched server gets: the system's folders only (it runs by Bun's full path). A server reads the
- * versions of the agent tools it finds on its PATH, each in a process group of its own that outlives a server
- * a test ends, and those tools would write into the HOME of a server whose folders the test has removed.
+ * A server reads the versions of the agent tools it finds on its PATH, each in a process group of its
+ * own that outlives a server a test ends, and those tools would write into the HOME of a server whose
+ * folders the test has removed.
  */
 const launchPath = "/usr/bin:/bin";
 /**
- * `undefined` in `env` leaves that variable out of the server's environment; `umask` is the one the server starts
- * under. HOME is a folder of its own unless `env` names one: Bun writes its cache into HOME before the server
+ * HOME is a folder of its own unless `env` names one: Bun writes its cache into HOME before the server
  * runs, and a profile starts only on an empty state folder or one it marked.
  */
 function launch(stateDir: string, env: Record<string, string | undefined> = {}, umask?: string) {
@@ -133,13 +121,11 @@ function launch(stateDir: string, env: Record<string, string | undefined> = {}, 
   };
   const drained = Promise.all([read(child.stdout, false), read(child.stderr, true)]);
   const exited = child.exited.then(async (code) => { await drained; ready.reject(new Error(output || `Server exited ${code}`)); return code; });
-  // A refused second start is observed through exited, not ready.
   void ready.promise.catch(() => undefined);
   cleanup.push(async () => { if (child.exitCode === null) child.kill(); await bounded(exited, 15_000); });
   return { child, ready: ready.promise, exited, output: () => output, errors: () => errors };
 }
 
-/** A refusal at the profile's start: exit 1 and one sentence on standard error, no stack or source excerpt. */
 async function refused(server: ReturnType<typeof launch>): Promise<string> {
   expect(await bounded(server.exited, 20_000)).toBe(1);
   const sentence = server.errors().trim();
@@ -169,7 +155,6 @@ it.each(["environment", "saved"])("refuses herdr-core selected by %s in its heal
   const calls = join(bin, "hc-calls");
   const hc = join(bin, "hc");
   writeFileSync(hc, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nif [ "$1" = --version ]; then echo 'hc 0.1.18'; else exit 1; fi\n`, { mode: 0o700 });
-  // a choice saved in a folder the profile took before
   if (source === "saved") { marked(dir); writeFileSync(join(dir, "runtime-0.json"), JSON.stringify({ runtime: "herdr-core", previous: "herdr" })); }
   // the core's own folders are this test's: no core of the user's is ever looked at. Under root's sticky
   // /tmp: a core socket is taken only on a path that no other account can write
@@ -185,7 +170,6 @@ it.each(["environment", "saved"])("refuses herdr-core selected by %s in its heal
       engine: "herdr-core", runtime_down: true, reason: "herdr-core is not supported for a machine yet",
     } });
   }
-  // Request-triggered lookups must not construct a core connection either.
   await (await owner(dir, "/api/session", { headers })).text();
   expect(existsSync(calls) ? readFileSync(calls, "utf8") : "").toBe("");
 });
@@ -218,7 +202,6 @@ it("refuses the machine profile without OVIS_PREVIEW=fleet before its state fold
 });
 
 test.if(process.platform === "win32")("refuses the machine profile on Windows before its state folder is touched", async () => {
-  // a folder nothing walks: the walk's fallback /tmp is no folder on Windows
   const dir = scratch();
   expect(await refused(launch(dir))).toContain("Windows");
   expect(readdirSync(dir)).toEqual([]);
@@ -261,9 +244,7 @@ it("ordinary servers on one state folder and different ports both answer without
   expect(existsSync(join(dir, "serve.lock"))).toBe(false);
 });
 
-/** A process that holds `lock` as an Ovis supervisor holds its supervisor.lock (server/supervisor.ts), until it is ended. */
 async function supervisorRecord(lock: string) {
-  // the supervisor makes its update state folder first, then takes the lock in it
   mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
   const holder = Bun.spawn([process.execPath, "-e", `const { acquireOwnerDirectory } = await import(${JSON.stringify(join(root, "server/owner-guard.ts"))});
 acquireOwnerDirectory(${JSON.stringify(lock)}, { running: "running", starting: "starting" });
@@ -277,7 +258,6 @@ setInterval(() => {}, 60_000);`], { cwd: root, stdin: "ignore", stdout: "pipe", 
   return holder;
 }
 
-/** A process that holds `path` shared as an ordinary server started with OVIS_PREVIEW=fleet holds serve.own (server/index.ts), until the test ends. */
 async function sharedHold(path: string) {
   const holder = Bun.spawn([process.execPath, "-e", `const { holdForLife } = await import(${JSON.stringify(join(root, "server/owner-guard.ts"))});
 holdForLife(${JSON.stringify(path)}, "shared");
@@ -292,9 +272,7 @@ setInterval(() => {}, 60_000);`], { cwd: root, stdin: "ignore", stdout: "pipe", 
 
 it("refuses a state folder where an Ovis supervisor alive records itself, and starts once that owner is gone", async () => {
   const dir = state();
-  // a folder the profile took before, which a supervisor then took
   marked(dir);
-  // where a real Ovis records itself: <state folder>/updates/<checkout and port>/supervisor.lock
   const lock = join(updateStateDir(root, 7317, dir), "supervisor.lock");
   const holder = await supervisorRecord(lock);
   const before = readdirSync(dir).sort();
@@ -304,7 +282,6 @@ it("refuses a state folder where an Ovis supervisor alive records itself, and st
   expect(readdirSync(dir).sort()).toEqual(before);
   holder.kill();
   await bounded(holder.exited, 15_000);
-  // the record names a dead owner now: it stays where it is and blocks nothing
   expect(existsSync(join(lock, "owner.json"))).toBe(true);
   const after = launch(dir);
   await bounded(after.ready, 20_000);
@@ -322,7 +299,6 @@ const spellings: [string, (home: string) => string | undefined][] = [
 ];
 it.each(spellings)("refuses a default Ovis state folder named by %s and writes nothing there", async (_, spelling) => {
   const home = scratch();
-  // the folders an own Ovis keeps its state in
   for (const name of ["ovis", "herdr-web-ui"]) {
     mkdirSync(join(home, ".config", name), { recursive: true });
     writeFileSync(join(home, ".config", name, "devices.json"), "{}");
@@ -356,7 +332,6 @@ it.each([["does not exist yet", false], ["exists", true]] as const)("keeps authe
   const dir = state();
   const config = herdrConfig();
   if (made) mkdirSync(join(config, "herdr"), { mode: 0o700 });
-  // a named session whose herdr has not started yet
   const server = launch(dir, { XDG_CONFIG_HOME: config, HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" });
   await bounded(server.ready, 20_000);
   const response = await owner(dir, "/api/health", { headers });
@@ -414,7 +389,6 @@ it("finds the one herdr session that starts after it, when none was selected", a
   expect(await (await owner(dir, "/api/health", { headers })).json()).toMatchObject({ machine_profile: { runtime_down: false, reason: null }, herdr: { protocol: 22 } });
 });
 
-/** A HOME everyone may write with a private ~/.config in it, and the socket of its herdr session `a`. */
 function openHome() {
   const home = herdrConfig();
   chmodSync(home, 0o777);
@@ -473,7 +447,6 @@ it("connects to no session its walk refuses while it looks for one, names why to
   await bounded(server.ready, 20_000);
   // the one session under a HOME everyone may write is not a session found: the discovery before the start did not even connect to it
   expect(unsafe.connections()).toBe(0);
-  // but a herdr runs there, so the owner reads the walk's reason for that folder, not that none runs
   const health = await (await owner(dir, "/api/health", { headers })).json() as { machine_profile: { reason: string } };
   const { reason } = health.machine_profile;
   expect(health).toMatchObject({ machine_profile: { runtime_down: true, reason: unsafeSocket } });
@@ -527,14 +500,12 @@ it.each(["/api/session", "/api/machines"])("looks for a herdr that started after
 
 it("answers /api/session with its health's reason while its herdr is down", async () => {
   const dir = state();
-  // a named session whose herdr has not started yet
   const server = launch(dir, { XDG_CONFIG_HOME: herdrConfig(), HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" });
   await bounded(server.ready, 20_000);
   const reason = (await (await owner(dir, "/api/health", { headers })).json() as { machine_profile: { reason: string } }).machine_profile.reason;
   expect(reason).toBe("herdr is not running for the selected session");
   const response = await owner(dir, "/api/session", { headers });
   const text = await response.text();
-  // the status every failed herdr read answers with, and the client's own code, kept
   expect([response.status, JSON.parse(text)]).toEqual([502, { error: { code: "connect_failed", message: reason } }]);
   expect([text.includes(realpathSync(dir)), text.includes("herdr.sock")]).toEqual([false, false]);
   expect(response.headers.get("cache-control")).toBe("no-store");
@@ -545,7 +516,6 @@ it.each(["/api/session", "/api/machines"])("answers a herdr read that fails on %
   const config = herdrConfig();
   const socket = join(config, "herdr", "sessions", "a", "herdr.sock");
   mkdirSync(dirname(socket), { recursive: true, mode: 0o700 });
-  // herdr answers ping, and fails the session read with an error of its own: its code, and a message that names its socket
   fakeHerdr(socket, { method: "session.snapshot", message: `cannot read the session behind ${socket}` });
   const server = launch(dir, { XDG_CONFIG_HOME: config, HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" });
   await bounded(server.ready, 20_000);
@@ -572,7 +542,6 @@ it("keeps the bridge's own code when herdr closes the connection before it answe
 });
 
 it("answers an ordinary server's failed /api/session with herdr's own message", async () => {
-  // control: only the machine profile changes this answer
   const socket = join(scratch(), "herdr.sock");
   const base = await bounded(launch(state(), { OVIS_PROFILE: "", OVIS_PREVIEW: undefined, HERDR_SOCKET: socket }).ready, 20_000);
   const response = await fetch(`${base}/api/session`, { headers });
@@ -583,7 +552,6 @@ it("answers an ordinary server's failed /api/session with herdr's own message", 
 
 it("lists this machine alone on GET /api/machines, under its own name, and says why its engine is down", async () => {
   const dir = state();
-  // a named session whose herdr has not started yet
   const server = launch(dir, { XDG_CONFIG_HOME: herdrConfig(), HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" });
   await bounded(server.ready, 20_000);
   const health = await (await owner(dir, "/api/health", { headers })).json() as { machine_profile: { reason: string }; web_ui: { boot_id: string; server_id?: string } };
@@ -591,7 +559,6 @@ it("lists this machine alone on GET /api/machines, under its own name, and says 
   const response = await owner(dir, "/api/machines", { headers });
   expect(response.status).toBe(200);
   const { machines } = await response.json() as { machines: Record<string, unknown>[] };
-  // what the app's sidebar draws for a PC whose herdr is away: its name, the reason, no terminals (an ordinary server's own PC)
   expect(machines).toEqual([{ id: "local", name: hostname(), kind: "local", enabled: true, state: "error", error: health.machine_profile.reason,
     snapshot: null, source_boot_id: health.web_ui.boot_id, ...(health.web_ui.server_id ? { server_id: health.web_ui.server_id } : {}) }]);
 });
@@ -604,7 +571,6 @@ it("proves its own boot to its owner on GET /api/machines?verify_source_boot=loc
   const body = await proved.json() as { machines: { id: string; source_boot_id: string }[]; verified_source_boot?: unknown };
   expect(body.machines.map((machine) => [machine.id, machine.source_boot_id])).toEqual([["local", boot]]);
   expect(body.verified_source_boot).toEqual({ machine_id: "local", boot_id: boot });
-  // a PC it does not have is no proof, and the plain roster carries none
   for (const path of ["/api/machines?verify_source_boot=other", "/api/machines"]) {
     expect(await (await owner(stateDir, path, { headers })).json()).not.toHaveProperty("verified_source_boot");
   }
@@ -640,7 +606,6 @@ it("refuses a state folder whose serve.own an ordinary server holds shared, as o
 
 it("refuses a state folder an ordinary server has used, and leaves it as it was", async () => {
   const dir = state();
-  // an ordinary server without the preview takes no hold: the folder is told apart by what is in it
   const ordinary = launch(dir, { OVIS_PROFILE: "", OVIS_PREVIEW: undefined });
   await bounded(ordinary.ready, 20_000);
   ordinary.child.kill("SIGKILL");
@@ -655,12 +620,9 @@ it("refuses a state folder an ordinary server has used, and leaves it as it was"
 
 it("refuses a folder another server wrote into while the profile took its hold, and leaves what that server left", () => {
   const dir = realpathSync(state());
-  // the other server, an ordinary one with the preview: between the profile's first look at the empty folder and
-  // its hold, it holds the folder, writes its state and is gone
   guardLibrary.posix = (calls) => ({ ...calls, flock: (fd, operation) => { writeFileSync(join(dir, "telemetry.json"), "{}"); return calls.flock(fd, operation); } });
   cleanup.push(() => { delete guardLibrary.posix; });
   expect(() => claimServerState(dir)).toThrow(MachineProfileError);
-  // nothing of the profile's stays: not its marker, not the serve.own its hold made
   expect(readdirSync(dir)).toEqual(["telemetry.json"]);
 });
 
@@ -669,8 +631,6 @@ it("leaves the serve.own another server made right before this start would make 
   const hold = join(dir, "serve.own");
   const open = fs.openSync;
   let theirs: number | undefined;
-  // the other server, an ordinary one with the preview: as this start is about to make serve.own, it makes it,
-  // holds it, writes its state and is gone
   const made = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
     if (path === hold && theirs === undefined) {
       writeFileSync(hold, "", { mode: 0o600 });
@@ -688,7 +648,6 @@ it("leaves the serve.own another server made right before this start would make 
 
 it("refuses an ordinary server whose folder a profile marked after its first look, before the device list is read", () => {
   const dir = state();
-  // the marker, written after serve()'s first look and before createServer's: the second look sees it
   marked(dir);
   let error: unknown;
   try {
@@ -696,7 +655,6 @@ it("refuses an ordinary server whose folder a profile marked after its first loo
     cleanup.push(() => server.stop());
   } catch (thrown) { error = thrown; }
   expect(String(error)).toContain(join(dir, "machine-profile.json"));
-  // nothing written: no device list, nothing else
   expect(readdirSync(dir)).toEqual(["machine-profile.json"]);
 });
 
@@ -725,7 +683,7 @@ const restricted = [
   "/api/herdr/update", "/api/runtime", "/api/runtime/move", "/api/runtime/move/install",
   "/api/runtime/move/stop", "/api/runtime/move/stop-all", "/api/runtime/move/start", "/api/runtime/move/cancel",
   "/api/portal", "/api/portal/start", "/api/relay/direct", "/api/machines", "/api/machines/ssh-candidates",
-  "/api/fleet/machines", "/api/fleet/invites", "/api/fleet/restore/confirm", "/api/bridge",
+  "/api/fleet/machines", "/api/fleet/invites", "/api/fleet/restore/confirm", "/api/bridge", "/api/devices/pair/start",
 ];
 it.each(restricted)("refuses %s even to an owner in the machine profile", async (path) => {
   const stateDir = scratch();
@@ -737,7 +695,6 @@ it.each(restricted)("refuses %s even to an owner in the machine profile", async 
 });
 
 it("answers its owner's check for updates as unmanaged, and asks the updater nothing, even when given a managed one", async () => {
-  // a managed updater as a supervisor's channel makes it (server/update-api.ts)
   const sent: unknown[] = [];
   let deliver: (message: unknown) => void = () => {};
   const updates = connectUpdater({ send: (message) => { sent.push(message); }, onMessage: (listener) => { deliver = listener; } });
@@ -761,7 +718,6 @@ it.each(["", "?scope=bridge"])("gives an unknown caller only plain liveness at /
   expect(response.headers.get("cache-control")).toBe("no-store");
 });
 
-/** A profile server, and beside it an ordinary one with the same options as the control: an ordinary server's door. */
 function pair(options: NonNullable<Parameters<typeof createServer>[0]>) {
   const stateDir = scratch();
   const profile = createServer({ profile: "machine", stateDir, port: 0, hostname: "127.0.0.1", sidecar: false, ...options });
@@ -782,7 +738,6 @@ it("lets a DNS-rebinding page in nowhere before the relay was ever on, while thi
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>("workspace.create", { label: "ovis-test-machine-door", cwd: root, focus: false });
   cleanup.push(async () => { await herdrRpc("workspace.close", { workspace_id: created.workspace.workspace_id }); });
   const paneId = created.root_pane.pane_id;
-  // the page's own name as Host, its own origin, no Tailscale login to compare with
   const page = (port: number) => ({ host: `evil.example:${port}`, origin: `http://evil.example:${port}` });
   // control: an ordinary server whose pairing gate is still open answers this as an open install; the profile, whose gate is closed, does not
   const forwarded = { "x-forwarded-for": "203.0.113.7" };
@@ -799,7 +754,6 @@ it("lets a DNS-rebinding page in nowhere before the relay was ever on, while thi
   // a program of this PC's own account on loopback TCP with no header of value is nobody either
   const loopback = await fetch(`http://127.0.0.1:${profile}/api/pane/input`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pane_id: paneId, text: "MACHINE_LOOPBACK" }) });
   expect(loopback.status).toBe(401);
-  // this account types next, on the socket; once its text is in the pane, the others' would have been there before it
   const own = await owner(stateDir, "/api/pane/input", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pane_id: paneId, text: "MACHINE_OWNER" }) });
   expect(own.status).toBe(200);
   const deadline = Date.now() + 15_000;
@@ -816,7 +770,6 @@ it("lets a DNS-rebinding page in nowhere before the relay was ever on, while thi
 it("lets nobody in by a Tailscale identity header, the machine's own login included", async () => {
   const { profile, ordinary } = pair({ token: "", tailscaleOwner: "owner@example.com" });
   const identity = { "tailscale-user-login": "owner@example.com", "x-forwarded-for": "100.64.0.7" };
-  // control: an ordinary server admits it "via tailscale"
   const admitted = await fetch(`http://127.0.0.1:${ordinary}/api/health`, { headers: identity });
   expect(await admitted.json()).toMatchObject({ auth: { authenticated: true, via: "tailscale" } });
   expect((await fetch(`http://127.0.0.1:${profile}/api/session`, { headers: identity })).status).toBe(401);
@@ -828,16 +781,11 @@ it("treats the bridge token as nobody in the profile", async () => {
   const bridgeToken = "machine-contract-bridge-token";
   const { profile, ordinary } = pair({ token, bridgeToken, tailscaleOwner: null });
   const bearer = { authorization: `Bearer ${bridgeToken}` };
-  // control: on an ordinary server, the connection server reads this PC's session with it
   expect((await fetch(`http://127.0.0.1:${ordinary}/api/session`, { headers: bearer })).status).toBe(200);
   expect((await fetch(`http://127.0.0.1:${profile}/api/session`, { headers: bearer })).status).toBe(401);
   expect(await (await fetch(`http://127.0.0.1:${profile}/api/health?scope=bridge`, { headers: bearer })).text()).toBe('{"ok":true}');
 });
 
-/**
- * A profile made by createServer, as serve() makes it but with no engine to ask, the relay and the account service
- * of the test, and the token given: `prepare` writes into its state folder before it starts.
- */
 function profileServer(prepare: (stateDir: string) => void = () => {}) {
   const stateDir = scratch();
   prepare(stateDir);
@@ -891,8 +839,7 @@ it("takes the caller on its socket as the local owner, and a cookie there adds n
   }
   expect((await owner(stateDir, "/api/devices")).status).toBe(200);
   expect((await owner(stateDir, "/api/account/status")).status).toBe(200);
-  // a change from the command line with its origin is judged for what it asks (the relay is off), not for who asks
-  const offer = await owner(stateDir, "/api/relay/offer", { method: "POST", headers: { origin: "http://localhost", "x-herdr-update": "1" } });
+  const offer = await owner(stateDir, "/api/relay/offer", { method: "POST", headers: { origin: "http://localhost", "x-herdr-update": "1", "x-ovis-expect-account": "acct_owner" } });
   expect([offer.status, (await offer.json() as { error: { code: string } }).error.code]).toEqual([409, "relay_off"]);
 });
 
@@ -939,7 +886,6 @@ it("refuses on its socket a request that names no host at all, as HTTP/1.0 may",
 it("ignores OVIS_TOKEN and says so once at its start, and names the devices paired at its own address that cannot reach it", async () => {
   const dir = state();
   const secret = "machine-contract-cookie";
-  // a folder the profile took before, with rows paired at the machine's own address in it
   marked(dir);
   const id = cookieRow(dir, secret);
   const server = launch(dir);
@@ -962,7 +908,6 @@ it("makes its folder 0700 and its socket 0600 under umask 002, gives the umask b
   expect(statSync(dir).mode & 0o7777).toBe(0o700);
   expect(lstatSync(socket).isSocket()).toBe(true);
   expect(lstatSync(socket).mode & 0o7777).toBe(0o600);
-  // what the files and processes it makes afterwards get, where /proc shows it
   if (process.platform === "linux") expect(/^Umask:\s+(\d+)$/m.exec(readFileSync(`/proc/${server.child.pid}/status`, "utf8"))?.[1]).toBe("0002");
   expect(JSON.parse(readFileSync(join(dir, "serve.lock", "http.json"), "utf8"))).toEqual({ port: Number(new URL(base).port), hostname: "127.0.0.1", socket, door: 1 });
   // the kernel checks the folder at every connect, for this account too
@@ -1034,7 +979,6 @@ it("keeps an ordinary server with the preview off a folder a profile marked, run
   const profile = launch(dir, { HOME: scratch() });
   await bounded(profile.ready, 20_000);
   const before = readdirSync(dir).sort();
-  // the marker is read before the hold is tried: its sentence, naming the marker, is the one
   expect(await refused(launch(dir, { OVIS_PROFILE: "", HOME: scratch() }))).toContain(join(dir, "machine-profile.json"));
   expect(readdirSync(dir).sort()).toEqual(before);
   profile.child.kill("SIGKILL");
@@ -1095,7 +1039,6 @@ it("lets exactly one of a profile and an ordinary server started at the same mom
     return [launch(dir, { HOME: scratch() }), launch(dir, { OVIS_PROFILE: "", HOME: scratch() })];
   });
   const outcomes = await Promise.all(pairs.map((started) => Promise.all(started.map((server) => bounded(server.ready.then(() => "ready", () => server.exited), 30_000)))));
-  // the ones that run are ended at once, together: an ordinary server's own stop waits for its sidecars
   await Promise.all(pairs.flat().map((server) => { server.child.kill("SIGKILL"); return bounded(server.exited, 15_000); }));
   for (const outcome of outcomes) expect(outcome.filter((one) => one === "ready")).toHaveLength(1);
 });
@@ -1108,17 +1051,10 @@ it("starts an ordinary server whose hold cannot be taken for another reason, and
   expect(ordinary.errors()).toContain(join(dir, "serve.own"));
   ordinary.child.kill("SIGTERM");
   await bounded(ordinary.exited, 20_000);
-  // marked only now, as if the profile had taken it before: an ordinary server does not start on a marked folder
-  // (so it is marked after that server), and what refuses the profile is the hold
   marked(dir);
   expect(await refused(launch(dir, { HOME: scratch() }))).toContain("serve.own");
 });
 
-/**
- * A herdr that answers ping, each method of `answers` with what its function gives (the call's params, and how many
- * calls of that method came before), and refuses every other method with `refusal`, counting the calls it refused
- * that a request made (not the status collector's own: its event stream and process lookups).
- */
 function refusingHerdr(socket: string, refusal: { code: string; message: string }, answers: Record<string, (params: Record<string, unknown>, before: number) => unknown> = {}) {
   let calls = 0;
   const asked = new Map<string, number>();
@@ -1140,10 +1076,8 @@ function refusingHerdr(socket: string, refusal: { code: string; message: string 
   return { calls: () => calls };
 }
 
-/** A pane of the walk's one tab (the ids it asks with), or of another tab. */
 const walkPane = (cwd: string, id: string, tab = "w1:t1") => ({ pane_id: id, workspace_id: "w1", tab_id: tab, terminal_id: `term-${id}`, focused: id === "w1:p1",
   agent_status: "unknown", revision: 0, cwd });
-/** herdr's snapshot and pane reads answered, with the walk's ids, so that a route goes past its first look to the call after it. */
 const reads = (cwd: string): Record<string, () => unknown> => ({
   "session.snapshot": () => ({ snapshot: { focused_pane_id: "w1:p1", workspaces: [{ workspace_id: "w1", label: "x", number: 1, focused: true, pane_count: 2, tab_count: 1,
     active_tab_id: "w1:t1", agent_status: "unknown" }], tabs: [{ tab_id: "w1:t1", workspace_id: "w1", label: "1" }], panes: [walkPane(cwd, "w1:p1"), walkPane(cwd, "w1:p2")],
@@ -1151,7 +1085,6 @@ const reads = (cwd: string): Record<string, () => unknown> => ({
   "pane.get": () => ({ pane: walkPane(cwd, "w1:p1") }),
 });
 
-/** Every "/api/..." the shipped server code names: what the walk asks. A route is in it by being written. */
 function shippedRoutes(): string[] {
   const paths = new Set<string>();
   for (const file of files("server/**/*.ts").filter((name) => !/\.test\.ts$|\.fake\.ts$/.test(name))) {
@@ -1159,14 +1092,11 @@ function shippedRoutes(): string[] {
   }
   return [...paths].sort();
 }
-/** Families that call no herdr: the account, the relay and its devices, push, settings and the server's own facts. */
 const NO_HERDR = /^\/api\/(?:account|relay|devices|push|alerts|auth|telemetry|preferences|seen|system|fonts|updates|voice|cliproxy|access|health|connection-diagnostics|info|event|herdr-ui|usage(?!\/login))(?:\/|$)/;
-/** One set of values that names a pane, a workspace and a tab, and never a folder or a file. */
 const ids = { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", target: "w1:p1", target_pane_id: "w1:p2", source: "recent", text: "x", keys: "Enter",
   name: "x", label: "x", agent_id: "x", plugin_id: "x", action_id: "x", branch: "x", query: "x", q: "x", ref: "x", id: "x", provider: "claude" };
 const walkQuery = `?${new URLSearchParams({ ...ids, offset: "1", index: "0", start: "0", end: "1" }).toString()}`;
 const walkBody = { ...ids, keys: ["Enter"], direction: "right", cols: 80, rows: 24, lines: 10, offset: 1, index: 0 };
-/** Values of their own, for routes that check one before they look the pane up. */
 const OWN: Record<string, Record<string, string>> = {
   "/api/sessions/history": { agent: "claude" }, "/api/pane/find": { direction: "forward" },
   "/api/pane/move": { side: "right" },
@@ -1182,7 +1112,6 @@ const OWN_BODY: Record<string, Record<string, unknown>> = {
  */
 const NOT_WALKED = /^(?:(?:GET|POST|PUT) \/api\/(?:usage\/login|agent-catalog\/(?:install|sign-in)|fs\/favicon|workspace\/directories|agent\/commands)|PUT \/api\/fs\/text|POST \/api\/(?:layout\/ratio|pane\/image|pane\/prompt\/answer|pane\/scroll|pane\/swap|tab\/move|workspace\/move|workspace\/pr\/merge|worktree\/create|worktree\/open|tab\/create|workspace\/create|sessions\/resume)|(?:GET|POST|PUT) \/api\/pane\/(?:selection|conversation\/image)|GET \/api\/plugin\/action)(?:$|\?|\/)/;
 
-/** Asks every shipped route on `ask` by GET, POST and PUT; what each answered, and whether herdr was called for it. */
 async function walk(ask: (path: string, init: RequestInit) => Promise<Response>, calls: () => number) {
   const answers: { route: string; status: number; code: string | null; text: string; headers: string; reached: boolean }[] = [];
   for (const path of shippedRoutes().filter((route) => !NO_HERDR.test(route))) {
@@ -1193,20 +1122,18 @@ async function walk(ask: (path: string, init: RequestInit) => Promise<Response>,
         ...(method === "GET" ? {} : { body: JSON.stringify({ ...walkBody, ...own, ...OWN_BODY[path] }) }), signal: AbortSignal.timeout(10_000) });
       const text = await response.text();
       let code: string | null = null;
-      try { code = (JSON.parse(text) as { error?: { code?: string } }).error?.code ?? null; } catch { /* not JSON */ }
+      try { code = (JSON.parse(text) as { error?: { code?: string } }).error?.code ?? null; } catch {}
       answers.push({ route: `${method} ${path}`, status: response.status, code, text, headers: [...response.headers.entries()].join(";"), reached: calls() > before });
     }
   }
   return answers;
 }
-/** What the profile answers before any herdr call: refused, unknown, or not that method. */
 const answeredFirst = (answer: { status: number; code: string | null }) => answer.code === "machine_profile" || answer.code === "not_found" && answer.status === 404 || answer.code === "method_not_allowed" || answer.status === 405;
 
 it.each(["refusing every call", "answering only its snapshot and panes", "not listening"])("answers every failed herdr call with its own words while herdr is %s", async (mode) => {
   const dir = state();
   const config = herdrConfig();
   const socket = join(config, "herdr", "sessions", "a", "herdr.sock");
-  // the stand-in's marker, or with no herdr the client's own words
   const marker = `herdr-own-${Math.random().toString(36).slice(2)}`;
   let calls = () => 0;
   if (mode !== "not listening") {
@@ -1219,8 +1146,6 @@ it.each(["refusing every call", "answering only its snapshot and panes", "not li
   const shown = answers.filter((answer) => [marker, socket, dirname(socket), realpathSync(dir)].some((text) => answer.text.includes(text) || answer.headers.includes(text)));
   expect(shown.map((answer) => `${answer.route} ${answer.status} ${answer.text.slice(0, 160)}`)).toEqual([]);
   if (mode !== "not listening") {
-    // every route the profile did not answer first called herdr: one the walk cannot take there is named here (with
-    // the snapshot answered, a route may answer from it, so this is asked of the walk that refuses every call)
     if (mode === "refusing every call") {
       expect(answers.filter((answer) => !answeredFirst(answer) && !answer.reached && !NOT_WALKED.test(answer.route)).map((answer) => `${answer.route} ${answer.status} ${answer.code}`)).toEqual([]);
     }
@@ -1228,9 +1153,7 @@ it.each(["refusing every call", "answering only its snapshot and panes", "not li
     const worded = answers.filter((each) => each.code === "herdr_error");
     expect(worded.length).toBeGreaterThan(0);
     for (const answer of worded) expect([answer.route, answer.headers]).toEqual([answer.route, expect.stringContaining("no-store")]);
-    // control: an ordinary server on the same herdr answers those routes as main does
     const ordinary = await bounded(launch(state(), { OVIS_PROFILE: "", OVIS_PREVIEW: undefined, HERDR_SOCKET: socket }).ready, 20_000);
-    // GET /api/machines is the profile's own list, not the route an ordinary server answers it with
     for (const answer of worded.filter((each) => each.route !== "GET /api/machines")) {
       const [method, path] = answer.route.split(" ") as [string, string];
       const own = OWN[path] ?? {};
@@ -1242,7 +1165,6 @@ it.each(["refusing every call", "answering only its snapshot and panes", "not li
   }
 }, 240_000);
 
-/** The profile and an ordinary server on one stand-in herdr, and a POST to each. */
 async function bothOn(socket: string) {
   const dir = state();
   await bounded(launch(dir, { XDG_CONFIG_HOME: dirname(dirname(dirname(dirname(socket)))), HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" }).ready, 20_000);
@@ -1270,10 +1192,8 @@ it("answers a pane move herdr did not make with its own reason and words, and ke
       moves++;
       if (script === "plain") return { move_result: { changed: false, reason: marker, pane: pane("w1:p1") } };
       if (script === "swap") return { move_result: { changed: true, pane: pane("w1:p1"), source_layout: { focused_pane_id: "w1:p2" } } };
-      // out of its tab, then herdr will not bring it back beside any pane
       if (moves === 1) return { move_result: { changed: false, reason: "same_tab", pane: pane("w1:p1") } };
       if (moves === 2) return { move_result: { changed: true, pane: pane("w1:p9", "w1:t9"), source_layout: { focused_pane_id: "w1:p2" } } };
-      // or with a reply that is no answer at all
       if (script === "malformed") return null;
       return { move_result: { changed: false, reason: `${marker}-reason`, pane: pane("w1:p9", "w1:t9") } };
     },
@@ -1290,12 +1210,9 @@ it("answers a pane move herdr did not make with its own reason and words, and ke
     expect([each, mine.text.includes(marker), mine.cache]).toEqual([each, false, "no-store"]);
     expect([each, theirs.text.includes(marker), theirs.cache]).toEqual([each, each !== "malformed", null]);
     if (each === "malformed") {
-      // the pane is where a refused move back leaves it, and the profile says so as it does then
       expect([mine.status, mine.text]).toEqual([theirs.status, stranded]);
     } else if (each === "stray") {
       stranded = mine.text;
-      // the same refusal, in the profile's words: the code the bridge made is kept, and the message says where the
-      // pane is (the bridge's own words), not the sentence the profile gives a call herdr did not answer
       const refused = await post("profile", "/api/pane/zoom", { pane_id: "w1:p1" });
       const sentence = (JSON.parse(refused.text) as { error: { message: string } }).error.message;
       const told = (JSON.parse(mine.text) as { error: { code: string; message: string } }).error;
@@ -1372,7 +1289,6 @@ it("words a failed herdr call on its own answers only, when a profile and an ord
   const { ordinary, stateDir } = pair({ token, tailscaleOwner: null });
   const ask = (target: "profile" | "ordinary") => target === "profile" ? owner(stateDir, "/api/pane/read?pane_id=w-none:p-none", { headers })
     : fetch(`http://127.0.0.1:${ordinary}/api/pane/read?pane_id=w-none:p-none`, { headers });
-  // interleaved, so that each answer is worded by the server it came from and not by the other's request
   const answers = await Promise.all(Array.from({ length: 20 }, (_, index) => ask(index % 2 === 0 ? "profile" : "ordinary").then(async (response) => ({
     target: index % 2 === 0 ? "profile" : "ordinary", body: await response.text(), cache: response.headers.get("cache-control") }))));
   const of = (target: string) => answers.filter((answer) => answer.target === target);
@@ -1382,7 +1298,6 @@ it("words a failed herdr call on its own answers only, when a profile and an ord
   expect([new Set(of("profile").map((answer) => answer.cache)), new Set(of("ordinary").map((answer) => answer.cache))]).toEqual([new Set(["no-store"]), new Set([null])]);
 });
 
-/** The next `error` frame `socket` receives. */
 function nextError(socket: WebSocket): Promise<{ code: string; message: string }> {
   const frame = deferred<{ code: string; message: string }>();
   socket.addEventListener("message", (event) => {
@@ -1404,7 +1319,6 @@ it("words a failed herdr call in its WebSocket frames, and an ordinary server an
   const frames = async (url: string, init?: { headers: Record<string, string> }) => {
     const ws = new WebSocket(url, init as never);
     cleanup.push(() => ws.close());
-    // the snapshot read as the socket opens, then an attach: each fails at herdr
     const opened = nextError(ws);
     const first = await opened;
     await bounded(new Promise<void>((resolve) => { if (ws.readyState === WebSocket.OPEN) resolve(); else ws.addEventListener("open", () => resolve(), { once: true }); }), 15_000);
@@ -1422,7 +1336,6 @@ it("words a submit that failed for a fault of the bridge's own in its sentence, 
   const config = herdrConfig();
   const socket = join(config, "herdr", "sessions", "a", "herdr.sock");
   mkdirSync(dirname(socket), { recursive: true, mode: 0o700 });
-  // a process lookup herdr answers with nothing: the submit fails in the bridge, not at herdr
   refusingHerdr(socket, { code: "refused", message: "refused" }, { ...reads(scratch()), "pane.process_info": () => null });
   const dir = state();
   await bounded(launch(dir, { XDG_CONFIG_HOME: config, HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" }).ready, 20_000);
@@ -1442,7 +1355,6 @@ it("words a submit that failed for a fault of the bridge's own in its sentence, 
   };
   const mine = await submitted(`ws+unix://${join(realpathSync(dir), "serve.sock")}:/ws`);
   const theirs = await submitted(`${ordinary.replace(/^http/, "ws")}/ws`, { headers: { authorization: headers.authorization } });
-  // the profile's sentence, as its HTTP answer to a call herdr refused gives it
   const refused = await owner(dir, "/api/pane/zoom", { method: "POST", headers: { ...headers, origin: "http://localhost", "content-type": "application/json" }, body: JSON.stringify({ pane_id: "w1:p1" }) });
   const sentence = ((await refused.json()) as { error: { message: string } }).error.message;
   expect([mine.ok, mine.code, mine.message]).toEqual([false, theirs.code, sentence]);
@@ -1461,7 +1373,6 @@ it("tells a pane herdr could not restore in its own words, keeping the field, an
   const dir = state();
   await bounded(launch(dir, { XDG_CONFIG_HOME: config, HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_SESSION: "a" }).ready, 20_000);
   const ordinary = await bounded(launch(state(), { OVIS_PROFILE: "", OVIS_PREVIEW: undefined, HERDR_SOCKET: socket }).ready, 20_000);
-  /** The snapshot frame as the socket opens, and the error frame of an attach to the pane that was not restored. */
   const frames = async (url: string, init?: { headers: Record<string, string> }) => {
     const ws = new WebSocket(url, init as never);
     cleanup.push(() => ws.close());
@@ -1483,11 +1394,9 @@ it("tells a pane herdr could not restore in its own words, keeping the field, an
   const theirs = await frames(`${ordinary.replace(/^http/, "ws")}/ws`, { headers: { authorization: headers.authorization } });
   const theirAnswer = await fetch(`${ordinary}/api/session`, { headers });
   const theirSession = await theirAnswer.json() as { snapshot: unknown };
-  // on the profile: the field is still set (the app keys on it), in one sentence of the profile's own, everywhere
   const told = [restoreOf(session.snapshot), restoreOf(listed.machines[0]!.snapshot), restoreOf(mine.snapshot), mine.attach.message];
   expect(told.map((text) => [typeof text === "string" && text.length > 0, text?.includes(marker)])).toEqual(told.map(() => [true, false]));
   expect([new Set(told).size, mine.attach.code, asked.headers.get("cache-control")]).toEqual([1, "pane_not_restored", "no-store"]);
-  // an ordinary server answers as main does
   expect([restoreOf(theirSession.snapshot), restoreOf(theirs.snapshot), theirs.attach.code, theirs.attach.message, theirAnswer.headers.get("cache-control")])
     .toEqual([`${marker} could not restore`, `${marker} could not restore`, "pane_not_restored", `${marker} could not restore`, null]);
 }, 60_000);

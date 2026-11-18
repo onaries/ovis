@@ -35,8 +35,7 @@ import { homedir, platform, uptime } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 
 // No application package (node_modules) is loaded with this file: `stop` and `status` must work in a checkout whose
-// install was cut off, so a server that runs from it can be stopped. The commands that need one (the QR code, the
-// relay's and the account's code, through scripts/plugin-link.ts and shared/relay-offer.ts) import it where they use it.
+// install was cut off, so a server that runs from it can be stopped.
 import { DEFAULT_PORT } from "../shared/protocol.ts";
 import type { RemoteAccess } from "../shared/protocol.ts";
 import { canServe, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
@@ -55,7 +54,6 @@ import { descendantProcesses, windowsArgv, windowsProcessTable } from "../server
  */
 const ENV_FILES = ["env", ".env"];
 const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? SERVER_ROOT);
-/** the dir under its Ovis name, or under the name before the rename while only that one exists */
 function ownDir(parent: string): string {
   const legacy = join(parent, "herdr-web-ui");
   const next = join(parent, "ovis");
@@ -63,7 +61,6 @@ function ownDir(parent: string): string {
 }
 const DEFAULT_STATE_DIR = ownDir(join(homedir(), ".local", "state"));
 const PLUGIN_ID = "devswha.ovis";
-/** the id before the rename: an install from then keeps it until the installer moves it to PLUGIN_ID */
 const LEGACY_PLUGIN_ID = "devswha.herdr-web-ui";
 const HERDR_PLUGIN_STATE = join(herdrStateDir(process.env, platform(), homedir()), "plugins");
 const MANAGED_STATE_DIR = [PLUGIN_ID, LEGACY_PLUGIN_ID].map((id) => join(HERDR_PLUGIN_STATE, id)).find((dir) => existsSync(dir)) ?? join(HERDR_PLUGIN_STATE, PLUGIN_ID);
@@ -71,18 +68,12 @@ const MANAGED_STATE_DIR = [PLUGIN_ID, LEGACY_PLUGIN_ID].map((id) => join(HERDR_P
 // own dir while it runs; otherwise the dir herdr gives the plugin, where its startup hook wrote
 const REQUESTED_STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"]
   ?? (pidIn(join(DEFAULT_STATE_DIR, "server.pid")) !== null || !existsSync(MANAGED_STATE_DIR) ? DEFAULT_STATE_DIR : MANAGED_STATE_DIR);
-/** where the record is: the old id's dir while a server started under it runs (runningStateDir) */
 let STATE_DIR = runningStateDir(REQUESTED_STATE_DIR);
 const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? ownDir(join(homedir(), ".config"));
 adoptLegacyConfig(CONFIG_DIR);
 let PID_FILE = join(STATE_DIR, "server.pid");
 let LOG_FILE = join(STATE_DIR, "server.log");
-/** the recorded server's pid and birth, so a pid handed on to another process is not taken for it */
 let OWNER_FILE = join(STATE_DIR, "server.owner");
-/**
- * Finds the record again once this process has its turn: the server a start or stop before it
- * waited on may have stopped meanwhile, and the old id's dir with it.
- */
 function settleStateDir(): void {
   STATE_DIR = runningStateDir(REQUESTED_STATE_DIR);
   PID_FILE = join(STATE_DIR, "server.pid");
@@ -90,21 +81,18 @@ function settleStateDir(): void {
   OWNER_FILE = join(STATE_DIR, "server.owner");
 }
 /**
- * Starts and stops take turns through this lock: a start holds it from deciding whether a server
- * runs until its own answers (or fails), a stop until the server is gone. Without it a second start
- * found the first one's server spawned but not on its port yet, spawned another and overwrote its
- * record, and `stop` then missed the server that kept running (#1611). It is kept in the dir herdr
- * hands the plugin, not the one the record is in, which can change while a start waits for its turn.
+ * Without it a second start found the first one's server spawned but not on its port yet, spawned
+ * another and overwrote its record, and `stop` then missed the server that kept running (#1611). It
+ * is kept in the dir herdr hands the plugin, not the one the record is in, which can change while a
+ * start waits for its turn.
  */
 const LIFECYCLE_LOCK = join(REQUESTED_STATE_DIR, "lifecycle.lock");
 const LIFECYCLE_BUSY = "another start or stop of Ovis is running";
 /** longer than a start holds the lock (its port wait and its readiness wait, 20 s each) or a stop does */
 const LIFECYCLE_WAIT_MS = 60_000;
-/** the server needs a moment to bind and open its first herdr connection */
 const READY_TIMEOUT_MS = 20_000;
 /** the supervisor gives its bridge 6 s to exit before it kills it */
 const STOP_TIMEOUT_MS = 15_000;
-/** how long a killed server gets to disappear before `stop` reports that it could not stop it */
 const KILL_WAIT_MS = 3_000;
 /** `tailscale serve` waits while the user turns HTTPS on for the tailnet at the link it prints */
 const SERVE_TIMEOUT_MS = 180_000;
@@ -151,7 +139,6 @@ function adoptLegacyConfig(dir: string): void {
   }
 }
 
-/** `KEY=value` lines of one settings file */
 function readEnvFile(file: string): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const line of readFileSync(file, "utf8").split("\n")) {
@@ -167,17 +154,12 @@ function readEnvFile(file: string): Record<string, string> {
 /** the settings files in the plugin's config dir: the token lives here, not in herdr's env */
 const CONFIG_FILES = ENV_FILES.map((name) => join(CONFIG_DIR, name)).filter((file) => existsSync(file));
 const fileVars = CONFIG_FILES.map(readEnvFile);
-/** keys both files set to different values: `.env` wins, which someone editing `env` would not expect */
 const shadowed = fileVars.length === 2 ? Object.keys(fileVars[0]!).filter((key) => key in fileVars[1]! && fileVars[0]![key] !== fileVars[1]![key]) : [];
 const env = mergeEnvLayers([process.env, ...fileVars]);
-/** HERDR_SOCKET the user put in the config files: it names the session to show, so herdr's own socket does not replace it */
 const configuredSocket = fileVars.some((vars) => (vars["HERDR_SOCKET"] ?? "") !== "");
 const PATH_KEY = platform() === "win32" ? Object.keys(env).sort().find(key => key.toLowerCase() === "path") ?? "PATH" : "PATH";
-/** the app's own state, as the server finds it (server/update-state.ts): the same path with or without herdr's env */
 const APP_STATE_DIR = defaultStateDir(env);
-/** the port a start took because the default could not be opened; absent while the default serves */
 const PORT_FILE = join(APP_STATE_DIR, "plugin-port");
-/** a PORT the user set is theirs: it is never swapped for another */
 const portSet = (env["PORT"] ?? "") !== "";
 let port = portSet ? Number(env["PORT"]) : savedPort(PORT_FILE) ?? DEFAULT_PORT;
 const host = env["HOST"] ?? "127.0.0.1";
@@ -185,12 +167,7 @@ const ipv6Loopback = env["OVIS_IPV6_LOOPBACK"] === "1";
 const originOf = (value: number): string => `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${value}`;
 let origin = originOf(port);
 
-/**
- * This plugin runs for a machine profile: OVIS_PROFILE=machine under the fleet preview (server/preview.ts), both read
- * from the plugin's settings as the server it starts gets them (`env`: its environment, then its settings files).
- */
 const machineProfile = fleetPreview(env) && env["OVIS_PROFILE"] === "machine";
-/** The most a profile's record may hold: its own is one short line (a port, a host and a socket path of at most 100 bytes). */
 const RECORD_MAX_BYTES = 4096;
 /**
  * How the record is opened, as server/profile-marker.ts opens the profile's marker: never through a link, never waiting
@@ -221,21 +198,17 @@ function profileRecord(path: string): unknown {
 }
 
 /**
- * The machine profile's local owner, when this plugin runs for one (`machineProfile`). The profile records its owner's
- * unix socket in its state folder (`serve.lock/http.json`, with `door: 1`) and answers only liveness on its TCP port, so
- * the requests to the server go to that socket, addressed as `http://localhost`, the one Host and Origin it takes
+ * The profile records its owner's unix socket in its state folder (`serve.lock/http.json`, with `door: 1`) and answers only liveness on its TCP
+ * port, so the requests to the server go to that socket, addressed as `http://localhost`, the one Host and Origin it takes
  * there. The plugin takes the socket only when the state folder passes the profile's own check (server/machine-profile.ts
  * stateDirRefusal), the record names `serve.sock` in the folder's real path, as the profile names it, and `serve.sock`
  * is a socket this account owns and no group or other may write to, not a link. Otherwise null, also when the record is
  * missing, unreadable, larger than RECORD_MAX_BYTES, not a regular file, names no door or another socket, or the folder
- * is absent: the server then counts as not running (appHealth), and no request goes to it. Without the profile, null at
- * once, and the requests go to `origin` over TCP. Read until a health check passes (serverDoor): the record is written
- * once the server listens.
+ * is absent: the server then counts as not running (appHealth), and no request goes to it.
  */
 function ownerDoor(): string | null {
   if (!machineProfile) return null;
   try {
-    // the folder as the profile takes it (server/machine-profile.ts walkedStateDir): its record and its socket are there
     const dir = realpathSync(APP_STATE_DIR);
     if (stateDirRefusal(dir) !== null) return null;
     const record = profileRecord(join(dir, "serve.lock", "http.json")) as { door?: unknown; socket?: unknown } | null;
@@ -247,12 +220,10 @@ function ownerDoor(): string | null {
 }
 /**
  * The door of this command: the one its first passing health check went to (appHealth), kept for every later request
- * of the command, so a command never moves from one door to the other. undefined until a health check passed.
+ * of the command, so a command never moves from one door to the other.
  */
 let commandDoor: string | null | undefined;
-/** The door a request goes to: the command's (commandDoor), or ownerDoor's answer now while no health check passed. */
 const serverDoor = (): string | null => commandDoor === undefined ? ownerDoor() : commandDoor;
-/** The origin the requests to the server name: `origin`, or `http://localhost` on a machine profile's owner socket. */
 const serverOrigin = (): string => serverDoor() === null ? origin : "http://localhost";
 /**
  * A request on a machine profile's owner socket (`door`), as given but with no `authorization` header: the profile
@@ -266,14 +237,13 @@ function ownerFetch(door: string, input: string | URL | Request, init?: RequestI
 /**
  * What `pair`, `phone` and `phone-setup` say for a machine profile instead of an address, a pairing code or a Tailscale
  * serve: its TCP port answers liveness only (server/machine-profile.ts machineTcpAnswer), and a phone pairs with it
- * through the Ovis relay. The commands are named as `add` names its own (OVIS_CLI_NAME, scripts/plugin-link.ts cli).
+ * through the Ovis relay.
  */
 function profileRelayOnly(): string {
   const cli = env["OVIS_CLI_NAME"] || "ovis";
   return `A phone reaches this machine profile through the Ovis relay only, not at an address: run ${cli} add to add this machine to your Ovis account, or ${cli} link --code to pair one device.`;
 }
 
-/** One request to the server at `path`: over TCP to `origin`, or on a machine profile's owner socket (`door`, serverDoor). */
 function serverFetch(path: string, init: RequestInit = {}, door = serverDoor()): Promise<Response> {
   return door === null ? fetch(`${origin}${path}`, init) : ownerFetch(door, `http://localhost${path}`, init);
 }
@@ -296,8 +266,7 @@ function link(url: string): string {
 }
 
 /**
- * What draws a QR code, from its package. A command that draws one loads it before it changes anything (a pairing code,
- * Tailscale), so in a checkout whose install was cut off it fails with nothing changed.
+ * A command that draws one loads it before it changes anything (a pairing code, Tailscale), so in a checkout whose install was cut off it fails with nothing changed.
  */
 async function qrDrawer(): Promise<(text: string) => string> {
   const { default: qrcode } = await import("qrcode-generator");
@@ -309,21 +278,17 @@ async function qrDrawer(): Promise<(text: string) => string> {
   };
 }
 
-/** What `pair` draws and checks a relay offer with, loaded before it asks for a code (see qrDrawer) */
 async function pairingParts(): Promise<{ qr: (text: string) => string; decodeOffer: (url: string) => unknown }> {
   const [qr, { decodeOffer }] = await Promise.all([qrDrawer(), import("../shared/relay-offer.ts")]);
   return { qr, decodeOffer };
 }
 
 /**
- * The server's health, when the app answers it; null otherwise. For a machine profile it is asked on the owner socket
- * only: with no socket the plugin may take (ownerDoor), it is null and nothing is sent, since the profile answers its
- * TCP port with liveness only. There the answer also counts without `herdr` when it carries `machine_profile` with
- * `runtime_down` (server/machine-profile.ts machineHealth): the profile runs, and `engineDown` is its reason while its
- * engine does not answer ("" with none given). Over TCP `engineDown` is always null.
+ * For a machine profile it is asked on the owner socket only: with no socket the plugin may take (ownerDoor), it is
+ * null and nothing is sent, since the profile answers its TCP port with liveness only. `devices`: the groups the
+ * answer lists to its owner (accountDevicesOf); `tokenRequired`: the app let the request in only with its token.
  */
-async function appHealth(): Promise<{ readonly engineDown: string | null } | null> {
-  // the door the request goes to and the answer is judged by: decided once, and kept for the command once it passes
+async function appHealth(): Promise<{ readonly engineDown: string | null; readonly devices: AccountDevices | null; readonly tokenRequired: boolean } | null> {
   const door = serverDoor();
   if (machineProfile && door === null) return null;
   try {
@@ -337,7 +302,10 @@ async function appHealth(): Promise<{ readonly engineDown: string | null } | nul
     const engine = typeof profile === "object" && profile !== null && typeof profile.runtime_down === "boolean" ? profile : null;
     if ((typeof body.herdr !== "object" || body.herdr === null) && engine === null) return null;
     commandDoor = door;
-    return { engineDown: engine?.runtime_down === true ? (typeof engine.reason === "string" ? engine.reason : "") : null };
+    return {
+      engineDown: engine?.runtime_down === true ? (typeof engine.reason === "string" ? engine.reason : "") : null,
+      devices: accountDevicesOf(body), tokenRequired: (body.auth as { reason?: unknown }).reason === "token_required",
+    };
   } catch {
     return null;
   }
@@ -347,7 +315,6 @@ async function health(): Promise<boolean> {
   return (await appHealth()) !== null;
 }
 
-/** Whether the app holds the port: its bridge health answers without asking herdr. */
 async function appOnPort(): Promise<boolean> {
   try {
     const response = await fetch(`${origin}/api/health?scope=bridge`, { signal: AbortSignal.timeout(1500) });
@@ -366,10 +333,8 @@ function appAuth(auth: unknown): boolean {
   return typeof fields?.required === "boolean" && typeof fields.authenticated === "boolean";
 }
 
-/** Why the app's full health fails, as it says: herdr's error while herdr is away; null when it answers now (herdr came back). */
 async function healthError(): Promise<string | null> {
   try {
-    // short, as health() is: the wait before this has already spent the start's deadline
     const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1500) });
     const body = (await response.json()) as { ok?: unknown; error?: { message?: unknown } };
     if (response.ok && body.ok === true) return null;
@@ -383,10 +348,6 @@ function recordedPid(): number | null {
   return pidIn(PID_FILE);
 }
 
-/**
- * The recorded server while it may still run: null once it is proved gone or replaced, or when no
- * record of its identity was kept (recordedServer).
- */
 function provedServer(): number | null {
   const pid = recordedPid();
   // an exited server its parent has not reaped yet still answers signal 0, with its birth
@@ -394,20 +355,13 @@ function provedServer(): number | null {
   return recordedServer(pid) === "ours" ? pid : null;
 }
 
-/**
- * What the record says of the process under `pid`: "replaced" once the recorded server is proved
- * gone or another process holds its pid (the pid is free, another birth runs there now, or, for a
- * record without a birth, the PC restarted after it was recorded); "unrecorded" when no record of its identity was kept (a server
- * started by a version before this one); else "ours". A birth that could not be read, when it was
- * recorded or now, proves nothing either way, so the server counts as ours.
- */
 function recordedServer(pid: number): "ours" | "replaced" | "unrecorded" {
   let owner = null as { pid?: unknown; birth?: unknown; birth_unknown?: unknown } | null;
   let recordedAt = 0;
   try {
     owner = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as typeof owner;
     recordedAt = statSync(OWNER_FILE).mtimeMs;
-  } catch { /* none kept */ }
+  } catch {}
   if (owner?.pid !== pid) return "unrecorded";
   const now = readProcessBirth(pid);
   if (now.state === "absent") return "replaced";
@@ -416,12 +370,10 @@ function recordedServer(pid: number): "ours" | "replaced" | "unrecorded" {
   const birth = parseBirth(owner.birth);
   if (birth !== null && birth.platform === process.platform) return now.state === "unknown" || now.birth.value === birth.value ? "ours" : "replaced";
   if (owner.birth_unknown !== true) return "unrecorded";
-  // no birth to compare: a record from before this boot names a process that is gone
   if (recordedAt < Date.now() - uptime() * 1000 - 1000) return "replaced";
   return now.state === "identified" && startedAfter(now.birth.value, recordedAt) ? "replaced" : "ours";
 }
 
-/** Whether a birth read now is of a process that started after `time` (ms), where the platform's birth is a time. */
 function startedAfter(birth: string, time: number): boolean {
   if (process.platform === "win32") return Number(birth) > time;
   if (process.platform === "darwin") {
@@ -432,7 +384,6 @@ function startedAfter(birth: string, time: number): boolean {
   return false; // Linux: ticks after boot; a reused pid within one boot needs the pid space to wrap
 }
 
-/** the live process a pid file names, or null */
 /**
  * herdr keeps a plugin's state dir by its id too. A server started under the old id keeps its pid
  * in the old id's dir until it stops (the installer stops it before moving the install to the new
@@ -457,10 +408,6 @@ function pidIn(file: string): number | null {
 }
 
 
-/**
- * Waits for this process's turn to start or stop: the lease, or why there is none. A lock whose
- * owner is proved gone (it crashed, or the PC restarted under it) is taken over at once.
- */
 async function takeTurn(): Promise<OwnerLease | string> {
   // the lock reports a guard it cannot open as a start in progress: a state dir this user cannot
   // write would then be waited on for a minute, and its message would name a lock nobody holds
@@ -474,7 +421,6 @@ async function takeTurn(): Promise<OwnerLease | string> {
       return acquireOwnerDirectory(LIFECYCLE_LOCK, { running: LIFECYCLE_BUSY, starting: LIFECYCLE_BUSY }, {}, { wait: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // anything else (the state dir cannot be written) does not pass by waiting
       if (!message.startsWith(LIFECYCLE_BUSY)) return message;
       if (Date.now() >= deadline) return `${message} and did not finish within ${LIFECYCLE_WAIT_MS / 1000}s; if none is running, remove ${LIFECYCLE_LOCK}`;
       if (!said) process.stdout.write(`${message}; waiting for it to finish\n`);
@@ -501,20 +447,14 @@ function failStart(message: string, detail = "", log: number | string = LOG_FILE
   return 1;
 }
 
-/** A failed start reads at most this much of the log's end, so a log of any size costs the same. */
 const LOG_TAIL_BYTES = 64 * 1024;
 
-/**
- * What the server wrote to `log` since `offset`: its own error is in the last lines. Read through
- * the start's own handle, so a log another start has moved meanwhile is still this run's.
- */
+/** Read through the start's own handle, so a log another start has moved meanwhile is still this run's. */
 function logSince(log: number, offset: number): string {
   const size = fstatSync(log).size;
-  // a cut read's first byte only shows whether the next one starts a line
   const from = Math.max(offset, size - LOG_TAIL_BYTES);
   const bytes = Buffer.alloc(Math.max(0, size - from));
   let text = bytes.subarray(0, readSync(log, bytes, 0, bytes.length, from)).toString("utf8");
-  // a read that starts mid-file drops its cut-off first piece, unless that piece is all there is
   if (from > offset) {
     const rest = text.slice(text.indexOf("\n") + 1);
     if (rest.trim() !== "") text = rest;
@@ -541,10 +481,6 @@ function keepPreviousLog(): void {
   }
 }
 
-/**
- * Leaves `port` on one the server can open, or says why none is. Returns "running" when the port
- * was held by a server of ours that came up meanwhile.
- */
 async function settlePort(): Promise<"ready" | "running" | "failed"> {
   if (await canServe(host, port, ipv6Loopback)) return "ready";
   // a start still coming up holds the port: wait for it rather than open a second server beside it
@@ -594,7 +530,6 @@ async function start(): Promise<number> {
     process.stdout.write(`Ovis already running at ${origin}\n`);
     return 0;
   }
-  // a machine profile is started on its own, not by the managed launcher: nothing is spawned, made or written for it
   if (machineProfile) {
     process.stderr.write("This plugin does not start a machine profile. Start it with OVIS_PROFILE=machine, OVIS_PREVIEW=fleet and OVIS_STATE_DIR naming a folder of its own, running ovis-server serve.\n");
     return 1;
@@ -610,9 +545,7 @@ async function start(): Promise<number> {
   }
 }
 
-/** The rest of `start`, while no other start or stop runs: a server another start recorded is seen here. */
 async function startInTurn(): Promise<number> {
-  // a start this one waited for may have moved to another port and come up there
   if (!portSet) {
     const kept = savedPort(PORT_FILE) ?? DEFAULT_PORT;
     if (kept !== port) {
@@ -636,7 +569,6 @@ async function startInTurn(): Promise<number> {
   const running = provedServer();
   if (running !== null) return failStart(`Ovis (pid ${running}) is still running but does not answer ${origin}/api/health. Stop it before starting it again.`);
   if (!portSet) {
-    // kept, so the address a phone or a bookmark holds survives a restart
     if (port === DEFAULT_PORT) rmSync(PORT_FILE, { force: true });
     else {
       mkdirSync(APP_STATE_DIR, { recursive: true, mode: 0o700 });
@@ -645,7 +577,6 @@ async function startInTurn(): Promise<number> {
     }
   }
   keepPreviousLog();
-  // readable too: a failed start reads its server's last lines back through this handle
   const log = openSync(LOG_FILE, "a+");
   const logged = fstatSync(log).size;
   const [runtime, managed] = entryCommand("managed", ROOT);
@@ -660,7 +591,7 @@ async function startInTurn(): Promise<number> {
       HOST: host,
       PORT: String(port),
       // herdr hands the plugin HERDR_SOCKET_PATH; the server (and the attach it
-      // spawns) reads HERDR_SOCKET. A HERDR_SOCKET set in the config files wins.
+      // spawns) reads HERDR_SOCKET.
       ...(env["HERDR_SOCKET_PATH"] !== undefined && !configuredSocket ? { HERDR_SOCKET: env["HERDR_SOCKET_PATH"] } : {}),
     },
   });
@@ -670,7 +601,6 @@ async function startInTurn(): Promise<number> {
     return 1;
   }
   try {
-    // the identity first: a reader that finds the pid finds what it was
     const birth = readProcessBirth(child.pid);
     writeRecord(OWNER_FILE, `${JSON.stringify({ pid: child.pid, ...(birth.state === "identified" ? { birth: birth.birth } : { birth_unknown: true }) })}\n`);
     writeRecord(PID_FILE, `${child.pid}\n`);
@@ -682,7 +612,6 @@ async function startInTurn(): Promise<number> {
   }
 
   const deadline = Date.now() + READY_TIMEOUT_MS;
-  // a server that has exited will not answer: its last words are in the log now
   while (Date.now() < deadline && child.exitCode === null) {
     if (await health()) {
       process.stdout.write(`Ovis listening at ${origin}\n`);
@@ -704,20 +633,18 @@ function writeRecord(file: string, text: string): void {
   writeStateDocument(file, text, false);
 }
 
-/** Removes the records that name `pid`, and only those: a start that ran meanwhile may have recorded its own server. */
 function forgetServer(pid: number): void {
-  try { if (Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE, { force: true }); } catch { /* none */ }
-  try { if ((JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { pid?: unknown }).pid === pid) rmSync(OWNER_FILE, { force: true }); } catch { /* none, or not a record */ }
+  try { if (Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE, { force: true }); } catch {}
+  try { if ((JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { pid?: unknown }).pid === pid) rmSync(OWNER_FILE, { force: true }); } catch {}
 }
 
-/** Stops a server this start spawned and returns once it is gone (its process group, on Unix), or false if it did not go. */
 async function stopSpawned(child: ReturnType<typeof spawn>): Promise<boolean> {
   const pid = child.pid!;
   const windows = platform() === "win32";
   try {
     if (windows) stopDependencies.terminateTree(pid);
     else process.kill(-pid, "SIGKILL");
-  } catch { /* gone meanwhile */ }
+  } catch {}
   const exited = () => child.exitCode !== null || child.signalCode !== null;
   const gone = (): boolean => {
     if (!exited()) return false;
@@ -744,7 +671,7 @@ function liveProcess(target: number): boolean | null {
       const [state, , group] = fields.slice(fields.lastIndexOf(")") + 2).split(" ");
       return { state: state!, group: Number(group) };
     } catch {
-      return null; // gone meanwhile
+      return null;
     }
   };
   if (target > 0) {
@@ -783,11 +710,6 @@ const stopDependencies: StopDependencies = {
 };
 
 /**
- * Returns once the server is gone. It stops answering at once, but its supervisor holds the
- * checkout's lock until the bridge under it exits, and a `start` before then finds that lock,
- * gives up, and leaves nothing running.
- */
-/**
  * Whether a process (its executable and argv) is this plugin's server in either of the forms it runs in: the form this
  * process would start, Bun running the plugin checkout's server/managed.ts (from source, as before the compiled server),
  * or the checkout's installed ovis-server(.exe) running its managed entry (scripts/plugin-launch.ts). So a stop run by
@@ -803,8 +725,12 @@ export function startedByThisPlugin(path: string, argv: string[], env: Record<st
   return argv[1] === "managed" && path.toLowerCase().startsWith(installed) && /^ovis-server(\.exe)?$/i.test(basename(path));
 }
 
+/**
+ * Returns once the server is gone. It stops answering at once, but its supervisor holds the
+ * checkout's lock until the bridge under it exits, and a `start` before then finds that lock,
+ * gives up, and leaves nothing running.
+ */
 export async function stop(dependencies: StopDependencies = stopDependencies): Promise<number> {
-  // no start made the dir, and no server runs under the old id's: nothing to stop
   if (!existsSync(REQUESTED_STATE_DIR) && recordedPid() === null) {
     process.stdout.write("Ovis is not running\n");
     return 0;
@@ -823,7 +749,6 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
   }
 }
 
-/** The creation time (ms) `start` recorded on Windows for the server under `pid`, or null when it kept none for it. */
 function recordedWindowsBirth(pid: number): number | null {
   try {
     const owner = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { pid?: unknown; birth?: unknown };
@@ -839,7 +764,6 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     process.stdout.write("Ovis is not running\n");
     return 0;
   }
-  // the whole process group when the server leads one, as `start` spawns it
   let target = dependencies.isWindows ? pid : -pid;
   if (dependencies.isWindows) {
     // A stale PID can belong to another app, or a newer instance of this plugin.
@@ -847,11 +771,8 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     const processes = await dependencies.processTable();
     const owner = processes.find(row => row.pid === pid);
     // The identity start recorded (the pid and the creation time Windows gives it) decides, whichever installation
-    // folder runs this stop: herdr plugin update builds the new version in a new one while the old server runs on. A
-    // record without a birth (none could be read) falls back to the server's form and folder.
+    // folder runs this stop: herdr plugin update builds the new version in a new one while the old server runs on.
     const birth = recordedWindowsBirth(pid);
-    // An exact creation-time match decides alone, as on Linux. Without one, the process must also have started
-    // before its pid record was written (a record older than it is not its own).
     const identified = owner?.started !== undefined && (birth !== null
       ? owner.started === birth
       : owner.started <= recordedAt && startedByThisPlugin(owner.path ?? "", windowsArgv(owner.commandLine ?? "")));
@@ -898,8 +819,7 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     process.stdout.write(`stopped Ovis (pid ${pid})\n`);
     return 0;
   } else {
-    // the recorded server is gone and its pid is someone else's now: nothing of ours to signal. A
-    // record without the server's identity (from a version before it was kept) is signalled as before
+    // the recorded server is gone and its pid is someone else's now: nothing of ours to signal.
     if (recordedServer(pid) === "replaced") {
       forgetServer(pid);
       process.stdout.write(`Ovis is not running (pid ${pid} now belongs to another process)\n`);
@@ -927,7 +847,7 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
   // a lone process (no group of its own) that exited and whose pid another process took meanwhile is not ours to kill
   const handedOn = killed && target === pid && recordedServer(pid) === "replaced";
   if (killed && !handedOn) {
-    try { process.kill(target, "SIGKILL"); } catch { /* gone meanwhile */ }
+    try { process.kill(target, "SIGKILL"); } catch {}
     // SIGKILL only asks: the lock is free, and a start can follow, once the group is gone
     const killDeadline = Date.now() + KILL_WAIT_MS;
     while (running() && Date.now() < killDeadline) await Bun.sleep(100);
@@ -936,21 +856,14 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
       return 1;
     }
   }
-  // a start that ran meanwhile may have recorded its own server: leave that one's records alone
   forgetServer(pid);
   // install.ps1 reads a stdout line starting `stopped ` as "this stop stopped a server" (scripts/plugin-stop-identity.test.ts pins it)
   process.stdout.write(`stopped Ovis (pid ${pid})${killed && !handedOn ? `; it was still running after ${STOP_TIMEOUT_MS / 1000}s, so it was killed` : ""}\n`);
   return 0;
 }
 
-/**
- * A pairing code for another device, printed here. A headless PC has no browser of its own to
- * open Settings → Devices in, so this is how its owner lets a phone in: the code, the address the
- * phone opens (when Tailscale serves one), and that address as a QR code for a screen to scan.
- */
 async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<number> {
   if (process.argv.includes("--approve")) return approvePairings();
-  // a code started on a machine profile is entered at no address: no pairing is started for it
   if (machineProfile) {
     process.stderr.write(`${profileRelayOnly()}\n`);
     return 1;
@@ -972,7 +885,7 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
   try {
     const access = (await (await serverFetch("/api/access", { headers })).json()) as { tailscale: { serving_url: string | null } };
     url = access.tailscale.serving_url;
-  } catch { /* an older server: the code alone */ }
+  } catch {}
   const out: string[] = [`Pairing code: ${code.slice(0, 3)} ${code.slice(3)}   (good for 10 minutes, for one device)`];
   if (url !== null) {
     out.push(`On the other device, open ${link(url)} and enter the code, or scan this to open it with the code filled in:`, "");
@@ -1013,13 +926,8 @@ async function pair(parts?: Awaited<ReturnType<typeof pairingParts>>): Promise<n
   return 0;
 }
 
-/**
- * `pair --approve`: the devices waiting to pair through the relay by comparing digits, one by one,
- * with the digits their screens show, approved or declined here. The PC's terminal is the PC
- * itself, so this is approval on this PC (docs/account.md, "Who may admit a device").
- */
+/** The PC's terminal is the PC itself, so this is approval on this PC (docs/account.md, "Who may admit a device"). */
 async function approvePairings(): Promise<number> {
-  // loaded before a request is decided, as qrDrawer is
   const { approveWaiting, discardTyped } = await import("./plugin-link.ts");
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
@@ -1044,7 +952,6 @@ async function approvePairings(): Promise<number> {
     // a pipe, a file or a closed stdin approves nothing, whatever it carries and whenever
     terminal: process.stdin.isTTY === true,
     discard: discardTyped,
-    // Ctrl+C ends the process as it is
     signal: new AbortController().signal,
     // read again before three digits approve: a request that came since may end in the same three
     list: async () => {
@@ -1086,17 +993,10 @@ async function handOn(active: string, args: readonly string[]): Promise<number> 
   }
 }
 
-/**
- * `link [--code | --approve] [--print] [--github | --google]`, also `add` and `login`: this PC joins the relay from
- * its own terminal (scripts/plugin-link.ts), signed in to the account by a device code and then added by a QR code
- * (`--approve`: by an approval here), or with a code to type and a QR code.
- */
 async function linkCommand(): Promise<number> {
-  // the checkout survives in-app updates: the release that runs has the link that fits its server (as phone-setup)
   const active = activePluginScript(ROOT, port, APP_STATE_DIR);
   // Always "link", whichever name it was run by: a release from before `add` and `login` knows only that one
   if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) return await handOn(active, ["link", ...process.argv.slice(3)]);
-  // loaded before anything is asked or listened for, as qrDrawer is
   const { discardTyped, link: linkPc, linkSettings } = await import("./plugin-link.ts");
   if (!(await health())) {
     process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
@@ -1124,7 +1024,6 @@ async function linkCommand(): Promise<number> {
     origin: door === null ? origin : "http://localhost", headers, signal: stop.signal,
     ...(door === null ? {} : { fetch: (input: string | URL | Request, init?: RequestInit) => ownerFetch(door, input, init) }),
     accountService: accountServiceOrigin(env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE),
-    // the fleet preview, the command's name and the app the server pairs with, from the settings the server it starts gets
     ...linkSettings(env),
     out: (text) => process.stdout.write(text),
     lines: console[Symbol.asyncIterator](),
@@ -1138,11 +1037,10 @@ async function linkCommand(): Promise<number> {
 }
 
 /**
- * The address a phone opens, as a QR code. When Tailscale runs on this PC but does not yet serve
- * the app, this is the one place that changes it: `tailscale serve` of the app's port on the first
- * free HTTPS port, or only on the one OVIS_TAILSCALE_HTTPS_PORT names, said out loud with the
- * command that undoes it. Everything else only reads. Run by install.sh (and by hand); neither the
- * server nor startup ever calls it.
+ * When Tailscale runs on this PC but does not yet serve the app, this is the one place that changes it:
+ * `tailscale serve` of the app's port on the first free HTTPS port, or only on the one
+ * OVIS_TAILSCALE_HTTPS_PORT names, said out loud with the command that undoes it. Everything else
+ * only reads. Run by install.sh (and by hand); neither the server nor startup ever calls it.
  */
 async function phone(): Promise<number> {
   // a machine profile serves no app at its port: no address is shown and Tailscale is not asked or changed
@@ -1150,7 +1048,6 @@ async function phone(): Promise<number> {
     process.stdout.write(`${profileRelayOnly()}\n`);
     return 0;
   }
-  // before `tailscale serve` (see qrDrawer)
   const qr = await qrDrawer();
   const say = (line = "") => process.stdout.write(line + "\n");
   const running = await health();
@@ -1215,12 +1112,9 @@ async function phone(): Promise<number> {
   return 0;
 }
 
-/** The marketplace action has a real pane, so its address, QR and pairing code stay visible. */
 async function phoneSetup(): Promise<number> {
   const active = activePluginScript(ROOT, port, APP_STATE_DIR);
   if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) return await handOn(active, ["phone-setup"]);
-  // before the pairing code is asked for (see qrDrawer), and not taken for a failed read of the app below; none for a
-  // machine profile, which shows no address and starts no pairing (profileRelayOnly)
   const parts = machineProfile ? null : await pairingParts();
   process.stdout.write(`Phone setup\n\n${parts === null ? profileRelayOnly() : `App on this PC: ${link(origin)}`}\n`);
   let code = 0;
@@ -1254,10 +1148,7 @@ async function phoneSetup(): Promise<number> {
 }
 
 /**
- * The version that runs, or runs at the next start: the release Settings → Updates installed, else
- * this checkout. herdr's plugin list names only the checkout's, which keeps the version first
- * installed, so Ovis for Windows reads this line to tell an old server from an updated one. The compiled server has
- * no package.json beside it: it is the version compiled into it (updates stay unmanaged there for now).
+ * herdr's plugin list names only the checkout's, which keeps the version first installed, so Ovis for Windows reads this line to tell an old server from an updated one.
  */
 function runningVersion(): string | null {
   if (COMPILED) return builtVersion;
@@ -1267,13 +1158,45 @@ function runningVersion(): string | null {
   } catch { return null; }
 }
 
+/** The devices an owner's health answer lists apart (server/devices.ts accountGroups). */
+interface AccountDevices { readonly unlinked: readonly ShownDevice[]; readonly own_word: readonly ShownDevice[] }
+interface ShownDevice { readonly id: string; readonly label: string }
+
+/** The `account_devices` of a health answer, in the shape this command reads; null without one (an older server, or a caller that is not its owner). */
+function accountDevicesOf(body: unknown): AccountDevices | null {
+  const groups = (body as { account_devices?: unknown } | null)?.account_devices as Record<string, unknown> | null | undefined;
+  const shown = (list: unknown): list is ShownDevice[] => Array.isArray(list)
+    && list.every((device) => typeof device?.id === "string" && typeof device.label === "string");
+  return typeof groups === "object" && groups !== null && shown(groups["unlinked"]) && shown(groups["own_word"])
+    ? { unlinked: groups["unlinked"], own_word: groups["own_word"] } : null;
+}
+
+/** One group's line: each device by its name and its id, neither with a control character. */
+const deviceLine = (title: string, devices: readonly ShownDevice[]): string => {
+  const plain = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return `${title}: ${devices.length === 0 ? "none" : devices.map((device) => `${plain(device.label)} (${plain(device.id)})`).join(", ")}\n`;
+};
+
 /** Reporting "down" is not an action failure: herdr logs a nonzero exit as failed. */
 async function status(): Promise<number> {
   const pid = recordedPid();
   const answer = await appHealth();
   process.stdout.write(`${answer !== null ? "running" : "down"} ${origin}${pid === null ? "" : ` (pid ${pid})`}\n`);
-  // a machine profile that runs while its engine does not answer (appHealth)
   if (typeof answer?.engineDown === "string") process.stdout.write(`engine: down${answer.engineDown === "" ? "" : ` (${answer.engineDown})`}\n`);
+  // the groups of the app's own answer, which carries no token: on a machine profile's owner socket, or over TCP when
+  // the app lets the command in without one. Nothing proves which program holds a TCP port, so no token goes there
+  const devices = answer?.devices ?? null;
+  if (devices !== null) {
+    // relay rows only: a browser paired on the PC's own address is outside the account too, and listed in Settings → Devices
+    process.stdout.write(deviceLine("relay devices outside the account", devices.unlinked));
+    process.stdout.write(deviceLine("devices that joined the account on their own word", devices.own_word));
+  } else if (answer !== null) {
+    // the answer of an app that is not its owner's (a token, a pairing or the owner's login needed, the open LAN), or of a
+    // release from before the groups: only the token is something to name
+    process.stdout.write(answer.tokenRequired
+      ? "account devices: not shown, as Ovis lets this command in only with a token, which status does not send over TCP\n"
+      : "account devices: not shown, as the app's answer to this command does not list them\n");
+  }
   const version = runningVersion();
   if (version !== null) process.stdout.write(`version: ${version}\n`);
   process.stdout.write(`config: ${CONFIG_FILES.length === 0 ? `none (settings go in ${join(CONFIG_DIR, "env")})` : CONFIG_FILES.join(", ")}\n`);
@@ -1293,8 +1216,6 @@ export async function runPlugin(): Promise<void> {
   else if (command === "phone-setup") process.exit(await phoneSetup());
   else if (command === "tui") process.exit(await runTui(process.argv.slice(3), { platform: platform(), where: { root: ROOT, home: homedir() }, caller: process.env, settings: env, err: (text) => process.stderr.write(text), on: (signal, handler) => { process.on(signal, handler); return () => process.off(signal, handler); } }));
   else {
-    // a launcher runs the checkout's own script, which stays at the version first installed: a
-    // command it does not know may be one of the release Settings → Updates installed since
     const active = activePluginScript(ROOT, port, APP_STATE_DIR);
     if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) process.exit(await handOn(active, process.argv.slice(2)));
     process.stderr.write([

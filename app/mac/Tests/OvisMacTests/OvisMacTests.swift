@@ -104,13 +104,10 @@ final class RunningCodeTests: XCTestCase {
         XCTAssertNil(Model.processDirectory(-1))
     }
 
-    /// The launcher of the checkout runs the checkout's supervisor, which fell back from the release's and runs the
-    /// release's bridge: the release is what runs.
     @MainActor
     func testFindsTheReleaseTheBridgeRunsUnderThisCheckoutsLauncher() async throws {
         let root = try code("plugin")
         let release = try code("state/updates/8e64ff3e5eb22439/release-2")
-        // each waits for its child, and the bridge for its stdin, which the test closes at the end
         try Data("/bin/sh \(root)/server/supervisor.ts\n:\n".utf8).write(to: URL(fileURLWithPath: "\(root)/server/managed.ts"))
         try Data("cd \(release) && /bin/sh server/index.ts\n:\n".utf8).write(to: URL(fileURLWithPath: "\(root)/server/supervisor.ts"))
         try Data("echo ready\nread line\n".utf8).write(to: URL(fileURLWithPath: "\(release)/server/index.ts"))

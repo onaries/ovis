@@ -3,7 +3,6 @@ import { readers } from "./index.ts";
 import { readersFor, type DialogReader, type ReaderContext } from "./registry.ts";
 import { onePerPass } from "./shared.ts";
 
-// Copied from the moved/list/sideways responder sets in prompt.ts at 3df0824e, the base of #1435.
 const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["list"]]> = {
   "claude-question": ["none", "none"],
   "claude-submit": ["none", "none"],
@@ -89,7 +88,6 @@ test("keeps fallback readers last for known and unknown agents", () => {
   }
 });
 
-/** The readers each agent's screen is offered to, first to last: the first that reads it gives the card. */
 const order: Record<string, readonly string[]> = {
   "": ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   agy: ["agy-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],

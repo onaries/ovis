@@ -76,23 +76,19 @@ describe("read-only watch stream", () => {
 });
 
 describe("an observe process asked to end", () => {
-  // stand-ins for herdr's binary, started as `<stand-in> terminal session observe …`: no herdr runs
   let root: string | undefined;
   const binBefore = process.env["OVIS_HERDR_BIN"];
   afterEach(() => {
     if (binBefore === undefined) delete process.env["OVIS_HERDR_BIN"]; else process.env["OVIS_HERDR_BIN"] = binBefore;
-    // whatever a stand-in left running: itself when it would not end, and the child it started
     for (const name of ["pid", "child"]) {
-      try { process.kill(Number(readFileSync(join(root!, name), "utf8")), "SIGKILL"); } catch { /* ended, or never started */ }
+      try { process.kill(Number(readFileSync(join(root!, name), "utf8")), "SIGKILL"); } catch {}
     }
     if (root) rmSync(root, { recursive: true, force: true });
     root = undefined;
   });
-  /** A watch on a stand-in whose shell script is `body`, once the stand-in runs (it has written its pid). */
   async function watching(body: string, killGraceMs?: number): Promise<{ watch: PaneWatch; ends: () => number }> {
     root = mkdtempSync(join(tmpdir(), "ovis-watch-kill-"));
     const bin = join(root, "herdr");
-    // `ROOT_DIR` in `body`: this test's own folder
     writeFileSync(bin, `#!/bin/sh\necho $$ > 'ROOT_DIR/pid'\n${body}\n`.replaceAll("ROOT_DIR", root));
     chmodSync(bin, 0o755);
     process.env["OVIS_HERDR_BIN"] = bin;
@@ -105,7 +101,6 @@ describe("an observe process asked to end", () => {
     }
     return { watch, ends: () => ends };
   }
-  /** Whether the watch's process is reported gone within `ms`. */
   const exitedWithin = (watch: PaneWatch, ms: number): Promise<boolean> => Promise.race([watch.exited.then(() => true), Bun.sleep(ms).then(() => false)]);
   const posix = process.platform !== "win32";
 
@@ -114,7 +109,6 @@ describe("an observe process asked to end", () => {
     const { watch, ends } = await watching(`sleep 30 &\necho $! > 'ROOT_DIR/child'\ntouch 'ROOT_DIR/ready'\nwait`);
     watch.kill();
     expect(await exitedWithin(watch, 3_000), "what waits for its exit (the pane's next view, its place among 64) would wait for the child").toBe(true);
-    // asked to end, it tells no end of its own
     expect(ends()).toBe(0);
   }, 15_000);
 
@@ -125,7 +119,6 @@ describe("an observe process asked to end", () => {
   }, 15_000);
 
   it.skipIf(!posix)("is killed outright too when its pane closed and it stays: the view that ended by itself still frees its place", async () => {
-    // herdr says the terminal closed, and the process is asked to end as a pane's watch is; this one stays
     const closed = JSON.stringify({ type: "terminal.closed" });
     const { watch, ends } = await watching(`trap '' TERM\necho '${closed}'\ntouch 'ROOT_DIR/ready'\nwhile :; do sleep 0.05; done`, 100);
     expect(await exitedWithin(watch, 3_000)).toBe(true);

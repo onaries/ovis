@@ -35,7 +35,6 @@ async function savedPcs(count: number): Promise<{ devices: RelayDevice[]; store:
   return { devices, store };
 }
 
-/** A probe that answers only when the test lets it: each call's resolver in `pending`, and `arrived(n)` resolves once n calls were made. */
 function heldProbe() {
   const pending: ReturnType<typeof Promise.withResolvers<Found>>[] = [];
   const checked: string[] = [];
@@ -93,16 +92,13 @@ it("checks exactly the PC asked for, ahead of a sweep's remaining PCs and within
   const [queued, outside] = [ids[7] ?? "", ids[10] ?? ""];
   const { pending, checked, arrived, probe } = heldProbe();
   const sweep = createPcSweep(store, { active: () => true, redraw() {} }, { probe });
-  // a PC outside the sweep's eight, asked for first: checked at once and marked as checking meanwhile
   const asked = sweep.checkOne(outside);
   await arrived(1);
   expect(checked).toEqual([outside]);
   expect(sweep.status.get(outside)).toEqual({ kind: "checking" });
-  // the sweep that follows gets the one worker left: two checks at once across both
   const first = sweep.check();
   await arrived(2);
   expect(checked).toEqual([outside, ids[0] ?? ""]);
-  // a PC still waiting in the sweep's queue moves to its front, a second one from outside goes before it; the one under way is not asked again
   const movedUp = sweep.checkOne(queued);
   const another = sweep.checkOne(ids[11] ?? "");
   await sweep.checkOne(outside);
@@ -126,7 +122,6 @@ it("checks exactly the PC asked for, ahead of a sweep's remaining PCs and within
     pending[turn]?.resolve({ kind: "offline", reason: "relay" });
   }
   await first;
-  // the sweep's eight plus the two asked for, the PC moved up checked once
   expect(checked).toEqual([outside, ids[0], ids[11], queued, ...ids.slice(1, 7)].map((id) => id ?? ""));
 });
 
@@ -141,7 +136,6 @@ it("lets an answer go once it is older than the directory's 15 minutes, while a 
   await arrived(1);
   pending[0]?.resolve({ kind: "answered", route: "relay", rttMs: 20 });
   await first;
-  // ten minutes on, a second check answers again: the first answer's expiry leaves this one alone
   jest.advanceTimersByTime(10 * 60_000);
   const second = sweep.checkOne(id);
   await arrived(2);
@@ -149,7 +143,6 @@ it("lets an answer go once it is older than the directory's 15 minutes, while a 
   await second;
   jest.advanceTimersByTime(5 * 60_000);
   expect(sweep.status.get(id)).toEqual({ kind: "answered", route: "lan", rttMs: 4 });
-  // fifteen minutes after it, nothing answers for the PC any more, and the rows are drawn again
   const drawn = redraws;
   jest.advanceTimersByTime(10 * 60_000);
   expect(sweep.status.has(id)).toBe(false);

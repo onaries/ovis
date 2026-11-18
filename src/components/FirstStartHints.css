@@ -1,4 +1,3 @@
-/* a first-start hint (FirstStartHints): the app's popover surface beside or under what it is about */
 .first-hint {
   position: fixed;
   z-index: var(--z-popover);
@@ -14,7 +13,6 @@
   color: var(--text);
 }
 
-/* the small arrow toward the anchor, a turned square in the card's own colours */
 .first-hint::before {
   content: "";
   position: absolute;
@@ -25,7 +23,6 @@
   transform: rotate(45deg);
 }
 
-/* the arrow points at the anchor's centre (--first-hint-arrow), wherever the window's edge put the card */
 .first-hint.is-below::before {
   top: calc(-1 * var(--space-1-5));
   left: calc(var(--first-hint-arrow, 50%) - var(--space-1-5));

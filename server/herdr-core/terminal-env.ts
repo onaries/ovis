@@ -16,8 +16,7 @@ type SourceEnv = Record<string, string | undefined>;
 const SESSION_ENV = /^(?:HOME|USER|LOGNAME|SHELL|PATH|LANG|LC_[A-Z_]+|TZ|TMPDIR|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|SSH_AUTH_SOCK|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|ZDOTDIR|XDG_CONFIG_HOME)$/;
 
 /**
- * The shell's own bookkeeping, and what places a process in a terminal or core: never the user's setting. BUN_BE_BUN
- * is the compiled server's own: it sets it to run the probe as Bun (server/shell-agent.ts), the probe prints it back
+ * BUN_BE_BUN is the compiled server's own: it sets it to run the probe as Bun (server/shell-agent.ts), the probe prints it back
  * with the rest, and a pane that had it would run every Bun-compiled program (an agent's CLI, this server) as bare Bun.
  */
 const NOT_SETTINGS = /^(?:PWD|OLDPWD|SHLVL|_|TERM|COLORTERM|BUN_BE_BUN|HC_.*|HERDR_.*)$/;
@@ -25,23 +24,16 @@ const NOT_SETTINGS = /^(?:PWD|OLDPWD|SHLVL|_|TERM|COLORTERM|BUN_BE_BUN|HC_.*|HER
 /**
  * What names the probe's own session, process or tty rather than a setting: a profile that runs
  * `eval $(ssh-agent)` names an agent of the probe's (holding no key), `GPG_TTY` reads "not a tty".
- * Each pane keeps the core's own, as before.
  */
 const SESSION_BOUND = /^(?:SSH_AUTH_SOCK|SSH_AGENT_PID|SSH_TTY|SSH_CONNECTION|SSH_CLIENT|GPG_TTY|GPG_AGENT_INFO|TTY|DBUS_SESSION_BUS_ADDRESS|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|XDG_SESSION_.*|XDG_VTNR|TMUX|TMUX_PANE|STY|WINDOWID)$/;
 
-/** Where hc finds its core: a connect that starts one keeps this server's, whatever the profile says. */
 const CORE_PLACE = /^(?:HOME|HC_.*|XDG_.*)$/;
 
-/** Ovis's terminal view draws 24-bit colour. */
 const COLOUR: Env = { TERM: "xterm-256color", COLORTERM: "truecolor" };
 
 /**
- * The user's login environment for the terminals Ovis starts on herdr-core, given over whatever
- * the core's own is (hc hands every terminal the environment of the process that started the
- * core, herdr-core#86): what the login shell set, without this server's own variables, in colour.
- * A value the login shell left as it was given is left out: a pane keeps the core's own there.
- * With no login environment, only the colour; on Windows nothing (no login shell, and a console
- * takes no TERM). `forCore` then fits it to the core the terminals run on.
+ * hc hands every terminal the environment of the process that started the core (herdr-core#86).
+ * Windows has no login shell, and a console takes no TERM.
  */
 export async function loginTerminalEnv(options: TerminalEnvOptions = {}): Promise<Env> {
   return (await readTerminalEnv(options)).env;
@@ -49,7 +41,6 @@ export async function loginTerminalEnv(options: TerminalEnvOptions = {}): Promis
 
 type TerminalEnvOptions = { env?: SourceEnv; shell?: string | null; timeoutMs?: number };
 
-/** loginTerminalEnv, and whether the login shell answered (a miss is worth asking again) */
 async function readTerminalEnv(options: TerminalEnvOptions): Promise<{ env: Env; answered: boolean }> {
   const source = options.env ?? process.env;
   const shell = options.shell === undefined ? loginShell(source) : options.shell;
@@ -62,24 +53,19 @@ async function readTerminalEnv(options: TerminalEnvOptions): Promise<{ env: Env;
     console.warn(`[herdr-core] terminals start without the login shell's environment: ${login.reason}`);
     return { env: { ...COLOUR }, answered: false };
   }
-  // a value the login shell gave back as it was given (a service's bare PATH, say) is this server's, not the
-  // user's: a pane keeps the core's own there, as before
   const kept = Object.entries(login.value).filter(([name, value]) => base[name] !== value && !NOT_SETTINGS.test(name) && !SESSION_BOUND.test(name) && !SERVER_ENV.test(name));
   return { env: { ...Object.fromEntries(kept), ...COLOUR }, answered: true };
 }
 
 function homeFolder(home: string | undefined): string {
-  try { if (home && statSync(home).isDirectory()) return home; } catch { /* gone */ }
+  try { if (home && statSync(home).isDirectory()) return home; } catch {}
   return homedir();
 }
 
 /**
- * The login environment fitted to a core whose own environment is `core`:
- * - NO_COLOR set empty, which turns colour back on, only where the core has a NO_COLOR the login
- *   does not set (hc cannot drop one). An empty one where there is none would turn colour off in
- *   libraries that only ask whether the name is there (consola, colorette, kleur).
- * - PATH: the login's first, then the core's folders it does not name, so a folder only the core
- *   has (an installer's, a running core's tools) stays.
+ * NO_COLOR set empty, which turns colour back on, only where the core has a NO_COLOR the login
+ * does not set (hc cannot drop one). An empty one where there is none would turn colour off in
+ * libraries that only ask whether the name is there (consola, colorette, kleur).
  */
 export function forCore(terminal: Env, core: SourceEnv): Env {
   const env = { ...terminal };
@@ -97,8 +83,7 @@ export function forCore(terminal: Env, core: SourceEnv): Env {
  * starts their shells (live-verified, hc 0.1.17: on macOS the core itself is a launchd job with
  * launchd's environment, its holder has the starter's), else of the core on Linux, where it has
  * the starter's too. A macOS core with no terminal yet has no holder, and its own process has
- * launchd's: there the core is asked to run `env` (coreExecEnv). Null where none of that answers
- * (the caller then goes by the environment that starts the core).
+ * launchd's: there the core is asked to run `env` (coreExecEnv).
  */
 export async function coreEnvironment(hc: Pick<HcConnection, "call">, read: (pid: number) => Promise<Env | null> = processEnv, platform: NodeJS.Platform = process.platform): Promise<Env | null> {
   try {
@@ -162,11 +147,6 @@ export function envAfterCommand(command: string, withEnv: string): Env | null {
   return Object.keys(env).length === entries.length ? env : null;
 }
 
-/**
- * What every shell started on the core `hc` reaches gets: the login environment `terminal` fitted
- * to the environment that core hands its terminals, asked afresh each time (a core restarted since
- * may hand another), or, where that cannot be read, to `starter`'s (the environment that starts the core).
- */
 export function terminalEnvFor(hc: Pick<HcConnection, "call">, terminal: Env | Promise<Env>, starter: SourceEnv, core: (hc: Pick<HcConnection, "call">) => Promise<Env | null> = coreEnvironment): () => Promise<Env> {
   return async () => forCore(await terminal, await core(hc) ?? starter);
 }
@@ -176,7 +156,7 @@ const read = new Map<string, Env>();
 /**
  * loginTerminalEnv for `env` (this process's), kept per user and shell once it was read, for the
  * server's life, as a core keeps its own: a token the profile changes reaches new panes after a
- * restart. One that failed is asked again next time.
+ * restart.
  */
 export async function userTerminalEnv(env: SourceEnv = process.env): Promise<Env> {
   const key = `${env["HOME"] ?? ""}\0${env["SHELL"] ?? ""}`;

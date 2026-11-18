@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 
 import { InstalledLookup, RETRY_MS, type PathLookup } from "./installed-lookup.ts";
 
-/** A PATH lookup whose login PATH changes only when it is refreshed: `installed` puts a binary in an installer folder, `profile` puts that folder on the next login PATH. */
 function fake() {
   const folder = new Set<string>();
   let next = new Set<string>();
@@ -18,11 +17,9 @@ function fake() {
   return {
     lookup,
     installed: (binary: string, onProfile: boolean) => { folder.add(binary); if (onProfile) next.add(binary); },
-    /** the installer adds the folder to the shell profile, after the binary */
     profiled: (binary: string) => { next.add(binary); },
     hold: () => { held = Promise.withResolvers<void>(); return held; },
     refreshes: () => refreshes,
-    /** whether each refresh asked the interactive shell (its .zshrc) again too */
     asked: () => asked,
   };
 }
@@ -77,7 +74,6 @@ describe("InstalledLookup", () => {
     f.installed("opencode", false);
     expect(await installed.has("opencode")).toBe(false);
     f.profiled("opencode");
-    // within the window: no new login shell, the old answer stands
     clock += RETRY_MS - 1;
     expect(await installed.has("opencode")).toBe(false);
     expect(f.refreshes()).toBe(1);

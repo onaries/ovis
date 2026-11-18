@@ -24,7 +24,6 @@ let requests: Array<{ url: string; init: RequestInit }>;
 let keychain: Map<string, KeychainRead>;
 let commands: Map<string, string>;
 let commandCalls: string[][];
-/** commands this PC does not have installed */
 let absent: Set<string>;
 
 function context(platform: NodeJS.Platform = "linux"): UsageContext {
@@ -585,7 +584,6 @@ describe("providers", () => {
   it("lists each Codex account once, from ~/.codex and a ~/.codex-* sibling", async () => {
     signInCodex(NOW / 1000 + 3600, ".codex", "user-1", "work@example.com");
     signInCodex(NOW / 1000 + 7200, ".codex-personal", "user-2", "me@example.com");
-    // the same account signed in twice is one plan
     signInCodex(NOW / 1000 + 5400, ".codex-copy", "user-1", "work@example.com");
     replies.set(CODEX_USAGE, codexReply());
     const report = await new UsageService(context(), only("codex")).report();
@@ -803,7 +801,6 @@ describe("providers", () => {
       { bucketId: "unknown", remainingFraction: 0.5 },
     ] }] } } });
     const [usage] = (await new UsageService(context("darwin"), only("antigravity")).report()).providers;
-    // a bucket without a fraction is left out, never shown as exhausted
     expect(usage!.windows).toEqual([
       { kind: "session", scope: null, used_percent: 25, resets_at: "2026-09-29T16:00:00.000Z", starts_at: null },
       { kind: "session", scope: "Other models", used_percent: 100, resets_at: "2026-09-29T15:00:00.000Z", starts_at: null },
@@ -930,7 +927,6 @@ describe("providers", () => {
     absent.add("secret-tool");
     const service = new UsageService(context("linux"), only("antigravity"));
     expect(await service.report()).toEqual({ server_time: expect.any(String), providers: [], missing_commands: [{ provider: "antigravity", command: "secret-tool" }] });
-    // installed since: the next plain report finds the keyring item, without waiting for FRESH_MS
     absent.delete("secret-tool");
     commands.set("secret-tool lookup service gemini username antigravity", JSON.stringify({
       token: { access_token: "ya29-keyring", expiry: new Date(NOW + HOUR).toISOString() },
@@ -1253,7 +1249,6 @@ describe("the service", () => {
         searches += 1;
         return ["a", "b", "none"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } }));
       },
-      // "none" has no plan, so it is never listed and cannot be hidden
       async read(_ctx, signIn) { return signIn.token === "token-none" ? null : { plan: "pro", windows: [] }; },
     };
     let skipped = new Set(["copilot:a"]);
@@ -1393,14 +1388,12 @@ describe("the service", () => {
     const service = new UsageService(context(), [copilot]);
     service.skipAccounts(() => hidden);
     await service.report();
-    // read, hide, then another account signs in at a new place: each gone hidden account used to keep a reading for good
     for (account = 1; account <= 50; account++) {
       hidden.add(`copilot:a${account - 1}`);
       service.invalidate("copilot");
       await service.report();
     }
     expect(reads).toHaveLength(51);
-    // the one gone since the last search is kept for this report; every older one is dropped
     expect([...service["entries"].keys()].sort()).toEqual(["copilot|place-49", "copilot|place-50"]);
   });
 
@@ -1421,7 +1414,6 @@ describe("the service", () => {
     present = true;
     service.invalidate("copilot");
     await service.report();
-    // found again: not read, and its reading is no longer one gone for a report
     present = false;
     service.invalidate("copilot");
     await service.report();
@@ -1470,7 +1462,6 @@ describe("the service", () => {
       await service.report();
     }
     expect([...service["entries"].keys()]).toEqual(["copilot|b"]);
-    // signed in again and shown again within the last search's time: found now, not at the next search
     present = true;
     skipped = new Set();
     now += MIN_REFRESH_MS;
@@ -1505,7 +1496,6 @@ describe("the service", () => {
       service.invalidate("copilot");
       report = await service.report();
     }
-    // Bob is read each time he takes the place; Alice only before she was hidden
     expect(reads).toEqual(["token-alice", "token-bob", "token-bob"]);
     expect(report!.providers.map((usage) => [usage.key, usage.checked_at])).toEqual([["copilot:alice", null]]);
   });
@@ -1532,7 +1522,6 @@ describe("the service", () => {
     const reads: string[] = [];
     const copilot: UsageProvider = {
       id: "copilot",
-      // Alice's sign-in is judged at its new place before the old one, now Bob's
       async signIns() { return round === 0 ? [{ source: "x", token: "token-alice", expiresAt: null }] : [{ source: "y", token: "token-alice", expiresAt: null }, { source: "x", token: "token-bob", expiresAt: null }]; },
       async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [], account: { id: signIn.token, label: signIn.token } }; },
     };
@@ -1552,7 +1541,6 @@ describe("the service", () => {
       async signIns() { return [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }, { source: "b", token: "token-b", expiresAt: null, account: { id: "b", label: "b" } }]; },
       async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
     };
-    // a server started with the hidden list already saved
     const service = new UsageService(context(), [copilot]);
     service.skipAccounts(() => new Set(["copilot:a"]));
     expect((await service.report()).providers.map((usage) => usage.key).sort()).toEqual(["copilot:a", "copilot:b"]);
@@ -1566,7 +1554,6 @@ describe("the service", () => {
       async signIns() { searches += 1; return [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }]; },
       async read() { return { plan: "pro", windows: [] }; },
     };
-    // a Hub account's key starts with its provider's id too
     let skipped = new Set(["copilot:a", "copilot:cliproxy:hub"]);
     const service = new UsageService(context(), [copilot]);
     service.skipAccounts(() => skipped);
@@ -1584,7 +1571,6 @@ describe("the service", () => {
     const copilot: UsageProvider = {
       id: "copilot",
       missingCommand: () => missing,
-      // a visible account keeps the provider searched
       async signIns() {
         const visible = { source: "b", token: "token-b", expiresAt: null, account: { id: "b", label: "b" } };
         return present ? [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }, visible] : [visible];
@@ -1594,14 +1580,12 @@ describe("the service", () => {
     const service = new UsageService(context(), [copilot]);
     await service.report();
     service.skipAccounts(() => new Set(["copilot:a"]));
-    // the keychain tool is missing, so the account cannot be found: these searches are incomplete
     present = false;
     missing = "secret-tool";
     for (let round = 0; round < 3; round++) {
       now += MIN_REFRESH_MS;
       await service.report();
     }
-    // installed again, but the account still gone for one complete search: kept for that one, not marked before it
     missing = null;
     now += MIN_REFRESH_MS;
     await service.report();
@@ -1741,7 +1725,6 @@ describe("GET /api/usage", () => {
 });
 
 describe("accounts across reads (review fixes)", () => {
-  /** a provider whose sign-ins and answers the test sets: `found` by place, `answer` by token */
   function fake(found: () => Array<Record<string, unknown>>, answer: (token: string) => unknown): UsageProvider {
     return {
       id: "codex",
@@ -1792,7 +1775,6 @@ describe("accounts across reads (review fixes)", () => {
   it("reads a GitHub CLI sign-in that comes from GH_TOKEN without a per-user lookup", async () => {
     const status = JSON.stringify({ hosts: { "github.com": [{ state: "success", login: "alice", tokenSource: "GH_TOKEN" }] } });
     commands.set("gh auth status --hostname github.com --json hosts", status);
-    // what a CLI without --hostname would answer too: the account path must be the one taken
     commands.set("gh auth status --json hosts", status);
     commands.set("gh auth token --hostname github.com", "gho_env");
     replies.set("https://api.github.com/copilot_internal/user", { body: { login: "alice", copilot_plan: "individual", quota_snapshots: { chat: { entitlement: 50, percent_remaining: 50 } } } });

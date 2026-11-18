@@ -1,7 +1,12 @@
+/**
+ * A relay device's key for one PC, as the hosted app keeps it (src/lib/relay/device.ts, IndexedDB) and as a PC's
+ * server keeps one for a PC it added through the relay (server/relay-pc.ts, a private file): signing in and pinning.
+ */
 import type { RelayOffer } from "./relay-offer.ts";
 
 export class ServerIdentityChangedError extends Error {
   readonly code = "server_identity_changed";
+  /** `saved` and `offered`: the two keys that disagree, one of which is not the key `serverId` names */
   constructor(readonly serverId: string, readonly saved?: string, readonly offered?: string) {
     super("This PC's identity changed");
     this.name = "ServerIdentityChangedError";
@@ -17,7 +22,9 @@ export interface RelayDevice {
   readonly server_public_key: string;
   readonly relay: string;
   readonly name?: string;
+  /** the account key a link was sent for, before the PC's answer came: tried once if the PC refuses this key (src/lib/account/join.ts) */
   readonly pending_key?: { readonly private_key: CryptoKey; readonly public_spki: string };
+  /** the account this PC confirmed this pairing is a member of (a link it applied, or its account status): what leaving and disconnecting count as reached */
   readonly account?: string;
   readonly introduced_at?: number;
   readonly direct?: readonly string[];
@@ -27,6 +34,7 @@ export interface RelayDeviceStore {
   get(serverId: string): Promise<RelayDevice | undefined>;
   update(serverId: string, change: (current: RelayDevice | undefined) => RelayDevice): Promise<RelayDevice>;
   list(): Promise<RelayDevice[]>;
+  /** Forgets a PC: its key is gone for good, and the PC's next pairing makes a new one; a push subscription kept for it goes too. */
   remove(serverId: string): Promise<void>;
 }
 
@@ -39,9 +47,14 @@ function checkPin(device: RelayDevice, offer: RelayOffer): RelayDevice {
   return device;
 }
 
+/**
+ * The saved key for the offer's PC, or a new one that is not saved yet: a new key is kept only once
+ * the PC admits it (channel.ts), so a link whose PC never does takes no PC's slot.
+ */
 export async function getDevice(offer: RelayOffer, store: RelayDeviceStore, label = "Device", accountKey?: { readonly private_key: CryptoKey; readonly public_spki: string }): Promise<RelayDevice> {
   const stored = await store.get(offer.server_id);
   if (stored) return checkPin(stored, offer);
+  // signed in, a new pairing uses the account key, the same on every PC of the account
   const key = accountKey ?? await (async () => {
     const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
     return { private_key: keys.privateKey, public_spki: base64url(new Uint8Array(await crypto.subtle.exportKey("spki", keys.publicKey))) };
@@ -53,6 +66,7 @@ export async function getDevice(offer: RelayOffer, store: RelayDeviceStore, labe
   };
 }
 
+/** Raw r||s ECDSA signature; the server verifies this exact domain, nonce and server id. */
 export async function sign(device: RelayDevice, nonce: Uint8Array, serverId: string): Promise<string> {
   if (nonce.length !== 32 || serverId !== device.server_id) throw new TypeError("Invalid relay authentication challenge");
   const encoder = new TextEncoder();

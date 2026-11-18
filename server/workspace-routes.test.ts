@@ -6,10 +6,8 @@ import * as directories from "./directories.ts";
 import * as herdr from "./herdr/client.ts";
 import { handleWorkspaceRequest, INVENTORY_BUDGET_MS, MAX_ENV_BYTES, MAX_ENV_VARS } from "./workspace-routes.ts";
 
-/** each herdr create, launch, queued message and broadcast a create makes, in the order made */
 const calls: string[] = [];
 const made = (workspace: string) => ({ workspace: { workspace_id: workspace }, tab: { workspace_id: workspace, tab_id: `${workspace}:t1` }, root_pane: { pane_id: `${workspace}:p1` } });
-// no herdr answers here: the create calls stand in for it, and the launch starts nothing
 beforeEach(() => {
   calls.length = 0;
   spyOn(herdr, "tabCreate").mockImplementation(async () => { calls.push("tab.create"); return made("w1") as never; });
@@ -19,11 +17,13 @@ beforeEach(() => {
 });
 afterEach(() => mock.restore());
 
+const NO_FIRST_MESSAGES = { ask: () => ({ at: () => {}, end: () => {} }), queue: async () => ({ id: "m1" }) as PendingMessage };
+
 async function post(path: string, body: unknown): Promise<Response> {
   const request = new Request(`http://127.0.0.1${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const queue = async (): Promise<PendingMessage> => { await Promise.resolve(); calls.push("queue"); return { id: "m1" } as PendingMessage; };
   const response = await handleWorkspaceRequest(request, new URL(request.url), path, { timeout: () => {} },
-    (message: ServerMessage) => { calls.push(message.type); }, queue, () => ({ order_epoch: "e", moved_seq: 1 }));
+    (message: ServerMessage) => { calls.push(message.type); }, { ask: () => ({ at: () => {}, end: () => {} }), queue }, () => ({ order_epoch: "e", moved_seq: 1 }));
   calls.push("answer");
   return response!;
 }
@@ -32,7 +32,7 @@ describe("GET /api/worktree/inventory reads several workspaces' checkouts in one
   async function inventory(ids: string[]): Promise<Response> {
     const request = new Request(`http://127.0.0.1/api/worktree/inventory?${ids.map((id) => `workspace_id=${encodeURIComponent(id)}`).join("&")}`);
     const response = await handleWorkspaceRequest(request, new URL(request.url), "/api/worktree/inventory", { timeout: () => {} },
-      () => {}, async () => ({ id: "m1" }) as PendingMessage, () => ({ order_epoch: "e", moved_seq: 1 }));
+      () => {}, NO_FIRST_MESSAGES, () => ({ order_epoch: "e", moved_seq: 1 }));
     return response!;
   }
 
@@ -55,7 +55,6 @@ describe("GET /api/worktree/inventory reads several workspaces' checkouts in one
   it("stops asking herdr once the read's budget is spent, answering the rest as timed out", async () => {
     let now = 1_000_000;
     spyOn(Date, "now").mockImplementation(() => now);
-    // a herdr that answers, slowly: each call takes most of the budget
     const list = spyOn(herdr, "worktreeList").mockImplementation(async (workspaceId) => { now += INVENTORY_BUDGET_MS * 0.6; return { source: { repo_key: workspaceId }, worktrees: [] } as never; });
     const body = (await (await inventory(["w1", "w2", "w3"])).json()) as { entries: { workspace_id: string; listing?: unknown; error?: { status: number; code: string } }[] };
     expect(body.entries.map((entry) => [entry.workspace_id, entry.listing ? "listing" : `${entry.error?.status} ${entry.error?.code}`])).toEqual([["w1", "listing"], ["w2", "listing"], ["w3", "502 timeout"]]);
@@ -75,7 +74,6 @@ describe("GET /api/worktree/inventory reads several workspaces' checkouts in one
 });
 
 describe("a create passes the request's env to the new pane (#2745)", () => {
-  /** what each herdr create was asked for */
   const asked = () => [herdr.tabCreate, herdr.workspaceCreate].flatMap((create) => (create as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((call) => call[0]));
 
   it.each([
@@ -118,6 +116,43 @@ describe("a create passes the request's env to the new pane (#2745)", () => {
   });
 });
 
+describe("a create request's first message", () => {
+  // the launch may take a minute: asked for only after it, a page that switched to watching and back meanwhile
+  // would still have its first message typed on its own (server/core/pending.ts askFirstMessage)
+  it.each(["/api/tab/create", "/api/workspace/create"])("is taken before %s makes the pane and launches the agent, and ended with the request", async (path) => {
+    const steps: string[] = [];
+    const request = new Request(`http://127.0.0.1${path}`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspace_id: "w1", agent: { kind: "claude" }, first_message: "hello", first_message_connection: "page-1" }) });
+    const firstMessages = {
+      ask: (requester: string | null) => {
+        steps.push(...calls.splice(0), `ask ${requester}`);
+        const asked = { at: (pane: string) => { steps.push(...calls.splice(0), `at ${pane}`); }, end: () => { steps.push(...calls.splice(0), "end"); } };
+        return asked;
+      },
+      queue: async (pane: string, text: string, _kind: string, requester: unknown) => {
+        steps.push(...calls.splice(0), `queue ${pane} ${text} ${typeof requester}`);
+        return { id: "m1" } as PendingMessage;
+      },
+    };
+    const response = await handleWorkspaceRequest(request, new URL(request.url), path, { timeout: () => {} }, () => {}, firstMessages, () => ({ order_epoch: "e", moved_seq: 1 }));
+    expect(response!.status).toBe(200);
+    const pane = path === "/api/tab/create" ? "w1:p1" : "w2:p1";
+    expect(steps).toEqual(["ask page-1", path === "/api/tab/create" ? "tab.create" : "workspace.create", `at ${pane}`, "launch", `queue ${pane} hello object`, "end"]);
+  });
+
+  it("is ended when the agent does not start, with nothing queued", async () => {
+    spyOn(agentLaunchModule, "agentLaunch").mockImplementation(async () => ({ agent_started: false }) as never);
+    const steps: string[] = [];
+    const request = new Request("http://127.0.0.1/api/tab/create", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspace_id: "w1", agent: { kind: "claude" }, first_message: "hello" }) });
+    const response = await handleWorkspaceRequest(request, new URL(request.url), "/api/tab/create", { timeout: () => {} }, () => {},
+      { ask: () => ({ at: () => { steps.push("at"); }, end: () => { steps.push("end"); } }), queue: async () => { steps.push("queue"); return { id: "m1" } as PendingMessage; } },
+      () => ({ order_epoch: "e", moved_seq: 1 }));
+    expect(response!.status).toBe(200);
+    expect(steps).toEqual(["at", "end"]);
+  });
+});
+
 describe("a create answers after the roster is told", () => {
   // the page draws a new pane only once the roster lists it: without this push, the roster is read
   // only after the collector's debounced pane.created, about 500 ms after herdr made the pane
@@ -132,7 +167,6 @@ describe("a create answers after the roster is told", () => {
   ] as const)("%s %j", async (path, body, order) => {
     const response = await post(path, body);
     expect(response.status).toBe(200);
-    // once, and after the launch: a roster read beside the launch's own herdr calls slows both
     expect(calls).toEqual([...order]);
   });
 });
@@ -151,7 +185,7 @@ describe("a folder a workspace route is given", () => {
     for (const [directory, asked] of [["sub", "/work/repo/sub"], ["/elsewhere", "/elsewhere"]] as const) {
       const url = new URL(`http://127.0.0.1/api/workspace/diff/files?pane_id=p&directory=${encodeURIComponent(directory)}`);
       const response = await handleWorkspaceRequest(new Request(url), url, "/api/workspace/diff/files", { timeout: () => {} },
-        () => {}, async () => ({ id: "m1" }) as PendingMessage, () => ({ order_epoch: "e", moved_seq: 1 }));
+        () => {}, NO_FIRST_MESSAGES, () => ({ order_epoch: "e", moved_seq: 1 }));
       expect(((await response!.json()) as { error: { code: string } }).error.code, directory).toBe("invalid_cwd");
       expect(expanded.mock.calls.at(-1), directory).toEqual([asked, ["/work/repo"]]);
     }

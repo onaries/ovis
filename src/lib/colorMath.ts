@@ -1,8 +1,3 @@
-/**
- * Colour arithmetic on `#rrggbb` values: OKLab for moving a colour's lightness while its hue and
- * chroma stay, and the WCAG contrast ratio. Pure, and shared by the offline theme tools (scripts/
- * herdr-theme-proposal.ts) and the app's own derivation of an imported theme (themeDerive.ts).
- */
 export type Vector = readonly [number, number, number];
 
 export function rgb(hex: string): Vector {
@@ -42,7 +37,6 @@ export function deltaE(from: string, to: string): number {
   return 100 * Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-/** `from` moved a tenth of the way to `to`, in OKLCH: the hover step of a filled button. */
 export function mix(from: string, to: string): string {
   const [l, a, b] = lab(rgb(from)), [L, A, B] = lab(rgb(to));
   const c = Math.hypot(a, b), C = Math.hypot(A, B);
@@ -64,7 +58,6 @@ export function contrast(a: string, b: string): number {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
-/** `color` laid over `ground` at `alpha`, channel by channel. */
 export function over(color: Vector, ground: Vector, alpha: number): Vector {
   return [color[0] * alpha + ground[0] * (1 - alpha), color[1] * alpha + ground[1] * (1 - alpha), color[2] * alpha + ground[2] * (1 - alpha)];
 }

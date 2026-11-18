@@ -12,7 +12,6 @@ const workflow = parseWorkflow(file);
 const job = workflow.jobs["hook-kill-tests"]! as Job & { name?: string };
 const container = readFileSync(join(root, "scripts/self-hosted-runner/hook-test-container.sh"), "utf8");
 const dockerfile = readFileSync(join(root, "scripts/self-hosted-runner/hook-test.Dockerfile"), "utf8");
-/** The job's last step: status 0 and exactly the expected summary, read from what the container wrote, or it fails. */
 const CONTAINER_RESULT_CHECK = String.raw`out="$RUNNER_TEMP/hook-test-out"
 status=$(cat "$out/status" 2>/dev/null || echo missing)
 if [ "$status" != 0 ]; then echo "::error::the container's command did not end with status 0 (status: $status)"; exit 1; fi

@@ -3,7 +3,6 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as i18n from "../lib/i18n.ts";
 
-// English as written: the lines are the component's own
 await mock.module("../lib/i18n.ts", () => ({ ...i18n, useT: () => (key: string) => key }));
 const { AlertsChecking, ALERTS_CHECK_GIVE_UP_MS, useLongerThan } = await import("./AlertsChecking.tsx");
 

@@ -1,11 +1,3 @@
-/**
- * Which browser scripts failed, and which passed only on a second run, across recent CI runs:
- *   bun scripts/ci-flakes.ts [--hours 24] [--repo owner/name] [--json]
- * Reads through `gh`, changes nothing. A job that failed has its log read. A job that passed is
- * read only when it carries the lane's "Flaky browser script" warning, which GraphQL answers for
- * 20 runs a query, so a quiet day costs no request per job. scripts/ci-flakes-issue.ts keeps the
- * same list in an issue (.github/workflows/ci-flakes.yml).
- */
 import { parseArgs } from "node:util";
 import { failureSite, TIMEOUT_EXIT_CODE } from "./ci-browser-parallel.ts";
 
@@ -16,7 +8,6 @@ export interface LaneFailure {
   readonly message: string | null;
 }
 
-/** The lane's words for a script it stopped at its time limit, from the script's FAILED line; null when it ended by itself. */
 function timedOut(header: string): string | null {
   const said = header.match(/Timed out after \d+s/)?.[0];
   if (said !== undefined) return said;
@@ -32,14 +23,12 @@ export function parseLaneLog(log: string): LaneFailure[] {
     return {
       script: header[2] ?? "",
       outcome: header[1] === "FLAKY" ? "flaky" : "failed",
-      // a stopped script's log ends with its shutdown's errors, which are not why it was slow
       ...(limit === null ? failureSite(body) : { site: null, message: `${limit} (the lane's limit)` }),
     };
   });
 }
 
 export interface FailureObservation extends LaneFailure {
-  /** A run of the default branch itself: no change under review was there to break the script. */
   readonly main: boolean;
   readonly runId: number;
   readonly branch: string;
@@ -52,7 +41,6 @@ export interface RankedFailure {
   readonly message: string | null;
   failed: number;
   flaky: number;
-  /** How many of the failed and flaky job attempts were in runs of the default branch itself. */
   main: number;
   runId: number;
   branch: string;
@@ -84,11 +72,7 @@ export function aggregateFailures(observations: readonly FailureObservation[]): 
 
 class GhError extends Error {}
 
-/**
- * One gh call, asked again up to twice on a server error (HTTP 5xx): one 502 among the hundreds of reads a day's scan
- * makes would otherwise end the whole scan with nothing. A refusal (4xx) answers the same again and is not repeated.
- * A write passes `attempts: 1`, since a 5xx may come after the write was done; `input` is its standard input.
- */
+/** A write passes `attempts: 1`, since a 5xx may come after the write was done; `input` is its standard input. */
 export async function gh(args: string[], { attempts = 3, input }: { attempts?: number; input?: string } = {}): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     const child = Bun.spawn(["gh", ...args], { stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
@@ -133,16 +117,10 @@ interface Job {
   readonly conclusion: string | null;
 }
 
-/**
- * Whether a job that passed says one of its scripts needed a second run (the lane's warning annotation); "unread"
- * when a server error keeps its annotations from us, so its log is read instead and the job counts as unread if that
- * log cannot say either.
- */
 async function flaggedFlaky(repo: string, job: Job): Promise<boolean | "unread"> {
   let text: string;
   try { text = await gh(["api", `repos/${repo}/check-runs/${job.id}/annotations?per_page=100`, "--paginate", "--slurp"]); }
   catch (error) {
-    // annotations a server error keeps from us: its log is read instead, which says it as well
     if (error instanceof GhError && /HTTP 5\d\d\b/.test(error.message)) return "unread";
     throw error;
   }
@@ -213,7 +191,6 @@ export interface Scan {
   readonly rows: readonly RankedFailure[];
 }
 
-/** The ranked failures of the last `hours` of `ci.yml` runs in `repo` (the current repository's when not given). */
 export async function scan(hours: number, repoName?: string): Promise<Scan> {
   if (!Number.isFinite(hours) || hours <= 0) throw new Error("--hours must be a positive number");
   const repo = repoName ?? (await gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
@@ -224,7 +201,6 @@ export async function scan(hours: number, repoName?: string): Promise<Scan> {
   ]));
   const runs = runPages.flatMap((page) => page.workflow_runs);
   const defaultBranch = (await gh(["api", `repos/${repo}`, "--jq", ".default_branch"])).trim();
-  // runsUnread, logsUnread: a run's job list or a job's log that a server error kept from us, after gh()'s retries
   const stats: ScanStats = { runs: runs.length, jobs: 0, jobsSkipped: 0, jobsClean: 0, logsRead: 0, runsUnread: 0, logsUnread: 0 };
   const groups = await pooled(runs, async (run) => {
     const jobs: { run: Run; job: Job }[] = [];
@@ -233,7 +209,6 @@ export async function scan(hours: number, repoName?: string): Promise<Scan> {
       try {
         text = await gh(["api", `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, "--paginate", "--slurp"]);
       } catch (error) {
-        // one run's job list a server error keeps from us is left out and counted, as a job's log is
         if (!(error instanceof GhError) || !/HTTP 5\d\d\b/.test(error.message)) throw error;
         stats.runsUnread++;
         continue;
@@ -242,7 +217,6 @@ export async function scan(hours: number, repoName?: string): Promise<Scan> {
       for (const job of pages.flatMap((page) => page.jobs)) {
         if (!job.name.startsWith("Browser regression")) continue;
         stats.jobs++;
-        // still running, or skipped on a draft: nothing ran to a result
         if (job.status !== "completed" || (job.conclusion !== "success" && job.conclusion !== "failure")) stats.jobsSkipped++;
         else jobs.push({ run, job });
       }
@@ -269,9 +243,7 @@ export async function scan(hours: number, repoName?: string): Promise<Scan> {
         log = await gh(args);
       }
     } catch (error) {
-      // gone (404, 410), or a server error that outlasted gh()'s retries: this job is left out and counted, the scan goes on
       if (!(error instanceof GhError) || !/HTTP (404|410|5\d\d)\b/.test(error.message)) throw error;
-      // a passed job whose annotations were not read either could not be looked at at all: unread, not skipped
       if (/HTTP 5\d\d\b/.test(error.message) || flagged === "unread") stats.logsUnread++;
       else stats.jobsSkipped++;
       return [];

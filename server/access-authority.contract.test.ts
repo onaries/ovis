@@ -18,7 +18,6 @@ const status = JSON.stringify({ BackendState: "Running", Self: { DNSName: `${NOD
 
 type Server = { port: number; stop: (force?: boolean) => void };
 
-/** the status line of a WebSocket upgrade sent as raw HTTP */
 function upgrade(port: number, headers: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
     const lines = ["GET /ws HTTP/1.1", ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
@@ -41,9 +40,7 @@ describe("a rebound name on a loopback server", () => {
   let named: Server;
   beforeAll(() => {
     const state = () => { const dir = mkdtempSync(join(tmpdir(), "ovis-authority-")); states.push(dir); return dir; };
-    // nothing paired, no token, no Tailscale here: the default install
     open = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: state(), tailscaleOwner: null, tailnet: new TailnetIdentitySource(async () => null) }) as Server;
-    // the same, on a PC whose Tailscale login is known
     owned = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: state(), tailnet: new TailnetIdentitySource(async () => status) }) as Server;
     // a tagged node's owner named in OVIS_TAILSCALE_OWNER: the login still counts only at this PC's tailnet name
     named = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: state(), tailscaleOwner: OWNER, tailnet: new TailnetIdentitySource(async () => status) }) as Server;

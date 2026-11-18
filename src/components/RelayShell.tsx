@@ -26,11 +26,8 @@ export { INSTALLER_COMMAND, PLUGIN_COMMANDS, TypedDigits };
 
 export interface RelayShellProps {
   state: RelayShellState;
-  /** how each saved PC answered the front page's latest check (pcStatus.ts), by server id */
   pcStatus?: ReadonlyMap<string, PcStatus>;
-  /** Check now: probe the saved PCs again; Details' Check now: one PC, not the fleet sweep */
   onCheckPcs?: () => void; onCheckPc?: (serverId: string) => void;
-  /** Explicit directory retry; independent of the liveness probe sweep. */
   onRefreshAccount?: () => void | Promise<void>;
   /** Admission succeeded; only this action hands the scoped page to the PC app. */
   onOpenPc?: () => void;
@@ -38,37 +35,29 @@ export interface RelayShellProps {
   continuedAccount?: AccountView | null;
   /** Versions from admitted sessions only; a liveness probe never supplies one. */
   observedVersions?: ReadonlyMap<string, ObservedVersion>;
-  /** on a PC's own page (`/s/<id>/`), where Back leads to the front page; iosTab: an iPhone or iPad browser tab */
   scoped: boolean; iosTab: boolean;
   onPair: () => void; onRetry: () => void; onCancel: () => void; onBack: () => void; onForget: () => void;
   onForgetPc?: (serverId: string) => Promise<void> | void;
-  /** a PC below the shell's minimum version with a managed install: install its latest release */
   onUpdate: () => void;
   /** pairing without a code: the digits on this screen are the ones the PC shows (`typed`: typed from the PC's screen) */
   onMatch: (typed?: string) => void;
-  /** the front page's sign-in: off to the provider's pages */
   onSignIn?: (provider: AccountProvider) => void;
   /** a PC of the account this device is not paired with: compare digits with it */
   onJoin?: (pc: MyPc, options?: { typed?: boolean; sheet?: "new" | "join" }) => void;
-  /** on a PC's own page: the join the dashboard's sheet started for this PC, which the sheet takes up again over the pairing screens */
   sheetJoin?: { mode: "new" | "join"; server_id: string; returnHash?: string } | null;
   /** that sheet's typed comparison, for a PC that shows no number: the same request goes on as a join, with this device's digits */
   onJoinInstead?: () => void;
   onSignOut?: () => void; onLeave?: () => void; onDeleteAccount?: () => void;
   /** which sign-in the signed-in account view speaks of (AccountSession.sign_in_id): a question asked under one is dropped under the next */
   accountSignIn?: string;
-  /** the sign-ins the account service offers (accountProvidersOf); GitHub alone by default */
   accountProviders?: readonly AccountProvider[];
-  /** the relay each PC of the account's directory named (DirectoryPc.relay), for the dashboard's rows */
   directoryRelays?: readonly { server_id: string; relay: string | null }[];
-  /** the shell's default relay origin, where the dashboard puts a PC with no known relay; meLabel: this device on the map */
   defaultRelay?: string; meLabel?: string;
-  /** Pair with a code: the field to type it in; onCodeSubmit: the code as typed; onCodeMatch: the ID matches */
   onCodeStart: () => void; onCodeSubmit: (code: string) => void; onCodeMatch: () => void;
 }
 
 /** The field a code is typed in, kept in the input itself (src/AGENTS.md: secret input stays in the DOM). */
-export function CodeEntry({ failure, looking = false, onSubmit, back, titleTag: Title = "h1", titleId, formId, omitHeading = false }: { readonly failure: TypedCodeFailure | null; readonly looking?: boolean | undefined; readonly onSubmit: (code: string) => void; readonly back?: ReactNode; readonly titleTag?: "h1" | "h2" | undefined; /** the id a dialog around this screen is labelled by */ readonly titleId?: string | undefined; /** when inside a modal sheet whose footer owns the submit button */ readonly formId?: string | undefined; readonly omitHeading?: boolean | undefined }) {
+export function CodeEntry({ failure, looking = false, onSubmit, back, titleTag: Title = "h1", titleId, formId, omitHeading = false }: { readonly failure: TypedCodeFailure | null; readonly looking?: boolean | undefined; readonly onSubmit: (code: string) => void; readonly back?: ReactNode; readonly titleTag?: "h1" | "h2" | undefined; readonly titleId?: string | undefined; readonly formId?: string | undefined; readonly omitHeading?: boolean | undefined }) {
   const t = useT(), id = useId(), label = t("Code from the PC");
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -142,7 +131,6 @@ function PairQrDialog({ state, onCodeStart, onCodeSubmit, onCodeMatch, onCancel,
 /** A completed pairing owns its transport until Open PC or Cancel, including in continued scope. */
 export function ReadyCheckpoint({ open, cancel, state, retry }: { readonly open: () => void; readonly cancel: () => void; readonly state?: Extract<RelayShellState, { kind: "ready" }>; readonly retry?: () => void }) {
   const t = useT(), title = useId(), surface = useFocusTrap<HTMLDivElement>(true);
-  // Back cancels, as Escape does
   const latestCancel = useRef(cancel); latestCancel.current = cancel;
   usePhoneSheetBack(() => { latestCancel.current(); });
   useEffect(() => {
@@ -161,10 +149,6 @@ export function ReadyCheckpoint({ open, cancel, state, retry }: { readonly open:
   );
 }
 
-/**
- * The hosted shell's screens before the app: the sign-in column, the dashboard, the continued
- * sheet over the dashboard frame across a scoped join, and the pairing/recovery screens.
- */
 export function RelayShell(props: RelayShellProps) {
   const { state, pcStatus, onCheckPcs, onCheckPc, onRefreshAccount, observedVersions, scoped, onPair, onRetry, onCancel, onBack, onForgetPc, onMatch, onCodeStart, onCodeSubmit, onCodeMatch, onOpenPc, continuedAccount, onSignIn, onJoin, sheetJoin = null, onJoinInstead, onSignOut, onLeave, onDeleteAccount, accountSignIn, directoryRelays = [], defaultRelay = GLOBAL_RELAY, meLabel } = props;
   const t = useT();

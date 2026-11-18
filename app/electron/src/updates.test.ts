@@ -62,17 +62,13 @@ describe("updatePlan", () => {
     expect(updatePlan({ ...appImage, writable: () => true })).toEqual({ enabled: true, feed: null, channel: "stable", installer: "appimage" });
     // it stays an AppImage: the deb's package-type file left in it does not make it a .deb install
     expect(updatePlan({ ...appImage, linuxPackage: "deb", writable: () => false }).enabled).toBe(false);
-    // a .deb install, started from another AppImage, is not asked about that AppImage's folder
     expect(updatePlan({ ...appImage, linuxPackage: "deb", execPath: "/opt/Ovis/ovis", writable: () => false })).toEqual({ enabled: true, feed: null, channel: "stable", installer: "deb" });
   });
 
   it("takes the beta builds from the beta feed only on the beta channel", () => {
     expect(updatePlan({ ...packaged, channel: "beta" })).toEqual({ enabled: true, feed: BETA_FEED, channel: "beta", installer: "default" });
     expect(updatePlan({ ...packaged, channel: "stable" })).toEqual({ enabled: true, feed: null, channel: "stable", installer: "default" });
-    // a build without a feed stays off, and OVIS_UPDATE_URL stays the feed on beta
     expect(updatePlan({ ...packaged, builtWithFeed: false, channel: "beta" }).enabled).toBe(false);
-    // no Windows build is published to the beta feed: a Windows app on beta keeps the release feed and its
-    // stable channel, since asking the release feed for beta.yml finds nothing
     expect(updatePlan({ ...packaged, platform: "win32", channel: "beta" })).toEqual({ enabled: true, feed: null, channel: "stable", installer: "default" });
     expect(updatePlan({ ...packaged, channel: "beta", env: { OVIS_UPDATE_URL: "https://updates.example/desktop" } })).toEqual({ enabled: true, feed: "https://updates.example/desktop", channel: "beta", installer: "default" });
   });
@@ -81,15 +77,15 @@ describe("updatePlan", () => {
 // the deb's install line is run by a POSIX shell, which a Windows runner does not have at /bin/sh
 describe.skipIf(process.platform === "win32")("debInstallCommand", () => {
   // electron-updater's installerPath (LinuxUpdater) escapes these for one shell, but leaves ' alone
-  const escaped = (path: string) => path.replace(/\\/g, "\\\\").replace(/([`$!" ;|&()<>])/g, "\\$1");
+  const electronUpdaterEscaped = (path: string) => path.replace(/\\/g, "\\\\").replace(/([`$!" ;|&()<>])/g, "\\$1");
   const printed = (shellLine: string) => Bun.spawnSync(["/bin/sh", "-c", shellLine]).stdout.toString();
   const path = "/home/O'Brien/.cache/my app (1)/Ovis-linux-x64.deb";
 
   it("hands apt-get the whole path behind the prompt's bash -c '…', and when Ovis already runs as root", () => {
     // how electron-updater runs it: `pkexec … /bin/bash -c '<command>'`, or the command alone as root, both through a shell
-    const prompted = debInstallCommand(escaped(path), true).at(-1);
+    const prompted = debInstallCommand(electronUpdaterEscaped(path), true).at(-1);
     expect(printed(`/bin/bash -c 'printf %s ${prompted}'`)).toBe(path);
-    const asRoot = debInstallCommand(escaped(path), false).at(-1);
+    const asRoot = debInstallCommand(electronUpdaterEscaped(path), false).at(-1);
     expect(printed(`printf %s ${asRoot}`)).toBe(path);
   });
 });
@@ -98,7 +94,6 @@ describe("checkForUpdates", () => {
   it("leaves a failed download to the updater's error event, never an unhandled rejection", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-desktop-check-"));
     try {
-      // a packaged build with a feed, offering a newer .deb whose download fails
       const app = { version: "0.4.22", name: "Ovis", isPackaged: true, appUpdateConfigPath: join(root, "resources", "app-update.yml"),
         userDataPath: join(root, "user-data"), baseCachePath: join(root, "cache"), whenReady: () => Promise.resolve(), quit() {}, relaunch() {}, onQuit() {} };
       mkdirSync(join(root, "resources"));
@@ -107,7 +102,6 @@ describe("checkForUpdates", () => {
         request: async () => "version: 99.0.0\nfiles:\n  - url: Ovis-linux-x64.deb\n    sha512: c2hhNTEy\n    size: 12\n",
         download: async () => { throw new Error("connection reset"); },
       };
-      // as the app sets it up: the check downloads what it found itself
       const updater = Object.assign(new DebUpdater(null, app), { httpExecutor, logger: null, autoInstallOnAppQuit: false, autoDownload: false });
       const failed = new Promise<string>((resolve) => updater.on("error", (error: Error) => resolve(error.message)));
       const unhandled: unknown[] = [];
@@ -129,7 +123,6 @@ describe("checkForUpdates", () => {
     }
   });
 
-  /** a stand-in updater whose feed names `version` (null: nothing newer), counting the downloads asked of it */
   const feed = (version: string | null) => {
     const asked = { checks: 0, downloads: 0 };
     const updater: Parameters<typeof checkForUpdates>[0] = {
@@ -224,7 +217,6 @@ describe("nextOffer", () => {
   it("offers a download at once everywhere but on a Mac", () => {
     for (const platform of ["linux", "win32"]) {
       expect(after(platform, { is: "downloaded", update: v3 })).toEqual({ staging: null, ready: v3 });
-      // an error leaves it: whether its file is still there is stillHeld's question
       expect(after(platform, { is: "downloaded", update: v3 }, { is: "error" })).toEqual({ staging: null, ready: v3 });
       expect(after(platform, { is: "downloaded", update: v3 }, { is: "downloaded", update: v4 })).toEqual({ staging: null, ready: v4 });
     }
@@ -239,7 +231,6 @@ describe("nextOffer", () => {
     // run from the disk image or translocated, a signature it refuses: Squirrel's error comes after "update-downloaded"
     const failed = after("darwin", { is: "downloaded", update: v3 }, { is: "error" });
     expect(failed).toEqual(NO_OFFER);
-    // Squirrel saying it holds something nobody is waiting for changes nothing
     expect(nextOffer(failed, { is: "staged" }, "darwin")).toEqual(NO_OFFER);
     expect(after("darwin", { is: "downloaded", update: v3 }, { is: "error" }, { is: "downloaded", update: v3 }, { is: "staged" })).toEqual({ staging: null, ready: v3 });
   });
@@ -283,7 +274,6 @@ describe("updateNotice", () => {
 
   it("announces the next version afresh", () => {
     expect(updateNotice("0.5.4", { notified: "0.5.3", closed: "0.5.3" })).toEqual({ notify: true, line: true });
-    // a beta build is a version of its own
     expect(updateNotice("0.5.4-beta.2", { notified: "0.5.4-beta.1", closed: "0.5.4-beta.1" })).toEqual({ notify: true, line: true });
   });
 
@@ -294,7 +284,6 @@ describe("updateNotice", () => {
       expect(readUpdateNotices(path)).toEqual(nothing);
       writeUpdateNotices(path, { notified: "0.5.3", closed: null });
       expect(readUpdateNotices(path)).toEqual({ notified: "0.5.3", closed: null });
-      // the same download found again by the next start (a .deb installs only from Restart to Update)
       expect(updateNotice("0.5.3", readUpdateNotices(path)).notify).toBe(false);
       for (const damaged of ["", "null", "[]", "{\"notified\": 3, \"closed\": \"\"}", "{not json"]) {
         writeFileSync(path, damaged);

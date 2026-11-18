@@ -4,21 +4,14 @@ import { join } from "node:path";
 import { BETA_LINKS } from "../ovis-site/assets/beta.js";
 import { fail, files, read, repo } from "./source-scan.ts";
 
-// ovis.sh (ovis-site/) is plain HTML with no build, so what a build would keep in step is written
-// by hand: the JSON-LD repeats the visible FAQ, the sitemap and hreflang name the same pages,
-// llms.txt and _headers name paths that exist. These tests keep them true.
-
 const ORIGIN = "https://ovis.sh";
 const PAGES = files("ovis-site/**/*.html");
 const HOME = "ovis-site/index.html";
-/** The Android app's Google Play page, where the home page's Google Play icons lead. */
 const PLAY = "https://play.google.com/store/apps/details?id=sh.ovis.app";
 const APP_STORE = "https://apps.apple.com/app/id6824664162";
-/** Visible FAQ questions left out of the FAQPage on purpose, each with why. */
 const LEFT_OUT: Record<string, string> = {
   "How much does Ovis cost?": "its \"no analytics\" sentence is under review: the PC side sends anonymous usage counts by default",
 };
-/** schema.org properties the repo states nothing for; structured data must not invent them. */
 const UNSTATED = ["aggregateRating", "review", "reviewRating", "softwareVersion", "datePublished", "dateModified", "dateCreated", "releaseNotes", "downloadUrl", "installUrl", "fileSize"];
 
 const decode = (text: string): string =>
@@ -27,9 +20,7 @@ const decode = (text: string): string =>
     if (entity[0] !== "#") return named[entity.toLowerCase()]!;
     return String.fromCodePoint(entity[1] === "x" || entity[1] === "X" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1)));
   });
-/** The text a reader sees: tags stripped, entities decoded, whitespace collapsed. */
 const visible = (html: string): string => decode(html.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
-/** The page script's key for #i18n-data: the HTML with whitespace collapsed. */
 const norm = (html: string): string => html.replace(/\s+/g, " ").trim();
 
 const html = (file: string): string => read(file);
@@ -45,7 +36,6 @@ const noindex = (file: string): boolean => /noindex/.test(meta(file, "robots") ?
 
 /** The address Cloudflare Pages serves a file at: `privacy/index.html` is `/privacy/`. */
 const urlOf = (file: string): string => `${ORIGIN}/${file.replace(/^ovis-site\//, "").replace(/(^|\/)index\.html$/, "$1")}`;
-/** The file behind an ovis.sh address, or undefined when it is not on ovis.sh. */
 const fileOf = (url: string): string | undefined => {
   if (!url.startsWith(`${ORIGIN}/`)) return undefined;
   const path = new URL(url).pathname.slice(1);
@@ -112,7 +102,6 @@ describe("ovis.sh pages", () => {
 
 describe("ovis.sh beta page", () => {
   const BETA_PAGES = ["ovis-site/beta/index.html", "ovis-site/zh/beta/index.html", "ovis-site/ja/beta/index.html", "ovis-site/ko/beta/index.html"];
-  /** The kind of address each phone test link is, so a link pasted into the wrong slot fails here. */
   const SHAPES: Record<string, RegExp> = {
     testflight: /^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]+$/,
   };
@@ -139,7 +128,6 @@ describe("ovis.sh beta page", () => {
   });
 
   it("leads the home page's App Store and Google Play icons, and a phone's download button, to the stores", () => {
-    // each download row's icons, and the iPhone and Android buttons assets/platform.js puts on a phone
     const rows = html(HOME).split("<div class=\"dl-row\"").slice(1).map((rest) => rest.split("</div>")[0]!);
     const platform = read("ovis-site/assets/platform.js");
     const links = [["ios", APP_STORE], ["android", PLAY]];
@@ -153,8 +141,6 @@ describe("ovis.sh beta page", () => {
   });
 
   it("has the section each home page link names", () => {
-    // the home page's phone icons and the phone button in assets/platform.js link to /beta/#<id>,
-    // which the page's language script points at the visitor's language
     const ids = [...new Set([...`${html(HOME)}\n${read("ovis-site/assets/platform.js")}`.matchAll(/["']\/beta\/#([\w-]+)["']/g)].map(([, id]) => id!))];
     fail(BETA_PAGES.flatMap((file) => ids.filter((id) => !html(file).includes(` id="${id}"`)).map((id) => `${file}: no id="${id}"`)),
       `${HOME} and ovis-site/assets/platform.js link to these sections of the beta page: give each beta page an element with that id, or change the links:`);
@@ -239,8 +225,6 @@ describe("ovis.sh structured data", () => {
 
   it("repeats the visible FAQ word for word", () => {
     const page = html(HOME);
-    // each item on its own, from its opening tag to the next </details>, so one item off the shape
-    // is named instead of being read together with the next
     const shape = /^<details class="faq-item"[^>]*>\s*<summary>\s*<span>([\s\S]*?)<\/span>[\s\S]*?<\/summary>\s*<div class="faq-answer">([\s\S]*?)<\/div>\s*<\/details>$/;
     const parsed = page.split("<details class=\"faq-item\"").slice(1)
       .map((rest) => `<details class="faq-item"${rest.split("</details>")[0]}</details>`)
@@ -286,7 +270,6 @@ describe("ovis-site/llms.txt", () => {
   const llms = read("ovis-site/llms.txt");
   const links = [...llms.matchAll(/\]\((https?:\/\/[^)\s]+)\)|(?<!\w)(https?:\/\/[^\s)`>]+[^\s)`>.,;:])/g)].map(([, inMarkdown, bare]) => inMarkdown ?? bare!);
   const redirects = read("ovis-site/_redirects").split("\n").filter((line) => line.trim() && !line.startsWith("#")).map((line) => line.trim().split(/\s+/)[0]!);
-  // paths _routes.json sends to _worker.js are served by it (the demo), not by a file or a redirect
   const routed = existsSync(join(repo, "ovis-site/_worker.js")) ? (JSON.parse(read("ovis-site/_routes.json")) as { include: string[] }).include : [];
   const covers = (from: string, path: string): boolean => from.endsWith("/*") ? path.startsWith(from.slice(0, -1)) : from === path || `${from}/` === path;
   const served = (url: string): boolean => {
@@ -338,10 +321,8 @@ describe("ovis-site/_redirects", () => {
 });
 
 describe("ovis.sh download links", () => {
-  // The names a release attaches: the desktop app's builds, which .github/workflows/desktop.yml checks
-  // for by name before it uploads them, and the older apps' Ovis.dmg and Ovis.exe.
   const desktopYml = read(".github/workflows/desktop.yml");
-  const checked = /every name a download page links[\s\S]*?for name in ([\s\S]*?); do/.exec(desktopYml)?.[1] ?? "";
+  const checked = /for name in (latest-linux\.yml [\s\S]*?); do/.exec(desktopYml)?.[1] ?? "";
   const desktop = checked.replace(/\\\n/g, " ").split(/\s+/).filter((name) => /^Ovis-[\w-]+\.(dmg|exe|deb|AppImage)$/.test(name));
   const older = ["mac-dmg.yml", "windows-app.yml"].flatMap((file) => [...read(`.github/workflows/${file}`).matchAll(/\bOvis\.(?:dmg|exe)\b/g)].map(([name]) => name));
   const released = new Set([...desktop, ...older]);
@@ -351,7 +332,7 @@ describe("ovis.sh download links", () => {
   for (const file of sources) for (const [, name] of read(file).matchAll(/https:\/\/ovis\.sh\/(Ovis[\w.${}-]*\.(?:dmg|exe|deb|AppImage))\b/g)) linked.set(name!, file);
 
   it("reads the desktop app's builds from the release workflow", () => {
-    fail(desktop.length ? [] : [".github/workflows/desktop.yml"], "The test reads the desktop app's file names from the loop after \"every name a download page links\" in .github/workflows/desktop.yml; keep that loop, or point the test at where the names went:");
+    fail(desktop.length ? [] : [".github/workflows/desktop.yml"], "The test reads the desktop app's file names from the `for name in latest-linux.yml …` loop in .github/workflows/desktop.yml; keep that loop, or point the test at where the names went:");
   });
 
   it("link only files a release attaches, each through a rule to the newest release", () => {

@@ -16,7 +16,6 @@ const compaction = (turn: ConversationTurn | undefined): boolean => turn?.role =
 const compactCommand = (turn: ConversationTurn | undefined): boolean => turn?.role === "user" && turn.parts.length === 1
   && turn.parts[0]!.kind === "text" && /^\/compact(?:\s|$)/u.test(turn.parts[0]!.text.trim());
 
-/** A compaction the user asked for: its summary right after a `/compact`, with only notices between them. */
 function commanded(conversation: ConversationProof, index: number): number | null {
   let before = index - 1;
   while (before >= 0 && passive(conversation.turns[before])) before--;
@@ -46,12 +45,10 @@ function finalAnswer(conversation: ConversationProof): ConversationTurn | undefi
   return turn?.role === "assistant" && last?.kind === "text" && last.phase === "final_answer" && last.text.trim().length > 0 ? turn : undefined;
 }
 
-/** No source gets an exemption: absent native completion evidence keeps the dot. */
 export function conversationFinishPresented(conversation: ConversationProof): boolean {
   return finalAnswer(conversation) !== undefined;
 }
 
-/** Every compaction after the newest final answer, oldest first. */
 function allCompactionsAfter(conversation: ConversationProof, turn: ConversationTurn): ConversationTurn[] {
   const from = conversation.turns.indexOf(turn) + 1;
   return conversation.turns.filter((later, index) => index >= from && compaction(later));
@@ -66,14 +63,12 @@ function compactionsAfter(conversation: ConversationProof, turn: ConversationTur
   return conversation.source !== "claude-transcript" ? all : all.filter((later) => commanded(conversation, conversation.turns.indexOf(later)) !== null);
 }
 
-/** `compacted`: the compaction that dates the proof; by default the last that proves a finish, null for none. */
 function answerIdentity(conversation: ConversationProof, compacted?: ConversationTurn | null): string | undefined {
   const turn = finalAnswer(conversation);
   if (!turn) return undefined;
   // A compaction after the answer (Claude Code's /compact) is a finish of its own: the proof is dated from it, so the
   // finish it brings is not refused as the answer's earlier one (#3675)
   if (compacted === undefined) compacted = compactionsAfter(conversation, turn).at(-1);
-  // Do not date a finish from later tool-result decoration or a trailing informational notice.
   return JSON.stringify([conversation.source, conversation.history_id, compacted?.ts ?? turn.end_ts ?? turn.ts, turnRevision({
     role: turn.role, ts: turn.ts, parts: [...turn.parts.filter((part) => part.kind === "text" && part.phase === "final_answer"),
       ...compacted?.parts.filter((part) => part.kind === "compact") ?? []],
@@ -87,11 +82,10 @@ function completedProof(answer: string): { identity: string; time: number } | un
       const time = Date.parse(value[2]);
       if (Number.isFinite(time)) return { identity: JSON.stringify([value[0], value[1], value[3]]), time };
     }
-  } catch { /* an older stored proof without a native time cannot establish ordering */ }
+  } catch {}
   return undefined;
 }
 
-/** Shared across retained/remounted chat renderers; scoped by PC, pane and server epoch. */
 export class ConversationFinishEvidence {
   private readonly latest = new Map<string, { id: number; answer: string }>();
   private readonly observed = new Map<string, number>();
@@ -156,19 +150,16 @@ export class ConversationFinishEvidence {
 }
 export const conversationFinishEvidence = new ConversationFinishEvidence();
 
-/** Retained phone siblings keep their suggestions, but invisible content covers no pane. */
 export function paneCovered(exclude?: string, selector = PANE_COVER_SELECTOR): boolean {
   return [...document.querySelectorAll(selector)].some((node) =>
     (!exclude || !node.matches(exclude)) && !node.closest('[hidden],[inert],[aria-hidden="true"],.is-hidden')
       && node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible");
 }
 
-/** A rendered content lifetime, not merely a selected pane slot. */
 export function paneContentKey(machine: Machine | undefined, pane: HerdrPane | null, view: PaneView): string | undefined {
   return machine && pane ? JSON.stringify([machine.id, pane.pane_id, pane.terminal_id, view, machine.snapshot?.finish_epoch, pane.finish_id]) : undefined;
 }
 
-/** The marker lives on the successfully rendered content and disappears with its error boundary. */
 export function paneContentPresented(key: string | undefined): boolean {
   if (key === undefined) return false;
   return [...document.querySelectorAll("[data-pane-content]")].some((node) =>

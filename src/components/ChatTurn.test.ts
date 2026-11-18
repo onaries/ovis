@@ -11,7 +11,6 @@ import { Turn } from "./ChatView.tsx";
 const text = (value: string): ConversationPart => ({ kind: "text", text: value });
 const tool = (command: string): ConversationPart => ({ kind: "tool", name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
 
-/** what Settings → Chat says about the chat's folds: off unless a test turns it on */
 type Folds = { showThinking?: boolean; expandThinking?: boolean; foldWork?: boolean; requestDetails?: boolean };
 
 const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }, role: ConversationTurn["role"] = "assistant", folds: Folds = {}, memory?: ChatRowMemory): string => {
@@ -39,7 +38,6 @@ describe("a bash-mode command", () => {
     const html = render([{ kind: "shell", command: "ls missing", stdout: "", stderr: "ls: missing: No such file or directory" }], { live: false }, "user");
     expect(html).toContain('<code>ls missing</code>');
     expect(html).toContain('<pre class="chat-tool-io chat-shell-stderr">ls: missing: No such file or directory</pre>');
-    // a command whose output is not recorded yet, or printed nothing, has no empty box
     expect(render([{ kind: "shell", command: "true" }], { live: false }, "user")).not.toContain("<pre");
     expect(render([{ kind: "shell", command: "true", stdout: "", stderr: "" }], { live: false }, "user")).not.toContain("<pre");
   });
@@ -75,7 +73,6 @@ describe("an agent turn's work blocks", () => {
     expect(html).toContain('<span class="work-row-name">HomeAssistant get_entity_state</span>');
     expect(html).toContain(`title="${id} · light.kitchen"`);
     expect(html).not.toContain(`>${id}<`);
-    // opened, the detail's first line is the id as the agent named it
     const memory: ChatRowMemory = { toggles: new Map([["tool:0", true]]), outputs: new Map(), runs: new Map(), dormant: new Map() };
     expect(render([part], { live: true }, "assistant", {}, memory)).toContain(`<p class="work-row-tool">${id}</p>`);
   });
@@ -95,11 +92,9 @@ describe("the folds Settings → Chat starts a turn with", () => {
     const running = render(parts, { live: true }, "assistant", { foldWork: true });
     expect(titles(running)).toEqual(["Working…"]);
     expect(expanded(running)).toEqual([false]);
-    // the folded head still says what the turn did
     expect(running).toContain("2 commands");
     expect(expanded(render(parts, { live: true, waiting: true }, "assistant", { foldWork: true }))).toEqual([true]);
     expect(expanded(render([...parts, commentary("Still looking.")], { live: false }, "assistant", { foldWork: true }))).toEqual([false]);
-    // off, as before: the running block open, a settled one open only for words after its answer
     expect(expanded(render(parts, { live: true }))).toEqual([true]);
     expect(expanded(render([...parts, commentary("Still looking.")], { live: false }))).toEqual([true]);
   });
@@ -112,7 +107,6 @@ describe("the folds Settings → Chat starts a turn with", () => {
     const folded = render(parts, { live: true }, "assistant", { showThinking: true });
     expect(thoughtsOpen(folded)).toEqual([false]);
     expect(folded).not.toContain("Weighing it.");
-    // reasoning the chat does not show stays out, whatever it would start as
     expect(thoughtsOpen(render(parts, { live: true }, "assistant", { expandThinking: true }))).toEqual([]);
   });
 });
@@ -120,9 +114,7 @@ describe("the folds Settings → Chat starts a turn with", () => {
 describe("Compaction and failed requests (#901)", () => {
   const failed = (error: string): ConversationPart => ({ kind: "text", text: `Error: ${error}`, failed: true });
   const rows = (html: string) => [...html.matchAll(/class="chat-skill(?: is-error)? chat-failed-requests"(?: open="")?><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);
-  /** the rows drawn open: the error itself in view without a click */
   const opened = (html: string) => [...html.matchAll(/class="chat-skill(?: is-error)? chat-failed-requests"( open="")?>/g)].map((match) => match[1] !== undefined);
-  /** the rows drawn in the alert colour (is-error): a run nothing followed, never one the turn went on from */
   const alerting = (html: string) => [...html.matchAll(/class="chat-skill( is-error)? chat-failed-requests"/g)].map((match) => match[1] !== undefined);
 
   it("draws each failed request as its error line while off, as before", () => {
@@ -137,22 +129,18 @@ describe("Compaction and failed requests (#901)", () => {
     const retried = render([failed("503 overloaded"), failed("Connection error."), text("hello")], { live: false }, "assistant", on);
     expect(rows(retried)).toEqual(["2 requests failed, then tried again"]);
     expect(alerting(retried)).toEqual([false]);
-    // the errors are inside the row, without the prefix the line needed; the answer stays outside it
     expect(retried).toContain("<li>503 overloaded</li><li>Connection error.</li>");
     expect(retried).not.toContain("Error: 503");
     expect(retried).toContain("hello");
     const alone = render([failed("401 unauthorized")], { live: false }, "assistant", on);
     expect(rows(alone)).toEqual(["Request failed"]);
     expect(alerting(alone)).toEqual([true]);
-    // two runs apart stay two rows; only the one nothing followed keeps the alert colour
     const apart = render([failed("a"), text("partial"), failed("b")], { live: false }, "assistant", on);
     expect(rows(apart)).toEqual(["Request failed, then tried again", "Request failed"]);
     expect(alerting(apart)).toEqual([false, true]);
-    // a turn that ended on its failure shows the error at once (a Codex usage limit); one it went on from stays folded
     expect(opened(alone)).toEqual([true]);
     expect(opened(retried)).toEqual([false]);
     expect(opened(apart)).toEqual([false, true]);
-    // folded while the turn goes on: a retry arriving under it does not fold it away under the reader
     expect(opened(render([failed("401 unauthorized")], { live: true }, "assistant", on))).toEqual([false]);
   });
 
@@ -166,7 +154,6 @@ describe("Compaction and failed requests (#901)", () => {
 });
 
 describe("a run of todo updates, opened", () => {
-  // omp's todo: operations in, the whole list as it now stands out
   const LIST = ["Read the fixture", "Patch the parser"];
   const todo = (id: string, ops: unknown[], done: number): ConversationPart => ({
     kind: "tool", name: "todo", summary: "todo", input: JSON.stringify({ ops }), call_id: id,
@@ -175,7 +162,6 @@ describe("a run of todo updates, opened", () => {
 
   it("shows each update's own input and output, not only the list it left (#1601)", () => {
     const parts = [todo("t1", [{ op: "init", list: [{ phase: "Fix", items: LIST }] }], 0), todo("t2", [{ op: "done", task: LIST[0] }], 1)];
-    // the reader opened both updates: the run opens with them
     const memory: ChatRowMemory = { toggles: new Map([["tool:0", true], ["tool:1", true]]), outputs: new Map(), runs: new Map(), dormant: new Map() };
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
@@ -238,13 +224,11 @@ describe("an agent turn's folded work, drawn again", () => {
   const toggle = async (index: number) => { await act(async () => { heads()[index]!.props.onClick(); }); };
   const thoughts = () => renderer!.root.findAll((node) => node.type === "div" && node.props.className === "work-row work-row-thinking").map((row) => row.findByType("button"));
   const thoughtOpened = () => thoughts().map((node) => node.props["aria-expanded"] as boolean);
-  // the row scrolled out of the list and back: only its memory is left
   const remount = async (parts: ConversationPart[], folds: Folds = {}) => {
     await act(async () => { renderer!.unmount(); });
     renderer = undefined;
     await draw(parts, folds);
   };
-  // the next message: a row of its own, with nothing chosen in it yet
   const nextMessage = async (parts: ConversationPart[], folds: Folds = {}) => {
     memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
     await remount(parts, folds);
@@ -256,7 +240,6 @@ describe("an agent turn's folded work, drawn again", () => {
     expect(opened()).toEqual([false]);
     await toggle(0);
     expect(opened()).toEqual([true]);
-    // the turn goes on, scrolls away and back, and the setting is turned off and on again
     await draw([tool("ls"), tool("cat a")], fold);
     expect(opened()).toEqual([true]);
     await remount([tool("ls"), tool("cat a")], fold);
@@ -266,7 +249,6 @@ describe("an agent turn's folded work, drawn again", () => {
     await draw([tool("ls"), tool("cat a")], fold);
     await draw([tool("ls"), tool("cat a")]);
     expect(opened()).toEqual([false]);
-    // a block nobody touched follows the setting
     await nextMessage([tool("ls")], fold);
     expect(opened()).toEqual([false]);
     await draw([tool("ls")]);
@@ -283,7 +265,6 @@ describe("an agent turn's folded work, drawn again", () => {
     expect(thoughtOpened()).toEqual([false]);
     await remount([reasoning, tool("ls"), tool("cat a")], expand);
     expect(thoughtOpened()).toEqual([false]);
-    // the next message starts open again, and folded once the setting is off
     await nextMessage([reasoning, tool("ls")], expand);
     expect(thoughtOpened()).toEqual([true]);
     await draw([reasoning, tool("ls")], { showThinking: true });
@@ -313,7 +294,6 @@ describe("an agent turn's folded work, drawn again", () => {
   });
 
   it("keeps a block folded when the words before its tools join it (#2063)", async () => {
-    // a later Codex record marks the words commentary; an empty commentary record is filled in
     for (const [before, after] of [[text("Checking."), commentary("Checking.")], [commentary(""), commentary("Checking.")]] as const) {
       memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
       await draw([before, tool("ls")]);
@@ -330,17 +310,14 @@ describe("an agent turn's folded work, drawn again", () => {
 
   it("keeps a block folded when it merges with reasoning the chat does not show (#2111)", async () => {
     const reasoning: ConversationPart = { kind: "thinking", text: "Weighing it." };
-    // the hidden reasoning is a run of its own that draws no block: one block, the tools'
     await draw([reasoning, text("Checking."), tool("ls")]);
     expect(opened()).toEqual([true]);
     await toggle(0);
     expect(opened()).toEqual([false]);
-    // the words become commentary: reasoning, words and tools are one run, still the folded block
     await draw([reasoning, commentary("Checking."), tool("ls")]);
     expect(opened()).toEqual([false]);
     await remount([reasoning, commentary("Checking."), tool("ls")]);
     expect(opened()).toEqual([false]);
-    // the words become the answer: the reasoning is a hidden run again, and the tools keep the fold
     await draw([reasoning, answer("Checking."), tool("ls")]);
     expect(opened()).toEqual([false]);
     await remount([reasoning, answer("Checking."), tool("ls")]);
@@ -352,13 +329,10 @@ describe("an agent turn's folded work, drawn again", () => {
     await draw([commentary("Checking."), reasoning]);
     await toggle(0);
     expect(opened()).toEqual([false]);
-    // the words become the answer: what is left of the run draws no block, through every redraw
-    // while the reasoning streams
     await draw([answer("Checking."), reasoning]);
     expect(opened()).toEqual([]);
     await draw([answer("Checking."), { ...reasoning, text: "Weighing it again." }]);
     expect(opened()).toEqual([]);
-    // a tool joins the reasoning: the block is drawn again, as the reader left it
     await draw([answer("Checking."), { ...reasoning, text: "Weighing it again." }, tool("ls")]);
     expect(opened()).toEqual([false]);
     await remount([answer("Checking."), { ...reasoning, text: "Weighing it again." }, tool("ls")]);
@@ -368,15 +342,12 @@ describe("an agent turn's folded work, drawn again", () => {
   it("keeps a merged block's fold when a part leaves it", async () => {
     await draw([tool("ls"), text("One shelf."), commentary("Checking it.")]);
     expect(opened()).toEqual([false, true]);
-    // the reader folds the working run and opens it again
     await toggle(1);
     await toggle(1);
-    // the words between become commentary: one run, which the reader folds
     await draw([tool("ls"), commentary("One shelf."), commentary("Checking it.")]);
     expect(opened()).toEqual([true]);
     await toggle(0);
     expect(opened()).toEqual([false]);
-    // its last words become the answer and leave it
     await draw([tool("ls"), commentary("One shelf."), answer("Checking it.")]);
     expect(opened()).toEqual([false]);
     await remount([tool("ls"), commentary("One shelf."), answer("Checking it.")]);

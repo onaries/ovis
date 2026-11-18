@@ -5,10 +5,6 @@ import type { MachineManager } from "./machines.ts";
 
 const machine = (state: Machine["state"]): Machine => ({ id: "local", name: "PC", kind: "local", enabled: true, state, error: null, snapshot: null });
 
-/**
- * A manager that tells `first` on subscribe, as MachineManager does, and every event emitted after.
- * `told` keeps each event as sent then: both transports encode it at once (SSE and the WebSocket).
- */
 function document(first: Machine[] = [machine("connected")]): { emit: (event: MachineEvent) => void; told: MachineEvent[] } {
   let emit: (event: MachineEvent) => void = () => undefined;
   const manager: Pick<MachineManager, "subscribe"> = {

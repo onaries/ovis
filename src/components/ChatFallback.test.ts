@@ -60,10 +60,8 @@ describe("the chat's fallback transcript", () => {
     expect(render({ agent: "claude", messages: [], outcomes: [], unavailable: "unreadable" })).toContain("Ovis couldn&#x27;t find or read the file Claude Code keeps this conversation in.");
     expect(render({ agent: "claude", messages: [], outcomes: [], unavailable: "no_folder" })).toContain("herdr has not said which folder this pane is in");
     expect(render({ agent: "opencode", messages: [], outcomes: [], unavailable: "no_integration" })).toContain("OpenCode chat needs herdr&#x27;s OpenCode integration, which is not installed on this PC.");
-    // no terminal to show: no button that does nothing
     expect(render({ agent: "claude", messages: [], outcomes: [], unavailable: "unreadable" })).not.toContain("Open Terminal");
     expect(notFound).toContain("<summary>Show a terminal output preview</summary>");
-    // no reason known: the preview alone, as before
     expect(render({ agent: "claude", messages: [], outcomes: [] })).not.toContain("chat-unavailable-reason");
   });
 

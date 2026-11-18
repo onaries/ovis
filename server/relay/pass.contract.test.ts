@@ -18,7 +18,6 @@ import { bounded, deferred } from "./test-helpers.ts";
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-/** Sets environment variables for this test only. */
 function withEnv(values: Record<string, string>): void {
   for (const [name, value] of Object.entries(values)) {
     const previous = process.env[name];
@@ -29,11 +28,9 @@ function withEnv(values: Record<string, string>): void {
 
 const KID = "0badc0de";
 
-/** An enforcing Bun relay, an account service that lists this PC under `acct_1` only, and a PC that may use them. */
 async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Partial<RelayServiceOptions> = {}, relayKeys?: string) {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-  // the relay trusts the account service's key unless the test names others
   const pass = await passPolicy({ RELAY_PASS_MODE: mode, RELAY_PASS_ENFORCE_AT: "2099-01-01T00:00:00Z", RELAY_PASS_KEYS: relayKeys ?? `${KID}:${Array.from(raw, (byte) => byte.toString(16).padStart(2, "0")).join("")}` });
   const allow = { async limit() { return { success: true }; } };
   const relay = startBunRelay({ port: 0, pass, limiters: { perAddress: allow, global: allow } });
@@ -43,15 +40,10 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
   const origin = `wss://127.0.0.1:${relay.port}`;
   const challenges = new Map<string, string>();
   const asked: string[] = [];
-  /** the accounts that list this PC */
   const listed = new Set(["acct_1"]);
-  /** `signing` holds a pass's answer back until what it returns settles, so a test decides what the pass comes after */
   const hooks: { refused?: () => void; limited?: () => void; signing?: () => Promise<unknown> } = {};
-  /** the accounts that have as many PCs on the relay as they may */
   const limited = new Set<string>();
-  /** what the passes the service signs say of new client sessions (unset: a v1 pass) */
   const signing: { newSessions?: boolean } = {};
-  /** the pass forms each pass request said this PC reads */
   const passVersions: unknown[] = [];
   /**
    * When every pass is issued: two that say the same are then the same pass, whatever second each was asked in. A PC an
@@ -78,17 +70,13 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
     await hooks.signing?.();
     return Response.json({ pass: await signRelayPass(pair.privateKey, KID, body["server_id"]!, issuedAt, undefined, signing), expires_in: 172_800, refresh_in: 43_200 });
   };
-  /** what each control socket heard first after its proof, and how it closed */
   const syncs: Record<string, unknown>[] = [];
   const headers: (Record<string, string> | undefined)[] = [];
-  /** every PC socket the PC opened: the relay it named, and the pass it sent there */
   const dialed: { origin: string; path: string; pass: string | null }[] = [];
-  /** what the PC sent on its control sockets after the proof */
   const sentOnControl: string[] = [];
   const renewal = deferred<string>();
   let synced = deferred<Record<string, unknown>>();
   let refused = deferred<{ code: number; reason: string }>();
-  /** refusals so far by reason, and who waits for how many of one */
   const refusals = new Map<string, number>();
   const waiting: { reason: string; times: number; resolve: () => void }[] = [];
   const refusedFor = (reason: string, times = 1) => {
@@ -137,11 +125,6 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
       const response = await fetch(`${base()}/api/relay/start`, { method: "POST", headers: { origin: base(), "x-herdr-update": "1" } });
       expect(response.status).toBe(200);
     },
-    /**
-     * Saves the pass the service signs now as one this PC kept from an earlier run. Started on it, the PC asks for
-     * none: its control socket carries the pass from the start, so the first pass it asks for later is the first
-     * renewal on that socket.
-     */
     async savePass() {
       const identity = loadRelayIdentity(stateDir);
       mkdirSync(join(stateDir, "relay"), { recursive: true });
@@ -186,7 +169,6 @@ test("an enforcing relay refuses a PC with no account to name; once its owner na
 
 test("a PC the relay refuses for its pass says why as a fixed code: no account to name, not listed by the one it names, or at its limit", async () => {
   for (const [account, code] of [[null, "pass_required"], ["acct_2", "pass_not_listed"], ["acct_1", "pass_limit"]] as const) {
-    // the keeper waits half an hour after each of these answers: that wait being set says the answer is in
     const answered = deferred<void>();
     const passClock = { now: () => Date.now(), setTimeout: (callback: () => void, ms: number) => {
       if (ms === 30 * 60_000) answered.resolve();
@@ -215,8 +197,6 @@ test("a PC whose pass the relay refuses (a key it does not trust) says pass_refu
   mkdirSync(join(f.stateDir, "relay"), { recursive: true });
   writeFileSync(join(f.stateDir, "relay", "pass.json"), JSON.stringify({ pass: await signRelayPass(stale.privateKey, KID, identity.server_id, Math.floor(Date.now() / 1000)), server_id: identity.server_id, service: "https://account.test", expires_at: Date.now() + 3_600_000, refresh_at: Date.now() + 3_600_000 }));
   await f.start();
-  // the kept pass refused is replaced at once, and the replacement goes out at once on a new control socket: refused too,
-  // the PC holds a pass the relay will not take
   await bounded(f.refusedFor("relay pass invalid", 2));
   expect(f.service.status()).toMatchObject({ phase: "error", error_code: "pass_refused" });
   const off = await fixture("enforce", { accountService: undefined });
@@ -247,8 +227,6 @@ test("a pass saved before the account service's address stopped parsing still le
   await f.restart({ accountService: new Error("Invalid OVIS_ACCOUNT_SERVICE_URL") });
   await f.start();
   expect(await bounded(Promise.race([f.synced.then((sync) => sync["relay_pass"]), f.refused]))).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
-  // the status says so too, after a refresh as well (naming another account asks again): a pass is in use, though no
-  // new one can be asked for
   expect((await f.nameAccount("acct_2")).status).toBe(204);
   expect(f.service.status().pass?.state).toBe("ok");
 });
@@ -259,7 +237,6 @@ test("a staging pass kept from before goes to no production relay while the acco
   const stale = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
   mkdirSync(join(f.stateDir, "relay"), { recursive: true });
   writeFileSync(join(f.stateDir, "relay", "pass.json"), JSON.stringify({ pass: await signRelayPass(stale.privateKey, KID, identity.server_id, Math.floor(Date.now() / 1000)), server_id: identity.server_id, service: STAGING_ACCOUNT_SERVICE, expires_at: Date.now() + 3_600_000, refresh_at: Date.now() + 3_600_000 }));
-  // Ovis's global relay, as a PC with no OVIS_RELAY_URL has it, and no relays named by the test
   await f.restart({ relay: GLOBAL_RELAY, ovisRelays: undefined, accountService: new Error("Invalid OVIS_ACCOUNT_SERVICE_URL") });
   await f.start();
   expect(await bounded(f.refused)).toEqual({ code: 4402, reason: "relay pass required" });
@@ -345,7 +322,6 @@ test("on an enforcing relay, a PC with its pass holds its typed code's nameplate
 test("a pass the relay refuses is dropped and a new one asked for at once", async () => {
   const f = await fixture();
   expect((await f.nameAccount("acct_1")).status).toBe(204);
-  // a pass this PC kept, signed under a key the relay no longer trusts
   const identity = loadRelayIdentity(f.stateDir);
   const stale = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
   mkdirSync(join(f.stateDir, "relay"), { recursive: true });
@@ -361,7 +337,6 @@ test("a pass renewed while online goes to the relay on the open control socket",
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await f.start();
   await bounded(f.synced);
-  // another account (which does not list this PC), then back: the PC asks again and renews on the open socket
   expect((await f.nameAccount("acct_2")).status).toBe(204);
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   expect(JSON.parse(await bounded(f.renewal))).toEqual({ type: "relay_pass", pass: expect.stringMatching(/^ovp1\./) });
@@ -387,7 +362,6 @@ test("a pass that allows no new client sessions is told in the status; one that 
   await f.start();
   await bounded(f.synced);
   expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, enforced: true, new_sessions: false });
-  // another account (which does not list this PC), then back: the PC renews with the pass the service signs now
   f.signing.newSessions = true;
   expect((await f.nameAccount("acct_2")).status).toBe(204);
   expect((await f.nameAccount("acct_1")).status).toBe(204);
@@ -401,9 +375,6 @@ test("a pass that allows no new client sessions is told in the status; one that 
 test("with passes off on the relay, a pass that allows no new client sessions is not told in the status", async () => {
   const f = await fixture("off");
   f.signing.newSessions = false;
-  // this relay lets the PC in without its pass, so whether its sync or the pass came first was a matter of timing, and
-  // the status read after the sync said no pass was held yet. Held back until the sync, the pass always comes second
-  // and goes out on the open control socket: that frame says the PC holds it
   f.hooks.signing = () => f.synced;
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await f.start();
@@ -425,13 +396,11 @@ test("naming the same account again asks the account service nothing more", asyn
 
 test("naming the same account again asks again while this PC holds no pass (it was not listed a moment ago)", async () => {
   const f = await fixture("grace");
-  // the account does not list the PC when it first asks; the add-me screen puts it back right after
   f.listed.clear();
   f.hooks.refused = () => f.listed.add("acct_1");
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await f.start();
   await bounded(f.synced);
-  // the screen names the same account again: with no pass held, the PC asks again and renews on the open socket
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   expect(JSON.parse(await bounded(f.renewal))).toEqual({ type: "relay_pass", pass: expect.stringMatching(/^ovp1\./) });
 });
@@ -444,7 +413,6 @@ test("naming the same account again keeps the scheduled retry after a refusal fo
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await f.start();
   await bounded(f.synced);
-  // the limit answer lands; the add-me screen relists and names the same account, twice
   await bounded(answered.promise);
   const asked = f.asked.length;
   expect((await f.nameAccount("acct_1")).status).toBe(204);

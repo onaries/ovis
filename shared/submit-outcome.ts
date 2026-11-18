@@ -43,10 +43,13 @@ export const PASTED_NOT_SENT_MESSAGE = "The message is in the terminal's input l
 export function submitNotTyped(code: string): boolean {
   return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "capacity_retry_stopped", "pending_input_unsupported", "agent_queue_unsupported", "invalid_delivery", "invalid_submit_text",
     "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "first_message_launch_ended", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
+    // Claude Code's rewind dialog was on screen: nothing went into it
     "rewind_dialog_open",
     "held_input",
     "not_transmitted",
     "capabilities_unknown",
+    // a message for an agent alone was not sent to a bridge that cannot keep that rule (HerdrSocket)
     "agent_only_unsupported",
+    // a hold that must never go on its own was not sent to a bridge that cannot hold one (HerdrSocket)
     "pending_hold_unsupported"].includes(code);
 }

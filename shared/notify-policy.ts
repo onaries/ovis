@@ -82,6 +82,7 @@ export function parseAlerts(value: unknown): AlertPrefs {
   };
 }
 
+/** What a blocked pane waits for, by what its agent reported (`agent_kind`, herdr-core only). */
 export function blockedAlertKind(agentKind: string | null | undefined): "input" | "permission" {
   return agentKind === "permission" ? "permission" : "input";
 }

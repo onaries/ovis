@@ -28,16 +28,10 @@ let app: ReturnType<typeof createServer>;
 let workspace: string;
 let pane: string;
 
-/** The stand-in for this session in front of a pane, by its own process: herdr's agent label can outlast one that quit. */
 async function fixtureInFront(pane: string, session: string): Promise<number | undefined> {
   return (await paneProcessInfo(pane))?.foreground_processes?.find((process) => process.argv?.includes(executable) && process.argv.includes(session))?.pid;
 }
 
-/**
- * The test herdr's last log lines without its per-request ones: what its detection changed (`agent changed`) and its
- * warnings. In the runs read, it had no line for a stand-in's exit while the pane's agent events (`recordAgentEvents`)
- * did, so no `agent=None` line after a quit proves nothing.
- */
 function herdrLogTail(): string {
   const log = join(dirname(testSocketPath()), "herdr-server.log");
   try {
@@ -45,11 +39,6 @@ function herdrLogTail(): string {
   } catch (error) { return `no herdr log at ${log}: ${error instanceof Error ? error.message : String(error)}`; }
 }
 
-/**
- * herdr's agent events for `pane` (`pane.agent_detected`, kept for this pane, and `pane.agent_status_changed`) from the
- * moment herdr acknowledged the subscription, each with when it came. Only for a failure's message: it waits for the
- * acknowledgement at most 2 s and never fails a test itself.
- */
 async function recordAgentEvents(pane: string): Promise<{ events: { at: number; text: string }[]; close: () => void }> {
   const events: { at: number; text: string }[] = [];
   const note = (text: string) => events.push({ at: performance.now(), text });
@@ -346,10 +335,6 @@ it.skipIf(process.platform !== "linux")("reads the live API without a report, fo
   const command = async (target: string, pid: number, text: string) => {
     const expected = (commands.get(pid) ?? 0) + 1;
     await herdrRpc("pane.send_text", { pane_id: target, text: text + "\n" });
-    // The acknowledgement shows before the rename that publishes it has returned, and the end of that rename
-    // can wait on the disk (state D) for some milliseconds. herdr reads no argv from a process in that state,
-    // and to the server two such answers in a row are no Copilot in front (the unread answers below), and one
-    // from a peer is no claim: a command is done once the stand-in is also at rest again.
     for (const deadline = Date.now() + 4000;;) {
       try { if (JSON.parse(fs.readFileSync(join(home, `api-ack-${pid}.json`), "utf8")) === expected && atRest(pid)) break; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -415,14 +400,12 @@ it.skipIf(process.platform !== "linux")("reads the live API without a report, fo
     try {
       expect((await read()).source).toBe("copilot-transcript");
       expect(answers.slice(0, 2)).toEqual(["unread", "read"]);
-      // still unread when asked again: which process is Copilot, and which store it names, stays unproved
       answers.length = 0;
       unreadLeft = 2;
       expect(await read()).toEqual({ source: "scrollback", turns: [] });
       expect(answers).toEqual(["unread", "unread"]);
     } finally { unread.mockRestore(); }
     expect((await read()).source).toBe("copilot-transcript");
-    // Even valid legacy report/marker evidence cannot rescue a refused API request.
     await herdrRpc("pane.send_text", { pane_id: current, text: `:hold ${first}\n` });
     for (const deadline = Date.now() + 4000;;) {
       if (copilotProcessSession(processEnviron(pid), ["copilot"], pid)?.sessionId === first) break;
@@ -464,8 +447,6 @@ it.skipIf(process.platform !== "linux")("reads the live API without a report, fo
 }, 30_000);
 
 it.skipIf(process.platform !== "linux")("binds only the reported UUID to the foreground process's home and rejects old cursors after a switch", async () => {
-  // the pane's agent events, for the errors after the stand-in quits below: in the runs read, its exit showed there
-  // ("released":true) and not in herdr's log. Opened here, long before the quit, so that it adds no wait at the quit
   const agentEvents = await recordAgentEvents(pane);
   onTestFinished(() => agentEvents.close());
   const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(pane)}`;
@@ -607,7 +588,6 @@ it.skipIf(process.platform !== "linux")("retries failed Copilot page reads only 
   function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
   function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
   function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
-    // Leave the bounded header/identity checks real; fail only a transcript page read.
     if (fail && (length ?? 0) > 64 * 1024 && fs.readlinkSync(`/proc/self/fd/${fd}`) === failingFile) {
       fail = false;
       onFailure();
@@ -627,8 +607,6 @@ it.skipIf(process.platform !== "linux")("retries failed Copilot page reads only 
       appendFileSync(log, `${new Date().toISOString()} [INFO] ${action} foreground session: ${id}\n`);
     const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(current)}`;
     reads = spyOn(fs, "readSync").mockImplementation(failedRead);
-    // CI once read no cursor here for a reason its log did not keep: each answer waited past is
-    // printed, so a run that waits says what it saw
     const readCursor = async () => {
       for (const deadline = Date.now() + 5000;;) {
         const response = await fetch(url);
@@ -752,8 +730,6 @@ it.skipIf(process.platform !== "linux")("reads a resumed CLI without marker or r
         source: string; turns: { parts: { text?: string; output_ref?: string }[] }[]; cursor?: string; history_id?: string;
       };
     };
-    // A switch may answer scrollback, or 409 if ownership changes during the read.
-    // Neither is the transcript this waits for; keep the response for timeout diagnostics.
     const waitForTranscript = async (text: string, previousHistory?: string) => {
       for (const deadline = Date.now() + 5000;;) {
         const body = await read();
@@ -853,7 +829,6 @@ it.skipIf(process.platform !== "linux")("shows the pictures a recorded Copilot s
   const red = "copilot:db47bba5fe6470a832370fa0ca3cbfd9194dd1e36eaa3d67fdd33bea01d4b66a";
   const blue = "copilot:c75fe07b33afb7b182fa53cd500727a7cfa1699443a17d87d053d6536ad65438";
   mkdirSync(join(home, "session-state", pictured), { recursive: true });
-  // the recorded session under this test's id; a prompt that is only the red picture again, as Copilot names an asset it already holds
   writeFileSync(file(pictured), recorded.replace(/"sessionId":"[0-9a-f-]{36}"/, `"sessionId":"${pictured}"`)
     + event("user.message", { content: "", attachments: [{ type: "blob", mimeType: "image/png", assetId: `sha256:${red.slice(8)}`, byteLength: 140 }] }));
   const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-copilot-pictures" });
@@ -876,7 +851,6 @@ it.skipIf(process.platform !== "linux")("shows the pictures a recorded Copilot s
       expect(new Bun.CryptoHasher("sha256").update(new Uint8Array(await response.arrayBuffer())).digest("hex")).toBe(ref.slice(8));
     }
     expect((await image(`copilot:${"0".repeat(64)}`)).status).toBe(404);
-    // another pane's Copilot session never had these pictures: the ref names no picture there
     expect((await image(red, pane)).status).toBe(404);
   } finally {
     await workspaceClose(created.workspace.workspace_id);

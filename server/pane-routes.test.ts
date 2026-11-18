@@ -18,7 +18,6 @@ import { requestIdContext } from "./http.ts";
 import { PANE_SUMMARY_DEADLINE_MS, PANE_SUMMARY_KEEP_MS, PANE_SUMMARY_MAX_IDS, PANE_SUMMARY_PANE_MS, type PaneSummaries } from "../shared/pane-summary.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 
-// The real RPC client against a unix socket this test owns; only herdr's answers are synthetic.
 let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
@@ -50,7 +49,6 @@ beforeEach(() => {
         const result = request.method === "pane.get" ? { pane: paneInfo(id) }
           : request.method === "pane.process_info" ? { process_info: { foreground_processes: panes[id]?.process ?? [] } }
           : request.method === "session.snapshot" ? { snapshot: { panes: Object.keys(panes).map(paneInfo), agents: [] } }
-          // an agent with no session yet (a Claude pane's commands route asks which transcript it writes)
           : request.method === "agent.get" ? { agent: {} }
           : request.method === "integration.list" ? { integrations }
           : null;
@@ -112,7 +110,6 @@ it("answers a conversation with the PC's clock, which its turns' times are on", 
     expect(Date.parse(body.server_time ?? "")).toBeGreaterThanOrEqual(before);
     expect(Date.parse(body.server_time ?? "")).toBeLessThanOrEqual(Date.now());
     expect(answered.headers.get("x-server-time")).toBe(body.server_time!);
-    // the time is no part of the answer's version: an unchanged transcript still answers 304, with the time as it answered
     const after = Date.now();
     const unchanged = (await ask({ "if-none-match": 'W/"clock-fixture"' }))!;
     expect(unchanged.status).toBe(304);
@@ -134,7 +131,6 @@ it("asks a chat showing a history to wait only when Copilot's rejection may be w
     expect(await ask("copilot_log_truncated", true)).toEqual({ source: "scrollback", turns: [], recovery: "waiting" });
     expect(await ask("copilot_log_truncated", false)).toEqual({ source: "scrollback", turns: [] });
     expect(await ask("copilot_session_unregistered", true)).toEqual({ source: "scrollback", turns: [] });
-    // a --ui-server API that timed out may answer later; one that names no or another foreground session settled it
     expect(await ask("copilot_api_rpc_timeout", true)).toEqual({ source: "scrollback", turns: [], recovery: "waiting" });
     expect(await ask("copilot_api_no_foreground", true)).toEqual({ source: "scrollback", turns: [] });
     expect(await ask("copilot_api_foreground_changed", true)).toEqual({ source: "scrollback", turns: [] });
@@ -154,7 +150,6 @@ it("passes on what the user could change for a Copilot pane to be read, beside a
 });
 
 it("says why a conversation could not be read, in the few words the chat can explain", async () => {
-  // one pane: a failure episode it keeps open logs once, and leaves the log's budget to the tests after this one
   const pane = crypto.randomUUID();
   const ask = async (error: conversation.ConversationUnavailable) => {
     const url = new URL(`http://x/api/pane/conversation?pane_id=${pane}`);
@@ -171,18 +166,15 @@ it("says why a conversation could not be read, in the few words the chat can exp
     expect(await ask(new Unavailable("transcript_unreadable"))).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
     expect(await ask(new Unavailable("branch_unreadable"))).toEqual({ source: "scrollback", turns: [], unavailable: "unreadable" });
     expect(await ask(new Unavailable("no_recognized_transcript", undefined, "agent_cwd_missing"))).toEqual({ source: "scrollback", turns: [], unavailable: "no_folder" });
-    // "can't read it yet" only for an agent no reader exists for: not a plain shell, nor an agent Ovis reads whose pane it could not tie
     expect(await ask(new Unavailable("no_recognized_transcript"))).toEqual({ source: "scrollback", turns: [] });
     panes[pane] = { agent: "droid", process: [] };
     expect(await ask(new Unavailable("no_recognized_transcript"))).toEqual({ source: "scrollback", turns: [], unavailable: "no_reader" });
     panes[pane] = { agent: "devin", process: [] };
     expect(await ask(new Unavailable("no_recognized_transcript"))).toEqual({ source: "scrollback", turns: [] });
-    // Copilot's own reader governs its fallback: a page read that failed carries no reason either
     panes[pane] = { agent: "copilot", process: [] };
     expect(await ask(new Unavailable("transcript_missing"))).toEqual({ source: "scrollback", turns: [] });
     expect(await ask(new Unavailable("no_session_id"))).toEqual({ source: "scrollback", turns: [] });
     delete panes[pane];
-    // a reason the chat has no words for says nothing rather than something wrong; nor does a Copilot stage (a log cut, a peer)
     expect(await ask(new Unavailable("no_session_path", undefined, "copilot_log_truncated"))).toEqual({ source: "scrollback", turns: [] });
     expect(await ask(new Unavailable("pane_not_found"))).toEqual({ source: "scrollback", turns: [] });
     expect(await ask(new Unavailable("dsh_transcript_unavailable"))).toEqual({ source: "scrollback", turns: [] });
@@ -202,9 +194,7 @@ it("names herdr's missing integration as the reason an OpenCode or Grok pane has
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
     expect(await ask("opencode")).toEqual({ source: "scrollback", turns: [], unavailable: "no_integration" });
-    // installed: the session is simply not reported yet
     expect(await ask("grok")).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
-    // Claude Code's chat is read from its files, integration or not
     expect(await ask("claude")).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
   } finally { warn.mockRestore(); }
 });
@@ -255,12 +245,9 @@ it("still reports an agent pane herdr gives no folder, and does not count it as 
 it("names an omo pane that herdr labels pi omo in the commands route, and types into it as omo only once omo holds a session", async () => {
   panes["w:p1"] = { agent: "pi", process: [{ ...OMO_PROCESS, cwd: root }] };
   panes["w:p2"] = { agent: "pi", process: [{ pid: 2147483646, argv: ["/usr/bin/pi"], cwd: root }] };
-  // typing needs omo's own holder record (server/core/omo-pane-send.test.ts): an argv alone keeps herdr's label
   expect(await paneAgentOf("w:p1")).toBe("pi");
-  // an ordinary pi stays pi
   expect(await paneAgentOf("w:p2")).toBe("pi");
 
-  // omo's catalog describes /quit in its own words, pi's in others: the route answers with the pane's
   const quit = async (paneId: string) => {
     const url = new URL(`http://x/api/pane/commands?pane_id=${paneId}`);
     const response = await handlePaneRequest(new Request(url), url, "/api/pane/commands", {});
@@ -273,7 +260,6 @@ it("names an omo pane that herdr labels pi omo in the commands route, and types 
   expect(await quit("w:p2")).toBe(piQuit);
 });
 
-/** a Hermes pane in the fake herdr, its skills under a HOME of the test's own */
 async function hermesPane(paneId: string, run: (f: { skill(name: string): void; names(): Promise<string[]> }) => Promise<void>): Promise<void> {
   const homeBefore = process.env["HOME"];
   process.env["HOME"] = root;
@@ -304,7 +290,6 @@ it("lists a Hermes skill added on disk before a successful reload on the next co
   await hermesPane("w:hermes", async ({ skill, names }) => {
     expect(await names()).not.toContain("fixture-added");
     skill("fixture-added");
-    // the recognized reload the client refetches on (catalog_changed)
     expect(reload.parse(below, { agent: "hermes", omoAsk: null, omoTrusted: false, omoOpen: [], sent: "/reload-skills", working: false })?.catalogChanged).toBeTrue();
     expect(await names()).toContain("fixture-added");
   });
@@ -344,7 +329,6 @@ async function stalledClaudePane(paneId: string, holdMs: number, run: (f: { sayi
   writer.postMessage({ fifo, gate: gate.buffer, holdMs });
   try {
     await run({
-      /** the writer's `count`th word, waited for at most `ms` */
       saying: (count, ms) => new Promise((done) => {
         const timer = setTimeout(() => done(said[count - 1]), ms);
         heard = () => { if (said.length >= count) { clearTimeout(timer); done(said[count - 1]); } };
@@ -358,7 +342,6 @@ async function stalledClaudePane(paneId: string, holdMs: number, run: (f: { sayi
     });
   } finally {
     release();
-    // a writer still waiting for a reader (the scan never opened the FIFO) gets one, and ends
     if (said.length === 0) closeSync(openSync(fifo, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK));
     writer.terminate();
     if (homeBefore === undefined) delete process.env["HOME"];
@@ -372,7 +355,6 @@ it("scans a pane's skill folders off the server's thread, so a read that stalls 
   await stalledClaudePane("w:stall", 3_000, async ({ saying, release, ask }) => {
     const answer = ask();
     expect(await saying(1, 10_000)).toBe("opened");
-    // the scan is inside its read: this thread still runs, and lets the writer go
     release();
     expect(["ok", "not-equal"]).toContain((await saying(2, 10_000))!);
     const response = await answer;
@@ -392,13 +374,10 @@ it("answers 503 past a request's wait, and lets the request asked again wait for
       expect(refused.status).toBe(503);
       expect(refused.headers.get("retry-after")).toBe("1");
       expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("file_busy");
-      // the scan goes on: the next read of the same pane waits for it rather than taking another thread
-      // (asked here as the route asks, so it joins at once, before the scan is let go)
       setCommandsWait(10_000);
       const again = scanPaneCommands("claude", join(root, "project"), { environ: null }, null);
       release();
       expect((await again).map((command) => command.name)).toContain("fifo-guard");
-      // one scan, on one thread: a second would have taken another, the first still being busy
       expect(filePoolSize().threads).toBe(1);
     });
   } finally {
@@ -415,10 +394,8 @@ it("hands a scan that finished after its request gave up to the next request onc
       const first = ask();
       expect(await saying(1, 10_000)).toBe("opened");
       expect((await first).status).toBe(503);
-      // the scan finishes with nobody waiting for it
       release();
       await commandScansSettled();
-      // a skill added since: the kept answer, taken by the next request, does not have it
       const project = join(root, "project");
       rmSync(join(project, ".claude", "settings.json"));
       writeFileSync(join(project, ".claude", "settings.json"), "{}");
@@ -428,7 +405,6 @@ it("hands a scan that finished after its request gave up to the next request onc
       const kept = (await scanPaneCommands("claude", project, { environ: null }, null)).map((command) => command.name);
       expect(kept).toContain("fifo-guard");
       expect(kept).not.toContain("added-later");
-      // taken once: the request after it scans again
       expect((await scanPaneCommands("claude", project, { environ: null }, null)).map((command) => command.name)).toContain("added-later");
     });
   } finally {
@@ -447,7 +423,6 @@ it("reflects a /reload-skills typed in Hermes's own terminal on the next command
 
 it("lists an agent's commands for a folder with no pane, from the folder's skills and the static tables alone", async () => {
   const homeBefore = process.env["HOME"];
-  // the user's own skills stay out of the answer: a HOME of the test's own
   process.env["HOME"] = join(root, "home");
   mkdirSync(join(root, "home"), { recursive: true });
   try {
@@ -458,15 +433,12 @@ it("lists an agent's commands for a folder with no pane, from the folder's skill
       const url = new URL(`http://x/api/agent/commands${query}`);
       return (await handlePaneRequest(new Request(url, { method }), url, "/api/agent/commands", {}))!;
     };
-    // no herdr RPC answers this route: the fake socket above would throw for one
     const listed = await ask(`?agent=codex&cwd=${encodeURIComponent(project)}`);
     expect(listed.status).toBe(200);
     const { commands } = (await listed.json()) as { commands: { name: string; source: string; trigger?: string; origin?: string; provenance?: { transport: string; verified: boolean } }[] };
     expect(commands.filter((command) => command.source === "skill")).toMatchObject([{ name: "fixture-skill", source: "skill", trigger: "$", origin: "project", provenance: { transport: "scan", verified: false } }]);
     expect(commands.some((command) => command.source === "builtin")).toBeTrue();
-    // no process, no version: no row is verified against one
     expect(commands.every((command) => command.provenance?.verified === false)).toBeTrue();
-    // the folder is optional; an agent the bridge has no tables for has no rows
     expect(await (await ask("?agent=nonesuch")).json()).toEqual({ commands: [] });
     const missingAgent = await ask("");
     expect(missingAgent.status).toBe(400);
@@ -491,14 +463,12 @@ it("lists OpenCode's skills for a folder with no pane in the form its installed 
     writeFileSync(join(project, ".opencode", "skills", "effect", "SKILL.md"), "---\nname: effect\ndescription: Apply Effect.\n---\nBody.\n");
     const state = join(root, "opencode-state");
     mkdirSync(state, { recursive: true });
-    // the server's own OpenCode state (createServer's openCodeStateDir), not the process-wide default
     const skill = async () => {
       const url = new URL(`http://x/api/agent/commands?agent=opencode&cwd=${encodeURIComponent(project)}`);
       const { commands } = await (await handlePaneRequest(new Request(url), url, "/api/agent/commands", { openCodeStateDir: state }))!.json() as { commands: { name: string; source: string; trigger?: string }[] };
       return commands.find((command) => command.name === "effect");
     };
     openCodeServiceOptions.stateDir = join(root, "elsewhere");
-    // no OpenCode 2 has written its service file: the v1 form
     const v1 = await skill();
     expect(v1?.source).toBe("skill");
     expect(v1?.trigger ?? "/").toBe("/");
@@ -512,7 +482,6 @@ it("lists OpenCode's skills for a folder with no pane in the form its installed 
   }
 });
 
-/** an OpenCode pane (herdr labels it opencode) in a project with one skill, under a HOME and state dir of the test's own */
 async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger?: string; provenance?: { verified?: boolean } } | undefined> }) => Promise<void>, session?: string, argv = ["opencode"]): Promise<void> {
   const homeBefore = process.env["HOME"];
   process.env["HOME"] = mkdtempSync(join(tmpdir(), "ovis-pane-routes-home-"));
@@ -541,10 +510,8 @@ async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger
 
 it("offers a session-less OpenCode pane's skill in the form its installed version types, unverified", async () => {
   await openCodePane(async ({ state, skill }) => {
-    // no service file: the v1 form
     const v1 = await skill();
     expect(v1?.trigger ?? "/").toBe("/");
-    // OpenCode 2.0.32 names its version in service.json: the skill is typed with @, but the file verifies nothing
     writeFileSync(join(state, "service.json"), JSON.stringify({ url: "http://127.0.0.1:9", pid: process.pid, password: "fixture", version: "2.0.32" }));
     const v2 = await skill();
     expect(v2?.trigger).toBe("@");
@@ -561,8 +528,6 @@ it("offers a session-less OpenCode pane started with --standalone or --server it
       expect(v2?.provenance?.verified).toBe(false);
     }, undefined, argv);
   }
-  // a pane with a session it cannot read may be an OpenCode 1 one: the flag alone does not decide it;
-  // and a word after `--` is a directory, not a flag
   for (const [session, argv] of [["ses_paneRoutesUnread", ["opencode", "--standalone"]], [undefined, ["opencode", "--", "--standalone"]]] as const) {
     await openCodePane(async ({ skill }) => {
       const row = await skill();
@@ -573,7 +538,6 @@ it("offers a session-less OpenCode pane started with --standalone or --server it
 });
 
 it("does not give a pane with an OpenCode session it cannot read the service file's version", async () => {
-  // no opencode.db: the session's own version is unknown, and it may be an OpenCode 1 session
   await openCodePane(async ({ state, skill }) => {
     writeFileSync(join(state, "service.json"), JSON.stringify({ url: "http://127.0.0.1:9", pid: process.pid, password: "fixture", version: "2.0.32" }));
     expect((await skill())?.trigger ?? "/").toBe("/");
@@ -589,7 +553,6 @@ it("keeps the version a pane's own OpenCode session records over the service fil
   db.close();
   await openCodePane(async ({ state, skill }) => {
     writeFileSync(join(state, "service.json"), JSON.stringify({ url: "http://127.0.0.1:9", pid: process.pid, password: "fixture", version: "2.0.32" }));
-    // the store's 1.19.3 wins: the v1 form, not the service's @
     expect((await skill())?.trigger ?? "/").toBe("/");
   }, "ses_paneRoutes01");
 });
@@ -602,8 +565,6 @@ it("answers OpenCode's commands for a folder with no pane while its opencode.jso
   mkdirSync(project, { recursive: true });
   const fifo = join(project, "opencode.json");
   expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
-  // the writer comes long after the answer should: a read that blocks on the FIFO could only return once
-  // the writer opened it, after it marks `opening`
   const opening = join(root, "fifo-opening");
   const writer = Bun.spawn(["sh", "-c", `sleep 20; touch '${opening}'; printf '{}' > '${fifo}'`]);
   try {
@@ -639,16 +600,13 @@ it("reads a version from the store the pane's own transcript names, and leaks no
   expect(resolveAgent(pane("claude"), null, { path: first })).toEqual({ agent: "claude", version: "2.1.100" });
   expect(resolveAgent(pane("claude"), null, { path: second })).toEqual({ agent: "claude", version: "2.1.200" });
   expect(resolveAgent(pane("claude"), null, { path: first }).version).toBe("2.1.100");
-  // no store, an agent that keeps no version, an omo pane: unverified
   expect(resolveAgent(pane("claude"), null).version).toBeNull();
   expect(resolveAgent(pane("pi"), null, { path: first }).version).toBeNull();
   expect(resolveAgent(pane("claude"), { omo: { agentDir: null, pluginDir: null } }, { path: first })).toEqual({ agent: "omo", version: null });
-  // a session report names the agent when herdr's label is absent
   expect(resolveAgent({ agent_session: { agent: "codex" } } as never, null).agent).toBe("codex");
   expect(resolveAgent({} as never, null)).toEqual({ agent: null, version: null });
 });
 
-// the New workspace dialog asks for a folder's skills by itself, also with the folder an address named
 it("asks the share rule about the folder an agent's commands are listed for, as one nobody chose and no pane's", async () => {
   const expanded = spyOn(directories, "expandedDirectory").mockReturnValue(null);
   try {
@@ -742,7 +700,6 @@ it("leaves out the panes it has no time left to read", async () => {
   const now = spyOn(Date, "now").mockImplementation(() => clock);
   const stuck = Promise.withResolvers<conversation.RecognizedConversation>();
   const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
-    // the first read takes all but a moment of the deadline, and the second outlasts that moment
     if (paneId === "stuck") { clock += 5; return stuck.promise; }
     clock += PANE_SUMMARY_DEADLINE_MS - 5;
     return said("first", "2026-11-12T10:00:00Z");
@@ -752,7 +709,6 @@ it("leaves out the panes it has no time left to read", async () => {
     expect(Object.keys(body.summaries)).toEqual(["w:p1"]);
     expect(read.mock.calls.map((call) => call[0])).toEqual(["w:p1", "stuck"]);
   } finally {
-    // settled, so no later request finds its read still running
     stuck.resolve(said("late", "2026-11-12T10:00:00Z"));
     await stuck.promise;
     read.mockRestore(); now.mockRestore();
@@ -768,10 +724,6 @@ it("keeps a pane id such as __proto__ as an ordinary key", async () => {
   } finally { read.mockRestore(); }
 });
 
-/**
- * The route's timers as a case runs them: the timer set once a pane's read has started is that pane's, and it runs
- * out at once for the pane named `late` and never for any other, whose read then answers first.
- */
 function paneTimers(late: string) {
   const set = globalThis.setTimeout;
   const delays: [string, number][] = [];
@@ -834,7 +786,6 @@ it("hands the result of a read a request stopped waiting for to the next request
   const keptReads = () => read.mock.calls.filter((call) => call[0] === "kept").length;
   try {
     expect(Object.keys((await (await askSummary(["kept"]))!.json() as PaneSummaries).summaries)).toEqual([]);
-    // it settles with no request waiting on it, past every microtask its settling queues
     slow.resolve(said("words read late", "2026-11-12T10:00:00Z"));
     await slow.promise;
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -842,7 +793,6 @@ it("hands the result of a read a request stopped waiting for to the next request
     const body = await (await askSummary(["kept"]))!.json() as PaneSummaries;
     expect(body.summaries).toEqual({ kept: { role: "user", text: "words read late", at: "2026-11-12T10:00:00Z", asked_at: "2026-11-12T10:00:00Z" } });
     expect(keptReads()).toBe(1);
-    // handed over once: the request after it reads anew
     await askSummary(["kept"]);
     expect(keptReads()).toBe(2);
   } finally {
@@ -885,12 +835,10 @@ it("shares a running read with a later request while it is younger than a reques
   const read = spyOn(conversation, "paneConversation").mockImplementation(async (paneId) => {
     timers.reads(paneId);
     reads++;
-    // the first read is still running when the later requests come; the one started in its place answers at once
     return reads === 1 ? first.promise : said("words after the turn", "2026-11-12T10:05:00Z");
   });
   try {
     expect(Object.keys((await (await askSummary(["aged"]))!.json() as PaneSummaries).summaries)).toEqual([]);
-    // inside the age the running read is the one waited on
     clock += PANE_SUMMARY_DEADLINE_MS - 1;
     timers.reads("none");
     const inside = askSummary(["aged"]);
@@ -917,15 +865,12 @@ it("starts a new read for a request that comes after the running one has aged pa
   });
   try {
     expect(Object.keys((await (await askSummary(["old"]))!.json() as PaneSummaries).summaries)).toEqual([]);
-    // past the age a new read starts in the old one's place; it is still running when its request's share runs out
     clock += PANE_SUMMARY_DEADLINE_MS;
     expect(Object.keys((await (await askSummary(["old"]))!.json() as PaneSummaries).summaries)).toEqual([]);
     expect(reads).toBe(2);
-    // the replaced read settles, past every microtask its settling queues: it leaves the read started in its place where it is
     first.resolve(said("words from mid-turn", "2026-11-12T10:00:00Z"));
     await first.promise;
     await new Promise<void>((resolve) => setImmediate(resolve));
-    // a request inside the second read's age waits on it, starts no third, and is answered with its words
     timers.reads("none");
     const third = askSummary(["old"]);
     second.resolve(said("words after the turn", "2026-11-12T10:05:00Z"));

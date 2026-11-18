@@ -22,6 +22,8 @@ export interface FoundHc {
   bin: string;
   /** what its `--version` says after `hc ` */
   version: string;
+  /** the app's own hc (OVIS_HC_BIN with OVIS_HC_BIN_BUNDLED) that did not answer, when this one runs in its place */
+  insteadOf?: string;
 }
 
 export interface FindHcOptions {
@@ -32,8 +34,10 @@ export interface FindHcOptions {
   loginShellPath?: () => Promise<string | null>;
   /** where hc gets installed; the default is usualHcDirs */
   usualDirs?: readonly string[];
-  /** how long one --version may take; PROBE_TIMEOUT_MS unset */
+  /** how long one --version may take; PROBE_TIMEOUT_MS unset. The app's own hc gets BUNDLED_PROBE_TIMEOUT_MS */
   timeoutMs?: number;
+  /** asks one candidate `--version`; the default is hcVersion */
+  version?: (bin: string, env: Env, timeoutMs: number) => Promise<string | null>;
   /** getfacl's path, or null when it is not installed; the default looks in /usr/bin and /bin */
   getfacl?: string | null;
   /** told each candidate the trust check refuses, and why */
@@ -41,16 +45,20 @@ export interface FindHcOptions {
 }
 
 /** a slow or interactive shell profile, or a hanging binary, must not hold the server up */
-const PROBE_TIMEOUT_MS = 3_000;
+export const PROBE_TIMEOUT_MS = 3_000;
+/** the hc the desktop app ships may be slow to answer its first --version (a fresh copy, a busy start) */
+export const BUNDLED_PROBE_TIMEOUT_MS = 10_000;
 /** how long output is still read after the probe exits: what it left behind holding stdout is not waited on */
 const EXIT_GRACE_MS = 500;
 /** a version line, and a PATH, are short: anything longer is not what was asked for */
 const PROBE_OUTPUT_LIMIT = 64 * 1024;
 
 /**
- * The first herdr-core found, or null. Where it looks, in order: OVIS_HC_BIN; the usual install
+ * The first herdr-core found, or null. OVIS_HC_BIN, when set, is the only place looked; else, in order: the usual install
  * places; this process's PATH; then the user's login shell's PATH (a server started by herdr's
- * plugin or a service may not carry it). In each folder `herdr-core` comes before `hc`, the name
+ * plugin or a service may not carry it). The desktop app's own hc comes with OVIS_HC_BIN_BUNDLED=1
+ * beside it: that one is given BUNDLED_PROBE_TIMEOUT_MS, and when it does not answer the usual
+ * places are looked in after all, and what is found says so (`insteadOf`). In each folder `herdr-core` comes before `hc`, the name
  * the core's installer gives it, and a candidate counts only when `--version` exits 0 and says
  * `hc …`: some window managers ship an unrelated `hc`.
  *
@@ -84,7 +92,7 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
   };
   // Windows' trust boundary: the profile as the OS gives it, never a HOME the environment sets
   const profile = options.home ?? (env["USERPROFILE"] || homedir());
-  const pick = async (candidates: string[], named = false): Promise<FoundHc | null> => {
+  const pick = async (candidates: string[], named = false, timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS): Promise<FoundHc | null> => {
     for (const candidate of candidates) {
       // absolute: a terminal attach runs it from another folder (server/core/terminal-process.ts),
       // and what is run is what was checked, whatever folder the server is in
@@ -97,7 +105,7 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
         options.onRefused?.(bin, refused);
         continue;
       }
-      const version = await hcVersion(bin, probing(), options.timeoutMs ?? PROBE_TIMEOUT_MS);
+      const version = await (options.version ?? hcVersion)(bin, probing(), timeoutMs);
       if (version !== null) return { bin, version };
     }
     return null;
@@ -108,10 +116,24 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
   const bare = configured !== undefined && !/[\\/]/.test(configured);
   const named = !configured ? [] : !bare ? [configured]
     : dirsOn(env["PATH"]).map((dir) => join(dir, platform === "win32" && !/\.[^.]+$/.test(configured) ? `${configured}.exe` : configured));
-  return await pick(named, !bare)
-    ?? await pick((options.usualDirs ?? usualHcDirs(home, platform, env)).flatMap(names))
+  // a set OVIS_HC_BIN is the only hc: one that fails is reported, never swapped for another, which
+  // could be one the user set it to avoid (a wrapper that keeps Ovis's environment out, say). The
+  // app's own hc is the app's choice, not the user's: one that fails leaves the usual places
+  const bundled = !!configured && env["OVIS_HC_BIN_BUNDLED"] === "1";
+  if (configured && !bundled) return await pick(named, !bare);
+  if (bundled) {
+    const own = await pick(named, !bare, BUNDLED_PROBE_TIMEOUT_MS);
+    if (own !== null) return own;
+    const other = await usual();
+    return other === null ? null : { ...other, insteadOf: bare ? configured : resolve(configured) };
+  }
+  return await usual();
+
+  async function usual(): Promise<FoundHc | null> {
+    return await pick((options.usualDirs ?? usualHcDirs(home, platform, env)).flatMap(names))
     ?? await pick(dirsOn(env["PATH"]).flatMap(names))
-    ?? await pick(dirsOn(await (options.loginShellPath ?? (() => loginShellPath(env, platform)))() ?? "").flatMap(names));
+      ?? await pick(dirsOn(await (options.loginShellPath ?? (() => loginShellPath(env, platform)))() ?? "").flatMap(names));
+  }
 }
 
 /**
@@ -317,6 +339,7 @@ export function aclReader(options: { platform?: NodeJS.Platform; getfacl?: strin
     }
     if (getfacl === undefined) getfacl = Bun.which("getfacl", { PATH: SYSTEM_PATH.join(delimiter) });
     if (getfacl === null) {
+      // `ls -ld` marks a path that has an ACL with a `+` after its mode
       const listing = read(["/bin/ls", "-ld", "--", path]);
       return listing === null || /^\S{10}\+/.test(listing);
     }
@@ -543,7 +566,7 @@ export function herdrCoreFacts(): HerdrCoreFacts | undefined {
   if (found === null) return undefined;
   const socket = coreSocket();
   // hc takes only a plain folder name for a session; anything else is not told, so no path can be
-  return { version: found.hc?.version ?? null, session: plainSession(socket.session), running: socket.running };
+  return { version: found.hc?.version ?? null, session: plainSession(socket.session), running: socket.running, ...(found.hc?.insteadOf ? { bundled_unused: true } : {}) };
 }
 
 export function plainSession(session: string): string | null {

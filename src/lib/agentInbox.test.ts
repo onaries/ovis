@@ -9,7 +9,6 @@ import type { SidebarActivity } from "./sidebarActivity.tsx";
 const fixture: Machine[] = JSON.parse(JSON.stringify(machinesFixture.machines));
 const t = (text: string): string => text;
 
-/** an activity whose shown state is the given one per pane id, idle for the rest */
 function activity(states: Record<string, AgentStatus> = {}, seqs: ReadonlyMap<string, number> = new Map()): SidebarActivity {
   return { seqs: () => seqs, status: (_machineId, pane) => states[pane.pane_id] ?? "idle" };
 }
@@ -24,7 +23,6 @@ describe("agent inbox", () => {
   });
 
   describe("within a state, the Agents list's order (Settings → Within a state)", () => {
-    // two PCs with the same panes, each counting its own changes; a pane with no counter yet sorts last
     const lab: Machine = { ...JSON.parse(JSON.stringify(fixture[0])), id: "lab", name: "lab" };
     const pcs = [fixture[0]!, lab];
     const counters: Record<string, ReadonlyMap<string, number>> = {
@@ -68,7 +66,6 @@ describe("agent inbox", () => {
     const words = (row: AgentRow): string | null => drawn[row.entry.pane.pane_id] ?? null;
     expect(ids(inboxSearched(rows, "node_modules", fixture, t, words))).toEqual(["w1D:p1"]);
     expect(ids(inboxSearched(rows, "flaky checkout", fixture, t, words))).toEqual(["w1C:p1"]);
-    // what the labels matched before still matches
     expect(label(inboxSearched(rows, "export", fixture, t, words))).toEqual(["Guard the export button"]);
   });
 

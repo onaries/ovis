@@ -6,10 +6,9 @@ import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
 
 /**
- * Watches the page's sockets, from before it loads, for the frame that says the pane takes input: a key pressed
- * before that is not sent. The returned wait settles once that frame has come (at once if it already has), or fails
+ * The returned wait settles once that frame has come (at once if it already has), or fails
  * after 15 s; only the wait makes a promise and a timer, so nothing is left to reject when the page fails to load
- * first. Settling stops the timer and the watching.
+ * first.
  */
 function watchInputReady(page: Page, paneId: string): () => Promise<void> {
   let ready = false;
@@ -41,7 +40,6 @@ function watchInputReady(page: Page, paneId: string): () => Promise<void> {
   });
 }
 
-/** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
   await context.addInitScript((id) => {
@@ -77,7 +75,6 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       assert.deepEqual(inputs.slice(before).map(({ pane_id, text }) => ({ pane_id, text })),
         [{ pane_id: paneId, text: expected }], `${shortcut} must send its sequence exactly once`);
     }
-    // compositionend's timer is still pending when the deletion key arrives.
     const beforeCommit = inputs.length;
     await input.evaluate(async (element) => {
       const textarea = element as HTMLTextAreaElement;
@@ -105,7 +102,6 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       assert.equal(inputs.slice(before).some(({ text }) => text === "\x15"), false,
         "an active composition must not receive a line-deletion sequence");
     }
-    // Also verify the effect in a real readline process inside the owned pane.
     const fixture = mkdtempSync(join(tmpdir(), "herdr-command-backspace-"));
     const result = join(fixture, "line.txt");
     const script = join(fixture, "readline.cjs");

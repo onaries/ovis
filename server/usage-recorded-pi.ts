@@ -1,6 +1,6 @@
 /**
- * What the stores of Oh My Pi and Gajae Code have in common. Both grew from pi: each keeps an agent.db that is opened
- * the same way here, and both name Claude's limits alike ("anthropic:5h", "anthropic:7d", "anthropic:7d:<model>").
+ * Both grew from pi: each keeps an agent.db that is opened the same way here, and both name Claude's limits alike
+ * ("anthropic:5h", "anthropic:7d", "anthropic:7d:<model>").
  */
 import { Database, SQLiteError, constants } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
@@ -29,10 +29,6 @@ function openForReading(path: string): Database {
   return new Database(`${pathToFileURL(path).href}?immutable=1`, constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI);
 }
 
-/**
- * What `read` finds in the store at `path`, which is only read. Null where there is no record to read: no file, a
- * folder or a FIFO in its place, not a database, a store of a version without what `read` asks for, or one still busy.
- */
 export function readStore<T>(path: string, read: (db: Database) => T): T | null {
   // only a regular file is a store: opening a FIFO left at this path would wait for a writer
   try { if (!statSync(path).isFile()) return null; } catch { return null; }
@@ -49,7 +45,6 @@ export function readStore<T>(path: string, read: (db: Database) => T): T | null 
   }
 }
 
-/** The limit of Claude's a tool names `id` and labels `label`; null for one the meters do not show (extra usage) or do not know. */
 export function claudeLimit(id: string, label: string): Pick<RecordedWindow, "kind" | "scope" | "seconds"> | null {
   if (id === "anthropic:5h") return { kind: "session", scope: null, seconds: FIVE_HOURS };
   if (id === "anthropic:7d") return { kind: "week", scope: null, seconds: SEVEN_DAYS };
@@ -59,12 +54,10 @@ export function claudeLimit(id: string, label: string): Pick<RecordedWindow, "ki
   return { kind: "week", scope: /\(([^()]+)\)\s*$/.exec(label)?.[1]?.trim() || model, seconds: SEVEN_DAYS };
 }
 
-/** The reset recorded for a window of `seconds` read at `readAt`; null when it names none, or a time that cannot be this window's: not epoch ms, or later than a whole window after the read. */
 export function resetOf(reset: number | null, readAt: number, seconds: number): number | null {
   return reset !== null && reset >= EPOCH_MS_FROM && reset <= readAt + seconds * 1000 + AHEAD_MS ? reset : null;
 }
 
-/** The session, then the week, then each model's week by name. */
 export function byLength(a: RecordedWindow, b: RecordedWindow): number {
   return a.seconds - b.seconds || Number(a.scope !== null) - Number(b.scope !== null) || ((a.scope ?? "") < (b.scope ?? "") ? -1 : 1);
 }

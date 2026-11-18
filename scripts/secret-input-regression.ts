@@ -103,7 +103,6 @@ process.stdin.on("data", chunk => {
     await field.fill("fixture-secret");
     await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click();
     await field.waitFor({ state: "detached" });
-    /** The fixture took one line of that many characters, Enter counted. */
     const accepted = async (value: string, never = "Masked input never reached fixture"): Promise<void> => {
       // the file's content, not its existence: writeFileSync makes the file empty before it writes the count
       const expected = String(`${value}\r`.length);
@@ -118,7 +117,6 @@ process.stdin.on("data", chunk => {
     assert.deepEqual(sent, ["secret"]);
     assert.equal(await page.evaluate(() => JSON.stringify({ ...localStorage }).includes("fixture-secret")), false);
     assert.equal(await page.locator("body").innerText().then((text) => text.includes("fixture-secret")), false);
-    // A new request is empty; Cancel sends only Ctrl+C.
     await paneSendText(pane, "\u0010");
     await field.waitFor();
     assert.equal(await field.inputValue(), "");
@@ -168,7 +166,6 @@ process.stdin.on("data", chunk => {
     await field.waitFor({ state: "detached" });
     await accepted("edge-secret");
     assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret", "secret"]);
-    // A prompt printed with its line break and answered on the row below: the cursor was never on it, so it asks
     rmSync(result, { force: true });
     await paneSendText(pane, "\u0016");
     await field.waitFor();
@@ -187,9 +184,6 @@ process.stdin.on("data", chunk => {
     await field.waitFor({ state: "detached" });
     assert.deepEqual(sent, ["secret", "secret", "secret", "secret", "secret", "secret", "secret", "input"]);
     assert.deepEqual(errors, []);
-    // On a desktop (no key bar, which a touch screen hides while the masked input is up) the masked
-    // input floats over the grid's last rows: its arrival leaves the grid's height, the shared pty's
-    // size, alone, whether the pane types straight into the grid or through the input line.
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     try {
       await desktop.addInitScript((pane) => {
@@ -224,10 +218,6 @@ process.stdin.on("data", chunk => {
         assert.equal(await gridHeight(), resting, `the masked input keeps the grid's height (${mode} input)`);
         assert.equal(await view.evaluate(() => (window as any).gridResized), 0, `the grid's observer never fired (${mode} input)`);
         if (mode === "direct") {
-          // A desktop answers the prompt in the grid itself, as in any terminal (#1031): the keys go
-          // to the program while the masked input stands by. Regression: on a build that disables
-          // stdin for the prompt, the fixture never gets them.
-          // the count left by below-secret, as long as this one, would pass for it
           rmSync(result, { force: true });
           await view.locator(".pane-terminal .xterm-screen").click();
           await view.keyboard.type("typed-secret");

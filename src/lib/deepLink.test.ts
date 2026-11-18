@@ -25,7 +25,6 @@ describe("deep links", () => {
     expect(linkSearch(link)).toBe("?ws=w2&pane=w2%3Ap1&view=terminal");
     expect(readLink(linkSearch(link))).toEqual(link);
     expect(linkSearch({ ...link, machine: "box" }, "?debug=1&pane=old")).toBe("?debug=1&machine=box&ws=w2&pane=w2%3Ap1&view=terminal");
-    // a lens means nothing without a pane; nothing to say is no query at all
     expect(linkSearch({ machine: "local", workspace: null, pane: null, view: "chat", settings: null })).toBe("");
     expect(linkSearch({ machine: "local", workspace: null, pane: null, view: null, settings: "about" })).toBe("?settings=about");
   });
@@ -33,7 +32,6 @@ describe("deep links", () => {
   it("lands a link to the pages Agents replaced on Agents, keeping the group it names", () => {
     expect(readLink("?settings=usage&section=accounts-claude")).toMatchObject({ settings: "agents", section: "accounts-claude" });
     expect(readLink("?settings=integrations&section=guide")).toMatchObject({ settings: "agents", section: "guide" });
-    // Voice input became Chat's group and Remote PCs a group of Devices and PCs
     expect(readLink("?settings=voice&section=openai-key")).toMatchObject({ settings: "chat", section: "openai-key" });
     expect(readLink("?settings=remote&section=sidebar-pcs")).toMatchObject({ settings: "devices", section: "sidebar-pcs" });
     expect(readLink("?settings=voice")).toMatchObject({ settings: "chat", section: "voice" });
@@ -107,7 +105,6 @@ describe("resolving a link", () => {
 
   it("opens the linked pane when it is still in the linked workspace", () => {
     expect(resolveLink(two, { workspace: "w2", workspaceSlug: "herdr-web-ui", pane: "w2:p2" })).toEqual({ pane: "w2:p2", workspace: "w2", note: null });
-    // a renamed workspace keeps its links: no other workspace has the old slug
     expect(resolveLink(two, { workspace: "w3", workspaceSlug: "old-name", pane: "w3:p1" })).toEqual({ pane: "w3:p1", workspace: "w3", note: null });
   });
 

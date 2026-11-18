@@ -10,7 +10,6 @@ import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { usageCounters } from "../lib/usageCounters.ts";
 
-// the usage counts of a send (lib/usageCounters.ts): counted once the send is taken, and never in the way of the draft
 const pane = "count-pane", draftKey = `ovis:composer-draft:${pane}`;
 const otherPane = "count-other", otherKey = `ovis:composer-draft:${otherPane}`;
 const globals = ["window", "document", "navigator", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT"];

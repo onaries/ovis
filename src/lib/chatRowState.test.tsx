@@ -25,7 +25,6 @@ const toggled = (open: boolean) => act(() => details().props.onToggle({ currentT
 test("follows its default until the reader opens or closes it: a failure the turn went on from folds again", () => {
   act(() => { renderer = create(row(true)); });
   expect(details().props.open).toBe(true);
-  // the toggle its own open attribute fires on mount is no choice of the reader's
   toggled(true);
   act(() => renderer!.update(row(false)));
   expect(details().props.open).toBe(false);

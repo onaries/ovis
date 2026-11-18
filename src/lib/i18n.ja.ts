@@ -50,6 +50,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "このターンで編集したファイル",
   "Open working-tree diff for {path}": "{path} の作業ツリーの差分を開く",
   "This file is outside the pane's repository.": "このファイルはペインのリポジトリ外にあります。",
+  "A key may not have reached the terminal: the connection ended before it was confirmed.": "キーがターミナルに届いていない可能性があります: 確認される前に接続が切れました。",
   "Open PC": "PC を開く",
   "View only": "表示のみ",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "貼り付けていません: ファイルのパスに改行があり、ターミナルが Enter として受け取ります。",
@@ -130,7 +131,6 @@ const BASE: Record<string, string> = {
   "Recent folders": "最近のフォルダー",
   "Dismiss": "閉じる",
   "Input line": "入力欄",
-  // ---- settings ----
   "Settings": "設定",
   "PCs": "PC",
   "PC {name}": "PC {name}",
@@ -140,7 +140,6 @@ const BASE: Record<string, string> = {
   "Devices and PCs": "デバイスと PC",
   "Access token": "アクセストークン",
 
-  // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "ペインとコマンドを検索",
   "Switch chat / terminal": "チャット / ターミナルを切り替え",
   "Focus pane input": "ペインの入力欄にフォーカス",
@@ -153,7 +152,6 @@ const BASE: Record<string, string> = {
   "Previous workspace": "前のワークスペース",
   "Next workspace": "次のワークスペース",
 
-  // ---- agent status words (lib/status.ts) ----
   "READY": "準備完了",
   "RUN": "実行中",
   "INPUT": "応答待ち",
@@ -161,7 +159,6 @@ const BASE: Record<string, string> = {
   "BG": "BG待ち",
   "—": "—",
 
-  // ---- app header and shell ----
   "Opening link…": "リンクを開いています…",
   "Connecting to Ovis…": "Ovis に接続しています…",
   "Close workspace list": "ワークスペース一覧を閉じる",
@@ -236,7 +233,6 @@ const BASE: Record<string, string> = {
   "Alerts on in the app. Tap to turn them off": "アプリ内の通知はオンです。タップするとオフになります",
   "Alerts on while this tab is open (closed-app alerts need https, and on iPhone the home-screen app). Tap to turn them off": "このタブを開いている間は通知が届きます (アプリを閉じた後の通知には https が必要で、iPhone ではホーム画面のアプリである必要があります)。タップするとオフになります",
 
-  // ---- sidebar ----
   "Rename pane": "ペインの名前を変更",
   "Branch": "ブランチ",
   "Opening…": "開いています…",
@@ -245,7 +241,6 @@ const BASE: Record<string, string> = {
   "Close": "閉じる",
   "Rename failed: {reason}": "名前を変更できませんでした: {reason}",
 
-  // ---- PCs sidebar ----
   "Filter workspaces and agents": "ワークスペースとエージェントを絞り込む",
   "Connecting…": "接続しています…",
   "Connected": "接続済み",
@@ -282,12 +277,10 @@ const BASE: Record<string, string> = {
   "Step {n} of {total}": "ステップ {n} / {total}",
   "{done} of {total}": "{done} / {total}",
 
-  // ---- command palette ----
   "Refresh": "更新",
   "Search panes and actions": "ペインとコマンドを検索",
   "Search conversation": "会話を検索",
 
-  // ---- new workspace ----
   "Browse": "参照",
   "Cancel": "キャンセル",
   "Install": "インストール",
@@ -296,29 +289,22 @@ const BASE: Record<string, string> = {
   "Sign in": "ログイン",
   "Starting…": "起動しています…",
   "Start": "開始",
-  // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
 
-  // ---- folder browser ----
   "No matching folders": "一致するフォルダーはありません",
   "This folder cannot be opened.": "このフォルダーは開けません。",
   "Folders could not be loaded.": "フォルダーを読み込めませんでした。",
   "Unlock agent": "エージェントのロックを解除",
 
-  // ---- files ----
   "Files": "ファイル",
   "This image is {size}; download it to view.": "この画像は {size} です。表示するにはダウンロードしてください。",
   "Download": "ダウンロード",
   "Open {path}": "{path} を開く",
 
-  // ---- PC dialog ----
   "Continue": "続行",
 
-  // ---- updates ----
   "Reload app": "アプリを再読み込み",
   "Details": "詳細",
 
-
-  // ---- prompt card ----
   "Submit": "送信",
   "Recommended": "推奨",
   "Agents": "エージェント",
@@ -330,13 +316,10 @@ const BASE: Record<string, string> = {
   "Pairing code": "ペアリングコード",
   "{agent} is ready": "{agent} の準備ができました",
 
-
-  // ---- composer ----
   "Drag to resize · double-click to reset": "ドラッグでサイズ変更 · ダブルクリックでリセット",
   "Failed": "失敗",
   "Send now": "今すぐ送信",
 
-  // ---- chat view ----
   "Copied": "コピーしました",
   "Worked for {duration}": "{duration} 作業しました",
   "Copy message": "メッセージをコピー",
@@ -344,19 +327,15 @@ const BASE: Record<string, string> = {
   "{m}m": "{m}分",
   "{h}h {m}m": "{h}時間 {m}分",
 
-  // ---- terminal ----
   "The question on screen changed; check it and answer again.": "画面上の質問が変わりました。確認してもう一度回答してください。",
   "Reconnect": "再接続",
   "Discard": "破棄",
   "Undo": "元に戻す",
   "Held message — review and send": "保持中のメッセージ。確認して送信してください",
 
-
-  // ---- voice input ----
   "Dictate (hold)": "音声入力（長押し）",
   "Hold message in chat": "チャットでメッセージを保留",
   "Voice input needs HTTPS": "音声入力には HTTPS が必要です",
-  // ---- errors (lib/userError.ts) ----
   "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.": "このブラウザーはもうこの PC にサインインしていません。設定 → デバイスと PCでもう一度ペアリングしてください。",
   "That item no longer exists on the PC. Refresh and try again.": "その項目は PC にもうありません。更新してからもう一度お試しください。",
   "It changed on the PC while you were acting. Check it and try again.": "操作中に PC 側で変更されました。確認してからもう一度お試しください。",
@@ -379,20 +358,16 @@ const BASE: Record<string, string> = {
   "Try again; if it keeps failing, restart Ovis on the PC.": "もう一度お試しください。失敗が続く場合は PC で Ovis を再起動してください。",
   "The server cannot save settings: check that its state folder is writable.": "サーバーが設定を保存できません。サーバーの状態フォルダーに書き込めるか確認してください。",
 
-
-  // ---- devices ----
   "Loading…": "読み込んでいます…",
   "Done": "完了",
   "Name": "名前",
   "Recent": "最近",
   "Needs you": "応答待ち",
 
-  // ---- phone ----
   "Copy": "コピー",
   "…": "…",
   "Alerts": "通知",
   "Sending…": "送信中…",
-  // the alerts health notice over the pane and Settings → Alerts say these alike (lib/pushHealth.ts)
   "This device's push subscription is missing. Turn alerts on again.": "このデバイスのプッシュ通知の登録がありません。通知をもう一度オンにしてください。",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "このデバイスの通知の接続が切れました。通知をもう一度オンにして、接続し直してください。",
   "Turn alerts on again": "通知をもう一度オンにする",
@@ -413,7 +388,6 @@ const BASE: Record<string, string> = {
   "Queued messages": "キュー内のメッセージ",
   "Not confirmed. Check the terminal before sending again.": "送信を確認できませんでした。再送信する前にターミナルを確認してください。",
   "Too large to attach: {name} ({size}). A file can be up to {limit}.": "添付するには大きすぎます: {name}（{size}）。ファイルは {limit} まで添付できます。",
-  // ---- subscription usage ----
   "Move {name} up": "{name} を上へ移動",
   "Move {name} down": "{name} を下へ移動",
   "Subscription usage": "サブスクリプション使用量",
@@ -422,7 +396,6 @@ const BASE: Record<string, string> = {
   "{n} background tasks": "バックグラウンドタスク {n} 件",
   "Try again": "再試行",
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "リレーをオンにするとデバイスゲートが閉じます。以後、新しいブラウザーにはペアリングコードかアクセストークンが必要です。",
-  // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新しいタブ",
   "New tab with agent…": "エージェントで新しいタブ…",
   "New worktree": "新しいワークツリー",
@@ -458,7 +431,6 @@ const BASE: Record<string, string> = {
   "Change PC": "PCを切り替え",
   "Forget this PC": "このPCを削除",
   "Selected": "選択中",
-  // Recover unsent text (components/UnsentText.tsx)
   "Unsent text · {destination}": "未送信のテキスト · {destination}",
   "Text you had not sent before herdr restarted. Copy it and paste it where you need it. Nothing here is sent.": "再起動前に送信されなかったテキストです。コピーして必要な場所に貼り付けてください。自動では送信されません。",
   "Put in message box adds this text to {destination}. Nothing is sent.": "「入力欄に入れる」を押すと {destination} にテキストが入ります。送信はしません。",
@@ -663,7 +635,6 @@ const BASE: Record<string, string> = {
   "Show QR code": "QR コードを表示",
 };
 
-/** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const JA_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: { ...SETTINGS_JA, ...SETTINGS_ACCESS_JA, ...SETTINGS_COMPOSER_JA, ...SETTINGS_LAYOUT_JA, ...SETTINGS_AGENTS_JA, ...SETTINGS_HELP_JA },

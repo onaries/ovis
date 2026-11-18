@@ -7,18 +7,12 @@ import panes from "../site/demo/fixtures/panes.json";
 import { appFaces } from "./app-faces.ts";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { serveDemo } from "./demo-server.ts";
 
 // A list's markers sit outside its items, in the list's indent, and are drawn in the Chat font: in
 // a monospace face each digit and the ". " after it take a whole cell, so "1. " outgrew the old
 // fixed 20px and was cut off at the transcript's left edge (#1993), and "10." or "100." need more.
-// On the unmodified app over the demo's fixture transport, at a phone's and a desktop's width, in
-// the default face, a monospace face and a monospace face at the largest Chat size, every marker
-// of a reply's lists (1-3, 8-12, 99-100, bullets and a nested list) fits inside its list's indent;
-// in the default face a bullet list keeps its 20px indent. The marker is measured as the browser
-// draws it: its text in its own computed font. The omp pane's conversation answers TURNS; all
-// files and HTTP traffic stay in this disposable, loopback-only app and no herdr session is
-// opened. Screenshots go to UI_EVIDENCE_DIR when it is set. The user's own message numbers its
-// list as typed, skipping (1, 4): its markers read 1 and 4, not 1 and 2, and fit their indent too.
+// All files and HTTP traffic stay in this disposable, loopback-only app and no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-chat-list-markers-demo-"));
 const evidence = process.env["UI_EVIDENCE_DIR"] || null;
 if (evidence !== null) mkdirSync(evidence, { recursive: true });
@@ -101,7 +95,6 @@ async function prepareDemo(): Promise<void> {
   const index = join(app, "index.html");
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
-  // over the demo's own fetch: only this pane's conversation read is answered here
   const override = `<script>(() => {
     const demo = window.fetch;
     const turns = ${JSON.stringify(TURNS)};
@@ -161,17 +154,7 @@ async function check(browser: Browser, origin: string, width: number, testCase: 
 
 try {
   await prepareDemo();
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith("/herdr-web-ui/demo/app/")) return new Response("not found", { status: 404 });
-    let file: string;
-    try { file = decodeURIComponent(path.slice("/herdr-web-ui/demo/app/".length)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app);
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {

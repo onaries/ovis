@@ -2,8 +2,6 @@
  * A thin wrapper over libghostty-vt compiled to WebAssembly (ghostty-vt.wasm, MIT; built by
  * scripts/ghostty-vt/build.sh with the Kitty graphics protocol turned on).
  *
- * It owns one terminal and one render state. Each frame hands every changed row to the caller as
- * runs of text that share one style, and lists the Kitty images on screen with their pixels.
  * Raw cells are read a row at a time and decoded with the bit layout the module reports in
  * ghostty_type_json(), so a row costs one wasm call plus a few per style change.
  */
@@ -47,10 +45,8 @@ interface Exports {
   ghostty_kitty_graphics_image_get(image: number, key: number, out: number): number;
 }
 
-/** One run of cells in a row that share a style. */
 export interface GhosttyRun {
   x: number;
-  /** each cell's grapheme, and whether it fills two columns (Hangul, CJK, most emoji) */
   cells: { text: string; wide: boolean }[];
   fg: string | null;
   bg: string | null;
@@ -172,11 +168,9 @@ export class GhosttyVt {
   private readonly bit: Record<"codepoint" | "content_tag" | "wide" | "style_id", Bits>;
   private readonly flagsOffset: number;
   private readonly encoder = new TextEncoder();
-  /** where the bytes so far stand in a `CSI ? Pm l`, carried from one write to the next */
   private csi = CSI_GROUND;
   private param = 0;
   private sawGraphemeMode = false;
-  /** whether the last code point printed was a ZWJ, and whether an escape sequence came since the last one */
   private afterZwj = false;
   private broken = true;
 
@@ -339,7 +333,6 @@ export class GhosttyVt {
     this.check(this.x.ghostty_terminal_set(this.terminal, OPT_SCROLLBACK_MAX_LINES, this.scratch), "scrollback");
   }
 
-  /** shows the screen `rowsAboveBottom` rows up in the history (0: the newest rows) */
   scrollFromBottom(rowsAboveBottom: number): void {
     const dv = this.view();
     const behavior = this.scratch + 512;
@@ -384,10 +377,6 @@ export class GhosttyVt {
     this.check(this.x.ghostty_terminal_set(this.terminal, OPT_COLOR_PALETTE, palette), "palette");
   }
 
-  /**
-   * Snapshot the terminal and call `draw` for each row that changed since the last frame.
-   * Returns false when nothing changed, the cursor included (an arrow key moves only the cursor, #3266).
-   */
   frame(draw: (y: number, runs: GhosttyRun[]) => void): boolean {
     const x = this.x;
     this.check(x.ghostty_render_state_update(this.state, this.terminal), "render_state_update");
@@ -523,7 +512,6 @@ export class GhosttyVt {
     return { visible, x: this.getU16(RS_DATA_CURSOR_VIEWPORT_X), y: this.getU16(RS_DATA_CURSOR_VIEWPORT_Y), style: this.getU8(RS_DATA_CURSOR_VISUAL_STYLE) };
   }
 
-  /** the Kitty images on screen after the last frame(), or null when the list has not changed since the last call */
   placedImages(): GhosttyImage[] | null {
     const x = this.x;
     const dv0 = this.view();
@@ -558,7 +546,6 @@ export class GhosttyVt {
     return list;
   }
 
-  /** a stored Kitty image's pixels as RGBA, copied out of the module; null once the program deleted it */
   imagePixels(id: number): ImageData | null {
     const x = this.x;
     this.view().setUint32(this.scratch, 0, true);

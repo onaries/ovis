@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { atDay, COUNTER_SHARES, COUNTS_BUCKETS, COUNTS_INSTALLS, COUNTS_PER_INSTALL, COUNTS_SHOWN, SWITCH_DAYS_BY_VERSION, SWITCHES_BY_AGENT, counterShares, html, QUERIES, table } from "./telemetry-report.ts";
 
 /** scripts/telemetry-report.ts with a stand-in bunx on a private PATH: no wrangler, no D1. */
-
 const SCRIPT = join(import.meta.dir, "telemetry-report.ts");
 const scratches: string[] = [];
 afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
@@ -40,19 +39,15 @@ describe("telemetry report queries", () => {
   it("count each screen and way in once per install over 30 days, and add up each day's answers and alerts", () => {
     const db = new Database(":memory:");
     db.exec(readFileSync(join(import.meta.dir, "..", "telemetry", "schema.sql"), "utf8"));
-    // one today for every seeded row, so a run across UTC midnight seeds no row a day off
     const today = db.query<{ day: string }, []>("SELECT date('now') AS day").get()!.day;
     const day = (back: number) => db.query<{ day: string }, [string, string]>("SELECT date(?, ?) AS day").get(today, `-${back} days`)!.day;
     const insert = db.prepare("INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses, usage) VALUES (?, ?, '0.4.20', 'linux', 'x64', 'source', 'KR', '[]', ?)");
     const usage = (surfaces: string[], ingress: string[], answers: number, delivered: number, opened: number) =>
       JSON.stringify({ surfaces, ingress, prompt_answers: answers, alerts_delivered: delivered, alerts_opened: opened });
     insert.run(day(0), "a", usage(["browser", "ios-app"], ["local", "tailscale"], 3, 2, 1));
-    // the same install on another day counts once per screen and way in
     insert.run(day(1), "a", usage(["ios-app"], ["tailscale"], 1, 0, 0));
     insert.run(day(0), "b", usage(["ios-app"], ["lan"], 4, 5, 2));
-    // a sender from before usage: a day of use, but in no usage table
     insert.run(day(0), "c", null);
-    // older than the 30-day tables, still in the daily one
     insert.run(day(40), "d", usage(["mac-app"], ["funnel"], 7, 7, 7));
     const rows = (title: string) => db.query(QUERIES.find((query) => query.title === title)!.sql).all();
     expect(rows("Installs per kind of screen, the last 30 days")).toEqual([{ surface: "ios-app", installs: 2 }, { surface: "browser", installs: 1 }]);
@@ -78,7 +73,6 @@ describe("telemetry report: button counts", () => {
     counts.run(day(1), "a", "0.5.5", side({ chat_send: 2, view_terminal_claude: 1, view_terminal_by_header: 1 }, ["composer"]), null);
     counts.run(day(2), "a", "0.5.5", side({ chat_send: 4 }, ["composer"]), side({ chat_send: 1 }));
     counts.run(day(1), "b", "0.5.6", side({}, ["composer", "composer_voice"]), null);
-    // today has not ended, and a week and a day ago is out of the window
     counts.run(day(0), "c", "0.5.6", side({ chat_send: 4 }), null);
     counts.run(day(8), "d", "0.5.5", side({ chat_send: 4 }), null);
     active.run(day(1), "a", '["claude","codex"]');
@@ -100,7 +94,6 @@ describe("telemetry report: button counts", () => {
       { width: "wide", agent: "claude", running: 1, switched: 0 },
     ]);
     expect(rows(SWITCH_DAYS_BY_VERSION)).toEqual([{ version: "0.5.5", days: 2, days_switched: 1 }, { version: "0.5.6", days: 1, days_switched: 0 }]);
-    // install a sent chat_send on two days, in 3-9 and 30+: its own value is the lower middle, and it is the only one
     expect(counterShares(rows(COUNTS_INSTALLS), buckets, rows(COUNTS_PER_INSTALL))).toEqual([
       { width: "narrow", counter: "chat_send", installs: 1, of: 2, percent: 50, middle_install_day: "3-9" },
       { width: "narrow", counter: "view_terminal_by_header", installs: 1, of: 2, percent: 50, middle_install_day: "1-2" },
@@ -113,14 +106,10 @@ describe("telemetry report: button counts", () => {
   it("takes the middle install, each install first given its own middle day: a heavy install does not carry it", () => {
     const shares = (perInstall: [string, number[]][]) => counterShares([{ width: "wide", installs: 10 }], [{ width: "wide", counter: "chat_send", installs: perInstall.length }],
       perInstall.map(([install, buckets]) => ({ width: "wide", counter: "chat_send", install, buckets: buckets.join(",") })))[0]!;
-    // one install in 30+ on six days, five installs once in 1-2: the middle install is a light one
     expect(shares([["heavy", [4, 4, 4, 4, 4, 4]], ["a", [1]], ["b", [1]], ["c", [1]], ["d", [1]], ["e", [1]]]).middle_install_day).toBe("1-2");
-    // two installs, one in 1-2 and one in 30+: no single middle range, both are named
     expect(shares([["a", [1]], ["b", [4]]]).middle_install_day).toBe("1-2 .. 30+");
     expect(shares([["a", [3]], ["b", [3, 2, 3]], ["c", [1]]]).middle_install_day).toBe("10-29");
-    // the base it is a share of is printed with it: a share over one install says so
     expect(shares([["a", [2]]])).toMatchObject({ installs: 1, of: 10, percent: 10 });
-    // the base comes with the users from one statement; were it ever smaller, the share is a dash, not a capped 100%
     expect(counterShares([{ width: "wide", installs: 1 }], [{ width: "wide", counter: "chat_send", installs: 2 }], []).at(0)).toMatchObject({ installs: 2, of: 1, percent: "-" });
     expect(counterShares([], [{ width: "wide", counter: "chat_send", installs: 1, of: 4 }], []).at(0)).toMatchObject({ installs: 1, of: 4, percent: 25 });
     expect(atDay("SELECT 1 WHERE day >= date('now', '-7 days') AND day < date('now')", "2026-11-15")).toBe("SELECT 1 WHERE day >= date('2026-11-15', '-7 days') AND day < date('2026-11-15')");
@@ -139,9 +128,7 @@ describe("telemetry report: button counts", () => {
     counts.run(day, "c", side({ view_chat_claude: 2 }));
     active.run(day, "a", '["claude"]');
     active.run(day, "b", '["claude"]');
-    // c opened the app before it started Claude: its active message named no agent
     active.run(day, "c", "[]");
-    // and a shell pane: no visit names shell, so its row shows switches alone, never a share of 100% by construction
     counts.run(day, "d", side({ view_terminal_shell: 1 }));
     active.run(day, "d", "[]");
     expect(db.query(QUERIES.find((query) => query.title === SWITCHES_BY_AGENT)!.sql).all()).toEqual([
@@ -167,7 +154,6 @@ describe.skipIf(process.platform === "win32")("telemetry report", () => {
     const result = await run(false);
     expect(result.exitCode).toBe(0);
     const sent = result.calls.map((call) => call.split("--command ")[1]!);
-    // one cut-off day for the whole run, in every query: none works out today for itself
     const days = new Set(sent.flatMap((sql) => [...sql.matchAll(/date\('(\d{4}-\d{2}-\d{2})'/g)].map((match) => match[1])));
     expect(days.size).toBe(1);
     expect(sent.some((sql) => sql.includes("date('now'"))).toBe(false);
@@ -178,11 +164,9 @@ describe.skipIf(process.platform === "win32")("telemetry report", () => {
       "SELECT COUNT(DISTINCT install_id) FROM active WHERE day >= date('now', '-6 days');",
       "SELECT COUNT(DISTINCT install_id) FROM active WHERE day >= date('now', '-29 days');",
       "SELECT harness.value AS harness, COUNT(DISTINCT active.install_id) AS installs FROM active CROSS JOIN json_each(active.harnesses) AS harness WHERE active.day >= date('now', '-29 days') GROUP BY harness.value ORDER BY installs DESC, harness;",
-      // the usage tables' results are checked against stored rows above (telemetry report queries)
       ...["Installs per kind of screen, the last 30 days", "Installs per way in, the last 30 days", "Prompt answers and pane alerts per day"].map((title) => QUERIES.find((query) => query.title === title)!.sql),
       "SELECT country, COUNT(*) FROM (SELECT (SELECT country FROM events WHERE install_id = e.install_id AND country IS NOT NULL ORDER BY rowid DESC LIMIT 1) AS country FROM events e GROUP BY install_id) GROUP BY country ORDER BY 2 DESC;",
       "SELECT day, country, COUNT(*) FROM active WHERE day >= date('now', '-27 days') GROUP BY day, country ORDER BY day, country;",
-      // the button counts' tables, checked against stored rows above (telemetry report: button counts)
       ...[COUNTS_INSTALLS, COUNTS_BUCKETS, COUNTS_SHOWN, COUNTS_PER_INSTALL, SWITCHES_BY_AGENT, SWITCH_DAYS_BY_VERSION].map((title) => QUERIES.find((query) => query.title === title)!.sql),
     ]);
     expect(QUERIES).toHaveLength(16);

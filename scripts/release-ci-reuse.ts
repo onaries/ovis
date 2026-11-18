@@ -1,7 +1,4 @@
 /**
- * Whether a Release run may take main's own CI as the validation of its commit instead of running
- * ci.yml a second time. .github/workflows/release-validate.yml asks before it calls ci.yml.
- *
  * The answer is yes only for the one push run of ci.yml on main for that exact commit, in this
  * repository, completed with success on its first or second attempt, with every job of ci.yml in
  * it and passed. Anything else is a no, and release-validate.yml then runs ci.yml as it always
@@ -24,11 +21,6 @@ import { appendFileSync, writeSync } from "node:fs";
 
 export const CI_WORKFLOW = ".github/workflows/ci.yml";
 
-/**
- * ci.yml's jobs by the name a run lists them under, the matrix job aside. A push run skips none of
- * them. scripts/release-ci-reuse.test.ts holds this list to ci.yml: a job added, renamed or given a
- * condition a push run may not meet fails the unit suite until this file follows.
- */
 export const CI_JOBS = [
   "Detect changes",
   "Native Windows install",
@@ -41,39 +33,30 @@ export const CI_JOBS = [
   "Integration and browser",
 ];
 const SHARD = "${{ strategy.job-total > 1 && format(' {0}/{1}', matrix.shard, strategy.job-total) || '' }}";
-/** The `name:` of ci.yml's one matrix job, as written there. */
 export const CI_MATRIX_JOB = `Browser regression (other scripts${SHARD})`;
-/** The sizes of that matrix: three parts on the self-hosted PC, four on GitHub's runners, five on the VM runners (ci.yml's `shard` lists). */
 export const CI_SHARD_COUNTS = [3, 4, 5];
-/** The names the matrix job runs under for one size: its bare name alone, or `k/N` for every k. */
 export const matrixJobs = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => CI_MATRIX_JOB.replace(SHARD, count > 1 ? ` ${index + 1}/${count}` : ""));
 
 /** Main's push run takes 15 to 30 minutes, so 40 cover one that began when the Release run did. */
 const WAIT_SECONDS = 2400;
 const POLL_MS = 20_000;
-/** A read that failed is tried again sooner than a run still going is looked at again. */
 const RETRY_MS = 5_000;
 const CALL_TIMEOUT_MS = 20_000;
-/** GitHub failing to answer this many times in a row is a no. */
 const API_ATTEMPTS = 3;
 
 export type Get = (url: string, init: RequestInit) => Promise<Response>;
 export interface Commit { repository: string; sha: string }
 export interface Run { id: number; status: string; conclusion: string | null; attempt: number }
-/** One reading of GitHub. `failed`: main's CI failed on this commit, which the Release run reports as a warning. */
 export type Finding = { answer: "yes"; run: number } | { answer: "wait"; why: string } | { answer: "no"; why: string; failed?: true };
 export interface Outcome { green: boolean; run: number | null; why: string; failed?: true }
-/** `timeout`: the signal that ends one call to GitHub after `ms` (AbortSignal.timeout when left out). */
 export interface Clock { now: () => number; sleep: (ms: number) => Promise<unknown>; log: (line: string) => void; timeout?: (ms: number) => AbortSignal }
 
 const no = (why: string, failed = false): Finding => ({ answer: "no", why, ...(failed ? { failed: true as const } : {}) });
-/** A conclusion that says the checks failed; a run a newer push cancelled, or a job that never ran, did not fail. */
 const failure = (conclusion: string | null): boolean => conclusion === "failure" || conclusion === "timed_out" || conclusion === "startup_failure";
 const record = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const whole = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-/** A value GitHub sent, for a message: short and on one line. */
 const shown = (value: unknown): string => (JSON.stringify(value ?? null) ?? "null").slice(0, 120);
 /** A message for the job's log, where a line that starts with `::` is a workflow command. */
 const oneLine = (text: string): string => text.replace(/\s+/g, " ");
@@ -85,8 +68,7 @@ export const jobsPath = ({ repository }: Commit, run: number): string =>
   `/repos/${repository}/actions/runs/${run}/jobs?filter=latest&per_page=100`;
 
 /**
- * The one push run of ci.yml on main for `commit` in GitHub's list of runs, or why the list holds
- * no such single run. The request already filters by commit, event and branch; every field is
+ * The request already filters by commit, event and branch; every field is
  * checked again here, so a filter GitHub ignored is a no rather than another run taken on trust.
  */
 export function pushRun(answer: unknown, commit: Commit): Run | string {
@@ -117,17 +99,13 @@ export function pushRun(answer: unknown, commit: Commit): Run | string {
   return { id, status, conclusion, attempt };
 }
 
-/** Why `run` is neither taken nor waited for, whatever its jobs say; null when its jobs decide. */
 export function runProblem(run: Run): Finding | null {
-  // one rerun of the failed jobs is what a merge is allowed too; a run that needed more proves little
   if (run.attempt !== 1 && run.attempt !== 2) return no(`main's run ${run.id} is on attempt ${run.attempt}, and only a first or second attempt counts`);
   if (run.status === "completed") return run.conclusion === "success" ? null : no(`main's run ${run.id} ended ${shown(run.conclusion)}`, failure(run.conclusion));
   if (run.status === "queued" || run.status === "in_progress") return null;
-  // pending: behind another run of main in ci.yml's concurrency group, with no saying when it starts
   return no(`main's run ${run.id} is ${shown(run.status)}, which is not a run to wait for`);
 }
 
-/** Why `names` are not exactly ci.yml's jobs, each once, with the matrix job in one of its sizes; null when they are. */
 export function namesProblem(names: string[]): string | null {
   const sorted = [...names].sort();
   const expected = CI_SHARD_COUNTS.map((count) => [...CI_JOBS, ...matrixJobs(count)].sort());
@@ -145,7 +123,7 @@ export function namesProblem(names: string[]): string | null {
 }
 
 /**
- * What the jobs of `run`'s last attempt say. A run still going is waited for while none of its jobs
+ * A run still going is waited for while none of its jobs
  * has ended without passing; a completed one is a yes only when every job belongs to that attempt
  * of that run, passed, and the names are ci.yml's. A skipped job is not a passed one.
  */
@@ -177,7 +155,6 @@ export function jobsFinding(answer: unknown, run: Run, commit: Commit): Finding 
   return problem ? no(`run ${run.id}: ${problem}`) : { answer: "yes", run: run.id };
 }
 
-/** One reading of GitHub: the list of runs, then that run's jobs. `read` throws when GitHub cannot be read. */
 export async function observe(commit: Commit, read: (path: string) => Promise<unknown>): Promise<Finding> {
   const run = pushRun(await read(runsPath(commit)), commit);
   if (typeof run === "string") return no(run);
@@ -185,8 +162,7 @@ export async function observe(commit: Commit, read: (path: string) => Promise<un
 }
 
 /**
- * Reads a path of the Actions API as JSON; throws on a transport error, a status that is not 2xx or a
- * body that is not JSON. Every call carries a signal that ends it after CALL_TIMEOUT_MS, so a GitHub
+ * Every call carries a signal that ends it after CALL_TIMEOUT_MS, so a GitHub
  * that accepts the request and never answers is a failed read, not a job that hangs.
  */
 export const reader = (api: string, token: string | undefined, get: Get = fetch, timeout: (ms: number) => AbortSignal = (ms) => AbortSignal.timeout(ms)) => async (path: string): Promise<unknown> => {
@@ -202,10 +178,6 @@ export const reader = (api: string, token: string | undefined, get: Get = fetch,
   try { return JSON.parse(body) as unknown; } catch { throw new Error("GitHub's answer is not JSON"); }
 };
 
-/**
- * Reads GitHub until it says yes or no, or `waitMs` have passed: a run still going, and a read that
- * failed fewer than API_ATTEMPTS times in a row, are asked about again every `pollMs`.
- */
 export async function reuse(commit: Commit, read: (path: string) => Promise<unknown>, waitMs: number, clock: Clock, pollMs = POLL_MS): Promise<Outcome> {
   const deadline = clock.now() + waitMs;
   let failures = 0;
@@ -230,7 +202,6 @@ export async function reuse(commit: Commit, read: (path: string) => Promise<unkn
   }
 }
 
-/** The whole check, from the job's environment. It answers no rather than throw. */
 export async function main(env: Record<string, string | undefined>, io: Clock & { get: Get }): Promise<Outcome> {
   const refuse = (why: string): Outcome => ({ green: false, run: null, why });
   const revalidate = env["REVALIDATE"] ?? "";
@@ -238,7 +209,6 @@ export async function main(env: Record<string, string | undefined>, io: Clock & 
   const commit = { repository: env["GITHUB_REPOSITORY"] ?? "", sha: env["GITHUB_SHA"] ?? "" };
   if (!/^[\w.-]+\/[\w.-]+$/.test(commit.repository) || !/^[0-9a-f]{40}$/.test(commit.sha)) return refuse("GITHUB_REPOSITORY or GITHUB_SHA does not name a commit");
   const seconds = env["RELEASE_CI_WAIT_SECONDS"] ?? "";
-  // a wait that cannot be read is no wait: a run already green is still taken, one still going is not
   const waitMs = seconds === "" ? WAIT_SECONDS * 1000 : /^\d{1,5}$/.test(seconds) ? Number(seconds) * 1000 : 0;
   try {
     return await reuse(commit, reader(env["GITHUB_API_URL"] || "https://api.github.com", env["GH_TOKEN"] || undefined, io.get, io.timeout), waitMs, io);
@@ -247,13 +217,11 @@ export async function main(env: Record<string, string | undefined>, io: Clock & 
   }
 }
 
-/** The two lines for $GITHUB_OUTPUT: a run id only beside a yes, and a yes only beside a run id. */
 export function outputLines(outcome: Outcome): string {
   const green = outcome.green === true && whole(outcome.run) && outcome.run > 0;
   return `green=${green}\nrun=${green ? outcome.run : ""}\n`;
 }
 
-/** What the Release run shows for the outcome: a line in the log, an annotation and the job summary. */
 function report(outcome: Outcome, env: Record<string, string | undefined>): void {
   const line = oneLine(outcome.green
     ? `${outcome.why}: this run does not run CI again.`

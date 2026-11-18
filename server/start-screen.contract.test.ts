@@ -29,8 +29,6 @@ beforeAll(async () => {
   }, undefined, 12000);
   await herdrRpc("pane.send_text", { pane_id: codexPane, text: `clear; printf '%s\\n' '  >_ OpenAI Codex (v0.163.0)' '' '› Ask Codex to do anything' '' '  GPT-6.1-Sol low · /tmp/project'; printf '? for shortcuts codex_%s\\n' ready_contract; exec cat\n` });
   await codexReady;
-  // an earlier Codex's frame left in the history above the live one, and the terminal scrolled up
-  // to it (as another device can): the scrolled-to footer never states the model
   const scrolled = await workspaceCreate({ cwd: root, label: "ovis-test-start-screen-scrolled" });
   workspaces.push(scrolled.workspace.workspace_id);
   scrolledPane = scrolled.root_pane.pane_id;
@@ -107,9 +105,7 @@ it("carries the model a Codex without a session states with the scrollback stand
 });
 
 it("names no model while the terminal is scrolled up to an older Codex frame, and the live one once back at the bottom", async () => {
-  // scrolled up, the viewport is history and nothing proves the live screen: no model, not the old one
   expect(await read(scrolledPane)).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
-  // the read moved nothing: the terminal stays where it was scrolled to
   expect((await paneScrollInfo(scrolledPane))?.offset_from_bottom).toBe(scrolledTop);
   expect((await paneScroll(scrolledPane, 0))?.offset_from_bottom).toBe(0);
   expect(await read(scrolledPane)).toEqual({

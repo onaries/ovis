@@ -1,5 +1,3 @@
-// The bundle is launched only through SSH. Keep it alive after the tunnel closes;
-// herdr owns the terminal processes and no disconnect should terminate their work.
 import "./adopt-legacy-env.ts";
 import { createServer } from "./index.ts";
 import { ROOT } from "./entries.ts";
@@ -78,9 +76,9 @@ try {
     try {
       const file = lstatSync(path);
       if (file.isFile() && (uid === undefined || file.uid === uid) && file.mtimeMs < cutoff) rmSync(path);
-    } catch { /* gone, inaccessible, or another start already removed it */ }
+    } catch {}
   }
-} catch { /* housekeeping must not block starting the bridge */ }
+} catch {}
 const report = (code: "herdr_sessions_found" | "herdr_session_gone", sessions: Awaited<ReturnType<typeof discoverHerdrSessions>>, refusal?: string) => {
   const result = JSON.stringify({ code, sessions });
   const resultPath = process.env["HERDR_REMOTE_RESULT"];
@@ -95,7 +93,6 @@ if (chosenSocket) {
   if (status === "gone") return report("herdr_session_gone", (await discoverHerdrSessions()).filter((found) => found.socket_path !== chosenSocket));
 }
 if (windows) rmSync(windowsStartupStatus(dirname(descriptor), session), { force: true });
-// the lock records its owner's birth: a PID that now belongs to another process does not block this start
 const lock = acquireOwnerDirectory(descriptor + ".lock", { running: "Another bridge is starting; retry shortly", starting: "Another bridge is starting; retry shortly" });
 try {
   let existing = false;

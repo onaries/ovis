@@ -1,10 +1,3 @@
-/**
- * Attach files from a phone's terminal lens (#1633), on the real server and an owned pane: off by
- * default nothing new is drawn; turned on, the key bar's Attach key in direct typing and the input
- * line's Attach button open the system picker, store each picked file beside the pane through
- * POST /api/pane/image, and put the quoted paths into the terminal (no Enter) or the line at its
- * caret (nothing sent).
- */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +27,6 @@ async function openPhone(browser: Browser, origin: string, pane: string, attach:
     sent.push(frame);
     for (const wake of waiting.splice(0)) wake();
   }));
-  /** the next typed frame, subscribed before the action that sends it */
   const nextFrame = (): Promise<void> => new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("no terminal input arrived")), 10_000);
     waiting.push(() => { clearTimeout(timer); resolve(); });
@@ -45,7 +37,6 @@ async function openPhone(browser: Browser, origin: string, pane: string, attach:
   return { context, page, errors, sent, nextFrame };
 }
 
-/** picks `files` through the picker `open` raises, and resolves to the stored paths in pick order */
 async function pick(page: Page, open: () => Promise<void>, files: Array<{ name: string; mimeType: string; buffer: Buffer }>): Promise<string[]> {
   const stored: string[] = [];
   // a wrong answer fails the pick where it is awaited, not the run from a handler; once every file is stored the
@@ -69,13 +60,11 @@ async function pick(page: Page, open: () => Promise<void>, files: Array<{ name: 
   assert.equal(picker.isMultiple(), true, "the picker takes several files");
   await picker.setFiles(files);
   await responses;
-  // each file is on this PC's disk beside the pane, byte for byte
   for (const [index, path] of stored.entries()) assert.deepEqual(readFileSync(path), files[index]!.buffer, `${files[index]!.name} is stored as picked`);
   return stored;
 }
 
 export async function checkTerminalAttach(browser: Browser, origin: string, pane: string): Promise<void> {
-  // off by default: the input line and the key bar are as they were
   const plain = await openPhone(browser, origin, pane, false);
   assert.equal(await plain.page.locator('.key-bar [data-key="attach"]').count(), 0, "no Attach key by default");
   await plain.page.getByRole("button", { name: "Input line", exact: true }).click();
@@ -85,7 +74,6 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   await plain.context.close();
 
   const { context, page, errors, sent, nextFrame } = await openPhone(browser, origin, pane, true);
-  // direct typing: a key beside the keyboard control; the paths go to the terminal as a drop's do, no Enter
   const key = page.locator('.key-bar [data-key="attach"]');
   assert.equal(await key.getAttribute("aria-label"), "Attach files");
   assert.equal(await page.locator('.key-bar [data-key="keyboard"] + [data-key="attach"]').count(), 1, "the Attach key follows the keyboard control");
@@ -101,7 +89,6 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   assert.deepEqual(sent.slice(typed).map((frame) => ({ type: frame.type, text: unbracket(frame.text ?? "") })), [{ type: "input", text: expected }], "the quoted paths alone, with no Enter");
   console.log("PASS the key bar's Attach key stores picked files beside the pane and types their paths without Enter");
 
-  // the input line: a button before Insert and Send; the paths go in at the caret and nothing is sent
   await page.getByRole("button", { name: "Input line", exact: true }).click();
   const line = page.getByRole("textbox", { name: "Terminal input line", exact: true });
   await line.fill("cat ");
@@ -114,7 +101,6 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "the line still fits a 390 wide screen");
   await line.fill("");
 
-  // an edit while the picker is up: the paths are not for that line any more
   await line.fill("echo ");
   const opened = page.waitForEvent("filechooser");
   await button.click();
@@ -124,7 +110,6 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   await page.locator(".terminal-input-note", { hasText: "Not pasted: the line or the terminal changed meanwhile. Paste again." }).waitFor();
   assert.equal(await line.inputValue(), "echo changed ");
 
-  // a key-bar upload still on its way when the user turns to the input line types nothing behind it
   await line.fill("");
   await page.getByRole("button", { name: "Input line", exact: true }).click();
   await page.locator(".terminal-input").waitFor({ state: "detached" });
@@ -132,7 +117,6 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   const held = new Promise<void>((resolve) => { release = resolve; });
   let arrived: () => void = () => {};
   const reached = new Promise<void>((resolve) => { arrived = resolve; });
-  // installed before the click that uploads, so the upload cannot pass before the route holds it
   await page.route("**/api/pane/image", async (route) => { arrived(); await held; await route.continue(); });
   const chooser = page.waitForEvent("filechooser");
   await key.click();
@@ -145,11 +129,9 @@ export async function checkTerminalAttach(browser: Browser, origin: string, pane
   release();
   const heldAnswer = await answered;
   await heldAnswer.finished();
-  // the upload stored its file as any other: it is a stored answer, not a refused one, that must type nothing
   assert.equal(heldAnswer.status(), 200, "the held upload is stored");
   assert.equal(typeof ((await heldAnswer.json()) as { path?: unknown }).path, "string", "the held upload answers its stored path");
   await page.unroute("**/api/pane/image");
-  // the paste would follow the stored answer within a frame: two frames after it, nothing went
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   assert.deepEqual(sent.slice(quiet), [], "an upload for direct typing types nothing once the input line is up");
   assert.deepEqual(errors, []);

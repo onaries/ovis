@@ -58,6 +58,7 @@ describe("summaryOf", () => {
     const segmenter = Object.getOwnPropertyDescriptor(Intl, "Segmenter");
     Reflect.deleteProperty(Intl, "Segmenter");
     try {
+      // a copy of the module of its own, loaded while the API is missing, as an older browser loads the bundle
       const copy = "./pane-summary.ts?without-segmenter";
       const bare = await import(copy) as typeof import("./pane-summary.ts");
       const text = `${"a".repeat(PANE_SUMMARY_TEXT_MAX - 1)}\u{1F600}b`;

@@ -11,7 +11,6 @@ const pane: HerdrPane = { pane_id: "chat-guard", workspace_id: "w", tab_id: "t",
 beforeEach(() => {
   spyOn(client, "paneGet").mockResolvedValue(pane);
   spyOn(client, "paneProcessInfo").mockResolvedValue(undefined);
-  // pi's box, read before the send (composer.ts freeAgentInput): empty
   spyOn(client, "paneRead").mockResolvedValue({ text: "" } as Awaited<ReturnType<typeof client.paneRead>>);
 });
 
@@ -20,7 +19,6 @@ const submitter = () => createSubmitText({
   SUBMIT_DEADLINE_MS: 1000, TYPED_SETTLE_MS: 0, DRAFT_CLEAR_WAIT_MS: 0, DRAFT_CLEAR_POLL_MS: 0, SUBMIT_DELAY_MS: 0,
 });
 
-/** A sender that may type until herdr is reached, then watches: herdrRpc asks the guard once connected. */
 function senderLeavesWhileConnecting() {
   let watching = false;
   const authorize = () => { if (watching) throw new client.HerdrError("read_only", "this connection can only watch"); };

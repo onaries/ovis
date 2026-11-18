@@ -1,11 +1,9 @@
-/* Settings → Appearance → Theme file: the link to the format and Import on one line, at the row's end */
 .theme-file-actions {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
 }
 
-/* Settings → Appearance: the themes imported from a file, a name and its sides on a line with its Remove */
 .theme-files {
   display: flex;
   flex-direction: column;

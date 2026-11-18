@@ -74,7 +74,6 @@ describe("a pending row's refusal note", () => {
   });
 
   it("says why a message is held for a screen waiting in the terminal in the reader's language, not the bridge's English", () => {
-    // what the bridge holds a queued message with when one of Codex's own screens has the input (server/core/pending.ts)
     const reason = "Codex has one of its own screens open in the terminal; close it there, then send";
     for (const language of ["ko", "ja", "zh"] as const) {
       const note = translate(language, "Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
@@ -119,7 +118,6 @@ describe("a pending row's refusal note", () => {
     }
   });
 
-  // #511: a held message whose paste was left in the terminal's input line tells where it is, in every language
   it("says plainly that a held message sits in the terminal's input line", () => {
     for (const language of ["en", "ko", "ja", "zh"] as const) {
       const html = render("pasted_not_sent", "The message is in the terminal's input line, not sent; clear it or press Enter there", [language], true, "uncertain");

@@ -1,4 +1,3 @@
-/** Fictional agent processes -> real readers and API -> the chat says why it has no conversation, at 1280 and 390. */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +10,6 @@ import { SLEEP } from "./fixtures/sleep.ts";
 
 if (process.platform !== "linux") { console.log("SKIP fictional agent processes require Linux"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-chat-unavailable-"));
-// droid: an agent herdr knows and Ovis has no reader for. claude: one with a reader, before it records a session
 const cases = [
   { agent: "droid", words: "Ovis can't read Droid conversations yet. Use the terminal to work with it." },
   { agent: "claude", words: "Claude Code has not recorded a conversation Ovis can find for this pane yet." },
@@ -54,7 +52,6 @@ try {
       }
       await reason.getByRole("button", { name: "Open Terminal" }).click();
       await page.locator(`.pane-frame[data-layout-pane="${pane}"] .xterm`).first().waitFor();
-      // the terminal itself, not a peek at a command the chat never ran (whose banner would read " ran")
       assert.equal(await page.locator(".terminal-banner-command").count(), 0, "no command banner after Open Terminal");
       assert.deepEqual(errors, []);
       await page.close();

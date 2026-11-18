@@ -16,6 +16,14 @@ export interface ListItem {
   content: InlineNode[];
   checked?: boolean;
   blocks?: MarkdownBlock[];
+  /**
+   * An ordered item's number as written, when its list's numbers neither count up from the first
+   * nor all repeat it: `1.` then `4.` shows 1 and 4, as typed, where markdown would renumber them
+   * 1 and 2 and change what was said. Absent, so the list counts up from its first number, from a
+   * list that counts up; from one whose first two items share a number (`1.` `1.` …, markdown's way
+   * to let the numbers count), so a `2.` arriving in a streamed reply changes no number already on
+   * screen; and from one holding a number past `LIST_NUMBER_LIMIT`, which the browser cannot draw.
+   */
   number?: number;
 }
 
@@ -78,6 +86,11 @@ export function webLikeHref(target: string): string | null {
   return /^www\./i.test(host!) || path !== undefined ? `https://${value}` : null;
 }
 
+/**
+ * A path that begins with two separators (`//nas/work/a.md`, a network share on a Windows PC) stays a
+ * link: whether it opens is the server's to say, which knows its system and where its panes work
+ * (server/windows-share.ts).
+ */
 export function markdownFileTarget(href: string): string | null {
   const value = href.trim();
   if (/^file:\/\/\//i.test(value)) return fileUriPath(value);
@@ -87,6 +100,8 @@ export function markdownFileTarget(href: string): string | null {
   if (path === "" || /^[a-z][a-z0-9+.-]*:/i.test(path) || (path !== target && !/[./]/.test(path))) return null;
   let decoded = path;
   try { decoded = decodeURIComponent(path); } catch {}
+  // a control character belongs to no path, an encoded `%3A12` or `%23L12` names the file, not a
+  // line, and an encoded space at either end would be trimmed away by the viewer
   if (/[\u0000-\u001f\u007f]|(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$|^\s|\s$/.test(decoded)) decoded = path;
   return decoded + target.slice(path.length);
 }
@@ -99,6 +114,7 @@ export function markdownFileNode(href: string, children: InlineNode[]): InlineNo
     ? { type: "file", path, children } : { type: "file", path, written, children };
 }
 
+/** A bare URL without the punctuation that closes the sentence around it (GFM's autolink rule). */
 export function trimUrl(url: string): string {
   let end = url.length;
   let opened = 0;
@@ -131,12 +147,20 @@ function codexFileCitation(token: string): { path: string; label: string } | nul
     at = attribute.lastIndex;
   }
   const path = values.get("path");
+  // as a file:/// link (fileUri.ts): an absolute local path, never a network share however its separators are written
   if (!path || !(/^(?:\/|[A-Za-z]:[\\/])/.test(path)) || /^[\\/]{2}/.test(path) || /[\x00-\x1f\x7f]/.test(path)
     || !["source", "output"].includes(values.get("purpose") ?? "") || values.has("mode")) return null;
   const label = path.split(/[\\/]/).pop();
   return label ? { path, label } : null;
 }
 
+/**
+ * The marks in a line, left to right, as one search of the line for the pattern found them. That
+ * search looks from every `[`, `\(` and `_` to the end of the line for what closes it, so a long
+ * line of them that never close took a minute. Here the pattern is tried only where a mark can
+ * start, and where a closer may be far away, only if one is there: each closer is looked for
+ * once, for every opener before it.
+ */
 export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|\*[^*\n]+\*(?!\*)|_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
   const emphasis = /_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
@@ -161,6 +185,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   const afterNonSpace = (index: number): boolean => /\S/.test(source[index - 1] ?? "");
   const lineEnd = next(/\n/g);
   const citationEnd = next(/}/g);
+  // `.` stops at these, and a formula is `.+?`
   const mathBreak = next(/[\n\r\u2028\u2029]/g);
   const mathClose = next(/\\\)/g);
   const dollarClose = next(/\$/g);
@@ -280,6 +305,11 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
 // `s`: the text may hold a line separator (U+2028) that `.` would stop at, and the pattern then
 // tries every split of the spaces before it; with it the line is an item, as it reads
 const listLine = /^(\s*)([-*]|\d+\.)\s+(.+)$/s;
+/**
+ * The line under a table's header: two or more cells of dashes (`---`, `:-:`; one dash is enough, as on GitHub), with or without
+ * the outer pipes. Read cell by cell: one pattern for the whole line tries every way to share
+ * a run of spaces between its parts, and a long blank line takes seconds.
+ */
 export function isTableSeparator(line: string): boolean {
   let row = line.trim();
   if (row.startsWith("|")) row = row.slice(1);
@@ -316,6 +346,7 @@ function startsBlock(lines: string[], index: number, html = false, visualization
     || startsTable(lines, index);
 }
 
+/** An item's text, with a GitHub task box (`[x]`, `[X]`, `[ ]`) read off its start. */
 function listItem(text: string): ListItem {
   const task = /^\[([ xX])\](?:\s+(.*))?$/.exec(text);
   if (task === null) return { content: parseInline(text) };
@@ -357,6 +388,7 @@ function parseList(lines: string[], start: number, visualizations = false): { bl
         const item = block.items.at(-1)!;
         const last = item.blocks?.at(-1);
         if (last === undefined) {
+          // added to, not copied: an item of thousands of lines copies itself at every one
           item.content.push({ type: "text", value: " " });
           for (const node of parseInline(line.trim())) item.content.push(node);
         } else {
@@ -391,6 +423,7 @@ function parseList(lines: string[], start: number, visualizations = false): { bl
   return { block, next: index };
 }
 
+/** KaTeX reads a formula one call per group: nested deeper than this, it is shown as its source. */
 const MAX_MATH_DEPTH = 100;
 
 /**
@@ -424,6 +457,10 @@ export function foldCode(value: string): { head: string; lines: number } | null 
   return { head: lines.slice(0, FOLDED_CODE_LINES).join("\n"), lines: lines.length };
 }
 
+/**
+ * Past this many characters an output folds even in few lines: one long line wraps into hundreds on
+ * a phone. About 20 wrapped lines on a phone, as the line fold shows.
+ */
 export const FOLD_OUTPUT_CHARS = 1000;
 
 export function foldToolOutput(output: string): { head: string; lines: number | null } | null {
@@ -522,6 +559,7 @@ export function parseMarkdown(source: string, depth = 0, html = false, visualiza
     if (/^\s*>/.test(line)) {
       const quoted: string[] = [];
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
+      // a line of thousands of ">" (text nobody wrote by hand) would otherwise overflow the stack
       blocks.push({ type: "blockquote", blocks: depth < MAX_QUOTE_DEPTH ? parseMarkdown(quoted.join("\n"), depth + 1, html, visualizations)
         : [{ type: "paragraph", lines: quoted.map((quotedLine) => parseInline(quotedLine)) }] });
       continue;

@@ -1,3 +1,9 @@
+/**
+ * The pairing offer a server shows to a phone: which server it is, the public key to pin, and the
+ * relay to reach it through. It travels in the URL fragment (`${appBase}/s/${server_id}/#offer=<base64url JSON>`),
+ * which a browser never sends to any server. The path carries the server_id too, so one origin can
+ * hold a PWA scope per PC; decodeOffer refuses a URL whose path and payload name different servers.
+ */
 import { importPublicKey } from "./relay-e2ee.ts";
 import { SERVER_ID_PATTERN } from "./relay-id.ts";
 
@@ -8,8 +14,11 @@ export interface RelayOffer {
   server_id: string;
   server_public_key: string;
   relay: string;
+  /** one-time pairing code, 6 digits */
   code?: string;
   name?: string;
+  /** 1: the PC lets a device that pairs with this code link only once the account service holds its admission */
+  admission?: 1;
 }
 
 const MAX_PAYLOAD_CHARS = 2048;
@@ -47,9 +56,11 @@ export function validateOffer(value: unknown): RelayOffer {
   if (typeof o.relay !== "string" || !isWssOrigin(o.relay)) throw new Error("Invalid offer relay");
   if (o.code !== undefined && (typeof o.code !== "string" || !/^\d{6}$/.test(o.code))) throw new Error("Invalid offer code");
   if (o.name !== undefined && (typeof o.name !== "string" || o.name.length > MAX_NAME_CHARS)) throw new Error("Invalid offer name");
+  if (o.admission !== undefined && o.admission !== 1) throw new Error("Invalid offer admission");
   const offer: RelayOffer = { v: 1, server_id: o.server_id, server_public_key: o.server_public_key, relay: o.relay };
   if (o.code !== undefined) offer.code = o.code as string;
   if (o.name !== undefined) offer.name = o.name as string;
+  if (o.admission === 1) offer.admission = 1;
   return offer;
 }
 

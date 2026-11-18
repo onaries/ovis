@@ -14,7 +14,6 @@ export interface HcMachine {
   /** what this core calls it: its terminals are `<name>/t3` */
   name: string;
   connected: boolean;
-  /** why it is not connected, in hc's words; null when hc gives none */
   why: string | null;
 }
 
@@ -27,12 +26,10 @@ export async function listHcMachines(hc: Pick<HcConnection, "call">): Promise<Hc
 /** A machine's own server (machine-entry.ts), on loopback for this one, and how to end it. */
 export interface MachineBridge {
   endpoint: { url: string; token: string };
-  /** settles when that server ended, whoever ended it */
   exited: Promise<unknown>;
   stop: () => void;
 }
 
-/** What finds the core (`hc connect`) and what else a program needs to run, as this server has them. */
 const CORE_ENV = /^(?:HC_.*|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_RUNTIME_DIR|XDG_CONFIG_HOME|XDG_STATE_HOME)$/;
 const PROGRAM_ENV = /^(?:PATH|PATHEXT|LANG|LC_.*|TMPDIR|TEMP|TMP|SystemRoot|SYSTEMROOT|WINDIR|ComSpec|COMSPEC)$/;
 const READY_MS = 30_000;
@@ -68,7 +65,7 @@ export async function startMachineBridge(machine: Pick<HcMachine, "id" | "name">
     },
   });
   const stop = () => {
-    try { child.stdin.end(); } catch { /* already gone */ }
+    try { child.stdin.end(); } catch {}
     child.kill();
   };
   void child.exited.then((code) => ready.reject(new Error(`The server for ${machine.name} stopped before it answered (exit ${code})`)));

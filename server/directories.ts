@@ -5,7 +5,6 @@ import { dirname, join, type PlatformPath, resolve, sep } from "node:path";
 import type { DirectoryListing } from "../shared/protocol.ts";
 import { otherHostsShare } from "./windows-share.ts";
 
-/** A folder with more subfolders than this lists the first ones and says it stopped. */
 export const MAX_DIRECTORY_ENTRIES = 500;
 
 /** A folder name past this many bytes is refused before the filesystem is asked (255 on every common filesystem). */
@@ -51,8 +50,7 @@ export type CreateDirectoryResult =
   | { error: "invalid_cwd" | "invalid_name" | "folder_exists" | "permission_denied" };
 
 /**
- * Makes one folder named `name` directly inside `parent` (the folder the browser shows) and
- * answers its absolute path. `name` is one path segment: no separator, not `.` or `..`, so
+ * `name` is one path segment: no separator, not `.` or `..`, so
  * nothing is made anywhere but inside `parent`; nothing is made recursively or overwritten.
  */
 export function createDirectory(parent: string, name: string): CreateDirectoryResult {
@@ -81,13 +79,9 @@ export function createDirectory(parent: string, name: string): CreateDirectoryRe
 }
 
 /**
- * The folders inside one directory, for the new-session dialog's folder browser. One
- * directory at a time, names only, nothing kept between calls: the cost is one readdir.
- * `path` takes an absolute path, `~` or `~/…` (the dialog's own syntax); empty means home.
  * Hidden folders (a leading dot) are left out unless asked for. Null when `path` is not
  * a directory this user can read.
  */
-/** `base`: the folder a relative path is read from (a pane's, for a link in its chat); else the server's own. */
 export function listDirectories(path: string, hidden = false, withFiles = false, base?: string): DirectoryListing | null {
   const home = homedir();
   const target = resolveFolder(path, home, base);

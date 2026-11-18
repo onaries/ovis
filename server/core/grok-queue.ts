@@ -8,7 +8,6 @@ import { inputRowState, screenFromAnsi } from "../../shared/input-row.ts";
 import { GROK_QUEUED_MESSAGE, GROK_SEND_NOW_UNCONFIRMED_MESSAGE, GROK_SEND_UNCONFIRMED_MESSAGE, grokQueuedBehindMessage } from "../../shared/submit-outcome.ts";
 import { HerdrError } from "../herdr/client.ts";
 
-/** What Grok's live screen shows of its prompt queue. */
 export type GrokQueue =
   /**
    * Fullscreen: each queued row's text as Grok draws it (its first line, cut with `…`, ` (+N lines)` for the rest),
@@ -18,7 +17,6 @@ export type GrokQueue =
   /** Minimal mode: no input box, only a count on the info row (`1 queued · /queue`), 0 when none is drawn. */
   | { readonly mode: "minimal"; readonly count: number };
 
-/** a queued row, drawn above the turn's status row: `    #1 first follow-up please` */
 const QUEUE_ROW = /^ {4}#(\d+) (.*)$/;
 /** a row of the agent's output, which Grok indents by five */
 const OUTPUT_ROW = /^ {5}\S/;
@@ -43,7 +41,6 @@ export function grokQueue(screen: string): GrokQueue | null {
     if (!row) break;
     queued.unshift(row[2]!);
   }
-  // numbered from #1 down to the box, with no output under them: anything else is not Grok's queue
   const numbered = queued.every((_, index) => QUEUE_ROW.exec(above[end - queued.length + 1 + index]!)![1] === String(index + 1));
   const rowsOfQueue = numbered && !above.slice(end + 1).some((row) => OUTPUT_ROW.test(row)) ? queued : [];
   return { mode: "fullscreen", rows: rowsOfQueue, enterSendsNow: last.split("│").some((part) => part.trim() === "Enter:send now") };
@@ -51,7 +48,6 @@ export function grokQueue(screen: string): GrokQueue | null {
 
 const squash = (text: string): string => text.replace(/\s+/g, " ").trim();
 
-/** Whether a queued row as Grok draws it is `message`. A row drawn otherwise than recorded is not, nor one cut to its `…`. */
 export function showsMessage(row: string, message: string): boolean {
   const lines = message.replace(/\n+$/, "").split("\n");
   let shown = squash(row);
@@ -68,10 +64,6 @@ export function showsMessage(row: string, message: string): boolean {
 const ECHO_ROW = /^ {5}❯ (.*)$/;
 const ECHO_MORE = /^ {7}\S/;
 
-/**
- * The newest prompt Grok echoes above its input box, its rows joined as Grok wraps a long line and draws each of its lines
- * on a row, and how many prompts it echoes there. null: none is echoed.
- */
 export type GrokEcho = { readonly text: string; readonly echoes: number };
 
 export function grokEcho(screen: string): GrokEcho | null {
@@ -90,11 +82,8 @@ export function grokEcho(screen: string): GrokEcho | null {
 }
 
 /**
- * Whether Grok echoes `message` as a prompt drawn since the read before the send (`before`, that read's newest echo): a
- * newest echo of other words than that one, or one more echo above the box. An echo already drawn then (an earlier
- * prompt of the same words) is not the message's, nor a new one drawn as the oldest scrolls off the top (the safe
- * direction); the echo's time is to the minute, so it does not tell. Its text is the message whole, or cut with `…` as a
- * queued row is.
+ * An echo already drawn then (an earlier prompt of the same words) is not the message's, nor a new one drawn as the
+ * oldest scrolls off the top (the safe direction); the echo's time is to the minute, so it does not tell.
  */
 function echoesMessage(screen: string, before: GrokEcho | null, message: string): boolean {
   const echo = grokEcho(screen);
@@ -107,27 +96,17 @@ function echoesMessage(screen: string, before: GrokEcho | null, message: string)
   return cut !== "" && whole.startsWith(cut);
 }
 
-/** Grok's empty prompt with nothing over it (shared/input-row.ts grokInputRow): no draft on any of its lines, no card. */
 const grokPromptEmpty = (screen: string): boolean => inputRowState("grok", screenFromAnsi(screen)) === "ready";
 
 const changed = (message: string): HerdrError => new HerdrError("submit_changed", message);
 
-/** the queued rows a fullscreen Grok draws, none in any other reading */
 const onlyRows = (screen: string): readonly string[] => {
   const queue = grokQueue(screen);
   return queue?.mode === "fullscreen" ? queue.rows : [];
 };
 
-/**
- * The Grok as read before the Enter that typed the message: whether herdr reported it working, its queue (null: not read),
- * and the newest prompt it echoed (null: none).
- */
 export type GrokBeforeSend = { readonly working: boolean; readonly queue: GrokQueue | null; readonly echo: GrokEcho | null };
 
-/**
- * What a read after the queueing Enter says: `press` the one more Enter, or `done` with the send herdr's Enter made.
- * Every other outcome is thrown as submit_changed.
- */
 function sendNowStep(seen: { status: string; screen: string }, before: GrokBeforeSend, message: string): "press" | "done" {
   const queue = grokQueue(seen.screen);
   if (queue === null) throw changed(GROK_SEND_UNCONFIRMED_MESSAGE);
@@ -141,10 +120,6 @@ function sendNowStep(seen: { status: string; screen: string }, before: GrokBefor
     case "fullscreen": {
       if (queue.rows.length === 0) {
         if (seen.status !== "working") return "done";
-        // working with nothing queued: from a working Grok, or one whose queue was not read, the message's row is not
-        // drawn yet or it went somewhere the screen does not show. From a Grok at rest, another client can have started
-        // the turn with the message's row not drawn yet: the message started it only when Grok echoes it as its newest
-        // prompt, drawn since that read
         if (before.working || before.queue?.mode !== "fullscreen" || !echoesMessage(seen.screen, before.echo, message)) throw changed(GROK_SEND_UNCONFIRMED_MESSAGE);
         return "done";
       }
@@ -173,16 +148,7 @@ function sendNowStep(seen: { status: string; screen: string }, before: GrokBefor
  * Grok's empty prompt; and once more `delayMs` later, with the same one row: another row in its place says the message is
  * behind a row another client queued, and a second row under the same one says it is queued (the screen does not tell
  * whose the first row is). `lastScreen`: the screen once more, read last before the Enter's write when `look`
- * awaits more after its own read; that read must say the same, or nothing is pressed. The screen decides every other
- * outcome, and nothing more is pressed:
- * - the message queued behind other rows, any row queued before it, a row queued after it, or the prompt not empty: it
- *   is in Grok's queue, said so;
- * - minimal mode, where herdr does not tell a running turn: its count, against the one before, says it is queued, or
- *   Grok took it;
- * - no queued row while herdr reports Grok working, unless Grok was at rest and echoes the message as its newest prompt, a
- *   row that is not the message, a queue not read before the send, a screen neither layout reads, or a failed read:
- *   unconfirmed;
- * - no queued row with the turn over, or a turn the message started on a Grok at rest: the send as herdr's Enter made it.
+ * awaits more after its own read; that read must say the same, or nothing is pressed.
  */
 export async function sendGrokQueuedNow(opts: {
   message: string;

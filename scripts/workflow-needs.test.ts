@@ -12,7 +12,6 @@ const STATUS = /\b(always|cancelled|failure|success)\s*\(/i;
 const expression = (condition: unknown): string =>
   String(condition ?? "").trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").replace(/'(?:[^']|'')*'/g, "''").trim();
 
-/** The parts an expression's top level joins with `&&`; null when it has an `||` there, or a bracket left open. */
 function conjuncts(text: string): string[] | null {
   const parts: string[] = [];
   let depth = 0;
@@ -62,7 +61,6 @@ function skippedBehindDecidingJobs(workflow: Workflow): string[] {
   return Object.keys(workflow.jobs).filter((id) => {
     if (saysWhenItRuns(workflow.jobs[id]!.if)) return false;
     const seen = new Set<string>();
-    // true once a job is reached through one that decides for itself
     const reaches = (from: string, behind: boolean): boolean => needs(from).some((need) => {
       if (behind) return true;
       if (seen.has(need)) return false;
@@ -89,7 +87,6 @@ test("a job behind one that decides for itself is found, however far behind, unl
   expect(skippedBehindDecidingJobs(beta("${{ needs.build.result == 'success' && Success() }}"))).toEqual(["publish", "after"]);
   expect(skippedBehindDecidingJobs(beta("${{ !Cancelled() && needs.build.result == 'success' }}"))).toEqual(["after"]);
   expect(skippedBehindDecidingJobs(beta("${{ !cancelled() && needs.build.result == 'success' }}"))).toEqual(["after"]);
-  // a success() this cannot place still keeps the job waiting on every job before it: bracketed, or beside an ||
   expect(skippedBehindDecidingJobs(beta("(success() && needs.build.result == 'success')"))).toEqual(["publish", "after"]);
   expect(skippedBehindDecidingJobs(beta("(inputs.tag != '') && (success())"))).toEqual(["publish", "after"]);
   expect(skippedBehindDecidingJobs(beta("success() && inputs.a || success() && inputs.b"))).toEqual(["publish", "after"]);
@@ -106,7 +103,6 @@ test("a job behind one that decides for itself is found, however far behind, unl
   expect(skippedBehindDecidingJobs(recovering("success() && inputs.tag != '||'"))).toEqual([]);
   expect(skippedBehindDecidingJobs(recovering("contains(needs.gate.result, 'success') && success()"))).toEqual([]);
   expect(skippedBehindDecidingJobs(recovering("contains(github.event.head_commit.message, 'failure()')"))).toEqual([]);
-  // a deciding job with nothing before it hides nothing, and a plain chain is GitHub's own rule
   expect(skippedBehindDecidingJobs(workflowOf({ first: { if: "always()" }, second: { needs: "first" }, third: { needs: ["second"] } }))).toEqual([]);
   expect(skippedBehindDecidingJobs(workflowOf({ first: { if: "inputs.tag != ''" }, second: { needs: "first" } }))).toEqual([]);
 });
@@ -114,19 +110,16 @@ test("a job behind one that decides for itself is found, however far behind, unl
 test("no workflow leaves a job to be skipped behind one that ran", () => {
   const found = files.flatMap((file) => skippedBehindDecidingJobs(parseWorkflow(join(dir, file))).map((job) => `${file}: ${job}`));
   expect(found).toEqual([
-    // its own condition leaves out the pull request, the one event that skips the gate before its build
     "windows-app.yml: attach",
   ]);
 });
 
 test("Beta uploads the desktop builds whenever they passed, whatever became of the host's own jobs", () => {
   const beta = parseWorkflow(join(dir, "beta.yml"));
-  // host-publish has no condition: it is skipped with host-build, every time the host was built before
   expect(beta.jobs["host-build"]!.if).toBe("needs.pick.outputs.host == 'build'");
   expect(beta.jobs["host-publish"]!.if).toBeUndefined();
   const publish = beta.jobs["desktop-publish"]!;
   expect(publish.needs).toEqual(["pick", "desktop"]);
   expect(publish.if).toBe("${{ !cancelled() && needs.desktop.result == 'success' }}");
-  // the last job: nothing waits for it
   expect(Object.entries(beta.jobs).filter(([, job]) => [job.needs ?? []].flat().includes("desktop-publish"))).toEqual([]);
 });

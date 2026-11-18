@@ -4,7 +4,7 @@
 # slot's outbox, `<key>.tar` and then `<key>.claim` (its GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT). This
 # runs on the host, as the launcher's user, and takes a build only when GitHub says the slot is
 # running a job of that run and the run is trusted: a push to the default branch, or a pull request
-# from this repository that --writer opened and pushed. Every other outbox file is deleted.
+# from this repository that --build-cache-writer opened and pushed. Every other outbox file is deleted.
 #
 # A slot runs one job per container, under the same runner name each time, and GitHub answers for
 # the job the slot runs when it answers. So a claim is its container's: it is taken in only while the
@@ -29,7 +29,6 @@ REPO="$1" ROOT="$2" OUTBOXES="$3" WRITER="$4" MAX_MB="$5"
 shift 5
 ENTRIES="$ROOT/entries"
 USED="$ROOT/used"
-# a run id, as a claim may name one and as a run's directory under entries/ is named
 RUN_ID='^[0-9]{1,20}$'
 
 log() { echo "[build-cache] $*" >&2; }
@@ -86,7 +85,6 @@ trusted() {
         case "$number" in ''|*[!0-9]*) return 1 ;; esac
         pull="$(ask "repos/$REPO/pulls/$number")" || return 2
         jq -e --arg writer "$WRITER" '.user.login == $writer' >/dev/null <<<"$pull" || { log "pull request $number of run $run is not $WRITER's"; return 1; }
-        # the writer pushed again while this run's job ran: its next run on this slot is trusted
         jq -e --arg sha "$(jq -r '.head_sha // ""' <<<"$info")" '.head.sha == $sha' >/dev/null <<<"$pull" || { log "run $run is not at pull request $number's head"; return 4; }
       done
       ;;
@@ -125,15 +123,11 @@ admit() {
   return 1
 }
 
-# Removes an entry or what is left of one. A build's directories keep the modes its job gave them,
-# so one without the owner's write bit is given it first; and a removal that fails says so (unless
-# $2 is "quietly") and ends no pass: every later slot's build is still judged.
 discard() {
   chmod -R u+rwX "$1" 2>/dev/null || true
   rm -rf "$1" 2>/dev/null || [ "${2:-}" = quietly ] || log "could not remove $1"
 }
 
-# Every entry's path, one a line: entries/<run id>/<key>.
 entries() {
   local dir entry
   for dir in "$ENTRIES"/*; do
@@ -144,7 +138,6 @@ entries() {
   done
 }
 
-# Whether some run's directory holds an entry for the key $1.
 held() {
   local dir
   for dir in "$ENTRIES"/*; do
@@ -153,10 +146,8 @@ held() {
   return 1
 }
 
-# Keeps the most recently used entries within MAX_MB, whichever run they belong to.
 evict() {
   local total=0 limit=$(( 10#$MAX_MB * 1024 * 1024 )) line size path used stamp dir
-  # what an admission that was cut short, or an entry that could not be removed at once, left
   for path in "$ENTRIES"/.new-*; do
     if [ -L "$path" ]; then rm -f "$path"
     elif [ -n "$(find "$path" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then discard "$path"; fi
@@ -171,7 +162,6 @@ evict() {
     if [ -f "$USED/${path##*/}" ]; then stamp="$(stat -c %Y "$USED/${path##*/}")"; [ "$stamp" -gt "$used" ] && used="$stamp"; fi
     echo "$used $path"
   done | sort -rn)
-  # a run whose entries are all gone leaves no directory behind, and a key no entry holds no stamp
   for dir in "$ENTRIES"/*; do
     if [[ "${dir##*/}" =~ $RUN_ID ]] && [ ! -L "$dir" ]; then rmdir "$dir" 2>/dev/null || true; fi
   done
@@ -214,8 +204,6 @@ for path in "$ENTRIES"/*; do
     if gone="$(mktemp -d "$ENTRIES/.new-gone-XXXXXX" 2>/dev/null)" && mv -T "$path" "$gone" 2>/dev/null; then discard "$gone"
     else
       rmdir "$gone" 2>/dev/null || true
-      # entries/ itself cannot be written: what the entry holds goes all the same, its manifest with
-      # it, so no job restores it; the empty directory that may stay costs nothing to pass over
       discard "$path" quietly
       if [ -e "$path" ] && [ ! -e "$REFUSED/stuck-${path##*/}" ]; then
         log "could not move $path away or remove it; emptied it as far as it goes"
@@ -225,8 +213,6 @@ for path in "$ENTRIES"/*; do
   fi
 done
 
-# The container that is the slot $1's now, as docker names it: its id and when it started, in
-# milliseconds since the epoch. Nothing when the slot has none running, or when docker does not answer.
 container() {
   local id running at started part=000
   read -r id running at < <(timeout 10 docker container inspect -f '{{.Id}} {{.State.Running}} {{.State.StartedAt}}' "$1" 2>/dev/null) || return 0
@@ -303,7 +289,6 @@ for name in "$@"; do
         esac
       fi
     fi
-    # whatever it is (a directory named like a claim included): it must not stop the other slots
     rm -rf "$claim" "$tar" "$work" 2>/dev/null || true
     # Only now, the entry in place or the build refused: the job that built it may let the others go.
     # A directory, which mkdir never makes through a link the job could have put at that name.

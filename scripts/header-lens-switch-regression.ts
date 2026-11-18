@@ -1,12 +1,3 @@
-/**
- * The touch header's Chat/Terminal switch. From 641px it is a compact segmented control: its track sits
- * inside the header bar with clear space above and below (never edge to edge), and each option still
- * offers a touch target at least 44px tall and wide through its invisible expander, which stays inside
- * the bar. On a phone (640px and below) it is one 44px button inside the bar that names the other lens
- * and switches to it, and the header counts no running or finished sessions beside More. Folded (412)
- * and unfolded (720) foldable widths, a short landscape phone, a notched screen and the compact density.
- * On the isolated test herdr; UI_EVIDENCE_DIR=<dir> keeps the screenshots.
- */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +48,6 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
           assert.equal(placed.counts, false, `${size.label}: a phone's header counts no running or finished sessions`);
           assert.ok(placed.button.width >= TOUCH_TARGET - 0.5 && placed.button.height >= TOUCH_TARGET - 0.5, `${size.label}: the lens button is a finger's ${TOUCH_TARGET}px (${JSON.stringify(placed.button)})`);
           assert.ok(placed.button.top >= bar.top - 0.5 && placed.button.bottom <= bar.bottom + 0.5, `${size.label}: the lens button stays inside the bar`);
-          // a press opens the lens the button names, and the button then names the other one
           for (let press = 0; press < 2; press++) {
             const before = await toggle.getAttribute("data-view");
             const after = before === "chat" ? "terminal" : "chat";
@@ -88,7 +78,6 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
         const bar = { top: geometry.header.top + geometry.insetTop, bottom: geometry.header.bottom };
         assert.ok(geometry.track.top - bar.top >= CLEARANCE && bar.bottom - geometry.track.bottom >= CLEARANCE,
           `${size.label}: the switch leaves room above and below in the bar (${JSON.stringify({ bar, track: geometry.track })})`);
-        // the density's segmented track: as tall as the density's --control-h, as every .segmented is
         assert.ok(Math.abs(geometry.track.height - geometry.controlH) <= 0.5, `${size.label}: the track is the density's --control-h, ${geometry.controlH}px (${geometry.track.height}px)`);
         for (const option of geometry.options) {
           assert.ok(option.bottom - option.top >= TOUCH_TARGET - 0.5, `${size.label}: an option's touch target is ${TOUCH_TARGET}px tall (${option.bottom - option.top})`);
@@ -98,10 +87,6 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
         if (evidence) await page.screenshot({ path: join(evidence, `lens-switch-${size.label.replace(/\s+/g, "-")}.png`), clip: { x: 0, y: 0, width: size.width, height: 140 } });
       } finally { await context.close(); }
     }
-    // openLens picks the control by the width the page has now, never by what is drawn that instant: here the page has
-    // narrowed to a phone's width while the header still draws the wide switch (its media-query change is held), as
-    // it does for a frame after a rotation. The held change is let go when openLens asks the width, or when the wide
-    // switch is clicked; a click there fails the check, whichever came first
     {
       const context = await browser.newContext({ viewport: { width: 720, height: 870 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
@@ -125,7 +110,6 @@ export async function checkHeaderLensSwitch(browser: Browser, origin: string, ev
           } as typeof MediaQueryList.prototype.addEventListener;
           const matchMediaOwn = window.matchMedia.bind(window);
           window.matchMedia = (query: string) => {
-            // openLens asking the width while the change is held: let it go after this answer
             if (qa.holdMedia && query === "(max-width: 640px)") queueMicrotask(qa.releaseMedia);
             return matchMediaOwn(query);
           };

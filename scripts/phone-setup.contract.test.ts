@@ -23,7 +23,6 @@ it("herdr loads the Phone setup entrypoint and keeps its QR and code visible in 
   expect(manifest.actions.find((action: any) => action.id === "phone").command).toEqual([
     "herdr", "plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "phone", "--placement", "zoomed", "--focus",
   ]);
-  // The real pane entry, without installation/startup hooks that launch an app daemon.
   writeFileSync(join(plugin, "herdr-plugin.toml"), `id = "${manifest.id}"\nname = "Phone setup QA"\nversion = "0.0.0"\nmin_herdr_version = "0.9.0"\nplatforms = ["linux", "macos"]\n[[panes]]\nid = "phone"\ntitle = "Phone setup"\nplacement = "${phone.placement}"\ncommand = ${JSON.stringify([process.execPath, join(source, phone.command[2]), phone.command[3]])}\n`);
   const binary = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr")!;
   const session = "phone-setup-qa";

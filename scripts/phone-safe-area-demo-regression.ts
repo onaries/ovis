@@ -1,15 +1,8 @@
 /**
- * A phone's open surfaces keep clear of the screen's safe-area insets: the notch or Dynamic Island,
- * the rounded corners and the home indicator, on every side a phone puts them, landscape's left and
- * right included. Upright (390x844 under a 59px Dynamic Island and a 34px home indicator): the
- * search sheet, the header's More and tab sheets, Settings and a confirmation. A short screen (the
- * keyboard up): a sheet's top stays below the island. Landscape (844x390, 59px on either side and a
- * 21px indicator): Settings, a tab's menu and a confirmation. Every visible control of the open
- * surface lies inside the safe area, and the controls that close or answer it are drawn whole there
+ * Every visible control of the open surface lies inside the safe area, and the controls that close
+ * or answer it are drawn whole there
  * (a sheet's cap that cut them off would hide them from that check). An iPhone's keyboard (the layout
  * viewport stays, the visual one shrinks) keeps the search sheet and Settings below the island too.
- * Chromium has no phone insets of its own: CDP emulates them.
- * On demo fixtures; UI_EVIDENCE_DIR=<dir> keeps the screenshots.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +13,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openMoreGroup } from "./header-more.ts";
+import { serveDemo } from "./demo-server.ts";
 
 type Insets = { top: number; right: number; bottom: number; left: number };
 type Screen = { label: string; width: number; height: number; insets: Insets };
@@ -49,6 +43,7 @@ async function open(browser: Browser, origin: string, screen: Screen, run: (page
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const { top, right, bottom, left } = screen.insets;
+    // Chromium has no phone insets of its own: CDP emulates them
     const cdp = await context.newCDPSession(page);
     await cdp.send("Emulation.setSafeAreaInsetsOverride" as never, { insets: { top, topMax: top, right, rightMax: right, bottom, bottomMax: bottom, left, leftMax: left } } as never);
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
@@ -58,7 +53,6 @@ async function open(browser: Browser, origin: string, screen: Screen, run: (page
   } finally { await context.close(); }
 }
 
-/** The visible controls and text of `surface` that reach into an inset, clipped to their scroll boxes. */
 async function outside(page: Page, surface: string, insets: Insets): Promise<string[]> {
   await page.locator(surface).last().waitFor();
   // a sheet rises for --dur-sheet: measure where it rests
@@ -91,13 +85,11 @@ async function outside(page: Page, surface: string, insets: Insets): Promise<str
   }, { surface, insets });
 }
 
-/** Every surface is checked before the run fails, so one run names each one that reaches into an inset. */
 const failures: string[] = [];
 function clear(found: string[], what: string): void {
   for (const line of found) failures.push(`${what}: ${line}`);
 }
 
-/** `control` is drawn whole inside the safe area, scrolled into view if its list scrolls. */
 async function reachable(control: Locator, insets: Insets, what: string): Promise<void> {
   const box = await control.evaluate((node, insets) => {
     node.scrollIntoView({ block: "nearest" });
@@ -126,7 +118,6 @@ async function headerMore(page: Page, item?: string): Promise<void> {
   if (!item) return;
   const menu = page.locator(".row-sheet, .row-menu");
   await menu.waitFor();
-  // a phone's More holds the pane's and tab's actions under Pane and tab… (G-143)
   if (!(await menu.getByText(item, { exact: true }).isVisible())) await openMoreGroup(page, "pane");
   await menu.getByText(item, { exact: true }).click();
 }
@@ -143,15 +134,7 @@ try {
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
   writeFileSync(index, html.replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n<script type="module"`));
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    let file: string;
-    try { file = decodeURIComponent(new URL(request.url).pathname.slice(1)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix: "/" });
   const origin = `http://127.0.0.1:${server.port}`;
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   try {

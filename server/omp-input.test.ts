@@ -26,7 +26,6 @@ describe("gjc's suggested next prompt", () => {
   test("reads the ghost text in the empty box", () => {
     expect(parseGjcSuggestion(screen(top, row(ghost("커밋하고 PR 올려줘")), bottom))).toBe("커밋하고 PR 올려줘");
     expect(parseGjcSuggestion(screen(top, row(ghost("run the tests again")), bottom))).toBe("run the tests again");
-    // the ascii symbol preset draws the box in `+-|`
     const ascii = (input: string) => row(input).replace("│ ", "| ").replace(" │", " |");
     expect(parseGjcSuggestion(screen(`+${"-".repeat(116)}+`, ascii(ghost("run the tests again")), `+${"-".repeat(116)}+`))).toBe("run the tests again");
   });
@@ -36,7 +35,6 @@ describe("gjc's suggested next prompt", () => {
   });
 
   test("nothing while text is typed, for the placeholder, or for an empty box", () => {
-    // typed text takes the terminal's own color
     expect(parseGjcSuggestion(screen(top, row("hello typed text"), bottom))).toBeNull();
     expect(parseGjcSuggestion(screen(top, row(`hello ${ghost("typed text")}`), bottom))).toBeNull();
     expect(parseGjcSuggestion(screen(top, row(ghost("Type your message... ⌥↩: Queue (busy) · ⌃C: Clear")), bottom))).toBeNull();
@@ -47,7 +45,6 @@ describe("gjc's suggested next prompt", () => {
     // gjc draws its speech-to-text cursor as the theme's mic icon in a color of its own, by itself in the empty box
     expect(parseGjcSuggestion(screen(top, row(`${fg(200, 40, 40)}🎤${RESET}`), bottom))).toBeNull();
     expect(parseGjcSuggestion(screen(top, row(ghost("●")), bottom))).toBeNull();
-    // a suggestion of one word, or of digits alone, is still one
     expect(parseGjcSuggestion(screen(top, row(ghost("계속")), bottom))).toBe("계속");
     expect(parseGjcSuggestion(screen(top, row(ghost("2")), bottom))).toBe("2");
   });
@@ -58,10 +55,8 @@ describe("gjc's suggested next prompt", () => {
 
   test("only the box that ends the screen, with one row", () => {
     expect(parseGjcSuggestion(screen(top, row(ghost("first row")), row(ghost("second row")), bottom))).toBeNull();
-    // an autocomplete list under the box
     expect(parseGjcSuggestion(screen(top, row(ghost("run the tests")), bottom, "  /review  Review the changes"))).toBeNull();
     expect(parseGjcSuggestion(screen(row(ghost("run the tests")), bottom))).toBeNull();
-    // a border drawn in the ghost's color after a different row is no box
     expect(parseGjcSuggestion(screen(top, ghost("│ > run the tests │"), bottom))).toBeNull();
   });
   test("a suggestion with a character outside the BMP", () => {
@@ -71,13 +66,11 @@ describe("gjc's suggested next prompt", () => {
   test("a typed `|` or `▏` is no cursor: it does not blink", () => {
     expect(parseGjcSuggestion(screen(top, row(`|${ghost("continue")}`), bottom))).toBeNull();
     expect(parseGjcSuggestion(screen(top, row(`▏${ghost("continue")}`), bottom))).toBeNull();
-    // a suggestion's own `▏` is part of it
     expect(parseGjcSuggestion(screen(top, row(ghost("▏continue")), bottom))).toBe("▏continue");
   });
 
   test("colors in their colon form, and a background whose channels look like codes", () => {
     expect(parseGjcSuggestion(screen(top, row(`\u001b[38:2::111:71:67mrun the tests${RESET}`), bottom))).toBe("run the tests");
-    // 48 with the channels 7 and 2: no inverse, no dim, typed text stays typed
     expect(parseGjcSuggestion(screen(top, row(`\u001b[48:2::0:7:2mhello typed${RESET}`), bottom))).toBeNull();
     expect(parseGjcSuggestion(screen(top, row(`\u001b[48;2;0;7;2mhello typed${RESET}`), bottom))).toBeNull();
   });
@@ -99,9 +92,7 @@ describe("omp's predicted next prompt", () => {
   test("reads the prediction in the empty composer, over a dark or a light background", () => {
     expect(parseOmpSuggestion(screen(status, band(`${DARK_DIM}open the PR${RESET}`)))).toBe("open the PR");
     expect(parseOmpSuggestion(screen(status, band(`${LIGHT_DIM}그럼 다음 단계는 뭐야?${RESET}`)))).toBe("그럼 다음 단계는 뭐야?");
-    // a theme's 256-color dim
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;242mopen the PR${RESET}`)))).toBe("open the PR");
-    // with no status band, an empty row stands in its place
     expect(parseOmpSuggestion(screen("", band(`${DARK_DIM}open the PR${RESET}`)))).toBe("open the PR");
   });
 
@@ -109,32 +100,24 @@ describe("omp's predicted next prompt", () => {
     // omp 18.18 draws `▏` without blink, in the terminal's own color; Vim's normal mode an inverse blank
     expect(parseOmpSuggestion(screen(status, band(`▏${DARK_DIM}open the PR${RESET}`)))).toBe("open the PR");
     expect(parseOmpSuggestion(screen(status, band(`\u001b[7m \u001b[0m${DARK_DIM}open the PR${RESET}`)))).toBe("open the PR");
-    // the ascii preset's steady `|` reads as a typed one: no prediction past it
     expect(parseOmpSuggestion(screen(status, band(`|${DARK_DIM}open the PR${RESET}`)))).toBeNull();
   });
 
   test("in the other composer shapes", () => {
     const rule = `${fg(61, 66, 74)}${"─".repeat(118)}${RESET}`;
-    // box: the status in the top border, the prompt merged into the bottom one
     expect(parseOmpSuggestion(screen(`${fg(61, 66, 74)}╭─ π > GPT-6.1 Sol ${"─".repeat(90)}╮${RESET}`, `${fg(61, 66, 74)}╰─ ${RESET}${DARK_DIM}open the PR${RESET}${" ".repeat(80)}${fg(61, 66, 74)}─╯${RESET}`))).toBe("open the PR");
-    // claude: the prompt between rules, then the status
     expect(parseOmpSuggestion(screen(rule, `${fg(0, 180, 255)}❯ ${RESET}${DARK_DIM}open the PR${RESET}`, rule, status))).toBe("open the PR");
-    // pi: the prompt row has no gutter at all
     expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}open the PR${RESET}`, rule, status))).toBe("open the PR");
   });
 
   test("a pi prediction that begins like another shape's gutter keeps it (#3643)", () => {
     const rule = `${fg(61, 66, 74)}${"─".repeat(118)}${RESET}`;
     expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}| continue${RESET}`, rule, status))).toBe("| continue");
-    // a claude-shape row whose `❯ ` is drawn in the prediction's own color reads past it: blanked whole, that row
-    // would read as pi's (#3643)
     expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}\u001b[38;5;244mopen the PR${RESET}`, rule, status))).toBe("open the PR");
     // and its empty composer's right-aligned hint is no prediction, nor read from the `❯ ` on. omp draws the hint's
     // key (⇧⇥) in its accent; here all of it is in the dim, the case where only the `❯ ` reading could take it
     expect(parseOmpSuggestion(screen(rule, `\u001b[38;5;244m❯ ${RESET}${" ".repeat(80)}\u001b[38;5;244mShift+Tab effort${RESET}`, rule, status))).toBeNull();
-    // a pi prediction starting like another shape's gutter is offered whole: blanked, no shape's empty row is left
     for (const cap of ["+ ", "▐ ", "▎ ", "╰─ "]) expect(parseOmpSuggestion(screen(rule, `${DARK_DIM}${cap}check the diff${RESET}`, rule, status)), cap).toBe(`${cap}check the diff`);
-    // the box's IME-safe gutter, drawn in its border color, is still no part of the prediction
     expect(parseOmpSuggestion(screen(`${fg(61, 66, 74)}╭─ π > GPT-6.1 Sol ${"─".repeat(90)}╮${RESET}`, `${fg(61, 66, 74)}│ ${RESET}${DARK_DIM}open the PR${RESET}`, `${fg(61, 66, 74)}╰${"─".repeat(116)}╯${RESET}`))).toBe("open the PR");
   });
 
@@ -143,7 +126,6 @@ describe("omp's predicted next prompt", () => {
     expect(parseOmpSuggestion(screen(status, band(`${fg(0, 0, 0)}hello typed text${RESET}`)))).toBeNull();
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;254mhello typed text${RESET}`)))).toBeNull();
     expect(parseOmpSuggestion(screen(status, band("hello typed text")))).toBeNull();
-    // a prediction shows its rest after a typed prefix of it: that is a draft, not a suggestion
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}open ${RESET}${DARK_DIM}the PR${RESET}`)))).toBeNull();
   });
 
@@ -164,7 +146,6 @@ describe("omp's predicted next prompt", () => {
     // light-poimandres types in #506477, another theme's dim; a skill reads in an accent, as #7e57c2 is one
     expect(parseOmpSuggestion(screen(status, band(`${fg(80, 100, 119)}hello typed text${RESET}`)))).toBeNull();
     expect(parseOmpSuggestion(screen(status, band(`\u001b[1m${fg(126, 87, 194)}/skill:review${RESET}`)))).toBeNull();
-    // a 256-color cell a theme's accent also maps to
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38;5;60mhello typed text${RESET}`)))).toBeNull();
     // a typed model @mention, which omp 18.14 draws bold in statusLineModel: six built-in themes map that to the cells 59
     // and 248 without truecolor, another theme's dim; a prediction in those cells is never bold (#3643)
@@ -185,10 +166,8 @@ describe("omp's predicted next prompt", () => {
 
   test("a typed `|` or `▏` is no cursor: omp paints it in its text color", () => {
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}|${RESET}${DARK_DIM}continue${RESET}`)))).toBeNull();
-    // the rest of a prediction after its typed first character, and typed text that goes on
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}▏${RESET}${DARK_DIM}continue${RESET}`)))).toBeNull();
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}▏continue${RESET}`)))).toBeNull();
-    // a prediction's own `▏` is part of it
     expect(parseOmpSuggestion(screen(status, band(`${DARK_DIM}▏continue${RESET}`)))).toBe("▏continue");
     expect(parseOmpSuggestion(screen(status, band(`|${DARK_DIM}continue${RESET}`)))).toBeNull();
   });
@@ -197,14 +176,11 @@ describe("omp's predicted next prompt", () => {
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38:2::95:102:115mopen the PR${RESET}`)))).toBe("open the PR");
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38:2:95:102:115mopen the PR${RESET}`)))).toBe("open the PR");
     expect(parseOmpSuggestion(screen(status, band(`\u001b[38:2::229:229:231mhello typed text${RESET}`)))).toBeNull();
-    // a typo's undercurl over typed text leaves its color as it was
     expect(parseOmpSuggestion(screen(status, band(`${fg(229, 229, 231)}\u001b[4:3m\u001b[58:2::255:95:95mhelo\u001b[4:0m\u001b[59m${RESET}`)))).toBeNull();
   });
 
   test("only a composer that ends the screen", () => {
-    // something drawn under the prompt row
     expect(parseOmpSuggestion(screen(status, band(`${DARK_DIM}open the PR${RESET}`), "  /review  Review the changes"))).toBeNull();
-    // grey text in a row that is no prompt row
     expect(parseOmpSuggestion(screen(`${DARK_DIM}open the PR${RESET}`))).toBeNull();
     expect(parseOmpSuggestion(screen(status, `${DARK_DIM}open the PR${RESET}`))).toBeNull();
   });

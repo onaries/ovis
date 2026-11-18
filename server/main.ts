@@ -1,7 +1,3 @@
-/**
- * The compiled binary's one entry (scripts/build-server.ts): `ovis-server <entry> [arguments]` runs the
- * entry server/entries.ts names, with the arguments where that entry reads them when run from source.
- */
 import { ENTRIES, type EntryName, ROOT } from "./entries.ts";
 
 const RUN: Record<EntryName, () => Promise<unknown>> = {

@@ -65,7 +65,6 @@ export interface AccessInput {
   tokenMatched: boolean;
   /** the device the cookie belongs to */
   device: DeviceMatch | null;
-  /** the PC's own Tailscale login, when known */
   owner: string | null;
   /** this PC's Tailscale node is tagged: Tailscale runs here, and names no person as its owner */
   tagged: boolean;
@@ -156,9 +155,7 @@ export const inTailnet = (address: string | null | undefined): boolean => {
  * nginx's bare `proxy_pass`, looks the same: see `cameThroughProxy`).
  */
 export function observedIngress(input: Pick<AccessInput, "loopback" | "forwarded" | "funnel" | "tailscaleLogin" | "forwardedFor" | "owner" | "tagged" | "serveOnly"> & {
-  /** the connection's source address is known at all */
   peerKnown: boolean;
-  /** a forwarding header (`forwardingHeaders`) came with the request */
   forwardingHeaders: boolean;
 }): Exclude<ObservedIngress, "relay" | "portal"> {
   if (!input.peerKnown) return "unknown";
@@ -205,7 +202,6 @@ export function hostName(host: string): string | null {
   return authority ? authority[1]!.toLowerCase().replace(/\.$/, "") : null;
 }
 
-/** Is this Host header a name for this machine itself? */
 export function isLoopbackHost(host: string): boolean {
   const name = hostName(host);
   return name !== null && (name === "localhost" || name.endsWith(".localhost") || name === "[::1]"

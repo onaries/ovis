@@ -63,16 +63,13 @@ describe("useInboxShell", () => {
     await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true });
     expect(calls).toEqual([]);
     await act(async () => { shell.enterInbox(); });
-    // the file is hidden before the mode's entry is pushed: its own entry stays under it, so Back shows it again
     expect(calls).toEqual(["drawer false", "hide file", "enter", "show"]);
   });
 
   const open = (): void => { calls.push("open"); };
 
   it("enters a wide window on its list and then opens the thread of the pane the app is on, as its row does", async () => {
-    // Given the classic app on p1 at 769px or more, p1 an agent's pane with a row in the list.
     await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true, here: "local:p1", wide: true, open });
-    // When the way in is taken: the list first, as every way in; then, once it stands, p1's row's own opening.
     await act(async () => { shell.enterInbox(); });
     expect(calls).toEqual(["drawer false", "hide file", "enter", "show"]);
     await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true, here: "local:p1", wide: true, open });
@@ -93,13 +90,11 @@ describe("useInboxShell", () => {
     const listOf = (pane: string): Place => ({ ...classicOn(pane), inMode: true, shown: true });
     const threadOf = (pane: string): Place => ({ ...classicOn(pane), inMode: true, thread: `local:${pane}` });
     try {
-      // Given a phone in the classic app on p1, never in the mode: the list, and no thread.
       await draw(classicOn("p1"));
       await act(async () => { shell.enterInbox(); });
       await draw(listOf("p1"));
       expect(calls).not.toContain("open");
 
-      // Given the mode left by Back to Ovis from p1's thread: entering opens it again.
       await draw(threadOf("p1"));
       await draw(classicOn("p1"));
       calls = [];
@@ -107,7 +102,6 @@ describe("useInboxShell", () => {
       await draw(listOf("p1"));
       expect(calls.filter((call) => call === "open")).toEqual(["open"]);
 
-      // Given the classic app moved to p2 since: the list again.
       await draw(threadOf("p1"));
       await draw(classicOn("p2"));
       calls = [];
@@ -121,14 +115,11 @@ describe("useInboxShell", () => {
   });
 
   it("names the row a Back onto the list returns to: the thread that was shown, and none for a list opened any other way", async () => {
-    // Given a thread of the mode, then Back onto the list.
     await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true, thread: "local:p1" });
     expect(shell.returnTo).toBeNull();
     await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true, thread: null });
     expect(shell.returnTo).toBe("local:p1");
 
-    // When another thread opens, and the mode is then left and entered again from the classic app.
-    // a thread the list opens, and leaving, each ask a frame of the window for the focus's sake (below): this case has no use for it
     const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
     Object.defineProperty(globalThis, "window", { configurable: true, value: { requestAnimationFrame: () => 0 } });
     try {
@@ -141,7 +132,6 @@ describe("useInboxShell", () => {
       else Reflect.deleteProperty(globalThis, "window");
     }
 
-    // Then that list was opened by a way in, not by a Back: it returns to no row.
     expect(shell.returnTo).toBeNull();
   });
 
@@ -168,13 +158,11 @@ describe("useInboxShell", () => {
     } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: { requestAnimationFrame: (run: () => void) => { run(); return 0; } } });
     try {
-      // Given the mode's shell, left by Back to Ovis: the button pressed went with it, and nothing has the focus.
       await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true });
       calls = [];
       await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true });
       expect(calls).toEqual(["focus toggle"]);
 
-      // Given the mode left while the focus is in the pane (the composer of the thread that classic now shows).
       await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true });
       calls = [];
       page.activeElement = {};
@@ -195,26 +183,21 @@ describe("useInboxShell", () => {
     Object.defineProperty(globalThis, "document", { configurable: true, value: {
       get activeElement() { return page.activeElement; }, body,
       querySelector: () => null,
-      // a phone's thread draws Back in the drawer toggle's place: no toggle is shown
       querySelectorAll: (selector: string) => selector.includes(".inbox-back") ? page.back : [],
     } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: { requestAnimationFrame: (run: () => void) => { run(); return 0; } } });
     try {
-      // Given a page that opens on a thread: nothing was taken from the reader, and the focus is left alone.
       await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true, thread: "local:p1" });
       expect(calls).toEqual(["drawer false"]);
 
-      // Given the list, and a row opened from the keyboard: the list left the screen with the row that had the focus.
       await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true, thread: null });
       calls = [];
       await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true, thread: "local:p1" });
       expect(calls).toEqual(["focus back"]);
 
-      // a thread that takes that thread's place was not opened from the list: nothing more is asked
       await draw({ inMode: true, shown: false, selectedPaneId: "p2", linkLanded: true, thread: "local:p2" });
       expect(calls).toEqual(["focus back"]);
 
-      // Given the list again, and a row whose pane takes the typing as it is picked (a pointer that is fine).
       await draw({ inMode: true, shown: true, selectedPaneId: "p2", linkLanded: true, thread: null });
       calls = [];
       page.activeElement = {};
@@ -246,16 +229,13 @@ describe("useInboxShell", () => {
     try {
       for (const pointer of ["fine", "coarse"] as const) {
         coarse = pointer === "coarse";
-        // Given the classic app on p1, entered into the mode: p1 stays the app's pane, under the list.
         await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true, focusInput });
         await draw({ inMode: true, shown: true, selectedPaneId: "p1", linkLanded: true, focusInput });
         calls = [];
         page.activeElement = body;
 
-        // When the keyboard opens p1's own row: the same pane, so nothing is picked anew, and the row left with the list.
         await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true, thread: "local:p1", focusInput });
 
-        // Then the focus is in the thread: its input under a fine pointer, its Back under a coarse one.
         expect(calls).toEqual(pointer === "fine" ? ["focus input"] : ["focus back"]);
         await draw({ inMode: false, shown: false, selectedPaneId: "p1", linkLanded: true, focusInput });
       }
@@ -272,7 +252,6 @@ describe("useInboxShell", () => {
     expect(calls).toEqual(["drawer false"]);
     await draw({ inMode: true, shown: false, selectedPaneId: null, linkLanded: true });
     expect(calls).toEqual(["drawer false", "show"]);
-    // the list shown, or a pane picked: nothing more is asked
     await draw({ inMode: true, shown: true, selectedPaneId: null, linkLanded: true });
     await draw({ inMode: true, shown: false, selectedPaneId: "p1", linkLanded: true });
     expect(calls).toEqual(["drawer false", "show"]);
@@ -369,16 +348,13 @@ describe("useInbox", () => {
   });
 
   it("counts each time the list opens, and keeps one note of the opening it took the focus for", async () => {
-    // the page opens on the list
     await mount(true);
     const taken = inbox.focus.taken;
     expect(inbox.focus.opening).toBe(1);
-    // a thread, then Back onto the list
     await act(async () => { inbox.leave(); });
     expect(inbox.focus.opening).toBe(1);
     await act(async () => { inbox.show(); });
     expect(inbox.focus.opening).toBe(2);
-    // asked to show while it shows: nothing opened
     await act(async () => { inbox.show(); });
     expect(inbox.focus.opening).toBe(2);
     expect(inbox.focus.taken).toBe(taken);
@@ -405,7 +381,6 @@ describe("useInbox", () => {
     await act(async () => { inbox.setFilter("done"); });
     expect(JSON.parse(session.get(INBOX_LIST_KEY) ?? "null")).toEqual({ filter: "done", query: "pay", scroll: 120 });
 
-    // the offset is stored as the page is hidden (a reload)
     inbox.scroll.current = 300;
     await act(async () => { events.dispatchEvent(new Event("pagehide")); });
     expect(JSON.parse(session.get(INBOX_LIST_KEY) ?? "null")).toEqual({ filter: "done", query: "pay", scroll: 300 });
@@ -467,7 +442,6 @@ describe("useInbox", () => {
     await act(async () => { inbox.back(); });
     expect(backs).toBe(1);
 
-    // the step lands on an entry that still says it was pushed from the list (a Back further down the history)
     await act(async () => { events.dispatchEvent(new Event("popstate")); });
     await act(async () => { inbox.back(); });
     expect(backs).toBe(2);

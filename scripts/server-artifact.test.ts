@@ -45,7 +45,6 @@ describe("the folder that runs the compiled server", () => {
 
   it("installs an agent integration from what it carries, with no source to build it from", () => {
     expect(existsSync(join(dir, "integrations", "gjc.js"))).toBe(true);
-    // what the installer copies is the built file beside it, which this marker proves
     writeFileSync(join(dir, "integrations", "gjc.js"), "export default function extension() {} // built beside the binary\n");
     const home = join(root, "home");
     mkdirSync(home);
@@ -59,7 +58,6 @@ describe("the folder that runs the compiled server", () => {
 
 describe("node-pty in the server folder, for each of the five platforms", () => {
   const ptyVersion = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies["@lydell/node-pty"]!;
-  // each platform's prebuilt package, as the registry ships it: the native files differ
   const NATIVE: Record<ServerPlatform, { name: string; files: string[] }> = {
     "linux-x64": { name: "node-pty-linux-x64", files: ["pty.node"] },
     "linux-arm64": { name: "node-pty-linux-arm64", files: ["pty.node"] },
@@ -68,7 +66,6 @@ describe("node-pty in the server folder, for each of the five platforms", () => 
     "windows-x64": { name: "node-pty-win32-x64", files: ["conpty.node", "conpty_console_list.node"] },
   };
   const work = join(root, "pty");
-  /** a node_modules holding node-pty itself and, when given, one platform package at `version` */
   function modules(name: string, installed?: { platform: ServerPlatform; version: string }): string {
     const dir = join(work, name, "node_modules", "@lydell");
     mkdirSync(join(dir, "node-pty"), { recursive: true });
@@ -81,7 +78,6 @@ describe("node-pty in the server folder, for each of the five platforms", () => 
     }
     return join(work, name, "node_modules");
   }
-  /** the registry tarball of a platform's package, made here, and the pins that vouch for it */
   function tarball(platform: ServerPlatform): { bytes: Uint8Array; pins: typeof PTY_PINS } {
     const pkg = join(work, `tar-${platform}`, "package");
     mkdirSync(pkg, { recursive: true });

@@ -147,7 +147,6 @@ describe("Pages deployment gate", () => {
     type Job = { if?: string; needs?: string[]; environment?: unknown; permissions?: Record<string, string>; outputs?: Record<string, string>; "continue-on-error"?: unknown; steps?: { "continue-on-error"?: unknown }[] };
     const { jobs } = Bun.YAML.parse(pages) as { jobs: Record<string, Job> };
     const { current, deploy, build } = jobs as Record<"current" | "deploy" | "build", Job>;
-    // the check runs where no deployment is recorded: only the deploy job names the environment
     expect(current.environment).toBeUndefined();
     expect(current.permissions).toEqual({ contents: "read" });
     expect(current.needs).toEqual(["validate", "build"]);
@@ -155,7 +154,6 @@ describe("Pages deployment gate", () => {
     expect(deploy.needs).toEqual(["validate", "build", "current"]);
     expect(deploy.if).toContain("needs.current.result == 'success' && needs.current.outputs.stale == 'false'");
     expect(deploy.environment).toBeDefined();
-    // a broken site build still fails the run: both jobs wait for it and nothing lets the build pass on an error
     expect(current.if).toContain("needs.build.result == 'success'");
     expect(deploy.if).toContain("needs.build.result == 'success'");
     expect(build["continue-on-error"]).toBeUndefined();
@@ -240,7 +238,6 @@ describe("Browser lane script lists", () => {
     const selected = selectBrowserScripts(serial, env(job, "BROWSER_SCRIPTS"), env(job, "BROWSER_EXCLUDE"));
     const timings = JSON.parse(readFileSync(new URL("./ci-browser-timings.json", import.meta.url), "utf8")) as Record<string, number>;
     const sizes = [...env(job, "shard")!.matchAll(/'\[([\d,]*)\]'/g)].map((match) => match[1]!.split(",").map(Number));
-    // the self-hosted PC's three parts, the hosted four and the VM runners' five
     expect(sizes.map((list) => list.length).sort()).toEqual([3, 4, 5]);
     for (const list of sizes) {
       expect(list).toEqual(list.map((_, index) => index + 1));
@@ -261,7 +258,6 @@ describe("Browser lane script lists", () => {
       const wait = Number(env(job, "CHECK_WAIT_SECONDS"));
       const timeout = Number(job.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
       expect(wait).toBeGreaterThan(0);
-      // the job outlives its longest wait, with room for the lane itself
       expect(timeout * 60).toBeGreaterThanOrEqual(wait + 600);
     }
   });
@@ -302,19 +298,15 @@ describe("Browser lane script lists", () => {
 
 describe("Extracted UI checks", () => {
   it("refuses a direct mobile viewport run in unit mode instead of silently passing", () => {
-    // Given a unit run, no browser or herdr fixture is allowed.
-    // When the shared helper is invoked directly, it must execute its entrypoint.
     const result = spawnSync(process.execPath, [fileURLToPath(new URL("./mobile-viewport-regression.ts", import.meta.url))], {
       encoding: "utf8", timeout: 5_000,
       env: { ...process.env, HERDR_TEST_MODE: "unit" },
     });
-    // Then the unit-mode guard rejects the run rather than returning an empty success.
     expect(result.error).toBeUndefined();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("HERDR_TEST_MODE=unit");
   });
 
-  // the layout group (ui-contexts-layout-regression.ts) comes first in ui-contexts-checks.ts
   const moved = [
     "checkSplitView", "checkBackgroundTabKeepsTerminalSize",
     "checkPushSettings", "checkWakeLock", "checkSecretInput", "checkTerminalCopy", "checkPaneFind",
@@ -382,7 +374,6 @@ describe.skipIf(process.platform === "win32")("Pages SHA guard execution", () =>
     { job: "current", name: "current: rejects an artifact from another commit", built: newer, latest: sha, api: "0", code: 1, stale: null },
     { job: "current", name: "current: fails closed when GitHub denies the lookup", built: sha, latest: sha, api: "1", code: 1, stale: null },
     { job: "current", name: "current: rejects a malformed API response", built: sha, latest: "null", api: "0", code: 1, stale: null },
-    // the deploy job checks again right before deploying, and main moving on after the current job read it is still red
     { job: "deploy", name: "deploy: accepts the validated build at current main", built: sha, latest: sha, api: "0", code: 0, stale: null },
     { job: "deploy", name: "deploy: refuses a commit main moved past after the current job", built: sha, latest: newer, api: "0", code: 1, stale: null },
     { job: "deploy", name: "deploy: rejects an artifact from another commit", built: newer, latest: sha, api: "0", code: 1, stale: null },
@@ -414,7 +405,6 @@ describe.skipIf(process.platform === "win32")("Pages SHA guard execution", () =>
         expect(written).toBe(scenario.stale);
         const notice = result.stdout.split("\n").find((line) => line.startsWith("::notice title=Deployment skipped::"));
         expect(notice !== undefined).toBe(scenario.stale === "true");
-        // it says what this run did, and promises nothing about another run
         if (notice) expect(notice).toBe(`::notice title=Deployment skipped::This run built ${sha}, and main is now ${newer}, so it deploys nothing.`);
       } finally {
         rmSync(root, { recursive: true, force: true });

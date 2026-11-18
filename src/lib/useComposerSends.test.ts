@@ -15,8 +15,6 @@ import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import { currentWaitingSends, forgetWaitingSends, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 
-// A bridge without `submit` takes a message as raw input and sends no receipt (ws.ts `unconfirmed`):
-// nothing says the pane got it, so its text must not go as if it had (#1591).
 function savedStorage() {
   const data = new Map<string, string>(), storage = paneLifetimes.paneStorage;
   const spies = [
@@ -124,11 +122,9 @@ it.each([
   const pane = `legacy-send-${kind}`, owner = paneStorageId("local", pane), shown: string[] = [];
   try {
     const result = await sends(pane, answer, shown).composerSend("deploy the fix");
-    // the box lets it go either way: the message did leave
     expect(result).toBe(true);
     if (kind === "unconfirmed") {
       expect(pendingMessages.read(owner)).toMatchObject([{ text: "deploy the fix", state: "uncertain", serverOwned: false, error: { code: "submit_unconfirmed" } }]);
-      // a reload keeps it, not confirmed, never as a copy to send again
       expect(new PendingMessageStore(() => saved.storage).read(owner)).toMatchObject([{ text: "deploy the fix", state: "uncertain" }]);
       expect(shown).toEqual([]);
     } else {
@@ -150,7 +146,6 @@ it.each([
   const pane = `legacy-held-${kind}`, owner = paneStorageId("local", pane), key = waitingKey("local", pane), shown: string[] = [];
   const message = { id: `held-${kind}`, request_id: 1, text: "held follow-up", state: "held" as const, created_at: "2026-10-28T00:00:00Z" };
   try {
-    // a copy kept since a connection that held it: this one sends it again by its id
     new PendingMessageStore(() => saved.storage).accept(owner, message, "earlier");
     // the bridge's held receipt proves it untyped for this page: only then is a saved held copy sent again
     pendingMessages.publish(owner, [], [{ id: message.id, outcome: "held", resumed: true, until: Date.now() + 60_000 }], "receipt");
@@ -164,8 +159,6 @@ it.each([
     } else {
       expect(pendingMessages.read(owner)).toEqual([]);
       expect(shown).toEqual(["held follow-up"]);
-      // the row went: the chat shows the message as waiting until its turn is read; a replay of a
-      // send another connection made typed nothing now, and its turn may be read already
       if (kind === "confirmed") expect(currentWaitingSends(key)).toMatchObject([{ text: "held follow-up" }]);
       else expect(currentWaitingSends(key)).toEqual([]);
     }
@@ -205,8 +198,6 @@ it("records a confirmed send for its original pane after navigation without foll
   } finally { forgetWaitingSends(key); }
 });
 
-// the bridge types a queued follow-up at once when the turn ended before it arrived: its receipt
-// names no pending row, and the box lets the message go as for a send at once
 it("a queued follow-up the bridge typed at once waits in the chat and follows it, as a send at once", async () => {
   const pane = "queued-typed-at-once", key = waitingKey("local", pane), shown: string[] = [];
   let follows = 0;
@@ -223,7 +214,6 @@ it("a queued follow-up the bridge typed at once waits in the chat and follows it
   } finally { forgetWaitingSends(key); }
 });
 
-// an ok with no row also answers a replayed id, or a row sent or discarded since: nothing was typed now
 it("a queued follow-up answered ok with no row and no typed-now mark is no waiting message", async () => {
   const pane = "queued-replayed", key = waitingKey("local", pane), shown: string[] = [];
   let follows = 0;
@@ -265,20 +255,16 @@ it("Send it sends the named draft over itself, only at once and never as an answ
     id: "menu", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
     options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null,
   };
-  // at rest: the draft's text goes at once, with the clear of that same draft before it
   expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "idle", submitComposerMessage }).composerSend("fix the tests", "fix the tests")).toBe(true);
   expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"]]);
-  // a turn started since: queued, the text could go again after the draft itself was sent in the terminal
   const working = await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
     .composerSend("fix the tests", "fix the tests");
   expect(typeof working).toBe("string");
   expect(calls).toHaveLength(1);
-  // a menu opened since: the draft is never taken for one of its choices
   const blocked = await sends("send-it", { ok: true }, shown, { t, answering: prompt, submitComposerMessage })
     .composerSend("1", "1");
   expect(typeof blocked).toBe("string");
   expect(calls).toHaveLength(1);
-  // Clear it and send of other text still queues behind a turn, as before
   expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
     .composerSend("my new message", "fix the tests")).toBe(true);
   expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
@@ -296,7 +282,6 @@ it.each([
   const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
   const deps: Partial<ComposerSendsDeps> = { ...extra, submitComposerMessage };
   expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later", undefined, false, false, false, true)).toBe(true);
-  // control: Enter keeps its own delivery
   expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later")).toBe(true);
   expect(calls.map((call) => [call[1], call[2], call[7]])).toEqual([["hold", undefined, true], [plain, undefined, false]]);
 });
@@ -323,7 +308,6 @@ it("a hold a PC too old to hold refuses keeps the draft with the reason", async 
   expect(result).toBe("Update this PC to hold messages. Your draft stayed here.");
 });
 
-// #2596: Ctrl+Enter queues the message as Enter does, then sends that same row now, as its Send now
 it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p steers its own row", async (now, expected) => {
   const saved = savedStorage();
   const pane = `send-now-${now}`, owner = paneStorageId("local", pane), actions: string[] = [];
@@ -340,7 +324,6 @@ it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p st
   try {
     const result = await sends(pane, { ok: true }, [], {
       agentStatus: "working", inputAtRest: () => false, socketRef: { current: socket },
-      // as useTerminalSends does before it answers: the receipt's row is in the list first
       submitComposerMessage: () => { pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
       submitRetention: { retain: () => () => { settled(); } } as unknown as ComposerSendsDeps["submitRetention"],
     }).composerSend(pending.text, undefined, false, false, now);
@@ -380,7 +363,6 @@ it("a hold leaves its held row waiting for Send now, then Send now sends it", as
   }
 });
 
-// #511: Send now of a saved copy of a message for an agent alone sends it again as one
 it("sends a held copy of an agent-only message again as agent-only", async () => {
   const saved = savedStorage();
   const pane = "held-agent-only", owner = paneStorageId("local", pane), calls: unknown[][] = [];
@@ -398,7 +380,6 @@ it("sends a held copy of an agent-only message again as agent-only", async () =>
   }
 });
 
-// #511: Edit puts a held message for an agent alone back in the box as one
 it("puts an edited agent-only message back in the box agent-only", async () => {
   const saved = savedStorage();
   const pane = "edit-agent-only", owner = paneStorageId("local", pane), key = `ovis:composer-draft:${owner}`;

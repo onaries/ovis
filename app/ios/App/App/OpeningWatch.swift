@@ -10,17 +10,12 @@ import Foundation
 /// (ProcessInfo.systemUptime in the app).
 struct OpeningWatch {
     enum Stage: Equatable {
-        /// Nothing to say yet: "Opening …".
         case opening
-        /// The PC answered and the page still has not shown: a slow link.
         case slow
-        /// No answer within the limit: the cover says so, with Try again.
         case noAnswer
     }
 
-    /// How long a first page may take before the cover calls the link slow.
     static let slowAfterSeconds: TimeInterval = 5
-    /// The most the bar shows until the client is up: the page's load also has its script to run.
     static let maxShown = 0.95
 
     private let startedAt: TimeInterval
@@ -34,18 +29,15 @@ struct OpeningWatch {
         self.answerLimit = answerLimit
     }
 
-    /// The PC answered the first page.
     mutating func answer(at now: TimeInterval) {
         answered = true
     }
 
-    /// The web view's estimatedProgress is `fraction`: the bar's measure, once the PC has answered.
     mutating func progress(_ fraction: Double) {
         guard answered else { return }
         lastProgress = max(lastProgress, fraction)
     }
 
-    /// What the bar shows, 0 to maxShown: never less than before.
     mutating func shownProgress() -> Double {
         shown = max(shown, min(Self.maxShown, lastProgress))
         return shown

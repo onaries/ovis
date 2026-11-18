@@ -20,7 +20,6 @@ public class OpeningWatchTest {
 
     @Test
     public void tcpPacketsAloneAreNoAnswer() {
-        // a server that accepts the connection and never sends: only TCP's own packets arrive
         OpeningWatch watch = new OpeningWatch(0, LIMIT, 5000);
         watch.received(300, 5000 + 120);
         watch.received(15000, 5000 + 300);
@@ -34,7 +33,6 @@ public class OpeningWatchTest {
         watch.answered(1300);
         assertEquals(OpeningWatch.Stage.OPENING, watch.stage(4999));
         assertEquals(OpeningWatch.Stage.SLOW, watch.stage(5000));
-        // 10 KB a second for five minutes
         for (long at = 5000; at <= 300000; at += 1000) {
             watch.received(at, at * 10);
             assertEquals(OpeningWatch.Stage.SLOW, watch.stage(at + 999));
@@ -44,7 +42,6 @@ public class OpeningWatchTest {
 
     @Test
     public void bytesStillComingBeforeTheAnswerPutTheLimitOff() {
-        // a TLS handshake over a slow VPN: bytes come before the page's response
         OpeningWatch watch = new OpeningWatch(0, LIMIT, 100);
         for (long at = 2000; at <= 30000; at += 2000) watch.received(at, 100 + at);
         assertEquals(OpeningWatch.Stage.SLOW, watch.stage(30000 + OpeningWatch.QUIET_MS - 1));
@@ -54,7 +51,6 @@ public class OpeningWatchTest {
 
     @Test
     public void aHandshakeWithNoResponseAfterItStillGivesUp() {
-        // a server or proxy that completes TLS and never sends a response
         OpeningWatch watch = new OpeningWatch(0, LIMIT, 100);
         watch.received(1000, 100 + 4000);
         assertEquals(OpeningWatch.Stage.SLOW, watch.stage(LIMIT - 1));
@@ -64,7 +60,6 @@ public class OpeningWatchTest {
 
     @Test
     public void bytesWithoutAnAnswerNeverWaitPastTheCap() {
-        // other traffic of the app keeps arriving while the PC never responds
         OpeningWatch watch = new OpeningWatch(0, LIMIT, 0);
         for (long at = 1000; at < OpeningWatch.UNANSWERED_MAX_MS; at += 1000) watch.received(at, at * 2);
         assertEquals(OpeningWatch.Stage.SLOW, watch.stage(OpeningWatch.UNANSWERED_MAX_MS - 1));
@@ -105,11 +100,9 @@ public class OpeningWatchTest {
         assertEquals(0, watch.permille(total));
         watch.received(1000, 1000 + 25000);
         assertEquals(250, watch.permille(total));
-        // the sizes, learned later, came out larger: the bar holds where it was
         assertEquals(250, watch.permille(total * 2));
         watch.received(2000, 1000 + 99000);
         assertEquals(OpeningWatch.MAX_PERMILLE, watch.permille(total));
-        // TLS and headers take it past the files' total: still not full
         watch.received(3000, 1000 + 130000);
         assertEquals(OpeningWatch.MAX_PERMILLE, watch.permille(total));
     }
@@ -127,7 +120,6 @@ public class OpeningWatchTest {
 
     @Test
     public void aShorterLimitFromTheConnectScreenHolds() {
-        // the connect screen's check used most of the limit: the cover gets what is left
         OpeningWatch watch = new OpeningWatch(0, PCStore.PAGE_FLOOR_MS, 0);
         assertEquals(OpeningWatch.Stage.NO_ANSWER, watch.stage(PCStore.PAGE_FLOOR_MS));
     }

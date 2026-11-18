@@ -1,37 +1,19 @@
 /**
- * Parallel browser lane: runs browser regression scripts concurrently with a worker pool.
- * Workers are isolated by temp dir and evidence subdirectory. The demo build is shared read-only.
- * The script list is read from scripts/ci-browser.sh, the serial lane, so the two cannot drift.
- * Every script's full output goes to <CHECK_DIR or .ci>/browser-logs/<script>.log.
- *
- * BROWSER_WORKERS: worker count (default: min(cores/2, 6))
- * BROWSER_SCRIPTS: comma-separated list of scripts to run (default: all from ci-browser.sh)
- * BROWSER_EXCLUDE: comma-separated list of scripts to leave out of that list
- * BROWSER_RETRY: 0 runs a failed script once only (default: a failed script runs a second time)
- * BROWSER_ORDER: listed starts the scripts in ci-browser.sh's order (default: the scripts that
- *   scripts/ci-browser-timings.json does not time yet, then the others longest first, so a slow
- *   script never starts last and runs on alone)
- * BROWSER_SHARD: "k/n" runs only shard k of n of the selected scripts, so n jobs split one lane
- *   (default: every selected script)
  * BROWSER_SCRIPT_TIMEOUT_SECONDS: how long one run of a script may take (default 600), so a hung
- *   script fails and names itself instead of using up the job's timeout. At the bound the script's
- *   process tree is stopped, its last log lines are printed at once, and it is not run again.
- *
- * A script that fails and then passes is reported as flaky, not hidden: its first log is kept as
- * <script>.attempt-1.log and printed, summary.json lists it, and under GitHub Actions it gets a
- * warning annotation and a line in the job summary. A script that fails twice fails the lane.
+ * script fails and names itself instead of using up the job's timeout. At the bound the script's
+ * process tree is stopped, its last log lines are printed at once, and it is not run again.
  */
 import { availableParallelism } from "node:os";
 import { basename, join } from "node:path";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { QUARANTINE, QUARANTINE_MAX_DAYS, type QuarantineEntry } from "./ci-browser-quarantine.ts";
 
 const repo = join(import.meta.dir, "..");
 const FAILURE_TAIL_LINES = 400;
 const HEARTBEAT_MS = 60_000;
 /** The longest run seen on a loaded CI host was about 6 minutes (security-summary, 2026-10-28). */
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS = 600;
-/** How long a stopped script gets to exit after SIGTERM, and again after SIGKILL. */
 const STOP_GRACE_MS = 5_000;
 const TIMEOUT_TAIL_LINES = 40;
 /** The exit code a timed-out script is given, as timeout(1) does. */
@@ -40,7 +22,6 @@ export const TIMEOUT_EXIT_CODE = 124;
 /** The longest delay setTimeout takes; a longer one fires at once. */
 const MAX_TIMEOUT_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
 
-/** BROWSER_SCRIPT_TIMEOUT_SECONDS: a positive number of seconds up to about 24 days; unset or empty is the default. */
 export function scriptTimeoutSeconds(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return DEFAULT_SCRIPT_TIMEOUT_SECONDS;
   const seconds = Number(value);
@@ -48,14 +29,12 @@ export function scriptTimeoutSeconds(value: string | undefined): number {
   return seconds;
 }
 
-/** The scripts the serial lane runs, in its order (the demo build, which takes an argument, is not one). */
 export function serialBrowserScripts(source = readFileSync(join(repo, "scripts/ci-browser.sh"), "utf8")): string[] {
   return [...source.matchAll(/^run_script (scripts\/[\w.-]+\.ts)\s*$/gm)].map((match) => match[1]!);
 }
 
 const list = (value: string | undefined): string[] => (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 
-/** Applies BROWSER_SCRIPTS and BROWSER_EXCLUDE to the serial list; a name it does not hold is an error. */
 export function selectBrowserScripts(all: string[], include?: string, exclude?: string): string[] {
   const included = include?.trim() ? list(include) : all;
   const excluded = list(exclude);
@@ -64,25 +43,16 @@ export function selectBrowserScripts(all: string[], include?: string, exclude?: 
   return [...new Set(included)].filter((script) => !excluded.includes(script));
 }
 
-/** The scripts by `seconds`, most first; the same seconds keep the listed order. */
 function mostFirst(scripts: string[], seconds: (script: string) => number): string[] {
   return scripts.map((script, index) => ({ script, index, seconds: seconds(script) }))
     .sort((a, b) => (a.seconds === b.seconds ? 0 : b.seconds - a.seconds) || a.index - b.index)
     .map(({ script }) => script);
 }
 
-/**
- * The order the workers take the scripts in. A script `timings` does not hold starts first, in the
- * listed order: nobody has measured it, so it may be the longest, and counted as a typical script
- * it would start late and run on alone after every other worker is done. The scripts the table
- * holds follow, longest first (seconds a script took on CI), so the slow ones start while every
- * worker is still busy and the lane ends with short ones; ties keep the listed order.
- */
 export function longestFirst(scripts: string[], timings: Record<string, number>): string[] {
   return mostFirst(scripts, (script) => Number.isFinite(timings[script]) ? timings[script]! : Infinity);
 }
 
-/** A script's seconds by `timings`; one the table does not hold counts as the table's median. */
 function timingEstimate(timings: Record<string, number>): (script: string) => number {
   const known = Object.values(timings).filter((seconds) => Number.isFinite(seconds)).sort((a, b) => a - b);
   const middle = Math.floor(known.length / 2);
@@ -91,12 +61,9 @@ function timingEstimate(timings: Record<string, number>): (script: string) => nu
 }
 
 /**
- * BROWSER_SHARD "k/n": the scripts shard k of n runs, in their listed order. Longest first by
- * `timings`, each script goes to the shard with the least estimated time so far (at least a second
- * a script, so an empty table still deals them out in turn), so the shards end near the same time.
- * A script the table does not hold counts here as the table's median, the best guess at its share
- * of a shard's load (within its shard it still starts first). Every job computes the same split
- * from the same table and list. Unset or empty keeps every script.
+ * Longest first by `timings`, each script goes to the shard with the least estimated time so far
+ * (at least a second a script, so an empty table still deals them out in turn), so the shards end
+ * near the same time.
  */
 export function shardScripts(scripts: string[], timings: Record<string, number>, shard: string | undefined): string[] {
   if (shard === undefined || shard.trim() === "") return scripts;
@@ -131,13 +98,10 @@ interface ScriptResult {
   seconds: number;
   code: number;
   log: string;
-  /** the log of the run that failed before this one passed or failed again */
   firstLog?: string;
   site?: string;
   message?: string;
-  /** the run was stopped at its deadline */
   stopped?: boolean;
-  /** what stopping the run saw: how many processes it ended, which it could not, and whether more may have gone unseen */
   stop?: StopOutcome;
 }
 
@@ -165,10 +129,27 @@ const failureDetail = (result: ScriptResult): string =>
 const workflowData = (message: string): string =>
   message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 
-/** How a script ended, from its last exit code and whether that was its second run: a pass after a failure is flaky, never a plain pass. */
 export function scriptOutcome(code: number, secondRun: boolean): "pass" | "flaky" | "fail" {
   if (code !== 0) return "fail";
   return secondRun ? "flaky" : "pass";
+}
+
+export type QuarantineStatus =
+  | { readonly state: "quarantined"; readonly entry: QuarantineEntry }
+  | { readonly state: "ended"; readonly entry: QuarantineEntry }
+  | { readonly state: "unlisted" };
+
+/** `today` is a UTC date, YYYY-MM-DD; an entry still holds on its end date. */
+export function quarantineStatus(script: string, list: Readonly<Record<string, QuarantineEntry>>, today: string): QuarantineStatus {
+  const entry = list[script];
+  if (entry === undefined) return { state: "unlisted" };
+  return today <= entry.until ? { state: "quarantined", entry } : { state: "ended", entry };
+}
+
+export function quarantineNote(status: QuarantineStatus): string {
+  if (status.state === "quarantined") return `It is quarantined until ${status.entry.until} (#${status.entry.issue}), so it does not fail the lane.`;
+  if (status.state === "ended") return `Its quarantine ran out after ${status.entry.until}, so it fails the lane: fix the race in the script or the app, or move its end date in QUARANTINE in scripts/ci-browser-quarantine.ts, at most ${QUARANTINE_MAX_DAYS} days ahead.`;
+  return `It is not quarantined, so it fails the lane: fix the race in the script or the app, or give it an entry in QUARANTINE in scripts/ci-browser-quarantine.ts with an issue about it and an end date at most ${QUARANTINE_MAX_DAYS} days ahead.`;
 }
 
 class ChromiumSetupError extends Error {
@@ -238,7 +219,6 @@ function carriesMark(pid: number, mark: string): boolean {
   try { return readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").includes(`${RUN_MARK}=${mark}`); } catch { return false; }
 }
 
-/** Every process below `root`, from `ps`; none when `ps` cannot run. */
 async function descendants(root: number): Promise<number[]> {
   let table = "";
   try {
@@ -270,7 +250,6 @@ const signal = (pids: number[], name: NodeJS.Signals): number[] => {
   return refused;
 };
 
-/** Resolves true when `done` settles within `ms`, false at the bound. */
 function within(done: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -279,7 +258,6 @@ function within(done: Promise<unknown>, ms: number): Promise<boolean> {
   ]).finally(() => clearTimeout(timer));
 }
 
-/** What stopRun reads and signals: the real process table, or a test's stand-in. */
 export interface StopIo {
   processes(): Promise<number[]>;
   /** Sends `name` to `pids`; returns the ones the system refused (EPERM), which are not known to have stopped. */
@@ -287,22 +265,17 @@ export interface StopIo {
   running(pid: number): boolean;
   /** Whether `pid` still carries this run's mark, read now: a pid found a moment ago may have been freed and reused. */
   marked(pid: number): boolean;
-  /** The program name of `pid` (see processName), or an empty string where it cannot be read. */
   command(pid: number): string;
-  /** The clock the grace is measured on, in ms. */
   now(): number;
   graceMs: number;
 }
 
 const SURVIVOR_LIMIT = 20;
 
-/** What stopRun saw, which is all it can know: finding a run's processes always races with their forking. */
 export interface StopOutcome {
-  /** how many of the processes it found it ended */
   stopped: number;
   /** the processes it could not stop, as `<pid> (<program name>)` or `<pid>` alone: nothing of a command line is ever printed */
   survivors: string[];
-  /** the last read still found new processes, or a signal was refused: others may have gone unlisted */
   unsure: boolean;
 }
 
@@ -346,7 +319,6 @@ export async function stopRun(io: StopIo, finished: Promise<unknown>): Promise<S
   const killed = new Set(first);
   const deadline = io.now() + io.graceMs;
   for (;;) {
-    // each read is of the run's own processes, so one forked since the last read is killed too
     const left = await io.processes();
     const fresh = left.filter((pid) => !killed.has(pid));
     for (const pid of fresh) { seen.add(pid); killed.add(pid); }
@@ -384,7 +356,6 @@ export function processName(pid: number): string {
   try { return programName(readlinkSync(`/proc/${pid}/exe`)); } catch { return ""; }
 }
 
-/** What the lane says of a run it had to stop: what it saw, never a promise that nothing is left. */
 export function stopReport(message: string, { stopped, survivors, unsure }: StopOutcome): string {
   return [
     `${message}; stopped ${stopped} process${stopped === 1 ? "" : "es"}`,
@@ -405,11 +376,9 @@ async function runScript(script: string, env: Record<string, string>, log: strin
     stdout: "pipe",
     stderr: "pipe",
   });
-  // A hung script shows up as a repeated line instead of silence.
   const heartbeat = setInterval(() => {
     console.log(`[running] ${script} (${Math.round((Date.now() - started) / 1000)}s, log ${log})`);
   }, HEARTBEAT_MS);
-  // The run ends when the script has exited and its output is read.
   const drained = Promise.all([timestampLog(child.stdout, log), timestampLog(child.stderr, log)]);
   const finished = Promise.all([child.exited, drained]);
   const io: StopIo = { processes: () => runProcesses(child, mark), signal, running, marked: (pid) => carriesMark(pid, mark), command: processName, now: Date.now, graceMs: STOP_GRACE_MS };
@@ -456,10 +425,11 @@ async function main(): Promise<void> {
   if (baseEvidenceDir) mkdirSync(baseEvidenceDir, { recursive: true });
 
   const retry = process.env.BROWSER_RETRY !== "0";
+  const today = new Date().toISOString().slice(0, 10);
+  const quarantine = (script: string): QuarantineStatus => quarantineStatus(script, QUARANTINE, today);
   const timeoutSeconds = scriptTimeoutSeconds(process.env.BROWSER_SCRIPT_TIMEOUT_SECONDS);
   const queue = process.env.BROWSER_ORDER === "listed" ? [...scripts] : longestFirst(scripts, timings);
   const untimed = scripts.filter((script) => !Number.isFinite(timings[script]));
-  // Said in every job's log, so a table that has fallen behind the list is seen and refreshed.
   if (process.env.BROWSER_ORDER !== "listed" && Object.keys(timings).length > 0 && untimed.length > 0) {
     console.log(`[setup] Not in scripts/ci-browser-timings.json yet, so started first: ${untimed.join(", ")}`);
   }
@@ -510,14 +480,14 @@ async function main(): Promise<void> {
         console.log(lines.slice(-TIMEOUT_TAIL_LINES).join("\n"));
       }
       const outcome = scriptOutcome(result.code, result.firstLog !== undefined);
-      // A stopped run already says why in its message; its first run's log, if it had one, is kept.
       if (outcome !== "pass" && !result.stopped) {
         const { site, message } = failureSite(readFileSync(outcome === "flaky" ? result.firstLog! : result.log, "utf8"));
         if (site) result.site = site;
         if (message) result.message = message;
       }
       results.push(result);
-      const failure = outcome === "fail" ? ` exit=${result.code}, log ${log}` : outcome === "flaky" ? `, failed once: ${result.firstLog}` : "";
+      const failure = outcome === "fail" ? ` exit=${result.code}, log ${log}`
+        : outcome === "flaky" ? `, failed once: ${result.firstLog}; ${quarantine(script).state === "quarantined" ? "quarantined" : "not quarantined, so the lane fails"}` : "";
       console.log(`[worker-${workerId}] ${outcome.toUpperCase()} ${script} (${result.seconds.toFixed(1)}s)${failure}`);
       lock.active--;
     }
@@ -534,18 +504,21 @@ async function main(): Promise<void> {
   console.log("-".repeat(80));
 
   const ordered = scripts.map((s) => results.find((r) => r.script === s)!).filter(Boolean);
+  const flaky = ordered.filter((r) => scriptOutcome(r.code, r.firstLog !== undefined) === "flaky");
+  const unexcused = flaky.filter((r) => quarantine(r.script).state !== "quarantined");
   for (const result of ordered) {
-    const status = { pass: " ", flaky: "~", fail: "!" }[scriptOutcome(result.code, result.firstLog !== undefined)];
+    const outcome = scriptOutcome(result.code, result.firstLog !== undefined);
+    const status = outcome === "flaky" && unexcused.includes(result) ? "!" : { pass: " ", flaky: "~", fail: "!" }[outcome];
     console.log(`${status}${result.script.padEnd(59)}${result.seconds.toFixed(1).padStart(8)}${String(result.code).padStart(6)}`);
   }
 
   const totalSeconds = (Date.now() - startedAt) / 1000;
   const passed = results.filter((r) => r.code === 0).length;
   const failed = results.filter((r) => r.code !== 0);
-  const flaky = ordered.filter((r) => scriptOutcome(r.code, r.firstLog !== undefined) === "flaky");
 
   console.log("-".repeat(80));
-  console.log(`Total: ${passed}/${results.length} passed in ${totalSeconds.toFixed(1)}s with ${workers} workers${flaky.length > 0 ? `, ${flaky.length} only on a second run (~)` : ""}`);
+  const flakyNote = flaky.length === 0 ? "" : `, ${flaky.length} only on a second run (~)${unexcused.length > 0 ? `, ${unexcused.length} of them not quarantined (!), which fails the lane` : ""}`;
+  console.log(`Total: ${passed}/${results.length} passed in ${totalSeconds.toFixed(1)}s with ${workers} workers${flakyNote}`);
 
   writeFileSync(join(logDir, "summary.json"), JSON.stringify({
     workers,
@@ -553,6 +526,7 @@ async function main(): Promise<void> {
     passed,
     total: results.length,
     flaky: flaky.map((r) => r.script),
+    notQuarantined: unexcused.map((r) => r.script),
     scripts: ordered.map(({ script, seconds, code, log, firstLog, site, message, stop }) => ({
       script, seconds, code, log, ...(firstLog ? { firstLog } : {}),
       ...(site ? { site } : {}), ...(message ? { message } : {}), ...(stop ? { stop } : {}),
@@ -567,15 +541,16 @@ async function main(): Promise<void> {
     console.log(shown.join("\n"));
   };
 
-  // A pass on the second run is still a failure somebody has to read: say so where a green job is looked at.
   for (const result of flaky) {
     const detail = failureDetail(result);
-    console.log(`\n${"=".repeat(80)}\nFLAKY ${result.script}: failed, then passed when run again; first log: ${result.firstLog}${detail ? `; ${detail}` : ""}`);
+    const status = quarantine(result.script);
+    console.log(`\n${"=".repeat(80)}\nFLAKY ${result.script}: failed, then passed when run again; first log: ${result.firstLog}${detail ? `; ${detail}` : ""}. ${quarantineNote(status)}`);
     tail(result.firstLog!);
-    if (process.env.GITHUB_ACTIONS) console.log(`::warning title=Flaky browser script::${workflowData(`${result.script}${detail ? `: ${detail}` : ""} failed once and passed when run again. Its first log is ${basename(result.firstLog!)} in the browser-logs artifact.`)}`);
+    const level = status.state === "quarantined" ? "warning" : "error";
+    if (process.env.GITHUB_ACTIONS) console.log(`::${level} title=Flaky browser script::${workflowData(`${result.script}${detail ? `: ${detail}` : ""} failed once and passed when run again. Its first log is ${basename(result.firstLog!)} in the browser-logs artifact. ${quarantineNote(status)}`)}`);
   }
   if (flaky.length > 0 && process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Flaky browser scripts\n\nFailed once, passed when run again:\n\n${flaky.map((r) => `- \`${r.script}\`${failureDetail(r) ? `: ${failureDetail(r)}` : ""} (first log \`${basename(r.firstLog!)}\`)`).join("\n")}\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Flaky browser scripts\n\nFailed once, passed when run again:\n\n${flaky.map((r) => `- \`${r.script}\`${failureDetail(r) ? `: ${failureDetail(r)}` : ""} (first log \`${basename(r.firstLog!)}\`). ${quarantineNote(quarantine(r.script))}`).join("\n")}\n`);
   }
 
   for (const result of failed) {
@@ -588,7 +563,7 @@ async function main(): Promise<void> {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Failed browser scripts\n\n${failed.map((r) => `- \`${r.script}\`${failureDetail(r) ? `: ${failureDetail(r)}` : ""} (full log \`${basename(r.log)}\`)`).join("\n")}\n`);
   }
 
-  process.exit(failed.length > 0 ? 1 : 0);
+  process.exit(failed.length > 0 || unexcused.length > 0 ? 1 : 0);
 }
 
 if (import.meta.main) {

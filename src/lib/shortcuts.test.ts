@@ -68,17 +68,13 @@ describe("keepsArrowsForText", () => {
   it("lets the binding go where the field has no text left that way, so a draft never stops a pane switch", () => {
     const draft = (selectionStart: number, selectionEnd: number, selectionDirection = "none") =>
       ({ tagName: "TEXTAREA", value: "draft", selectionStart, selectionEnd, selectionDirection, classList: classes("composer-text") });
-    // the caret at the end: down has nothing left to select, up still does
     expect(keepsKeyForText({ key: "ArrowDown", target: draft(5, 5) }, "next-pane")).toBe(false);
     expect(keepsKeyForText({ key: "End", target: draft(5, 5) }, "next-pane")).toBe(false);
     expect(keepsKeyForText({ key: "ArrowUp", target: draft(5, 5) }, "previous-pane")).toBe(true);
-    // up once selected to the start (its moving end): the next up switches
     expect(keepsKeyForText({ key: "ArrowUp", target: draft(0, 5, "backward") }, "previous-pane")).toBe(false);
     expect(keepsKeyForText({ key: "ArrowDown", target: draft(0, 5, "backward") }, "next-pane")).toBe(true);
-    // a selection made forward from the start still moves its end back
     expect(keepsKeyForText({ key: "ArrowUp", target: draft(0, 5, "forward") }, "previous-pane")).toBe(true);
     expect(keepsKeyForText({ key: "ArrowDown", target: draft(0, 5, "forward") }, "next-pane")).toBe(false);
-    // the caret inside the text: both ways still select
     expect(keepsKeyForText({ key: "ArrowUp", target: draft(2, 2) }, "previous-pane")).toBe(true);
     expect(keepsKeyForText({ key: "ArrowDown", target: draft(2, 2) }, "next-pane")).toBe(true);
   });
@@ -134,7 +130,6 @@ describe("shortcutDisplayKeys", () => {
     expect(shortcutDisplayKeys("voice", { voice: "p" })).toEqual(["Mod", "Shift", "Space"]);
   });
 
-  // listed only, as voice: the composer's own Alt+Enter, never an app action or a binding to record
   it("lists the composer's Alt+Enter hold, never dispatched or rebound", () => {
     expect(SHORTCUTS.find((shortcut) => shortcut.id === "hold-message")?.keys).toEqual(["Alt", "Enter"]);
     expect(shortcutDisplayKeys("hold-message", { "hold-message": "p" })).toEqual(["Alt", "Enter"]);
@@ -330,7 +325,6 @@ describe("exact-modifier bindings", () => {
     const overrides = sanitizeShortcutOverrides({ palette: "ctrl+k", "scroll-up": "meta+PageUp" }, true);
     expect(matchShortcut(ctrlK(), false, overrides)).toBe("palette");
     expect(matchShortcut(ctrlK({ altKey: true }), false, overrides)).toBeNull();
-    // the moved palette no longer answers its default Mod+Shift+K
     expect(matchShortcut(ctrlK({ shiftKey: true }), false, overrides)).toBeNull();
     expect(matchShortcut(keyEvent("PageUp", { metaKey: true, shiftKey: false }), true, overrides)).toBe("scroll-up");
     expect(matchShortcut(keyEvent("PageUp", { metaKey: true, shiftKey: true }), true, overrides)).toBeNull();

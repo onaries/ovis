@@ -52,11 +52,8 @@ const DOUBLE_ESCAPE_AGENTS: ReadonlySet<string> = new Set(["devin", "kilo", "mak
 /** The gap Chat's Stop leaves between the two Escapes, well inside the window each of those agents gives the second. */
 export const DOUBLE_ESCAPE_GAP_MS = 150;
 
-/** What Chat's Stop sends: Escape, or Escape twice (DOUBLE_ESCAPE_GAP_MS apart) for DOUBLE_ESCAPE_AGENTS, or one
- * guarded Ctrl+C for Hermes and Grok, or nothing for those when their screen shows no turn to stop. */
 export type StopKey = "\u001b" | "\u001b\u001b" | "\u0003" | null;
 
-/** The key Chat's Stop sends, by agent: Ctrl+C or nothing for Hermes and Grok, two Escapes for some, else Escape. */
 export function stopKey(
   agent: string | null | undefined,
   rows: () => readonly string[],

@@ -13,13 +13,11 @@ import type { HerdrPane } from "../../shared/protocol.ts";
 
 /**
  * The hc client against a real hc, in a core of its own: a session name and state, config and
- * runtime folders no other core uses, so the user's core and the Herdr app never see it. Runs only
- * where OVIS_TEST_HC_BIN names an hc (generation 1).
+ * runtime folders no other core uses, so the user's core and the Herdr app never see it.
  */
 const bin = process.env["OVIS_TEST_HC_BIN"];
 
 const WAIT_MS = 5000;
-/** each test and hook outlasts its own bounded waits and calls, so a failure names the wait that ran out */
 const TEST_MS = 30_000;
 
 interface Waiter { check: () => boolean; resolve: () => void }
@@ -28,7 +26,6 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
   let dir = "";
   /** set only once every isolating variable is in it: nothing runs hc without it */
   let env: Record<string, string> | null = null;
-  /** the core and holder this test started, stopped (or killed) in afterAll */
   let pids: number[] = [];
   let hc: HcConnection;
   const waiters = new Set<Waiter>();
@@ -92,7 +89,6 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
     const proc = Bun.spawn([bin!, "schema"], { env: env!, stdout: "pipe", stderr: "ignore" });
     const schema: unknown = JSON.parse(await new Response(proc.stdout).text());
     expect(await proc.exited).toBe(0);
-    // a different hc: refresh with OVIS_HC_BIN=<it> bun run generate:types --refresh-hc
     expect(schema).toEqual(JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "scripts", "hc-schema.json"), "utf8")));
   }, TEST_MS);
 
@@ -278,7 +274,6 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
   it("renames and moves Ovis's own workspaces and tabs in labels, and splits them in its own document, on a core no Herdr app arranges", async () => {
     const socket = join(dir, "herdr.sock");
     const adapter = await startHerdrCoreAdapter(hc, socket);
-    // the core is this test's own and stops in afterAll: a failure here leaves nothing for another test
     try {
       expect((await ping(socket)).layout).toEqual({ rename: true, split: true, move: true, arrange: true, worktrees: true });
       const api = await workspaceCreate({ cwd: dir, label: "api" }, socket);
@@ -286,7 +281,6 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
 
       await workspaceRename(api.workspace.workspace_id, "backend", socket);
       await tabRename(api.tab.tab_id, "server", socket);
-      // #2812: split right, then the first pane down; a viewer sizes each terminal to its pane, and the panes keep their places
       const right = (await herdrRpc<{ pane: HerdrPane }>("pane.split", { target_pane_id: api.root_pane.pane_id, direction: "right" }, socket)).pane;
       const down = (await herdrRpc<{ pane: HerdrPane }>("pane.split", { target_pane_id: api.root_pane.pane_id, direction: "down" }, socket)).pane;
       const tabRects = async () => (await sessionSnapshot(socket)).layouts.find((layout) => layout.tab_id === api.tab.tab_id)!.panes.map((pane) => [pane.pane_id, pane.rect]);
@@ -316,7 +310,6 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
       snapshot = await sessionSnapshot(socket);
       expect(snapshot.workspaces.some((workspace) => workspace.workspace_id === web.workspace.workspace_id)).toBe(false);
       expect(snapshot.tabs.filter((tab) => tab.workspace_id === api.workspace.workspace_id).map((tab) => tab.label)).toEqual(["server", "moved"]);
-      // the moved pane takes its new workspace's name, so it never renames it
       expect(snapshot.workspaces.find((workspace) => workspace.workspace_id === api.workspace.workspace_id)?.label).toBe("backend");
       await workspaceClose(api.workspace.workspace_id, socket);
     } finally {
@@ -328,8 +321,7 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
 /**
  * Another machine of a real hc's core, shown as a PC of its own (#2497): two cores of their own
  * (sessions, state, config and runtime folders nobody else uses), the second added to the first as
- * `lab` through a `--via` command that runs its `hc connect` in its own env, as SSH would there. Runs
- * only where OVIS_TEST_HC_BIN names an hc.
+ * `lab` through a `--via` command that runs its `hc connect` in its own env, as SSH would there.
  */
 describe.skipIf(!bin)("another machine of a real hc's core", () => {
   let dir = "";
@@ -406,7 +398,6 @@ describe.skipIf(!bin)("another machine of a real hc's core", () => {
 
   it("lists the machine, then starts, types into and reads a terminal there by its own address", async () => {
     expect((await listHcMachines(hc!)).map((machine) => [machine.name, machine.connected])).toEqual([["lab", true]]);
-    // this PC's own terminal is none of lab's
     expect((await sessionSnapshot(socket)).panes).toEqual([]);
     const made = await workspaceCreate({ label: "on lab" }, socket);
     const paneId = made.root_pane.pane_id;

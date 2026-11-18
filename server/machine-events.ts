@@ -19,7 +19,6 @@ export interface MachineEventDocument {
 export function subscribeMachineEvents({ manager, preferences, herdrSidebar, seen, pairings }: MachineEventDocument, send: (event: MachineEvent) => void): () => void {
   const stops: Array<() => void> = [];
   let active = true;
-  /** the roster told last, encoded as it was then (the manager changes its machines in place), while no other event followed it */
   let lastRoster: string | null = null;
   const tell = (event: MachineEvent) => { if (active) { lastRoster = null; send(event); } };
   const stop = () => { active = false; for (const off of stops.splice(0)) off(); };
@@ -42,8 +41,6 @@ export function subscribeMachineEvents({ manager, preferences, herdrSidebar, see
       const incoming = reportedTokenValues(shown);
       sendSidebar(reported, incoming);
       reported = incoming;
-      // the manager tells its whole roster after every refresh, changed or not: over a slow relay
-      // a repeat of the event just told costs the bandwidth the pane being opened needs
       const encoded = JSON.stringify(shown);
       if (encoded === lastRoster) return;
       tell({ type: "machines", machines: shown });

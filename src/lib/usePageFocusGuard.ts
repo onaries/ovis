@@ -1,6 +1,4 @@
 /**
- * The app's keyboard while a page's scripts run beside the pane (the docked file viewer).
- *
  * A frame's script can take the focus by itself (`window.focus()`), and the keys typed for the message box or
  * the terminal then go to the page. Measured in Chrome 156 and WebKit 26.6: nothing on the frame element stops
  * it (`inert`, `tabindex`, a permissions policy), the page around a frame of another origin sees neither a hover
@@ -19,7 +17,6 @@
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
-/** how long after a Tab the focus arriving in the frame counts as that Tab's */
 const TAB_REACH_MS = 150;
 
 export function usePageFocusGuard(frame: RefObject<HTMLIFrameElement | null>, active: boolean, onGrab: () => void): { shield: boolean; enter: () => void } {
@@ -35,13 +32,10 @@ export function usePageFocusGuard(frame: RefObject<HTMLIFrameElement | null>, ac
     state.current.tabAt = -Infinity;
     const focused = (event: FocusEvent): void => {
       if (!(event.target instanceof HTMLElement) || event.target === frame.current) return;
-      // the focus is in the app again: the page has to be given it anew
       state.current.last = event.target;
-      // and a Tab that went there did not go to the page
       state.current.tabAt = -Infinity;
       put(false);
     };
-    // on the way up, so a Tab its target kept for itself (the terminal's completion stops it) never arrives
     const keyed = (event: KeyboardEvent): void => { if (event.key === "Tab" && !event.defaultPrevented) state.current.tabAt = performance.now(); };
     const left = (): void => {
       // the window's blur with the frame as the active element: the focus went into the page. The same is asked

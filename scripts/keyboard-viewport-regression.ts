@@ -1,8 +1,6 @@
 /**
- * bun scripts/keyboard-viewport-regression.ts
- * Runs the real viewport module and shell/composer CSS against controlled viewport
- * events. Chromium cannot emulate iOS keyboard dismissal or safe-area env() values;
- * only those platform inputs are faked. No live herdr session or production build.
+ * Chromium cannot emulate iOS keyboard dismissal or safe-area env() values;
+ * only those platform inputs are faked.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -97,7 +95,6 @@ try {
           ? ({ matches: scenario.startsWith("standalone") || ipad } as MediaQueryList) : originalMatchMedia(query);
         const nativeRect = HTMLElement.prototype.getBoundingClientRect;
         HTMLElement.prototype.getBoundingClientRect = function () {
-          // Fake only the module's rulers, never app layout.
           if (this.style.height === "100lvh") return new DOMRect(0, 0, 0, fake.large);
           if (this.style.height === "env(safe-area-inset-top, 0px)") return new DOMRect(0, 0, 0, ipad ? 24 : mobile ? 59 : 0);
           return nativeRect.call(this);
@@ -115,7 +112,6 @@ try {
       // an installed clock still runs in real time: paused, only runFor moves it, so a slow runner cannot let the
       // shrink wait run out between two steps, and nothing can land late unseen
       await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
-      // at rest: 100dvh, a phone home-screen app's status-bar correction, or the iPad's shell fitted under its status bar
       const rest = scenario === "ipad" ? 796 : scenario === "browser-short" ? 793 : mobile ? 852 : 800;
       const corrected = scenario === "standalone" || scenario === "ipad";
       await checkState(page, false, rest, mobile ? 34 : 0, corrected);
@@ -131,7 +127,7 @@ try {
         assert.deepEqual(bounds, { corrected: 852, uncorrected: 793, padding: 18 }, "status inset is added exactly once with home-indicator clearance");
       }
       await page.getByRole("textbox", { name: "Message", exact: true }).focus();
-      await checkState(page, false, rest, mobile ? 34 : 0, corrected); // hardware keyboard / focus without soft keyboard
+      await checkState(page, false, rest, mobile ? 34 : 0, corrected);
       if (scenario === "ipad") {
         const composer = page.getByRole("textbox", { name: "Message", exact: true });
         const mark = () => page.evaluate(() => ({ keyboard: document.documentElement.hasAttribute("data-keyboard"), published: document.documentElement.style.getPropertyValue("--app-height") }));
@@ -143,7 +139,6 @@ try {
         await checkState(page, false, 796, 34, true);
         await page.clock.runFor(50);
         await checkState(page, false, 796, 34, true);
-        // an on-screen keyboard that comes in one event counts once it lasted; up, it is followed in each event
         await geometry(page, 366, 820, 820);
         assert.deepEqual(await mark(), { keyboard: false, published: "796px" }, "iPad: the keyboard's shrink waits too");
         await page.clock.runFor(50);
@@ -152,9 +147,6 @@ try {
         await checkState(page, true, 300, 34);
         await geometry(page, 796, 820, 820, "scroll");
         await checkState(page, false, 796, 34, true);
-        // a keyboard opening under a stream of viewport events (one a frame): the wait starts at the first shrinking
-        // event and the ones after it do not start it again, so the keyboard counts while it still opens, and from
-        // then on the shell is at the viewport's height in every frame
         for (let frame = 1; frame <= 12; frame += 1) {
           await geometry(page, 796 - frame * 20, 820, 820);
           await page.clock.runFor(16);
@@ -162,8 +154,6 @@ try {
         assert.deepEqual(await mark(), { keyboard: true, published: "556px" }, "iPad: a keyboard opening under a stream of viewport events counts while it opens");
         await geometry(page, 796, 820, 820, "scroll");
         await checkState(page, false, 796, 34, true);
-        // the field loses the focus while the shrink waits (a tap on a button, a composer unmounted under the keyboard):
-        // the keyboard is still up and still counts, as it did when the shrink was applied in its event
         await geometry(page, 366, 820, 820);
         await composer.blur();
         await page.clock.runFor(50);
@@ -171,10 +161,8 @@ try {
         await geometry(page, 796, 820, 820, "scroll");
         await checkState(page, false, 796, 34, true);
         await composer.focus();
-        // a window made smaller is not a keyboard: its large viewport shrinks with it, and the shell follows in that event
         await geometry(page, 676, 700, 700);
         await checkState(page, false, 676, 34, true);
-        // nor is a rotation, which changes the width
         await page.setViewportSize({ width: 820, height: 1180 });
         await geometry(page, 1156, 1180, 1180, "orientationchange");
         await checkState(page, false, 1156, 34, true);
@@ -189,16 +177,15 @@ try {
         // while the visual viewport retains a small non-keyboard inset.
         await page.setViewportSize({ width: 393, height: 600 });
         await geometry(page, 576, 600, 600);
-        await checkState(page, false, 600, 34); // focused hardware keyboard
+        await checkState(page, false, 600, 34);
         await geometry(page, 300, 600, 600);
         await checkState(page, true, 300, 34);
         await geometry(page, 576, 600, 600, "scroll");
         await checkState(page, false, 600, 34); // soft keyboard dismissed, still focused
         await page.getByRole("textbox", { name: "Message", exact: true }).blur();
         await page.getByRole("textbox", { name: "Message", exact: true }).focus();
-        await checkState(page, false, 600, 34); // blur/refocus must not revive stale height
+        await checkState(page, false, 600, 34);
       } else if (scenario === "mobile") {
-        // a phone's keyboard is applied in the event that reports it: only an iPad's shrink waits
         await geometry(page, 472, 852, 852);
         await checkState(page, true, 472, 34);
         await geometry(page, 400, 852, 852); // the keyboard grows while it is up (a suggestion bar)
@@ -216,7 +203,7 @@ try {
         await checkState(page, true, 477, 34);
         await geometry(page, 793, 852, 852);
         await checkState(page, false, 852, 34);
-        await geometry(page, 400, 852, 852, "resize", 2); // pinch zoom is not a keyboard
+        await geometry(page, 400, 852, 852, "resize", 2);
         await checkState(page, false, 852, 34);
         await geometry(page, 793, 852, 852);
         // Safari page zoom 85%: the scale is below 1 but the visual viewport stays full width, so a keyboard still counts
@@ -229,7 +216,7 @@ try {
         await geometry(page, 793, 852, 852);
         await geometry(page, 210, 393, 393);
         await page.setViewportSize({ width: 852, height: 393 });
-        await geometry(page, 210, 393, 393, "orientationchange"); // rotate with keyboard still open
+        await geometry(page, 210, 393, 393, "orientationchange");
         await checkState(page, true, 210, 34);
         await geometry(page, 372, 393, 393);
         await checkState(page, false, 393, 34);
@@ -243,7 +230,7 @@ try {
         await checkState(page, false, 393, 21);
         await page.locator(".xterm-helper-textarea").focus();
         await geometry(page, 210, 393, 393);
-        await checkState(page, false, 393, 21); // automatic xterm focus does not raise keyboard state
+        await checkState(page, false, 393, 21);
         await page.locator(".terminal-host").evaluate((el) => el.setAttribute("data-direct-typing", ""));
         await geometry(page, 210, 393, 393);
         await checkState(page, true, 210, 21);
@@ -277,7 +264,7 @@ try {
           fake.keyboardHeight = 300;
           fake.keyboard.dispatchEvent(new Event("geometrychange"));
         });
-        await checkState(page, true, 793, 34); // geometry alone detects a keyboard
+        await checkState(page, true, 793, 34);
         await page.evaluate(() => {
           const fake = (window as any).viewportFixture;
           fake.keyboardHeight = 0;
@@ -286,22 +273,19 @@ try {
         await checkState(page, false, 852, 34);
         await geometry(page, 472, 852, 852);
         await checkState(page, true, 472, 34);
-        // Zero geometry must not mask visual occlusion on browsers exposing the API.
         await geometry(page, 793, 852, 852);
         await checkState(page, false, 852, 34);
       } else {
         await geometry(page, 400, 400, 800);
-        await checkState(page, false, 800, 0); // desktop focus/resize never activates phone keyboard handling
+        await checkState(page, false, 800, 0);
       }
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   }
   // an iPad home-screen app in landscape: the visual viewport stops above the status bar while the shell would be
-  // 100dvh tall, so the page could scroll by that band whenever a field takes the focus. The shell fits the visual
-  // viewport, also at Safari's page zoom; a pinch, a keyboard-sized gap, a Safari tab or a phone keep the rules above.
+  // 100dvh tall, so the page could scroll by that band whenever a field takes the focus.
   // Page zoom scales the layout (125% of an 1180x820 screen lays out 944x656) and leaves the screen's own size, so
-  // the iPad is told by its screen. Each case reads the shell right after the load, with no clock: the first sync
-  // of a page never waits for a shrink
+  // the iPad is told by its screen.
   const landscape = { width: 1180, height: 820 };
   const ipad = { width: 820, height: 1180 }; // iOS reports the screen as it is in portrait, whichever way it is held
   for (const [name, size, screen, visual, scale, pinched, standalone, fits] of [
@@ -359,8 +343,6 @@ try {
         const box = () => page.locator(selector).evaluate((el) => { const rect = el.getBoundingClientRect(); return [rect.x, rect.y, rect.width, rect.height]; });
         const resting = await box();
         await page.locator(selector).dispatchEvent("pointerdown");
-        // the press arms a text field, whose box does not follow its text. A select's box does: armed by the press it
-        // would widen under the finger and could move away from it, so a select is armed only once it has the focus
         const select = selector === ".select";
         assert.equal(await size(selector), ios && !select ? "16px" : body, `${where} ${selector}: ${ios && !select ? "16px from the press itself" : "a press leaves the size"}`);
         if (select) assert.deepEqual(await box(), resting, `${where} ${selector}: a press leaves the select's box where it is`);
@@ -370,7 +352,6 @@ try {
         await page.locator(selector).blur();
         assert.equal(await size(selector), body, `${where} ${selector}: the interface size again after the blur`);
       }
-      // a press on a field's label arms the field it focuses; a press a scroll cancels leaves no armed field behind
       await page.evaluate(() => document.querySelector(".app")!.insertAdjacentHTML("afterbegin", '<label for="fixture-dir">Directory</label><input id="fixture-dir" class="input">'));
       await page.locator('label[for="fixture-dir"]').dispatchEvent("pointerdown");
       await page.locator('label[for="fixture-dir"]').click();
@@ -379,7 +360,6 @@ try {
       await page.locator('.input[aria-label="Field"]').dispatchEvent("pointerdown");
       await page.locator('.input[aria-label="Field"]').dispatchEvent("pointercancel");
       assert.equal(await size('.input[aria-label="Field"]'), body, `${where}: a cancelled press disarms the field`);
-      // a press on a button whose handler focuses a field (Find in diff, Rename tab) arms the field it focuses
       await page.evaluate(() => {
         document.querySelector(".app")!.insertAdjacentHTML("afterbegin", '<button type="button" id="fixture-find">Find</button><input id="fixture-search" class="input">');
         document.querySelector("#fixture-find")!.addEventListener("click", () => document.querySelector<HTMLElement>("#fixture-search")!.focus());
@@ -396,8 +376,6 @@ try {
       assert.equal(await size("#fixture-picker"), body, `${where}: a pressed picker button keeps the interface size`);
       for (const type of ["pointerup", "click"]) await page.locator("#fixture-picker").dispatchEvent(type);
       assert.equal(await size("#fixture-picker"), body, `${where}: a picker button keeps the interface size after its press`);
-      // a press that ends in a click without the field taking the focus (a handler refused it) leaves nothing armed
-      // once the click is done, and the label of a disabled field arms nothing
       await page.evaluate(() => {
         document.querySelector(".app")!.insertAdjacentHTML("afterbegin", '<input id="fixture-refused" class="input"><label for="fixture-off">Off</label><input id="fixture-off" class="input" disabled>');
         document.querySelector("#fixture-refused")!.addEventListener("mousedown", (event) => event.preventDefault());
@@ -409,7 +387,6 @@ try {
       assert.equal(await size("#fixture-refused"), body, `${where}: a press that ends without the focus disarms the field`);
       await page.locator('label[for="fixture-off"]').dispatchEvent("pointerdown");
       assert.equal(await size("#fixture-off"), body, `${where}: the label of a disabled field arms nothing`);
-      // a press that never ends in a click (the finger slid off) is cleared by the next press anywhere
       await page.locator("#fixture-refused").dispatchEvent("pointerdown");
       await page.locator("#fixture-find").dispatchEvent("pointerdown");
       assert.equal(await size("#fixture-refused"), body, `${where}: the next press clears a field an earlier press left armed`);
@@ -425,13 +402,12 @@ try {
       assert.equal(await size("#fixture-dir"), body, `${where}: the blur of a field disabled while focused disarms it`);
       await page.locator("#fixture-dir").blur();
       if (ios) {
-        await page.locator("#fixture-dir").evaluate((el) => el.setAttribute("data-armed", "")); // as a dropped focus leaves it
+        await page.locator("#fixture-dir").evaluate((el) => el.setAttribute("data-armed", ""));
         await page.locator("#fixture-find").dispatchEvent("pointerdown");
         assert.equal(await size("#fixture-dir"), body, `${where}: the next press disarms a field that lost the focus without a blur`);
       }
     } finally { await context.close(); }
   }
-  // an interface size over 16px: the press keeps the field at the interface size instead of shrinking it to 16px
   for (const width of [393, 1180]) {
     const context = await browser.newContext({ viewport: { width, height: 820 }, hasTouch: true });
     try {
@@ -440,7 +416,6 @@ try {
       });
       const page = await context.newPage();
       await page.goto(`http://127.0.0.1:${server.port}/`);
-      // a 20px interface body size over the 14px default, as lib/settings.ts writes it on <html>
       await page.evaluate(() => {
         document.documentElement.style.setProperty("--ui-scale", String(20 / 14));
         document.querySelector(".app")!.insertAdjacentHTML("afterbegin", '<input class="input" aria-label="Large field">');
@@ -495,7 +470,6 @@ try {
       }, { width, scale, portrait, standalone, ipad, os26 });
       const page = await context.newPage();
       await page.goto(`http://127.0.0.1:${server.port}/`);
-      // the connecting shell's bare header, and the app's own: zoned, with the sidebar's top row (.header-side) in it
       await page.evaluate(() => document.querySelector(".app")!.insertAdjacentHTML("afterbegin", '<header class="app-header" id="fixture-bare"></header><header class="app-header is-zoned" id="fixture-zoned"><div class="header-side"></div></header>'));
       const header = () => page.evaluate(() => {
         const left = (selector: string) => parseFloat(getComputedStyle(document.querySelector(selector)!).paddingLeft);
@@ -505,13 +479,11 @@ try {
       assert.equal(open.marked, room !== null, `${name}: the window's controls are ${room === null ? "not " : ""}there`);
       if (room === null) continue;
       assert.equal(open.bare, room, `${name}: a bare header leaves the controls' room`);
-      // from 769px the sidebar's top row is the header's first zone: the room goes there and the header adds none
       assert.deepEqual({ zoned: open.zoned, side: open.side }, width >= 769 ? { zoned: 0, side: room } : { zoned: room, side: 0 }, `${name}: the room is left once, in the zone that holds the first button`);
       await page.locator(".app").evaluate((app) => app.classList.add("sidebar-collapsed"));
       const collapsed = await header();
       assert.deepEqual({ zoned: collapsed.zoned, side: collapsed.side }, { zoned: room, side: 0 }, `${name}: with the sidebar collapsed the header itself leaves the room`);
       await page.locator(".app").evaluate((app) => app.classList.remove("sidebar-collapsed"));
-      // the window goes full screen and back: the mark follows the resize
       const resize = (to: number) => page.evaluate((to) => {
         const fixture = (window as any).windowFixture;
         fixture.width = to;

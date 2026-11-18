@@ -4,18 +4,11 @@ import { fetchDevices } from "./api.ts";
 import { apiFetch } from "./api-request-id.ts";
 
 /**
- * What the relay tab's QR code (ConnectPhoneDialog `AccountQr`) let in after it was taken down. A device that
- * redeemed the code just before it was ended links itself seconds later (lib/relay/accountController.ts), when the
- * tab, the dialog or all of Settings may be gone. So the watch lives here, outside any component: it reads the PC's
- * account and devices until it knows nobody got in, and what it finds waits as a notice for the relay tab, which
- * Devices and PCs opens again for it. A notice nobody answered waits here too (holdAccountQrNotice).
  * Who is vouched for is decided here as `ovis add` decides it (scripts/plugin-link.ts): only a member of the PC's
  * account is named as the one that added it, and every other device that came since the code is asked about.
  */
 
-/** how often the PC is asked which account it is in and which devices it has */
 export const ACCOUNT_QR_POLL_MS = 3000;
-/** how long a device that just paired gets to put the PC in its account before it is named as paired with the PC alone */
 export const ACCOUNT_QR_ALONE_MS = 10_000;
 /** how long the PC is watched after its QR code came down: as long as a pairing code lives (server/devices.ts) */
 export const ACCOUNT_QR_LATE_MS = 10 * 60_000;
@@ -28,24 +21,18 @@ export const ACCOUNT_QR_LATE_MS = 10 * 60_000;
  */
 export interface AccountQrBaseline { readonly ids: ReadonlySet<string>; readonly seen: Map<string, number> }
 
-/** a device the QR code's code let in that nobody vouched for; `relay`: it came through the relay, not at the PC's own address */
 export interface AccountQrStray { readonly id: string; readonly label: string; readonly relay: boolean }
 
 /**
  * What there is to tell of a PC that was in no account when its QR code was made (`known`), and to ask: `strays` are
  * removed unless the person keeps them, and `checking` are the devices still in their ten seconds, asked about once
- * those end. The relay tab reads the PC on from `known`, so what changed while the notice waited is told as well.
+ * those end.
  */
 export type AccountQrNotice =
-  /** the PC is still in no account, and those devices paired with it */
   | { readonly kind: "alone"; readonly strays: readonly AccountQrStray[]; readonly checking: readonly AccountQrStray[]; readonly known: AccountQrBaseline }
   /** the PC joined `account`; `device` is the member of that account that added it, null when no row is one */
   | { readonly kind: "joined"; readonly account: string; readonly device: string | null; readonly strays: readonly AccountQrStray[]; readonly checking: readonly AccountQrStray[]; readonly known: AccountQrBaseline };
 
-/**
- * Fired on `window` when the watch starts or ends, and with `detail.notice` true when a notice waits
- * (takeAccountQrNotice).
- */
 export const ACCOUNT_QR_WATCH_EVENT = "ovis:account-qr-watch";
 
 const newest = (devices: readonly PairedDevice[]): PairedDevice | null => devices.reduce<PairedDevice | null>((latest, device) => latest === null || device.created_at > latest.created_at ? device : latest, null);
@@ -99,26 +86,19 @@ let notice: AccountQrNotice | null = null;
 
 const changed = (noticed: boolean): void => { window.dispatchEvent(new CustomEvent(ACCOUNT_QR_WATCH_EVENT, { detail: { notice: noticed } })); };
 
-/** a QR code that came down is still being checked for a device it may have let in a moment before */
 export const accountQrPending = (): boolean => watch !== null && !watch.lingering;
 export const accountQrNoticeWaiting = (): boolean => notice !== null;
 
-/** The waiting notice, once: whoever takes it shows it. */
 export function takeAccountQrNotice(): AccountQrNotice | null {
   const taken = notice;
   notice = null;
   return taken;
 }
 
-/**
- * A notice that went from the screen with no answer (the dialog closed over it): it waits again, with no event, so it
- * is shown the next time Devices and PCs or Add a connection opens, not put back over the dialog's own closing.
- */
 export function holdAccountQrNotice(held: AccountQrNotice): void {
   notice = held;
 }
 
-/** Ends the watch; the baseline it compared with, for a QR code shown again to go on from. */
 export function stopAccountQrWatch(): AccountQrBaseline | null {
   const known = watch?.known ?? null;
   watch?.stop();
@@ -130,7 +110,6 @@ function publish(next: AccountQrNotice): void {
   changed(true);
 }
 
-/** Forgets the watch and any waiting notice: every device was revoked, or a test starts over. */
 export function resetAccountQrWatch(): void {
   stopAccountQrWatch();
   notice = null;
@@ -184,9 +163,8 @@ export function watchEndedAccountQr(known: AccountQrBaseline, ended: Promise<boo
         publish({ kind: "alone", strays: due, checking, known });
         return;
       }
-      // nobody came: with the code's end confirmed before this read began, nobody will
       if (checking.length === 0 && conclusive && !linger) stop();
-    } catch { /* the next round asks again */ } finally { asking = false; }
+    } catch {} finally { asking = false; }
   };
   const poll = window.setInterval(() => void ask(), ACCOUNT_QR_POLL_MS);
   // by the timer, and in each round by the clock: a device that slept ran no timer

@@ -10,15 +10,9 @@ import { paneLifetimes, paneStateKey, type PaneLifetimes } from "./paneLifetime.
  * and a restart of the server; it needs no receipt and takes no `heldUntil`.
  */
 export interface PendingMessageView extends PendingMessage { serverOwned: boolean; resendInFlight?: true; resendGeneration?: number; heldUntil?: number; heldBy?: string; heldByRequest?: true }
-/**
- * Whether the bridge's own message says its sender asked for the hold: the bridge holds that one with no reason, and every
- * other hold names its reason (a lost connection, a turn that never started, a refused send; server/pending-input.ts).
- */
 const requestedHold = (message: PendingMessage): boolean => message.state === "held" && message.error === undefined;
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-/** a resumed `held` ID (the frame's own `held` field) travels with the removals */
-export type Removal = PendingRemoval | { id: string; outcome: "held"; resumed: true; /** when (Date.now) the bridge's receipt ends */ until: number };
-/** a frame field's value for one ID, from whatever the frame carries */
+export type Removal = PendingRemoval | { id: string; outcome: "held"; resumed: true; until: number };
 const byId = (value: unknown, id: string): unknown => typeof value === "object" && value !== null && Object.hasOwn(value, id) ? Reflect.get(value, id) : undefined;
 /**
  * A pending-messages frame's removals and its resumed `held` IDs, as `publish` takes them. A held ID is a proof only
@@ -42,7 +36,6 @@ export const frameRemovals = (frame: { removed?: PendingRemoval[]; held?: unknow
   }))];
 };
 const PREFIX = "ovis:pending:";
-/** the bridge keeps a held receipt this long (server/core/pending.ts PI_RESUME_MS), at most: a bridge that names no time gets this */
 const HELD_RECEIPT_MS = 10 * 60 * 1000;
 /**
  * The clock a held receipt's proof ends on. The bridge ends its receipt on a clock that only moves forward
@@ -59,12 +52,10 @@ const proofNow = (): number => {
   wallRead = wall; steadyRead = steady;
   return proofTime;
 };
-/** a held receipt's proof, by the time it ends (`proofNow`) */
 const freshReceipt = (until: number | undefined): until is number => until !== undefined && proofNow() < until;
 const piReceipt = (message: PendingMessage): boolean => message.id.startsWith("pi:")
   && (message.error?.code === "pi_transcript_pending" || message.error?.code === "transcript_unconfirmed");
 
-/** A row's error for a message an older bridge took with no receipt (SubmitResult `unconfirmed`). */
 export const UNCONFIRMED_SEND = { code: "submit_unconfirmed", message: "This PC sent no receipt, so nothing confirmed the pane took this message" };
 
 /** Connection proof stays in memory. A saved copy can never resume automatic delivery. */
@@ -74,7 +65,6 @@ export class PendingMessageStore {
   private removed = new Map<string, Map<string, Set<string>>>();
   /** ids an exact resumed receipt settled (a consumed Pi id, or a resumed sent/discarded one): no saved copy brings them back */
   private settledResumed = new Map<string, Set<string>>();
-  /** ids an exact resumed receipt confirmed held without typing: a saved copy from before the drop stays held */
   private heldResumed = new Map<string, Map<string, { until: number; scope: string }>>();
   /** ids this page discarded: a later resumed held ID never offers them for an explicit send again */
   private discarded = new Map<string, Set<string>>();
@@ -82,16 +72,11 @@ export class PendingMessageStore {
   private saved = new Map<string, string | null>();
   private unsaved = new Set<string>();
   private busy = new Set<string>();
-  /** rows saved as not confirmed while they are shown as they were (unconfirm) */
   private unconfirmed = new Set<string>();
-  /** the recovery record kept for a row this page alone holds (keepUnconfirmed), by owner and row */
   private recovery = new Map<string, string>();
   private listeners = new Set<() => void>();
-  /** rows moved off an owner (move), by id: the server lists them under the pane's new ID now */
   private movedAway = new Map<string, Set<string>>();
-  /** rows a move left while this page had their send on its way, with the ID they go to once it ends */
   private afterSend = new Map<string, string>();
-  // the pane's herdr's storage, or this page's memory (lib/paneLifetime.ts)
   constructor(
     private storage: () => StoragePort = () => paneLifetimes.paneStorage,
     private lifetimes: Pick<PaneLifetimes, "stored" | "keep" | "discard"> = paneLifetimes,
@@ -105,12 +90,10 @@ export class PendingMessageStore {
     this.scheduleExpiry();
   }
   private expiry: ReturnType<typeof setTimeout> | undefined;
-  /** One timer, to the end of the first page-only proof: its copy is uncertain again then (read also checks, for a tab that slept). */
   private scheduleExpiry(): void {
     if (this.expiry !== undefined) clearTimeout(this.expiry);
     this.expiry = undefined;
     let first = Infinity;
-    // a copy being sent ends with its send (end() tells the page, and this runs again)
     for (const [owner, rows] of this.rows) for (const message of rows) {
       if (message.heldUntil !== undefined && message.state === "held" && !this.isBusy(owner, message.id)) first = Math.min(first, message.heldUntil);
     }
@@ -123,7 +106,6 @@ export class PendingMessageStore {
       this.notify();
     }, wait);
   }
-  /** a page-only held copy whose proof has ended is uncertain again (saved, it already is); one being sent ends with its send */
   private dropExpired(owner: string, rows: PendingMessageView[]): PendingMessageView[] {
     const ended = (message: PendingMessageView): boolean => message.state === "held" && message.heldUntil !== undefined
       && !freshReceipt(message.heldUntil) && !this.isBusy(owner, message.id);
@@ -138,7 +120,6 @@ export class PendingMessageStore {
   isUnsaved(owner: string): boolean { return this.unsaved.has(owner); }
   isOwned(owner: string, id: string, scope: string | null): boolean { return scope !== null && this.scopes.get(owner)?.get(id) === scope; }
   isBusy(owner: string, id: string): boolean { return this.busy.has(`${owner}\0${id}`); }
-  /** `saved`: the rows as saved (a held one held); otherwise as shown: a saved copy has no proof, so held is uncertain */
   private restored(raw: string | null, saved = false): PendingMessageView[] {
     try {
       const data: unknown = JSON.parse(raw ?? "null");
@@ -153,8 +134,6 @@ export class PendingMessageStore {
         const error = message.error && typeof message.error.code === "string" && typeof message.error.message === "string" ? message.error : undefined;
         const restoredError = error?.code === "pi_transcript_pending"
           ? { code: "transcript_unconfirmed", message: "The bridge connection ended before Pi's transcript append was confirmed" } : error;
-        // a hold its sender asked for is held on its saved copy's word, as before; any other needs a receipt.
-        // A copy an older release saved has no mark: held with no reason, it is one too (requestedHold)
         const heldByRequest = message.heldByRequest === true || (message.state === "held" && error === undefined);
         return [{ id: message.id, request_id: message.request_id, text: message.text, created_at: message.created_at,
           state: (saved || heldByRequest) && message.state === "held" && message.resendInFlight !== true ? "held" as const : "uncertain" as const,
@@ -184,12 +163,11 @@ export class PendingMessageStore {
     const cached = this.rows.get(owner);
     if (cached) return this.dropExpired(owner, cached);
     let raw: string | null = null;
-    try { raw = this.storage().getItem(PREFIX + owner); } catch { /* keep a memory-only copy */ }
+    try { raw = this.storage().getItem(PREFIX + owner); } catch {}
     const restored = this.restored(raw);
     const messages = restored.map((message) => this.applyHeldResumed(owner, message));
     this.saved.set(owner, raw);
     this.rows.set(owner, messages);
-    // a copy held again is saved so: its ID applied once
     if (messages.some((message, at) => message !== restored[at])) this.write(owner, messages);
     return messages;
   }
@@ -199,27 +177,23 @@ export class PendingMessageStore {
       if (this.saved.get(owner) === raw) return;
       const loaded = this.restored(raw).filter((message) => !this.settledResumed.get(owner)?.has(message.id))
         .map((message) => message.state === "held" && this.discarded.get(owner)?.has(message.id) ? { ...message, state: "uncertain" as const } : message);
-      // this page's receipt proof stays with its copy while another tab saves the list (saved, it is uncertain)
-      // only while the saved copy is the one this page wrote: another tab that acted on it (sent it, an error) ends the proof
       const savedStates = new Map<string, unknown>();
       try {
         const data: unknown = JSON.parse(raw ?? "null");
         if (data && typeof data === "object" && "messages" in data && Array.isArray(data.messages)) {
           for (const item of data.messages as Array<{ id?: unknown; state?: unknown }>) if (typeof item?.id === "string") savedStates.set(item.id, item.state);
         }
-      } catch { /* nothing saved proves this page's copy */ }
+      } catch {}
       const proven = new Map((this.rows.get(owner) ?? []).filter((message) => message.state === "held" && freshReceipt(message.heldUntil))
         .map((message) => [message.id, { text: message.text, until: message.heldUntil!, by: message.heldBy, error: message.error?.code }]));
       // A tab still on a bundle that predates the mark saves the list without it (it drops fields it does not know),
-      // so a requested hold it refused once would read here as a hold of the bridge's own. This page knows better
-      // from its own row of the same ID and text: the mark is kept, and with it the state as that tab saved it.
+      // so a requested hold it refused once would read here as a hold of the bridge's own.
       const mine = new Map((this.rows.get(owner) ?? []).filter((message) => message.heldByRequest === true).map((message) => [message.id, message.text]));
       const next = loaded.map((loadedMessage) => {
         const message = loadedMessage.heldByRequest !== true && mine.get(loadedMessage.id) === loadedMessage.text
           ? { ...loadedMessage, heldByRequest: true as const,
             state: savedStates.get(loadedMessage.id) === "held" && !loadedMessage.resendInFlight && !this.discarded.get(owner)?.has(loadedMessage.id) ? "held" as const : loadedMessage.state }
           : loadedMessage;
-        // a hold its sender asked for is held as it is saved: it takes no receipt's end
         if (message.heldByRequest === true && message.state === "held") return message;
         const kept = proven.get(message.id);
         return kept?.text === message.text && ["uncertain", "held"].includes(String(savedStates.get(message.id))) && !message.resendInFlight && message.error?.code === kept.error
@@ -242,7 +216,7 @@ export class PendingMessageStore {
       this.saved.set(owner, raw);
       this.rows.set(owner, next);
       this.notify();
-    } catch { /* retain text when storage is unavailable */ }
+    } catch {}
   }
   private write(owner: string, messages: PendingMessageView[]): void {
     this.rows.set(owner, messages);
@@ -250,7 +224,6 @@ export class PendingMessageStore {
       const raw = messages.length ? JSON.stringify({ version: 1, messages: messages.map(({ serverOwned: _, heldUntil, heldBy: _by, ...message }) =>
         this.unconfirmed.has(`${owner}\0${message.id}`) || message.resendInFlight
           ? { ...message, state: "uncertain", resendInFlight: true }
-          // a receipt's proof is this page's alone: saved, the copy waits for the next one
           : heldUntil !== undefined && message.state === "held" ? { ...message, state: "uncertain" } : message) }) : null;
       if (raw === null) this.storage().removeItem(PREFIX + owner); else this.storage().setItem(PREFIX + owner, raw);
       this.saved.set(owner, raw);
@@ -287,7 +260,6 @@ export class PendingMessageStore {
     const previous = this.read(owner);
     const resendInFlight = previous.find((item) => item.id === message.id)?.resendInFlight;
     const resendGeneration = previous.find((item) => item.id === message.id)?.resendGeneration;
-    // once the bridge told it so, for as long as the copy lives: a refused Send now gives it a reason, not another kind
     const heldByRequest = previous.find((item) => item.id === message.id)?.heldByRequest === true || requestedHold(message);
     const receipt = this.heldResumed.get(owner)?.get(message.id);
     const heldByReceipt = !heldByRequest && scope === null && !resendInFlight && !this.unconfirmed.has(`${owner}\0${message.id}`)
@@ -375,7 +347,6 @@ export class PendingMessageStore {
     const heldIds = this.heldResumed.get(owner);
     const heldChanged = heldIds !== undefined && this.read(owner).some((message) => !deleted.has(message.id) && heldIds.has(message.id));
     if (deleted.size || heldChanged) {
-      // another tab may have saved a message since this one last read the list: the write below keeps it
       this.refresh(owner);
       for (const id of deleted) proofs?.delete(id);
       if (proofs?.size === 0) this.scopes.delete(owner);
@@ -418,10 +389,8 @@ export class PendingMessageStore {
       if (pane?.machineId !== machineId) continue;
       const kept = rows.filter((message) => message.serverOwned);
       if (this.unsaved.has(owner)) for (const message of rows) if (!message.serverOwned) this.lifetimes.keep(machineId, pane.paneId, "pending", message.text, false, message.agent_only === true);
-      // a row storage took on the same herdr (lib/paneLifetime.ts storeMemory) is offered again after a
-      // reload, so its recovery copy goes; a row left to recovery has only its record now
       let durable = new Set<string>();
-      try { durable = new Set(this.restored(this.storage().getItem(PREFIX + owner)).map((message) => message.id)); } catch { /* none is */ }
+      try { durable = new Set(this.restored(this.storage().getItem(PREFIX + owner)).map((message) => message.id)); } catch {}
       for (const [key, record] of [...this.recovery]) {
         if (!key.startsWith(`${owner}\0`)) continue;
         this.recovery.delete(key);
@@ -438,15 +407,13 @@ export class PendingMessageStore {
   /**
    * herdr moved the pane under a new ID (#1503): its rows go there as they are (the server holds its own for an
    * explicit send and lists them under the new ID), with the proof of the connection that has them; one settled
-   * there already does not come back. A row whose send this page has on its way follows once that send ends
-   * (`end`), as its answer looks for it under the old ID. `only`: that row alone.
+   * there already does not come back.
    */
   move(from: string, to: string, only?: string): void {
     if (from === to) return;
     this.refresh(from);
     this.refresh(to);
     const rows = this.read(from).filter((message) => only === undefined || message.id === only);
-    // rows still waiting on a send under an earlier ID that moved here go on to the new one
     for (const [key, next] of this.afterSend) if (next === from) this.afterSend.set(key, to);
     for (const message of rows) if (this.isBusy(from, message.id)) this.afterSend.set(`${from}\0${message.id}`, to);
     const moving = rows.filter((message) => !this.isBusy(from, message.id));
@@ -454,7 +421,6 @@ export class PendingMessageStore {
     const target = this.read(to);
     const have = new Set(target.map((message) => message.id));
     const fromProofs = this.scopes.get(from), toProofs = this.scopes.get(to) ?? new Map<string, string>();
-    // settled there as publish settles a row: an exact resumed receipt, or a receipt of the connection that proves it
     const settled = (id: string): boolean => {
       const proof = fromProofs?.get(id);
       return this.settledResumed.get(to)?.has(id) === true || (proof !== undefined && this.removed.get(to)?.get(id)?.has(proof) === true);
@@ -462,12 +428,10 @@ export class PendingMessageStore {
     const carried = moving.filter((message) => !have.has(message.id) && !settled(message.id));
     const carriedIds = new Set(carried.map((message) => message.id));
     const away = this.movedAway.get(from) ?? new Set<string>();
-    // moved back to an ID it left before: the server's lists there count for it again
     const back = this.movedAway.get(to);
     for (const message of moving) back?.delete(message.id);
     if (back?.size === 0) this.movedAway.delete(to);
     for (const message of moving) {
-      // the server's lists under the old ID, told before or as it moved the row, bring none back here
       away.add(message.id);
       const proof = fromProofs?.get(message.id);
       fromProofs?.delete(message.id);
@@ -485,7 +449,6 @@ export class PendingMessageStore {
     this.write(to, [...target, ...carried]);
     this.write(from, this.read(from).filter((message) => !gone.has(message.id)));
   }
-  /** the held IDs remembered for `owner` that the connection `scope` brought end with it */
   private forgetReceipts(owner: string, scope: string): void {
     const remembered = this.heldResumed.get(owner);
     if (remembered === undefined) return;
@@ -493,7 +456,6 @@ export class PendingMessageStore {
     if (remembered.size === 0) this.heldResumed.delete(owner);
   }
   suspendScope(scope: string): void {
-    // remembered held IDs of owners not read yet end too
     for (const owner of [...this.heldResumed.keys()]) if (!this.rows.has(owner)) this.forgetReceipts(owner, scope);
     for (const owner of this.rows.keys()) this.suspend(owner, scope);
   }
@@ -505,8 +467,7 @@ export class PendingMessageStore {
     return true;
   }
   /**
-   * Saves a row as not confirmed while what is shown stays as it is. A held copy sent again is
-   * a stable-ID resend: a reload before its answer must not offer it once more.
+   * A held copy sent again is a stable-ID resend: a reload before its answer must not offer it once more.
    * false: the mark could not be saved over a copy still saved as held, so the send must not start.
    */
   unconfirm(owner: string, id: string): boolean {
@@ -514,14 +475,11 @@ export class PendingMessageStore {
       const saved = this.restored(this.storage().getItem(PREFIX + owner)).find((message) => message.id === id);
       if (saved?.resendInFlight && !this.unconfirmed.has(`${owner}\0${id}`)) return false;
     } catch { this.unsaved.add(owner); this.notify(); return false; }
-    // another tab may have saved a message since this one last read the list
     this.refresh(owner);
     this.heldResumed.get(owner)?.delete(id);
-    // every write until the answer keeps the mark, also one made for another row
     this.unconfirmed.add(`${owner}\0${id}`);
     this.write(owner, this.read(owner));
     if (!this.unsaved.has(owner)) return true;
-    // with nothing saved (storage that never worked) there is no copy a reload could offer again
     try { return !this.restored(this.storage().getItem(PREFIX + owner), true).some((message) => message.id === id && message.state === "held"); } catch { return false; }
   }
   end(owner: string, id: string): void {
@@ -529,7 +487,6 @@ export class PendingMessageStore {
     this.busy.delete(`${owner}\0${id}`);
     this.rows.set(owner, [...this.read(owner)]);
     this.notify();
-    // its pane moved while the send was on its way: the row follows now
     const to = this.afterSend.get(`${owner}\0${id}`);
     if (to === undefined) return;
     this.afterSend.delete(`${owner}\0${id}`);
@@ -538,7 +495,6 @@ export class PendingMessageStore {
   fail(owner: string, id: string, error: { code: string; message: string }, uncertain: boolean, attemptedGeneration?: number): void {
     this.unconfirmed.delete(`${owner}\0${id}`);
     if (uncertain) this.heldResumed.get(owner)?.delete(id);
-    // another tab's rows and marks as they are saved now: this write is the whole list
     this.refresh(owner);
     this.write(owner, this.read(owner).map((message) => {
       if (message.id !== id) return message;
@@ -585,7 +541,6 @@ export class PendingMessageStore {
     this.unconfirmed.delete(`${owner}\0${id}`);
     this.refresh(owner);
     this.write(owner, this.read(owner).filter((message) => message.id !== id));
-    // its recovery copy goes with it
     const kept = this.recovery.get(`${owner}\0${id}`);
     if (kept === undefined) return;
     this.recovery.delete(`${owner}\0${id}`);

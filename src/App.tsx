@@ -158,20 +158,12 @@ import { catchTypeAhead } from "./lib/typeAhead.ts";
 import { goalStatusWord, sessionMenuLines, sizeWords, useSessionStats, workedWords } from "./lib/sessionStats.ts";
 
 const APP_TITLE = "Ovis";
-/** how soon after a key press a focus counts as the user's own (lastKeyAtRef) */
 const KEY_FOCUS_MS = 1000;
 
-/** Every slot of the split but `a` draws on connections of its own: several slots may attach one tab,
- *  and each attaches and detaches it as the others are not there (lib/split.ts). */
 function SlotSessions({ slot, machineIds, children }: { slot: SplitSlot; machineIds: readonly string[]; children: ReactNode }) {
   return slot !== "a" ? <MachineSessionsProvider machineIds={machineIds}>{children}</MachineSessionsProvider> : <>{children}</>;
 }
 
-/** The header's note. Its status is in the header from the header's first render, clipped while empty
-    (never display: none, as the connection chip), and its words land a frame after the box, even the
-    ones a page opens with (lib/useAnnouncedText.ts). Its sentence is cut like the title it stands in
-    for, under its own class: only the pane title carries .context-title-text, which the browser
-    checks measure (scripts/mobile-tabs-regression.ts). */
 function HeaderNote({ note }: { note: string | null }) {
   const shown = useAnnouncedText(note);
   return (
@@ -183,22 +175,15 @@ function HeaderNote({ note }: { note: string | null }) {
   );
 }
 
-/** The connecting shell's one sidebar line: the same announced status as every other (lib/useAnnouncedText.ts). */
 function ConnectingNote() {
   const t = useT();
   const shown = useAnnouncedText(t("Connecting…"));
   return <p className={shown === null ? "visually-hidden" : "tree-state"} role="status">{shown}</p>;
 }
 
-/** The header's connection chip. It speaks only while the bridge is not live; live, it stays in the document
-    for a screen reader (and the browser scripts that wait on it), drawn by nothing (styles.css). Its word lands
-    a frame after the chip (lib/useAnnouncedText.ts), as every status line's does. */
 function ConnectionChip({ connected, word, title, quiet }: { connected: boolean; word: string; title: string | undefined; quiet: boolean }) {
   const shown = useAnnouncedText(word);
   return (
-    // quiet: the title area or the status bar says it in words (lib/headerConnection.ts), so the chip stays a live
-    // region out of the flow (.conn.conn-quiet in styles.css): a dot that appears beside the lens switch would move
-    // the switch and Files over by its width while reconnecting, and the header's controls hold their place (G-144).
     <span className={`conn ${connected ? "conn-live" : "conn-reconnecting"}${quiet ? " conn-quiet" : ""}`} role="status" title={title}>
       <span className="conn-dot" aria-hidden="true" />
       <span className="conn-text">{shown}</span>
@@ -206,10 +191,6 @@ function ConnectionChip({ connected, word, title, quiet }: { connected: boolean;
   );
 }
 
-/**
- * The sidebar's head (from 769px): the Ovis wordmark in the theme's colours (ovis-site's logo pair). Where the inbox mode
- * is offered it is a way into it, as the app icon at a desktop app's top left goes home.
- */
 function SidebarBrand({ dark, onOpenInbox }: { dark: boolean; onOpenInbox: (() => void) | null }) {
   const t = useT();
   if (onOpenInbox === null) return (
@@ -239,17 +220,12 @@ export function App() {
   const t = useT();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const { settings, resolvedTheme, resolvedEntry, update: updateSettings } = useSettings();
-  // the PCs this device hides cannot say their panes are gone (lib/namedAgentGroups.ts liveGroupKeys)
   const hiddenMachines = useHiddenMachines();
   const { alerts, alertsRef, alertsOn, alertsOnRef } = useAlertPrefs({ settings });
   const { machineSessions, machines, setMachines, machineRosterLoaded, setMachineRosterLoaded } = useRosterState();
-  // the place the address names, read once at load: a link wins over this window's last selection
   const [initialLink] = useState(() => {
-    // a link's lens is drawn over its pane's own, as a tapped notification's is (notificationViewTarget below)
     if (!linksSomewhere(pageSearch())) return null;
     const link = readLink(pageSearch());
-    // a load onto an entry Settings left (a reload) steps out of it (lib/settingsHistory.ts): the
-    // dialog its address names, on that entry or on the one stepped back to, is the one it closed
     return loadedOnSettingsEntry() ? { ...link, settings: null, section: null } : link;
   });
   useRecentFolderMemory({ machines });
@@ -275,43 +251,26 @@ export function App() {
   const { selectedPaneId, setSelectedPaneId, notificationViewTarget, setNotificationViewTarget, terminalPeek, setTerminalPeek, endPeek, pendingLink, linkLanded, setLinkLanded, rosterSeq, linkSince, selectionSince, rosterTick, setRosterTick, linkTick, setLinkTick } = useSelectionState({ initialLink });
   const { otherRecheck, otherRosterTick, setOtherRosterTick } = useSplitRecheck();
   const { rosterIn, pendingFile, selectionHint, headerNote, setHeaderNote, note: linkNote, autoSelected, setAutoSelected } = useLinkLanding({ initialLink, otherRecheck, setOtherRosterTick, pendingLink, rosterSeq, setRosterTick, linkLanded, t });
-  // the inbox mode (lib/inboxMode.ts): the list and the thread a row opens in the shell's place, which then has no drawer.
-  // Settings → Start in the agent inbox on a phone: a fresh navigation starts this device in it at a phone's width (lib/inboxMode.ts
-  // startsInInbox); a reload opens where its address says, so a phone that left the mode stays out of it
   const inboxMode = useInboxMode({ startsIn: () => pageStartsInInbox(phoneInboxOn(settings), window.matchMedia?.(SHEET_QUERY).matches === true, initialLink) });
   const { drawerOpen, setDrawerOpen, drawerOpenRef, toggleDrawerByButton, secondTapOfOpening, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter } = useSidebarLayout({ initialLink, drawerBlocked: inboxMode.drawerBlocked });
-  // the mode's list: it stands in the pane's place until a pane is picked (lib/useInbox.ts)
   const inbox = useInbox({ on: inboxMode.on, initialLink, drawerOpenRef });
-  // A link whose pane has closed opens the mode's list (onLinkMiss below), and the note says that much: the classic
-  // app's words say its workspace opened in the pane's place, and the mode opens no workspace.
   const note = headerNote === "pane-closed" && inboxMode.on ? t("That link's chat is closed") : linkNote;
-  // Settings → Show the sidebar on hover: the collapsed sidebar over the pane for a moment (lib/sidebarPeek.ts)
   const { peeking: sidebarPeeking, sidebarRef: peekSidebarRef, toggleRef: peekToggleRef, toggleHandlers: peekToggleHandlers, sidebarHandlers: peekSidebarHandlers } = useSidebarPeek(settings.sidebarPeek && wideScreen && sidebarCollapsed);
   const { selectionRef, movingPanes } = useSelectionMark({ selectedMachineId, selectedPaneId });
   const { lens, setLens, viewPicks, setViewPicks } = usePaneLensState();
   const { split, setSplit, soloSlot, endSplit, splitRef, splitShownRef, lastKeyAtRef, paneDragging, setPaneDragging, gridDrop, gridDropRef, showGridDrop, hideDropTarget, clearDropPreview, paneAreaRef, tabDrag, draggedPaneRef, markSwap, markMove } = useSplitState();
-  // a pane under the mode's list keeps the box it was shown in and sizes no pty (lib/coveredPane.ts); the list
-  // covers a pane only in the mode, and the hook reads the page only as it does
   useKeptPaneBoxes(paneAreaRef, inbox.shown);
   const { paletteOpen, paletteQuery, openPalette, setPaletteOpen } = useCommandPalette();
   const paneControls = useRef<PaneControls | null>(null);
   const [findRequest, setFindRequest] = useState<{ paneId: string | null; serial: number }>({ paneId: null, serial: 0 });
-  // Search conversation over a pane's chat (ChatView): from the palette for the selected pane, from a pane's own menu for that one
   const { searchRequest, requestSearch } = useSearchRequest(setDrawerOpen);
-  /** a pane's chat can be searched: it shows the chat, and its PC's bridge searches (an older one does not) */
   const searchable = (machineId: string, pane: HerdrPane, lens: PaneView): boolean =>
     showsChat(pane, lens) && machineSessions.peek(machineId)?.socket.canSearchConversation() === true;
-  // the Rename tab shortcut and palette action: the tab strip of the selected pane opens its name field
   const { renameRequest, requestRename, clearRenameRequest } = useRenameRequest(selectedMachineId, selectedPaneId);
-  // the Close tab shortcut's press, one-shot as Rename tab's: the open tab's row, or its pane's menu where it has none, closes it
   const { renameRequest: closeTabRequest, requestRename: requestCloseTab, clearRenameRequest: clearCloseTabRequest } = useRenameRequest(selectedMachineId, selectedPaneId);
-  // the header's More menu: its button
-  // and, on a phone, the two groups it folds its find items and the pane's and tab's actions into (G-143)
   const moreMenu = useMoreMenu();
   const { more, setMore, closeMore, group: moreGroup, openGroup: openMoreGroup, closeGroup: closeMoreGroup } = moreMenu;
-  // the pane canvas's actions, for the phone's tab menu (TabStrip)
   const paneActionsRef = useRef<((target: HerdrPane, options?: { counted?: boolean }) => RowMenuItem[]) | null>(null);
-  // a locked pinned agent's menu has no Close (PaneCanvas): neither has the Close pane shortcut or palette row
   const paneLocked = usePaneLocked(selectedMachineId);
   const { filesOpen, setFilesOpen, filesDocked, filesCovered, revealFiles, viewing, openFile, closeFile, hideFile, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, closeWebPage, openWebPage, openDiffFile, reportFileKind, toggleFilePresentation, viewFile } = useFilePanels({ settings, filePanelAvailable, selectedPaneId, selectedMachineId });
   // a diff's line notes go to its own pane: none while this window only watches that pane
@@ -320,9 +279,7 @@ export function App() {
   const { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newSessionPending, newTab, setNewTab, sessionHistory, setSessionHistory, worktreeFor, setWorktreeFor } = useNewSessionState({ initialLink, watching: auth?.role === "watch" });
   const { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped, reportedBy, setReportedBy } = useConnectionChip();
   const { notifications, setNotifications, pushOn, setPushOn, pushOnRef } = useNotificationState();
-  // the shared settings and pins, the same in every browser of this server, once the app is in
   const { receive: receivePreferences, saveError: settingsSaveError, paused: settingsSavePaused, retrying: settingsSaveRetrying, retry: retrySettingsSave, resubscribed: preferencesResubscribed, disconnected: preferencesDisconnected, closed: preferencesClosed } = usePreferencesSync(locked === false);
-  // labels from first messages (#2019): keyed once their pane is seen, gone with their pane, all gone with the setting off
   const tabLabelWatching = auth?.role === "watch";
   // a file is edited only from a browser that drives this PC, as the server checks too (server/file-edit.ts)
   const fileEditable = auth?.role === "drive" && auth.via !== "portal" && auth.via !== "open";
@@ -359,7 +316,6 @@ export function App() {
   const handleServerMessage = useServerMessageHandler(setOutputStopped);
 
   const { enableNotifications, disableNotifications, repairNotifications } = useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn });
-  // the first-run setup guide: by itself once on a fresh install, again from Settings → Agents' Setup guide
   const localSnapshot = machines.find((machine) => machine.id === "local")?.snapshot ?? null;
   const setupGuide = useSetupGuide({
     enabled: locked === false,
@@ -370,38 +326,24 @@ export function App() {
     showUsage: settings.showUsage,
   });
   const guideShown = setupGuide.guide !== null && !setupGuide.paused;
-  // the sidebar's Setup: N left (components/SetupProgressRow.tsx), once the guide is gone; the phone is another
-  // device on the server's list, read again when one pairs or goes (pairedNotices, removedNotices)
   const rowFacts = setupGuide.guide === null && auth?.role !== "watch" && localSnapshot !== null;
-  // read only where the row can show (a guide begun and closed, and not hidden), and drawn once the list answered, so
-  // a paired phone does not count as left for a moment (#3907 review)
   const rowStore = browserStorage();
   const rowOn = rowFacts && rowStore !== null && setupRowState(rowStore) === "on";
   const otherDevicePaired = useOtherDevice(rowOn, [...pairedNotices, ...removedNotices].map((notice) => notice.event_id).join(" "), true);
-  // and once what is known of the alerts is in, by the guide's one rule (lib/setupGuideFlow.ts alertsHere)
   const alertsHealth = usePushHealth();
   const rowAlerts = alertsSurfaces(alertsHere({ alertsOn, notifications, desktop: desktopUpdateBridge() !== null, pushSupported: pushSupported(), pushOn, push: { checked: alertsHealth.checked, problem: alertsHealth.health.problem, delivered: alertsHealth.delivered }, confirmed: confirmation(registeredPushEndpoint()) })).row;
   const setupRow = rowOn && otherDevicePaired !== undefined && rowAlerts !== "wait"
     ? <SetupProgressRow facts={{ workspace: localSnapshot.workspaces.length > 0, phone: otherDevicePaired !== null, alerts: rowAlerts === "done" }} />
     : null;
-  // the mode's shell. The setup guide stands in the pane's place before any workspace exists: it keeps the classic one
   const inMode = inboxMode.on && !guideShown;
   inboxMode.drawerBlocked.current = inMode;
-  // Into the mode, onto its list, and out of it, onto the app as it was (the pane a thread showed, or the one under
-  // the list): one history entry each way, so Back undoes it. On a phone More's item runs while its sheet's own entry
-  // is still current: the push takes that entry over (lib/sheetHistory.ts), and no entry is left between. The shell's
-  // own part (the drawer put away, the list shown for a mode with no pane) is lib/useInbox.ts useInboxShell.
   const { leave: leaveModeShell } = inboxMode;
   const { enterInbox: enterInboxShell, returnTo } = useInboxShell({ inMode, shown: inbox.shown, show: inbox.show,
-    // the way in opens the thread of the pane the app is on as its row would (InboxList's onOpen below), once the
-    // list has covered the panes
     open: () => {
       if (selectedPaneId === null) return;
       activateSlotOf({ machineId: selectedMachineId, paneId: selectedPaneId });
       selectTarget(selectedMachineId, selectedPaneId, "chat");
     }, enter: inboxMode.enter, setDrawerOpen, hideFile, selectedPaneId, linkLanded, wide: wideScreen,
-    // only a pane drawn alone on its chat with a row in the list (lib/agentInbox.ts inboxOrder, as the list draws it);
-    // the panes its tab draws as PaneCanvas counts them (lib/paneCanvas.ts soloPane, lib/layoutMap.ts layoutCells)
     here: () => {
       if (selectedPaneId === null || !linkLanded) return null;
       const layout = snapshot?.layouts.find((item) => item.tab_id === selectedPane?.tab_id) ?? null;
@@ -414,15 +356,9 @@ export function App() {
     },
     thread: inMode && !inbox.shown && selectedPaneId !== null && linkLanded ? sidebarPinKey(selectedMachineId, selectedPaneId) : null,
     focusInput: () => paneControls.current?.focusInput() });
-  // offered where the mode is, and not over the setup guide, which has the classic shell to itself
   const modeOffered = !guideShown;
-  // the Ovis mark at the sidebar's head (from 769px, the sidebar shown) is the classic shell's one way in where it is
-  // drawn; with no mark (a phone, a collapsed sidebar) More and the drawer's foot keep the way in
   const markEnters = modeOffered && wideScreen && !sidebarCollapsed && !inMode;
-  // A phone's open drawer has the Ovis mark where its X was: the way into the inbox, so its foot holds none. It closes
-  // by a tap outside, a swipe, Back, Escape or the named close a screen reader finds at its start
   const markInDrawer = modeOffered && !wideScreen && drawerOpen && !inMode;
-  // going into the agent inbox and out of it, counted wherever a person asked
   const { enter: enterInbox, leave: leaveMode } = useCountedInboxWays(enterInboxShell, leaveModeShell);
   useShownCount("inbox", modeOffered, LOCAL_MACHINE);
 
@@ -468,15 +404,12 @@ export function App() {
   }, [auth?.via, loadHealth, t]);
 
   const { selectedMachineRef, selectTarget, selectTargetRef, picks } = useSelectTarget({ selectedMachineId, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setDrawerOpen, setOutputStopped, setNotificationViewTarget, setTerminalPeek, pendingLink, pendingFile, setLinkLanded, selectionHint, selectionSince, rosterSeq, snapshot, selectedMachine, selectedPaneId, setHeaderNote, linkTick, movingPanes, onPick: (paneId) => { setupGuide.stepAside(); if (paneId !== null) inbox.leave(); },
-    // in the inbox mode a link or an alert whose pane is gone opens the list, under the header's note that says so:
-    // the pane selected in its place is another agent's, whose thread nobody asked for
     onLinkMiss: () => { if (inbox.enabled) inbox.show(); } });
 
   const { selectPane } = useSelectPane({ pendingLink, pendingFile, setLinkLanded, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, setDrawerOpen, onPick: () => { picks.current += 1; setupGuide.stepAside(); inbox.leave(); } });
 
   const layoutRefused = useLayoutRefused(setLayoutNotice, t);
   const moveRefused = useMoveRefused(setLayoutNotice, t);
-  // a pane's title dropped on another pane's title of its tab (useSplitLayout's drop)
   const swapPanes = (dragged: SplitTarget, targetPaneId: string): void => {
     void swapPaneWith(dragged.paneId, targetPaneId, dragged.machineId).then((swap) => {
       if (!swap.changed) {
@@ -490,7 +423,6 @@ export function App() {
       void load();
     }).catch((err) => layoutRefused("pane swap failed", err));
   };
-  // a pane's title dropped on another pane's body in its tab: it goes to that side of it (#1819)
   const movePanes = (dragged: SplitTarget, targetPaneId: string, side: PaneDirection): void => {
     void movePaneBeside(dragged.paneId, targetPaneId, side, dragged.machineId).then((move) => {
       const notice = paneMoveNotice(move, side, t);
@@ -499,13 +431,9 @@ export function App() {
     }).catch((err: unknown) => { moveRefused(err); void load(); });
   };
 
-  // what this browser keeps under the moved pane's ID goes to its new ID (lib/paneMove.ts), and wherever the old ID is
-  // shown, in either half, the view goes with it (#1503). Nothing is sent: held text waits for its Send or Discard
+  // Nothing is sent: held text waits for its Send or Discard
   const followPaneMove = (machineId: string, from: string, to: string): void => {
     carryMovedPane(machineId, from, to);
-    // its lock goes with its pin (lib/paneLocks.ts), and its named group the same way (lib/namedAgentGroups.ts): read from
-    // the settings as this save stores them, when the change applies: this call may come from an older render's event,
-    // another tab may have saved since, and storage may refuse writes (#2977)
     updateSettings(({ lockedAgents, agentGroupOf }) => ({
       lockedAgents: [...movedSidebarPins(lockedAgents, machineId, from, to)],
       agentGroupOf: { ...movedAgentGroup(agentGroupOf, machineId, from, to) },
@@ -513,7 +441,6 @@ export function App() {
     const view = movedView(selectionRef.current, splitRef.current, machineId, from, to);
     if (view.split !== null) setSplit(view.split);
     if (view.selection === null) return;
-    // the app's own re-pick of a moved pane keeps a phone on the list it was reading
     const listed = inbox.shownRef.current;
     selectTargetRef.current(machineId, view.selection);
     if (listed) inbox.show();
@@ -522,78 +449,54 @@ export function App() {
 
 
   const { selectedPane } = useSelectedPane({ snapshot, selectedPaneId });
-  // held only while a pane is shown: one hidden under the inbox mode's list keeps no screen on
   useScreenWakeLock(settings.keepScreenOn && locked === false && selectedPane !== null && !inbox.shown);
   const { selectedWorkspace, presentedPaneId } = useSelectedLayout({ selectedPane, snapshot, drawerOpen: drawerOpen || inbox.shown, selectedMachineId, selectedPaneId, setSelectedPaneId, setAutoSelected });
-  // the selected pane has a tab strip to rename in: its pane and workspace are in the roster
   const tabStripMounted = selectedPane !== null && selectedWorkspace !== null;
   const targetHerdr = selectedMachineId === "local" ? health?.herdr : selectedMachine?.herdr;
-  // the layout calls the selected PC's herdr answers (lib/machineContext.tsx AppLayoutContext): the palette and the
-  // shortcuts offer only those; each PC's own value goes to its sidebar and its half
   const appLayout = appLayoutOf(targetHerdr);
   const herdrOn = (machineId: string) => machineId === "local" ? health?.herdr : machines.find((machine) => machine.id === machineId)?.herdr;
   const appLayoutOn = (machineId: string) => appLayoutOf(herdrOn(machineId));
-  // the herdr the header names as current: this PC's last answer only while it is still shown (through one
-  // failed read, not once unavailable), though its capabilities stay in targetHerdr
   const shownHerdr = selectedMachineId === "local" ? shownHealth?.herdr : targetHerdr;
-  // Pictures in the terminal not chosen on this device: what the PC's terminal connection does (its
-  // `terminal-history`, as PaneTerminal reads it), the health read only until that connection listed its features
   const shownTerminal = machineSessions.peek(selectedMachineId)?.socket;
   const picturesByDefault = shownTerminal?.hasTerminalHistory() === true
     || (shownTerminal?.featuresListed() !== true && shownHerdr?.runtime === "herdr-core" && shownHerdr.terminal_attach !== false);
   const selectedTitle = selectedPane ? displayPaneTitle(selectedPane) : null;
-  // the tab that governs the pane region, so the strip's tabs and the pane they select are
-  // one thing to a screen reader (A4); null while no tab owns this pane
   const tabPanelLabel = paneTabPanelLabel(snapshot, selectedPane, t);
   const selectedAgent = selectedPane?.agent ?? null;
   // a herdr not heard from yet (or a server that predates the flag) counts as attach-capable; a failed
   // health read keeps this PC's last answer (lib/healthPresentation.ts)
-  // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
   const terminalAttach = targetHerdr?.terminal_attach !== false || targetHerdr?.terminal_mirror === true;
-  // the same rule for any PC: a press on another PC's pane asks its lens as a pick there would
   const attachOn = (machineId: string): boolean => { const herdr = herdrOn(machineId); return herdr?.terminal_attach !== false || herdr?.terminal_mirror === true; };
 
   const { lenses, view, pressPane } = usePaneLens({ settings, selectedPaneId, selectedMachineId, selectedPane, selectedAgent, terminalAttach, attachOn, notificationViewTarget, setNotificationViewTarget, lens, setLens, viewPicks, terminalPeek, setTerminalPeek });
-  // a peek shows the terminal over the chat: nothing there to search
   const selectedSearchable = selectedPane !== null && terminalPeek === null && searchable(selectedMachineId, selectedPane, view);
 
   const contentKey = paneContentKey(selectedMachine, selectedPane, view);
   const { dialogCover, webDialogCover, contentReady } = usePaneCoverage({ contentKey });
-  // covered by something (closing it brings the pane into view again), or in view with its content still loading
   const panePresence = useCallback((): PanePresence => !(locked === false && linkLanded && pendingFile.current === null && pendingCreate.current === null
     && !drawerOpen && !settingsOpen && !newSessionOpen
     && !(filesOpen && !filesDocked) && !machineDialog && !paletteOpen && !diffViewing && !(viewing && !fileDocked)
     && !dialogCover && !paneCovered() && !inbox.shown) ? "covered"
     : contentReady && paneContentPresented(contentKey) ? "front" : "loading",
   [locked, linkLanded, inbox.shown, drawerOpen, settingsOpen, newSessionOpen, filesOpen, filesDocked, machineDialog, paletteOpen, diffViewing, viewing, fileDocked, dialogCover, contentReady, contentKey]);
-  // one source for the sidebar's two lists: live counters per PC and finishes looked at here
   const activity = useSidebarActivityState(machines, selectedMachineId, presentedPaneId, panePresence, shareSeen);
-  // and one for how long each agent has been in its state: stamped here, read by the lists (lib/useAgentStateSince.ts)
   useAgentStateStamping(machines, activity);
 
   const agentOf = (machineId: string, paneId: string) => machines.find((machine) => machine.id === machineId)?.snapshot?.panes.find((pane) => pane.pane_id === paneId)?.agent;
   const { pickView, setView } = usePaneViewPicks({ setViewPicks, setNotificationViewTarget, setTerminalPeek, setLens, setAutoSelected, selectedPaneId, selectedMachineId, view, agentOf });
   const { unsentFor, openUnsent, closeUnsent, recover } = useUnsentRecovery({ selectedMachineId, selectedPaneId, setView, pickView });
-  // the Chat/Terminal switch in the header (or the thread's top), and each half's own in a split
   useShownCount("view_switch_header", selectedPane !== null && !inbox.shown, selectedMachineId);
-  // on a phone a peek is a step of its own: Back takes the chat back, as it closes a sheet. It stays
-  // up under a sheet or Settings opened over it: their close, or a Back, comes back to the peek
   usePhoneSheetBack(() => endPeek(), terminalPeek !== null, true);
 
   const { splitOn, others, shownSlots, rects, follows, activateSlot, activateSlotOf, closeSlot, selectInSlot, dockSide, splitDragOn, paneDragOver, paneDragLeave, paneDrop, dividers, resizeDivider, gridPreview } = useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, gridDrop, gridDropRef, clearDropPreview, tabDrag, showGridDrop, hideDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, markMove, swapPanes, movePanes, followPaneMove, arrangeRefused: (machineId) => !appLayoutOn(machineId).arrange, threadDrawn: inMode && !inbox.shown });
 
-  // the New workspace dialog over the mode's list on a phone is a sheet: Back closes it onto the list instead of
-  // leaving the app. Its entry is made before the address bar writes the dialog's address over it.
-  // While its create is in flight Back refuses, as the dialog's own ways out do: what comes of it lands in the dialog
   usePhoneSheetBack(() => { if (newSessionPending.current) return false; closeNewSession(); }, newSessionOpen && inbox.shown);
   useAddressBar({ inbox, mode: { on: inMode, lands: inboxMode.at }, newSessionOpen, newSessionMachineId, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, newSessionPending, setHeaderNote, selectionRef });
 
 
   const { bell, alertsOffDot } = alertsBell({ t, alertsOn, notifications, pushOn, enableNotifications, disableNotifications });
   const connWord = t(connected ? "live" : outputStopped ? "disconnected" : connectedBefore ? "reconnecting" : "connecting");
-  // each split half has sockets of its own, even on one PC: the line is about the active half's
   const headerConnection = useHeaderConnection({ scope: `${split ? split.active : soloSlot}:${selectedMachineId}`, reportedBy, connected, connectedBefore, outputStopped });
-  // the selected pane's chat totals (lib/sessionStats.ts): after the crumb from 769px, and in More
   const session = useSessionStats(selectedMachineId, selectedPane?.pane_id ?? null);
   const sessionLines = session === null ? null : sessionMenuLines(session);
   const sessionShort = session === null ? [] : [workedWords(session), sizeWords(session)].filter((part) => part !== null);
@@ -608,9 +511,6 @@ export function App() {
     document.title = tabTitle ? `${tabTitle} · Ovis` : APP_TITLE;
   }, [tabTitle]);
 
-  // A new tab's workspace: the named one, else the selected pane's. Its folder is the workspace's:
-  // a worktree's checkout, else where the pane in front (the selected one, else the one herdr has
-  // in front, else the first) is. Read from refs, so the actions keep no stale roster.
   const newTabTarget = (target?: { machineId: string; workspaceId: string }) => {
     const machineId = target?.machineId ?? selectionRef.current.machineId;
     const roster = machinesRef.current.find((m) => m.id === machineId)?.snapshot;
@@ -629,13 +529,11 @@ export function App() {
   // a pane hidden under the mode's list is not closed, typed into, split or zoomed by a key: the shortcuts listen on the window, past its inert slot
   // nor is an inbox mode thread: the mode's shell has no tab row, split or pane menu to close from
   const closeOffered = selectedPane !== null && auth?.role !== "watch" && !guideShown && !inbox.shown && !inMode && !paneLocked(selectedPane.pane_id);
-  // a tab holding a locked pane is refused by the row or menu that closes it (TabStrip, PaneCanvas), as their Close tab is absent
   const tabCloseOffered = selectedPane !== null && tabStripMounted && auth?.role !== "watch" && !guideShown && !inbox.shown && !inMode;
   const actions = useMemo<AppActions>(
     () => ({
       selectPane,
       selectAdjacentPane: (direction) => {
-        // the panes the sidebar lists: a step never lands on a viewer it leaves out
         const panes = rosterPanes(snapshotRef.current?.panes ?? [], selectedPaneId);
         if (panes.length === 0) return;
         const index = panes.findIndex((pane) => pane.pane_id === selectedPaneId);
@@ -657,8 +555,6 @@ export function App() {
       selectAdjacentWorkspace: (direction) => {
         const roster = snapshotRef.current;
         if (!roster) return;
-        // the rows the sidebar draws, as it draws them; a PC folded in it has none drawn, so its rows are
-        // worked out as they would be: a drag's order until herdr has it, pins first, saved folds left out
         const unfolded = (): string[] => {
           const byId = new Map(roster.workspaces.map((workspace) => [workspace.workspace_id, workspace]));
           const ordered = reorderCoordinator.order(selectedMachineId, roster.workspaces.map((workspace) => workspace.workspace_id)).flatMap((id) => byId.get(id) ?? []);
@@ -674,9 +570,7 @@ export function App() {
         if (next) selectPane(next);
       },
       setView,
-      // what would do nothing here is no use of it; split, close pane, new tab and Files count for this PC's own panes alone
       counted: appCounted((): AppCountingState => ({ actions, machineId: selectedMachineId, inbox, inMode, tabTarget: newTabTarget() !== null })),
-      // a peek shows the terminal over the chat: the shortcut takes the chat back, the lens stays Chat
       toggleView: (source) => { if (terminalPeek !== null) endPeek(); else setView(view === "chat" ? "terminal" : "chat", source); setDrawerOpen(false); },
       focusInput: () => { if (!inbox.shown) paneControls.current?.focusInput(); },
       scrollPage: (direction) => paneControls.current?.scrollPage(direction),
@@ -686,8 +580,6 @@ export function App() {
         setNewTab(null);
         setNewSessionOpen(true);
       },
-      // a tab beside the pane hidden under the mode's list is not made by a key, nor one beside an inbox mode thread
-      // (the mode draws no tab row); a named workspace's is
       openNewTab: (target) => {
         if (target === undefined && (inbox.shown || inMode)) return;
         const found = newTabTarget(target);
@@ -699,7 +591,6 @@ export function App() {
         setNewSessionOpen(true);
       },
       renameTab: () => {
-        // a PC whose herdr renames no tab (lib/machineContext.tsx AppLayoutContext)
         if (selectedPaneId === null || !tabStripMounted || !appLayout.rename || inbox.shown || inMode) return;
         setDrawerOpen(false);
         requestRename(selectedMachineId, selectedPaneId);
@@ -709,9 +600,7 @@ export function App() {
         const found = newTabTarget(target);
         if (!found) return;
         const asked = selectionRef.current;
-        // the mode entered, or its list opened or left, while herdr answered is a move of the user's too: it moves no selection
         const shellAsked = [inboxMode.drawerBlocked.current, inbox.shownRef.current];
-        // the keys typed from now on are the new tab's (lib/typeAhead.ts)
         const ahead = catchTypeAhead();
         let created: Awaited<ReturnType<typeof createTab>>;
         try {
@@ -721,9 +610,7 @@ export function App() {
           throw reason;
         }
         void load();
-        // what the user went to while herdr answered is theirs to keep
         const still = selectionStill(asked, selectionRef.current) && shellAsked[0] === inboxMode.drawerBlocked.current && shellAsked[1] === inbox.shownRef.current;
-        // the keys typed ahead are this tab's either way: held for it when the user went elsewhere meanwhile
         ahead?.handTo(found.machineId, created.pane_id, still);
         if (still) selectTargetRef.current(found.machineId, created.pane_id);
       },
@@ -749,10 +636,8 @@ export function App() {
       openSessionHistory: (target) => {
         const found = newTabTarget(target);
         if (!found) return;
-        // a pane's own agent, or nothing; for a workspace, the agent named, else the pane in front's, else any of it
         const agent = sessionHistoryListAgent(target, found.agent, found.panes.map((pane) => pane.agent));
         if (agent === null) return;
-        // Claude's list prefers a pane running Claude, so a selected shell never hides its store.
         const selected = selectionRef.current.machineId === found.machineId ? selectionRef.current.paneId : null;
         const tabs = machinesRef.current.find((m) => m.id === found.machineId)?.snapshot?.tabs ?? [];
         const tabNumber = (tabId: string) => tabs.find((tab) => tab.tab_id === tabId)?.number ?? Number.MAX_SAFE_INTEGER;
@@ -763,7 +648,6 @@ export function App() {
       },
       openWorktree: (mode) => {
         const found = newTabTarget();
-        // the workspaces the sidebar and the palette offer worktrees for (lib/repositoryWorkspaces.ts)
         const machine = machinesRef.current.find((candidate) => candidate.id === found?.machineId);
         if (!found || machine?.state !== "connected" || !worktreesStartHere(found.machineId, found.workspace, machine.snapshot?.herdr_lifetime)) return;
         setDrawerOpen(false);
@@ -773,8 +657,6 @@ export function App() {
       agentStarted: (machineId, paneId) => lenses.startedAgent(lensOwner(machineId, paneId), window.matchMedia?.("(pointer: coarse)").matches === true),
       openFind: () => {
         if (selectedPaneId === null) return;
-        // a peek already shows the pane's terminal: find searches it there, and the peek (its return,
-        // and the lens and address under it) stays
         if (terminalPeek?.paneId !== selectedPaneId || terminalPeek.machineId !== selectedMachineId) setView("terminal", null);
         setDrawerOpen(false);
         setFindRequest((request) => ({ paneId: selectedPaneId, serial: request.serial + 1 }));
@@ -785,7 +667,6 @@ export function App() {
         setSettingsOpen(true);
       },
       openAddPc: (preset) => {
-        // the new PC reports its progress in the sidebar: nothing should sit over it
         setSettingsOpen(false);
         setUpdateRemote(false);
         addPcFocusReturn.current = true;
@@ -794,8 +675,6 @@ export function App() {
       },
       connectPc: (machine) => {
         setSettingsOpen(false);
-        // a relay PC has no setup to fill in (MachineDialog is SSH's): it opens as a pick in the sidebar does, once the
-        // roster has it (a PC just added may not be in it yet), unless another pick came first
         if (machine.kind === "relay") {
           const at = picks.current;
           void load().finally(() => { if (picks.current === at) selectTarget(machine.id, null); });
@@ -806,7 +685,6 @@ export function App() {
         setMachineDialog(machine);
       },
       toggleSidebar: () => {
-        // the inbox mode has no sidebar to show or hide
         if (inMode) return;
         if (window.matchMedia("(max-width: 768px)").matches) setDrawerOpen((open) => !open);
         else setSidebarCollapsed((collapsed) => !collapsed);
@@ -822,14 +700,9 @@ export function App() {
       // which in the hosted shell is not the PC (and its frame-src frames no other port)
       openLocalPage: settings.webLinks === "panel" && shellMode() !== "relay" ? (url) => { setDrawerOpen(false); openWebPage(url, false, LOCAL_MACHINE); } : null,
       searchConversation: selectedSearchable && selectedPaneId !== null ? () => requestSearch(split ? split.active : soloSlot, selectedMachineId, selectedPaneId) : null,
-      // herdr's layout calls on the selected pane (lib/layoutActions.ts): only those the PC's herdr answers
       ...layoutActions({ selectedPaneId: inbox.shown || inMode ? null : selectedPaneId, offer: appLayout, paneSplits: !selectedPane?.own_tab, selection: selectionRef, roster: snapshotRef, load, selectPane, layoutRefused }),
-      // the open pane's own menu's Close, as the canvas has it now (its confirmation, a lock's absence of
-      // it): none where that menu has none (a locked agent, no canvas under the setup guide), and a pane
-      // the canvas no longer offers Close for by the press closes nothing
       closePane: !closeOffered ? null : () => {
         const target = snapshotRef.current?.panes.find((pane) => pane.pane_id === selectionRef.current.paneId);
-        // counted by its shortcut or palette row, not as the pane menu it runs
         if (target) closeFromPaneMenu(paneActionsRef.current, target);
       },
       closeTab: !tabCloseOffered ? null : () => requestCloseTab(selectedMachineId, selectedPaneId!),
@@ -840,23 +713,13 @@ export function App() {
   useShortcuts(actions, locked === false);
   const herdrPrefixWaiting = useHerdrPrefixKeys(actions, locked === false, setLayoutNotice);
 
-  // The header's More menu: what used to be three buttons of its own. Each item is there under
-  // the condition its button had. At phone width the palette's button gives its room to the
-  // pane's title, and the menu's first item opens the palette.
   useMachineGone({ machines, pendingLink, pendingFile, pendingCreate, selectedMachineRef, linkSince, selectionSince, rosterSeq, setLinkLanded, setHeaderNote, selectTargetRef, rosterTick, linkTick });
-  // the PCs this device shows in its sidebar, Agents list and palette (Settings → Devices and PCs); every other
-  // use of the roster keeps them all, so a link, an alert or a split still reaches a hidden PC's pane
   const sidebarMachines = useShownMachines({ machines, selectedMachineRef, selectTargetRef, picks, restored: !linkSelects(initialLink) });
-  // every connected PC's sessions as its sidebar draws them, so the "waiting for you" count and its next jump
-  // triage the same set the Agents list shows (G-002), and the selected PC's even when the sidebar hides it (lib/headerSessions.ts)
   const waitingRosters = useWaitingRosters(sidebarMachines, machines.find((machine) => machine.id === selectedMachineId), activity.status);
   const sessionTally = sessionCountsAcross(waitingRosters);
   const nextWaiting = nextWaitingTarget(waitingRosters, { machineId: selectedMachineId, paneId: selectedPaneId });
-  // in the inbox mode it opens that agent's chat, as a row does: a terminal is shown there only when it is asked for
   const openNextWaiting = (): void => { if (nextWaiting !== null) selectTarget(nextWaiting.machineId, nextWaiting.paneId, inMode ? "chat" : undefined); };
 
-  // a link to the New workspace dialog opens it once the PCs are in; one for a tab, once the
-  // linked workspace's pane is selected (its folder is the workspace's, as the tab strip's + does)
   const [createTick, setCreateTick] = useState(0);
   useEffect(() => {
     const linked = pendingCreate.current;
@@ -869,7 +732,6 @@ export function App() {
     if (linked.kind === "tab") actions.openNewTab({ machineId: selectedMachineId, workspaceId: selectedPane!.workspace_id });
     else { setNewSessionMachineId(selectedMachineId); setNewTab(null); setNewSessionOpen(true); }
   }, [linkLanded, machines.length, newSessionOpen, selectedPane, selectedMachineId, actions, createTick]);
-  // Forward onto an entry the dialog was open on: the popstate above leaves it pending
   useEffect(() => {
     const onPop = (): void => setCreateTick((tick) => tick + 1);
     window.addEventListener("popstate", onPop);
@@ -877,40 +739,24 @@ export function App() {
   }, []);
   const { closeNewSession, closeSessionHistory, recentResumes, rememberResume, sessionHistoryWorkspace } = useSessionHistoryList({ machines, sessionHistory, setSessionHistory, setNewSessionOpen, setNewPrefill, setNewFields });
 
-  // the palette's shortcut, said beside its item where a hardware keyboard is likely (a fine pointer)
   const keyboardLikely = useMediaQuery("(hover: hover) and (pointer: fine)");
   const paletteKeys = keyboardLikely ? formatKeys(shortcutDisplayKeys("palette", settings.shortcutOverrides)).join("+") : "";
-  // A tooltip follows the platform and the current binding, including a removed shortcut.
   const shortcutTitle = (label: string, id: "palette" | "toggle-sidebar" | "toggle-view" | "settings"): string => {
     const keys = formatKeys(shortcutDisplayKeys(id, settings.shortcutOverrides));
     return keys.length === 0 ? label : `${label} (${keys.join("+")})`;
   };
-  // a phone's More opens a bottom sheet, a dialog, not a menu (RowMenu at SHEET_QUERY): the button says which
   const isSheetWidth = useMediaQuery(SHEET_QUERY);
   // a phone's open drawer is a dialog over the pane (G-003): Tab stays in it, the pane column is inert under it, Escape
   // closes it and the focus goes back to the toggle that opened it (lib/headerSessions.ts useDrawerDialog)
   // only once the shell is drawn: a drawer a link opens behind the access gate takes its focus when it mounts
   const drawerModal = locked === false && drawerOpen && !wideScreen;
   const { ref: drawerRef } = useDrawerDialog(drawerModal, setDrawerOpen, [peekSidebarRef]);
-  // Back closes the drawer, as it closes a sheet, and leaves the pane where it is. It stays up under a row's ⋯
-  // menu opened over it: that menu's close, or a Back, comes back to the drawer
   usePhoneSheetBack(() => setDrawerOpen(false), drawerModal, true);
-  // a phone (the sheets' width) draws no tab row: the header's title lists the tabs (TabStrip's sheet),
-  // as the Codex and Claude apps title a thread and list the others from it
   const { tabsInHeader, sheet: tabSheet, toggle: toggleTabSheet, close: closeTabSheet } = useTabSheet(selectedPane !== null && !guideShown && !inbox.shown && !inMode ? JSON.stringify([selectedMachineId, selectedPane.workspace_id]) : null);
-  // there, and for a lone tab on a cramped phone, the row and its pane's ellipsis are not drawn (TabStrip,
-  // PaneCanvas): the header's own ellipsis is the one menu, so it carries the pane's and the tab's actions too.
-  // They come from the canvas's last render; each runs as the canvas's latest one has it, and does
-  // nothing when that one no longer offers it (the pane or the layout changed while the menu was open)
   const cramped = useMediaQuery(CRAMPED_QUERY);
   const paneMenuInMore = selectedPane !== null
     && tabRowHidden(cramped, snapshot?.tabs.filter((tab) => tab.workspace_id === selectedPane.workspace_id).length ?? 0, tabsInHeader || inMode);
-  // from 769px the mode draws the list beside the thread
   const inboxWide = inMode && wideScreen;
-  // More's first item jumps to the next session waiting for you, and where no status bar says it, a
-  // waiting-coloured dot on its button says how many. The running and the finished ones are the sidebar's
-  // (the drawer's on a phone): the header does not count them. Over an inbox mode thread the count is of the
-  // other sessions that wait, the ones that item opens: the thread's own question is on the screen already
   const moreWaiting = inMode && !inbox.shown && selectedPaneId !== null ? waitingElsewhere(waitingRosters, { machineId: selectedMachineId, paneId: selectedPaneId }) : sessionTally.waiting;
   const waitingInMore = moreWaiting > 0;
   const currentTabInMore = paneMenuInMore && selectedPane ? snapshot?.tabs.find((tab) => tab.tab_id === selectedPane.tab_id) : undefined;
@@ -924,55 +770,33 @@ export function App() {
   const moreBase = alertsOffDot ? t("More · alerts are off") : t("More");
   const moreLabel = waitingInMore ? `${moreBase} · ${t("{count} waiting for you", { count: moreWaiting })}` : moreBase;
   const findInTerminal: RowMenuItem[] = selectedPane && !selectedPane.restore_error ? [{ id: "find", label: t("Find in terminal"), icon: Search, run: actions.openFind }] : [];
-  // at a phone's width, the find items and the pane's and tab's actions fold into one item each, More keeping the
-  // palette, Files, Copy link, Alerts and the tab's panes in sight (G-143); a group of one is not folded
   const findGroup = [...findInTerminal, ...paneMoreItems.filter((item) => item.id === "search-conversation")].map((item) => ({ ...item, divider: false }));
-  // a group open when the window widens past a phone's closes: More lists its items itself there
   const paneGroup = paneMoreItems.filter((item) => item.id !== "search-conversation" && !item.id.startsWith("pane:"));
   const foldFind = isSheetWidth && findGroup.length > 1;
   const foldPane = isSheetWidth && paneGroup.length > 1;
   const groupItems = openGroupItems(moreGroup?.kind ?? null, isSheetWidth, findGroup, paneGroup);
   useGroupClosedWhenEmpty(moreMenu, groupItems.length === 0);
-  // in a thread opened from the list, the header's first button goes back to it; beside the list (from 769px) a
-  // thread has nothing to go back to
   const inboxBack = inbox.enabled && !inbox.shown && !drawerOpen && !guideShown && !inboxWide;
   const moreItems: RowMenuItem[] = [
     ...(waitingInMore && nextWaiting !== null ? [{ id: "next-waiting", label: t("Open the next session waiting for you"), hint: String(moreWaiting), icon: CircleHelp, run: openNextWaiting }] : []),
-    // first at every width: a phone's header has no palette button, and a touch screen no shortcut
     { id: "palette", label: t("Search panes and actions"), icon: Search, ...(paletteKeys ? { hint: paletteKeys } : {}), run: () => openPalette() },
     ...(foldFind && more ? [{ id: "find-group", label: t("Find…"), icon: TextSearch, run: () => openMoreGroup("find", more.anchor) }] : findInTerminal),
-    // from 769px Files has its own button beside the lens switch; a phone keeps it here
-    // and so does an inbox mode thread at any width, whose shell has no Files button
     ...(selectedPane && (!wideScreen || inMode) ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: moreFilesRun(actions.counted, () => setFilesOpen(true)) }] : []),
-    // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from
     { id: "copy-link", label: t("Copy link"), icon: Link, run: () => void copyText(window.location.href).then((ok) => { if (ok) setHeaderNote("copied"); }) },
     { id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() },
-    // what is left of the pane's items in More itself, a hairline over the first as before
     ...paneMoreItems.filter((item) => !(foldFind && item.id === "search-conversation") && (!foldPane || item.id.startsWith("pane:")))
       .map((item, index) => index === 0 ? { ...item, divider: true } : item),
     ...(foldPane && more ? [{ id: "pane-group", label: t("Pane and tab…"), icon: PanelsTopLeft, divider: true, run: () => openMoreGroup("pane", more.anchor) }] : []),
-    // the way into the agent inbox (lib/inboxMode.ts), More's last group wherever the Ovis mark is not drawn
     ...(modeOffered && !markEnters ? [{ id: "enter-inbox", label: t("Open agent inbox"), icon: Inbox, divider: true, run: () => { actions.counted?.("inbox", "menu"); enterInbox(); } }] : []),
   ];
-  // The inbox mode's More: what still means something in a shell with no drawer, tab row or status bar. On the list
-  // only what is the app's own (the list already shows who waits first); in a thread also what is about the thread,
-  // the pane menu's items for what it shows among them. Settings stands last: the mode has no sidebar foot to hold it.
-  // From 769px the app's own items are the buttons of the mode's rail (components/InboxRail.tsx), each in that one
-  // place: the column has no More, and the one over the pane holds the thread's items after the palette, which the
-  // rail draws no magnifier for (the list's search field is the screen's one): a touch screen has no shortcut.
   const fromMore = (id: string): RowMenuItem[] => moreItems.filter((item) => item.id === id);
   const moreOnList = inbox.shown;
   const modeThreadItems: RowMenuItem[] = [
-    // beside the list the next session that waits is its first row: the pane's More does not say it again
     ...(inboxWide ? [] : fromMore("next-waiting")), ...fromMore("find-group"), ...fromMore("find"),
     ...(foldFind ? [] : paneMoreItems.filter((item) => item.id === "search-conversation")),
     ...fromMore("files"), ...fromMore("copy-link"),
     ...paneMoreItems.filter((item) => item.id === "mirror-width" || item.id === "recover-unsent"),
   ].map((item) => ({ ...item, divider: false }));
-  // The way out first on a phone, whose shell has no drawer or sidebar to leave by (a wide window's is the mark at
-  // its rail's top, and no More there says it). The app's own mark stands for it wherever it is drawn. Then the
-  // palette, as near the top as in the classic More and for its reason: a phone's shell has no palette button, and
-  // a touch screen no shortcut
   const modeLeadItems: RowMenuItem[] = [
     { id: "exit-inbox", label: t("Back to Ovis"), icon: PanelsTopLeft, glyph: <OvisMark />, run: leaveMode },
     ...fromMore("palette"),
@@ -982,51 +806,32 @@ export function App() {
     { id: "settings", label: t("Settings"), icon: SettingsGlyph, divider: true, run: () => { actions.counted?.("settings", "menu"); actions.openSettings(); } },
   ];
   const modeAppItems: RowMenuItem[] = [...modeLeadItems, ...modeEndItems];
-  // a phone's thread has the one More: the way out and the palette, then the thread's items, then the rest of the app's
-  // beside the wide list with no thread open the pane's More is the palette's one way for a pointer or a finger
   const paletteOnly = inboxWide && (inbox.shown || selectedPane === null);
   const modeMoreItems: RowMenuItem[] = paletteOnly ? fromMore("palette") : moreOnList ? modeAppItems : inboxWide ? [...fromMore("palette"), ...modeThreadItems.map((item, index) => index === 0 ? { ...item, divider: true } : item)]
     : [...modeLeadItems, ...modeThreadItems.map((item, index) => index === 0 ? { ...item, divider: true } : item), ...modeEndItems];
 
-  // the chat's surface is what the pane column shows: the header's pane zone and the tab strip
-  // take it (from 769px). A pane herdr could not restore draws a placeholder, not the chat.
   const chatShown = !inbox.shown && showsChat(selectedPane, view);
   // From 769px with one pane in view the header is one row, a browser's tab strip: the workspace's tabs and +,
-  // then the lens switch, Files and More (styles.css .header-tabs, THIRD_PARTY_NOTICES.md). A split keeps a
-  // strip per half and the title here; a phone keeps the title that lists the tabs.
-  // a phone whose tabs are in the header (Settings -> Tabs on a phone): the header's row is theirs in the title's place
-  // not in the inbox mode, whose shell has no tab row: its list draws no header, and a thread's holds Back and its title
+  // then the lens switch, Files and More (styles.css .header-tabs, THIRD_PARTY_NOTICES.md).
   const phoneTabRow = tabsInHeader && !inbox.shown && !inMode;
   const workspaceTabCount = selectedPane ? snapshot?.tabs.filter((tab) => tab.workspace_id === selectedPane.workspace_id).length ?? 0 : 0;
-  // Where the classic shell draws the workspace's tabs: in the header's row, else as a row of the pane's own. The
-  // mode's shell draws neither, yet a terminal keeps the box classic gives it: a pane under the mode's list keeps
-  // the row it had (below, hidden with its pane), and a phone thread's terminal keeps that row's room (tabRoom)
   const classicStripInHeader = (wideScreen ? !splitOn && !tabsInHeader : tabsInHeader) && !guideShown && snapshot !== null && selectedPane !== null && selectedWorkspace !== null;
   const stripInHeader = classicStripInHeader && !inMode;
   // from 769px with a mouse the pane column ends in the Herdr app's status bar: where the pane is, its branch,
-  // the connection. A touch screen keeps that room for its key bar and says them in More and the chip.
+  // the connection.
   const statusBarShown = wideScreen && keyboardLikely && selectedPane !== null && crumb !== null && !guideShown && !inMode;
-  // nor does More count where the mode's list stands beside the thread, its waiting rows first: one fact, one place
   const waitingDot = waitingInMore && !statusBarShown && !inboxWide;
   const openNewOn = (id: string): void => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); };
-  // An inbox mode thread is one pane, whatever split classic left. Under the mode's list the panes are as classic
-  // left them, a split's every half and a tab herdr split all mounted, covered and sizing nothing, so the mode
-  // detaches no terminal and attaches none again; their layout gives way to a thread's only when a thread is drawn.
-  // On its list the shell draws no header (the list is the screen), and a mode left with no pane to show a thread of
-  // shows its list
   const threadDrawn = inMode && !inbox.shown;
   const paneSplit = splitOn && !threadDrawn;
   useShownCount("view_switch_pane", paneSplit, selectedMachineId);
   const listScreen = inMode && inbox.shown && !inboxWide;
-  // a phone thread that shows its terminal, where the classic shell would draw the pane's own tab row over it: the
-  // thread keeps that row's room free, so the terminal's box, and its pty's size, are the ones classic gives it
   const tabRoom = inMode && !inboxWide && !inbox.shown && selectedPane !== null && !chatShown && !tabRowHidden(cramped, workspaceTabCount, tabsInHeader);
 
   if (locked === null) {
     // the auth state is unknown until /api/health or /api/session answers (ten seconds when
     // herdr is down): show the shell without the terminal, and so without a WebSocket,
-    // instead of a blank page. A page that opens in the inbox mode shows the mode's own shell: its address says
-    // the mode at the first render, and the classic header and sidebar would be painted for a frame or two
+    // instead of a blank page.
     if (inMode) return <InboxConnecting wide={inboxWide} sidebarWidth={sidebarWidth} />;
     return (
       <div className="app">
@@ -1050,16 +855,7 @@ export function App() {
   }
   if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} consumePairCode={consumePairCode} pairingUnconfirmed={pairingUnconfirmed} onPaired={onPaired} onUnlocked={unlock} />;
 
-  // The mode's list: the screen on a phone, where More is its own control (the shell draws no header over it) and
-  // the header's note stands between its top controls; the column from 769px, after the mode's rail, where its row
-  // for the open thread is the selected one and it draws no More. What the stream that feeds its rows has to say
-  // is said beside them, which otherwise show as they last were with no sign, whether or not a pane is mounted
-  // under the list (a thread says its own pane's word): on a phone by the list, where the note stands, while there
-  // is no note; from 769px by the rail's PC, which draws its dot only while the open thread's chip does not say
-  // the same word (one fact, one place).
   const listNote = herdrPrefixWaiting ? t("herdr prefix: press a key") : note;
-  // a row opens its agent's thread on its chat; the half of the app's own split that shows the pane becomes the
-  // active one first, so the pick never moves that pane into the other half
   const openThread = (machineId: string, paneId: string): void => { activateSlotOf({ machineId, paneId }); selectTarget(machineId, paneId, "chat"); };
   const modeList = (column: boolean): ReactNode => (
     <InboxList ref={inbox.list} machines={sidebarMachines} activity={activity} watching={auth?.role === "watch"} wide={column} filter={inbox.filter} onFilter={inbox.setFilter} query={inbox.query} onQuery={inbox.setQuery} scroll={inbox.scroll} focus={{ ...inbox.focus, row: returnTo }}
@@ -1069,15 +865,9 @@ export function App() {
       more={column ? undefined : { label: moreBase, expanded: more !== null && moreOnList, popup: isSheetWidth ? "dialog" : "menu", onPress: (anchor) => setMore((open) => (open ? null : { anchor })) }}
       note={column ? undefined : <HeaderNote note={listNote} />} connection={!column && listNote === null ? rosterConnection : null} failure={error === null ? null : { error, retry: load }} />
   );
-  // The rail's count (from 769px) is of the agents its press can open, and the press opens the next of them as its
-  // row would: both from one starting pane, the open thread's, or none while the list is alone (every waiting agent
-  // is another one then, the pane under the list included). So the button is drawn exactly while its press has a
-  // thread to open, and an agent that waits in a pane its tab's zoom hides, which no jump reaches, is not counted
-  // here, though More counts it over a phone's thread (lib/headerSessions.ts).
   const railFrom = { machineId: selectedMachineId, paneId: inbox.shown ? null : selectedPaneId };
   const railNext = inboxWide ? nextWaitingTarget(waitingRosters, railFrom) : null;
   const railWaiting = railNext !== null ? { count: waitingTargets(waitingRosters, railFrom), open: () => openThread(railNext.machineId, railNext.paneId) } : null;
-  // More's button: a square of the header's, or one of the mode's round controls over the wide pane
   const moreButton = (round: boolean): ReactNode => (
     <span className="header-more">
       <button
@@ -1094,13 +884,9 @@ export function App() {
       >
         <Ellipsis />
       </button>
-      {/* the waiting dot carries the count (G-015): the number a phone otherwise reads only inside More */}
-      {/* the wide thread's More holds the thread's items alone: Alerts, and its dot's reason, are the rail's */}
       {waitingDot ? <span className="header-more-dot is-waiting" data-count={moreWaiting} aria-hidden="true" /> : alertsOffDot && !round && <span className="header-more-dot" aria-hidden="true" />}
     </span>
   );
-  // Files beside the pane (opt-in, wide windows) shares the docked file's place: shown while no docked
-  // file or web page covers it, and kept mounted under one so its folder and tab are there again after
   const filesBeside = filesOpen && filesDocked && selectedPane !== null && !filesCovered;
   const toggleFiles = (): void => {
     if (filesBeside) setFilesOpen(false);
@@ -1122,9 +908,6 @@ export function App() {
     } as CSSProperties}>
       {selectedPane !== null && !guideShown && !inbox.shown && <h1 className="visually-hidden">{selectedTitle}</h1>}
       {listScreen || inboxWide ? null : <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}${stripInHeader && !phoneTabRow ? " has-tab-row" : ""}${phoneTabRow && stripInHeader ? " has-phone-tabs" : ""}`}>
-        {/* is-zoned tells this header from the connecting shell's, which has no zones to draw.
-            .header-side is the sidebar's own top row from 769px (styles.css); below that its
-            buttons sit in the bar */}
         <div className="header-side">
           {wideScreen && !sidebarCollapsed && !inMode && <SidebarBrand dark={resolvedTheme === "dark"} onOpenInbox={markEnters ? () => { actions.counted?.("inbox", "button"); enterInbox(); } : null} />}
           {inboxBack ? <button type="button" id="inbox-back" className="icon-button inbox-back" aria-label={t("Back")} title={t("Back")} onClick={inbox.back}><ChevronLeft /></button> : <button
@@ -1138,7 +921,6 @@ export function App() {
             aria-controls={markInDrawer ? undefined : "workspace-drawer"}
             onClick={(event) => {
               if (!markInDrawer) { toggleDrawerByButton(event.timeStamp); return; }
-              // the mark stands where the menu button was: the second tap of a double tap there is no way in
               if (secondTapOfOpening(event.timeStamp)) return;
               actions.counted?.("inbox", "button");
               enterInbox();
@@ -1146,12 +928,9 @@ export function App() {
           >
             {markInDrawer ? <OvisMark width="22" height="22" /> : drawerOpen ? <X /> : <Menu />}
           </button>}
-          {/* New workspace's + beside the logo, from 769px in one-line rows: it starts one on the selected PC. A phone's
-              drawer has none here: each PC's own row carries its +, which says which PC (MachineSidebar.tsx) */}
           {!inMode && wideScreen && !sidebarCollapsed && settings.sidebarRows !== "two" && <button type="button" className="icon-button new-workspace-button" disabled={auth?.role === "watch" || selectedMachine?.state !== "connected"} aria-label={t("New workspace")} title={auth?.role === "watch" ? `${t("New workspace")} · ${t("View only")}` : t("New workspace")} onClick={() => { actions.counted?.("new_workspace", "button"); actions.openNewSession(); }}>
             <Plus aria-hidden="true" />
           </button>}
-          {/* an inbox mode thread's header is Back, its title, the monitor button and More */}
           {!inMode && <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={shortcutTitle(t("Command palette"), "palette")} onClick={() => openPalette()}>
             <Search />
           </button>}
@@ -1171,7 +950,6 @@ export function App() {
         <HeaderNote note={herdrPrefixWaiting ? t("herdr prefix: press a key") : note} />
         {stripInHeader ? (
           <div className={`header-tabs${phoneTabRow ? " is-phone" : ""}`}>
-            {/* the strip that cannot be drawn leaves the sidebar and the pane working, as the pane's own strip did */}
             <RenderBoundary resetKey={`${selectedMachineId}:${selectedPane.pane_id}`} fallback={(retry) => <RegionCrash message={t("This pane can't be shown.")} retry={retry} />}>
             <PanePressContext.Provider value={pressPane}>
               <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} splitDrag={!phoneTabRow} browserTabs={!phoneTabRow} phoneRow={phoneTabRow}
@@ -1190,11 +968,8 @@ export function App() {
                 }} />
             </PanePressContext.Provider>
             </RenderBoundary>
-            {/* lost and back, the connection in words where the crumb would say it: the row has no line under it */}
             {phoneTabRow && headerConnection !== null && <span className={`header-tabs-connection is-${headerConnection}`}>{t(headerConnection === "connected" ? "Connected" : "Reconnecting…")}</span>}
-            {/* a watching phone says so where its crumb would (G-004): the row has no line under it */}
             {phoneTabRow && auth?.role === "watch" && <span className="header-tabs-watch" title={t("View only")}><Eye aria-hidden="true" /><span className="visually-hidden">{t("View only")}</span></span>}
-            {/* how many tabs the workspace has, beside the list of them: the row shows about one at a phone's width */}
             {phoneTabRow && <button type="button" className="icon-button header-tabs-sheet" aria-label={t("Tabs of {workspace}", { workspace: selectedWorkspace.label })}
               title={t("Tabs of {workspace}", { workspace: selectedWorkspace.label })} aria-haspopup="dialog" aria-expanded={tabSheet !== null} onClick={(event) => toggleTabSheet(event.currentTarget)}>
               {workspaceTabCount > 1 && <span className="header-tabs-count" aria-hidden="true">{workspaceTabCount}</span>}
@@ -1214,18 +989,14 @@ export function App() {
                 <span aria-hidden="true">{position.index}/{position.count}</span>
                 <span className="visually-hidden">{position.words}</span>
               </span>}
-              {/* the whole title is its target (styles.css .context-tabs::after) */}
               {tabsInHeader && selectedWorkspace && !guideShown && <button type="button" className="context-tabs" aria-label={t("Tabs of {workspace}", { workspace: selectedWorkspace.label })}
                 aria-haspopup="dialog" aria-expanded={tabSheet !== null} onClick={(event) => toggleTabSheet(event.currentTarget)}>
                 <ChevronDown aria-hidden="true" />
               </button>}
             </div>
-            {/* lost and back, the connection takes the crumb's place in words, in the same box: nothing moves */}
             <div className={`context-sub${headerConnection === null ? "" : ` context-connection is-${headerConnection}`}`}>
-              {/* a watching device says so where the status bar would (G-004): a phone has no status bar, so the crumb line leads with it, the connection's word kept after it */}
               {auth?.role === "watch" && !statusBarShown && <><span className="context-watch">{t("View only")}</span><span className="context-sep" aria-hidden="true">·</span></>}
               {headerConnection !== null ? <span>{t(headerConnection === "connected" ? "Connected" : "Reconnecting…")}</span> : <>
-                {/* one PC needs no name: the sidebar leaves it out too, and More still says it */}
                 {crumb.showMachine && <><span className="machine-context-name">{crumb.machine}</span><span className="context-sep" aria-hidden="true">›</span></>}
                 <span>{crumb.workspace}</span>
                 {crumb.folder !== null && (
@@ -1236,7 +1007,6 @@ export function App() {
                 )}
               </>}
             </div>
-            {/* after the crumb, so it wraps out of sight before the crumb does; the connection's word has the line */}
             {headerConnection === null && session !== null && sessionLines !== null && (sessionShort.length > 0 || session.goal !== null) && (
               <div className="context-sub context-session" title={[sessionLines.totals, sessionLines.goal].filter((line) => line !== null).join("\n")}>
                 {sessionShort.length > 0 && <span>{sessionShort.join(" · ")}</span>}
@@ -1247,8 +1017,6 @@ export function App() {
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
         )}
-        {/* a phone: one button to the other lens (components/LensToggle.tsx). Wider, both lenses, the open one on
-            a thumb that slides to it (Apple's segmented control). Mod+Shift+J switches too */}
         {selectedPane && (isSheetWidth || inMode) && !inbox.shown && (
           <LensToggle view={view} peek={terminalPeek !== null} terminalAttach={terminalAttach} thread={inMode}
             title={(label) => shortcutTitle(label, "toggle-view")} onToggle={() => actions.toggleView("header")} />
@@ -1267,7 +1035,6 @@ export function App() {
               <span className="lens-label">{t("Terminal")}</span>
               {!terminalAttach && <span className="pill pill-soon">{t("soon")}</span>}
             </button>
-            {/* after the buttons, so each lens is its own :first-child / :nth-child */}
             <span className="lens-thumb" aria-hidden="true" />
           </div>
         )}
@@ -1277,16 +1044,12 @@ export function App() {
           </button>
         )}
         <div className="header-meta">
-          {/* the chip speaks for the pane's terminal: the setup guide stands in the pane's place and has none */}
           {!guideShown && !inbox.shown && <ConnectionChip
             connected={connected}
             word={connWord}
             quiet={(headerConnection === "reconnecting" && note === null && ((crumb !== null && !stripInHeader) || (phoneTabRow && stripInHeader))) || statusBarShown}
             title={[connected ? null : connWord, shownHerdr ? (shownHerdr.runtime === "herdr-core" ? t("herdr-core {version} · protocol {protocol}", { version: shownHerdr.version, protocol: shownHerdr.protocol }) : t("herdr {version} · protocol {protocol}", { version: shownHerdr.version, protocol: shownHerdr.protocol })) : null].filter((part) => part !== null).join(" · ") || undefined}
           />}
-          {/* the Host's herdr is away: the step to take is on that PC (the sidebar's state line says the same) */}
-          {/* this PC's herdr is told by its health reads: one failed read is unknown, a second unavailable, and
-              neither is proof that herdr stopped. Another PC's is told by its bridge (the roster) */}
           {selectedMachineId !== "local"
             ? !targetHerdr && <span className="pill pill-offline">{t("herdr offline")}</span>
             : localFreshness === "unknown"
@@ -1297,15 +1060,12 @@ export function App() {
           {moreButton(false)}
         </div>
       </header>}
-      {/* More's menus are drawn outside the header (RowMenu's portal): the inbox mode's list has More and no header */}
         {more && (
           <RowMenu
             anchor={more.anchor}
             title={t("More")}
             header={crumb && !inbox.shown && !(inMode && moreOnList) ? (
               <div className={`header-more-crumb${inMode ? " is-inbox" : ""}`}>
-                {/* the status bar says where the pane is; the session's lines and the route stay here */}
-                {/* the pane's whole title, which the header cuts short: a phone has no tooltip, so More says it, with the agent (G-069) */}
                 {!statusBarShown && selectedTitle !== null && <span className="header-more-title">{selectedAgent ? `${agentName(selectedAgent)} · ${selectedTitle}` : selectedTitle}</span>}
                 {!statusBarShown && <span>{currentTabName ? `${crumb.place} › ${currentTabName}` : crumb.place}</span>}
                 {!statusBarShown && crumb.path !== null && <span className="header-more-path">{crumb.path}</span>}
@@ -1313,7 +1073,6 @@ export function App() {
                   <span>{sessionLines.totals}</span>
                   {sessionLines.goal !== null && <span>{sessionLines.goal}</span>}
                 </span>}
-                {/* how this device reaches Ovis, said here instead of beside the chip */}
                 <ConnectionRouteMark portal={auth?.via === "portal"} ingress={security.state === "known" ? security.summary.observed_ingress : null} />
               </div>
             ) : undefined}
@@ -1325,27 +1084,18 @@ export function App() {
 
       <PanePressContext.Provider value={pressPane}>
       <div className="app-body">
-        {/* the inbox mode has no drawer and no workspace tree: its list stands in the pane's place, and from 769px
-            in the sidebar's own column, at the sidebar's width, so the pane is as wide as in the classic shell. The
-            mode's rail comes first in that column, then the list, then the column's edge: the keyboard follows
-            the drawn order */}
         {inMode ? (inboxWide && <aside className="sidebar inbox-column">
           <InboxRail onExit={leaveMode} onInbox={() => inbox.list.current?.toTop()} waiting={railWaiting}
             alerts={{ on: bell.on, title: bell.title, toggle: () => void bell.run() }} onSettings={actions.openSettings} shortcutTitle={shortcutTitle}
             pcs={{ machines: sidebarMachines, selectedId: selectedMachineId, connection: rosterConnection,
               saidByThread: !inbox.shown && selectedPane !== null && note === null && rosterConnection === headerConnection,
-              // a PC alone, as the classic app opens one: no thread of it is chosen, so the list stands with none open
               onSelect: (machineId) => selectTarget(machineId, null) }} />
           {modeList(true)}
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>) : <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}${sidebarPeeking ? " is-peek" : ""}`} role={drawerModal ? "dialog" : undefined} aria-modal={drawerModal ? true : undefined} tabIndex={drawerModal ? -1 : undefined} aria-label={drawerModal ? t("Workspace list") : undefined}
-          // the header's toggle is drawn as the open drawer's top row: a screen reader that keeps to the modal finds it in it
           aria-owns={drawerModal ? "drawer-toggle" : undefined} ref={drawerRef} {...peekSidebarHandlers}>
-          {/* the X became the Ovis mark: the modal drawer still starts with a named way out, drawn while the keyboard is on it,
-              and the open drawer's disclosure state goes with it (expanded, and the list it closes) */}
           {markInDrawer && <button type="button" className="visually-hidden drawer-close" aria-controls="workspace-drawer" aria-expanded="true" onClick={() => setDrawerOpen(false)}>{t("Close workspace list")}</button>}
           {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
-          {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>
             <CrashProbe region="sidebar" />
             <ReorderContext.Provider value={reorderCoordinator}><MachineSidebar machines={sidebarMachines} allMachines={machines} watching={auth?.role === "watch"} appLayout={appLayoutOn} drawerOpen={drawerOpen} filterRequest={sidebarFilterRequest} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} activity={activity} actions={actions} onSelect={selectTarget} onUsageLogin={(paneId) => { selectTarget("local", paneId, "terminal"); void load(); }} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={openNewOn}
@@ -1354,17 +1104,13 @@ export function App() {
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>}
 
-        {/* kept on the page closed (styles.css): a swipe that begins on it closes the drawer */}
         {!inMode && <div className={`scrim${drawerOpen ? " is-open" : ""}`} aria-hidden="true" onClick={() => setDrawerOpen(false)} />}
 
-        {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
         <WebPanelContext.Provider value={openWebPage}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`} inert={drawerModal || undefined}>
-        {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
         <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
         <DesktopUpdateNotice update={desktopUpdate} />
-        {/* the guide's welcome carries this line while it is shown: here it would be under the dialog's scrim */}
         <TelemetryNotice enabled={locked === false && setupGuide.settled && !guideShown} onOpen={() => { setSettingsLinkPage("about"); setSettingsLinkSection("telemetry"); setSettingsOpen(true); }} />
         <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {layoutNotice && <p className="pane-notice" role="alert">{layoutNotice}</p>}
@@ -1378,25 +1124,17 @@ export function App() {
         {remotePairings.length > 0 && <AccountApprovals pairings={remotePairings} />}
         {pairedNotices.length > 0 && <DevicePairedNotice events={pairedNotices} onDismiss={dismissPairedNotice} onOpen={(event) => { dismissPairedNotice(event); setSettingsLinkPage("devices"); setSettingsOpen(true); }} />}
         {removedNotices.length > 0 && <DeviceRemovedNotice events={removedNotices} onDismiss={dismissRemovedNotice} />}
-        {/* the pane's tab, or two tabs side by side (lib/split.ts): a tab dragged down out of its strip,
-            or a sidebar row dragged over this area, opens its pane in the half it is dropped on */}
-        {/* kept mounted while it steps aside, so a sign-in or a workspace being made goes on where it was; it is this PC's setup */}
-        {/* mounted once the guide is gone, so a first run's arming (onOpened, below) is read afresh */}
         {setupGuide.guide === null && <FirstStartHints active={locked === false} />}
         {setupGuide.guide !== null && <MachineContext.Provider value="local"><SetupGuide auth={auth} security={security} onEnableAlerts={enableNotifications} settingsOpen={settingsOpen} pushOn={pushOn} notifications={notifications} hidden={setupGuide.paused} state={setupGuide.guide} dispatch={setupGuide.dispatch} onClose={setupGuide.close} onOpenSettings={(page) => { setSettingsLinkPage(page); setSettingsOpen(true); }}
           onOpenTelemetry={() => { setSettingsLinkPage("about"); setSettingsLinkSection("telemetry"); setSettingsOpen(true); }}
           // the tab was just made: picked before the roster has it, the pick would be released as a closed pane
-          // picked once the roster has it: only the latest tab the guide asked for, while it is open, Start
-          // was not pressed since, and nothing else was picked meanwhile
           onOpenTerminal={(paneId) => { const at = picks.current; const latest = setupGuide.ticket(); void load().finally(() => { if (latest() && picks.current === at) selectTarget("local", paneId, "terminal"); }); }}
           onStarting={setupGuide.voidTickets}
           onPaired={() => void loadHealth()}
           onOpened={(paneId, agentStarted) => { if (agentStarted) actions.agentStarted("local", paneId);
-            // the first run's agent is up: the three first-start hints come once its workspace shows
-            if (agentStarted && setupGuide.guide?.reopened !== true) { try { armHints(window.localStorage); } catch { /* no storage: no hints */ } } setupGuide.finish(() => selectTarget("local", paneId)); void load(); }} /></MachineContext.Provider>}
+            if (agentStarted && setupGuide.guide?.reopened !== true) { try { armHints(window.localStorage); } catch {} } setupGuide.finish(() => selectTarget("local", paneId)); void load(); }} /></MachineContext.Provider>}
         {guideShown ? null :
         <div ref={paneAreaRef} className={`pane-split${paneSplit ? " is-split" : ""}${inbox.shown ? " is-under-inbox" : ""}`} onDragEnterCapture={paneDragOver} onDragOverCapture={paneDragOver} onDragLeave={paneDragLeave} onDropCapture={paneDrop}>
-          {/* the wide thread's zone comes before its pane, after the column: the keyboard follows the drawn order */}
           {inboxWide && <ThreadTop note={<HeaderNote note={herdrPrefixWaiting ? t("herdr prefix: press a key") : note} />}
             thread={!inbox.shown && selectedPane !== null && note === null ? { machines, activity, machineId: selectedMachineId, pane: selectedPane, connection: headerConnection, watching: auth?.role === "watch", severalPcs: sidebarMachines.length > 1 } : null}
             controls={!inbox.shown && selectedPane !== null ? <>
@@ -1417,17 +1155,13 @@ export function App() {
             const slotSnapshot = other ? other.machine?.snapshot ?? null : snapshot;
             const attach = other ? other.attach : terminalAttach;
             const rect = threadDrawn ? undefined : rects?.get(slot);
-            // two slots side by side keep the halves' sides; any other layout places each slot at its rectangle
             const side = paneSplit ? slotSide(split!, slot) : null;
             const lensOf = (item: HerdrPane): PaneView => active && item.pane_id === selectedPaneId ? view
               : storedView(lenses, viewPicks, item.pane_id, machineId, item.agent != null, attach);
             const slotView = active ? view : pane ? lensOf(pane) : "terminal";
             const onSelect = active ? selectPane : (id: string, focusInput = true) => selectInSlot(slot, machineId, id, focusInput);
-            // one pane's panel keeps the page's own id, whichever slot draws it
             const slotPanelId = !paneSplit || slot === "a" ? PANE_TABPANEL_ID : `${PANE_TABPANEL_ID}-${slot}`;
             const slotPanelLabel = active ? tabPanelLabel : paneTabPanelLabel(slotSnapshot, pane, t);
-            // a peek shows this half's terminal over its chat: the half's lens button says the chat,
-            // and takes it back, as the palette's toggle and Mod+Shift+J do
             const slotPeek = active && pane ? peekFor(terminalPeek, slot, machineId, pane.pane_id) : null;
             const shownView: PaneView = slotPeek !== null ? "terminal" : slotView;
             const toggleSlotView = (): void => {
@@ -1435,8 +1169,6 @@ export function App() {
               const next = slotView === "chat" ? "terminal" : "chat";
               if (active) setView(next, "pane"); else if (pane) pickView(machineId, pane.pane_id, next, "pane");
             };
-            // a half's own lens and close sit at the end of its tab strip. The row's free end is the
-            // half's grip: its pane, dropped on a half of the pane area, opens there too (dockSide)
             const slotEnd = paneSplit ? <div className="pane-slot-grip" draggable={paneId !== null}
               onDragStart={(event) => {
                 if (paneId === null) return;
@@ -1462,26 +1194,18 @@ export function App() {
                 inert={inbox.shown || undefined}
                 data-machine={machineId}
                 data-side={side ?? undefined}
-                // a press or the focus in the other half makes it the active one, before the press acts;
-                // its own bar's buttons (its lens, its close) act on it as it is. A menu the half opened
-                // is portaled out of it: a press or a focus there reaches these handlers through React but
+                // React delivers events from a menu this half portaled out to these handlers too: such a press
                 // is not in the half, and activating would close the menu before its item's click lands
                 onPointerDownCapture={active ? undefined : (event) => {
                   if (!event.currentTarget.contains(event.target as Node)) return;
                   if (event.button === 0 && !paneContextPress(event, apple) && !(event.target as Element).closest(".pane-slot-action")) activateSlot(slot);
                 }}
                 onFocusCapture={active ? undefined : (event) => { if (event.currentTarget.contains(event.target as Node) && Date.now() - lastKeyAtRef.current < KEY_FOCUS_MS && !(event.target as Element).closest(".pane-slot-action")) activateSlot(slot, true); }}
-                // a file or text dropped into the other half is for its pane: an upload's paths and the pasted
-                // text reach only the active half's terminal, so the drop makes the half active first
                 onDropCapture={active ? undefined : (event) => { if (!event.dataTransfer.types.includes(PANE_DRAG_TYPE)) activateSlot(slot); }}
               >
-                {/* a pane this half cannot draw leaves the sidebar and the other half working; picking
-                    another pane tries again */}
                 <RenderBoundary resetKey={`${machineId}:${paneId ?? ""}`} fallback={(retry) => <>{slotBar}<RegionCrash message={t("This pane can't be shown.")} retry={retry} onShown={active ? paneLost : undefined} /></>}>
                 <CrashProbe region="pane" />
                 {!(slotSnapshot && pane && workspace) && slotBar}
-                {/* an inbox mode thread has no tab row and no tab sheet; a pane under the mode's list, hidden, keeps the
-                    row the classic shell gave it, so its terminal keeps its box */}
                 {slotSnapshot && pane && workspace && !(active && classicStripInHeader) && !threadDrawn && (
                   <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect}
                     inHeader={tabsInHeader} sheet={active ? tabSheet : null} onSheetClose={closeTabSheet} end={slotEnd} closable={auth?.role !== "watch"}
@@ -1495,14 +1219,9 @@ export function App() {
                     paneActions={active ? (paneId) => {
                       const target = snapshot?.panes.find((item) => item.pane_id === paneId);
                       if (!target || !paneActionsRef.current) return [];
-                      // the strip renders before the canvas, so its items come from the canvas's previous render:
-                      // an action runs against the canvas's latest one, where a snapshot change has landed; one it no
-                      // longer offers (a close a lock took away, lib/paneLocks.ts) does nothing
                       return paneActionsRef.current(target).map((item) => ({ ...item, run: () => paneActionsRef.current?.(target).find((fresh) => fresh.id === item.id)?.run() }));
                     } : undefined} />
                 )}
-                {/* the tab strip's panel: its id is what each tab's aria-controls points at, one per half.
-                    No tabIndex - the terminal (PaneTerminal) and the composer are the focusable things inside it. */}
                 <main className="terminal-host">
                   <div id={slotPanelId} className="terminal-tabpanel" role={slotPanelLabel === null ? undefined : "tabpanel"} aria-label={slotPanelLabel ?? undefined}>
                   <PaneCanvas key={machineId} snapshot={slotSnapshot} pane={pane} selectedPaneId={paneId} onSelect={onSelect} onChanged={actions.refresh} actionsRef={active ? paneActionsRef : undefined} watching={auth?.role === "watch"}
@@ -1535,7 +1254,6 @@ export function App() {
                         agentStatus={item?.agent_status}
                         agentSession={item ? paneSessionKey(item) : null}
                         backgroundTasks={item?.background_tasks ?? 0}
-                        // an offline PC's cached plan cannot be read
                         plan={machine?.state === "connected" ? (item as HerdrPane | undefined)?.plan ?? null : null}
                         backgroundWait={item?.background_wait === true}
                         cwd={item?.cwd ?? null}
@@ -1544,17 +1262,12 @@ export function App() {
                         worktreeRepo={worktreeRepoName(item === null ? undefined : slotSnapshot?.workspaces.find((workspace) => workspace.workspace_id === item.workspace_id))}
                         machineName={machine?.name ?? machineId}
                         view={item ? lensOf(item) : slotView}
-                        // the composer's way to the terminal: the selected pane's lens, or the pane's own remembered one
                         onOpenTerminal={item ? () => { if (active && item.pane_id === selectedPaneId) setView("terminal", "pane"); else pickView(machineId, item.pane_id, "terminal", "pane"); } : undefined}
-                        // a terminal command's peek, for the active half's selected pane alone (lib/terminalPeek.ts)
                         peek={active && item?.pane_id === selectedPaneId ? peekFor(terminalPeek, slot, machineId, item.pane_id) : null}
                         onPeek={active && item && item.pane_id === selectedPaneId && attach ? (request: PeekRequest) => setTerminalPeek({ ...request, slot, machineId, paneId: item.pane_id }) : undefined}
                         onEndPeek={endPeek}
-                        // /resume lists the pane's own agent's sessions, and only for an agent whose store is read
                         onOpenHistory={item && sessionHistoryAgent(item.agent) !== null ? () => actions.openSessionHistory({ machineId, workspaceId: item.workspace_id, agent: item.agent, scope: "pane", paneId: item.pane_id }) : undefined}
-                        // the other half never takes the keyboard: a press in it makes it active first
                         active={active && itemActive}
-                        // the paging shortcuts reach the selected pane of the active half only
                         controls={active && itemActive ? paneControls : undefined}
                         findRequest={active && findRequest.paneId === item?.pane_id ? findRequest.serial : 0}
                         searchRequest={searchRequest.slot === slot && searchRequest.machineId === machineId && searchRequest.paneId === item?.pane_id ? searchRequest.serial : 0}
@@ -1575,7 +1288,6 @@ export function App() {
               </PaneCoveredContext.Provider></PaneFollowContext.Provider></SlotSessions></AppLayoutContext.Provider></MachineContext.Provider>
             );
           })}
-          {/* the mode's list is the screen on a phone; from 769px it is the column, and a pane with no thread says so */}
           {listScreen && modeList(false)}
           {inboxWide && inbox.shown && <InboxUnchosen />}
           {dividers.length > 0 && !inMode && <SplitDividers dividers={dividers} areaRef={paneAreaRef} onResize={resizeDivider} />}
@@ -1592,7 +1304,6 @@ export function App() {
         </div>
         </WebPanelContext.Provider>
         </OpenFileContext.Provider>
-        {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
         {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={fileViewerKey(viewing)} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} editable={fileEditable} />
         </MachineContext.Provider>}
@@ -1619,7 +1330,6 @@ export function App() {
         onCreated={(paneId, agentStarted, messageWaits = false) => {
           closeNewSession();
           if (agentStarted) actions.agentStarted(newSessionMachineId, paneId);
-          // the first message waits in the chat's box: the pane opens on it, whatever lens the page would pick
           if (messageWaits) pickView(newSessionMachineId, paneId, "chat", null);
           selectTarget(newSessionMachineId, paneId);
           void load();
@@ -1648,7 +1358,6 @@ export function App() {
       /></MachineContext.Provider>}
       {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} preset={machineDialog === "new" ? addPcPreset ?? undefined : undefined} onClose={closeMachineDialog} onConnected={(id) => { closeMachineDialog(); selectTarget(id, null); void load(); }} />}
       <Droplet onOpen={(machineId, paneId) => {
-        // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing
         if (!machinesRef.current.find((m) => m.id === machineId)?.snapshot?.panes.some((p) => p.pane_id === paneId)) return;
         // Files lists the pane it was opened on, and would open its paths on the new one
         setFilesOpen(false);
@@ -1666,7 +1375,6 @@ export function App() {
           }
           const docked = filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel";
           if (docked) {
-            // Files beside the pane stays under the file, as it does for a file opened from its list
             if (!filesDocked) setFilesOpen(false);
             releaseDiff();
           }
@@ -1688,7 +1396,6 @@ export function App() {
       }} />}
       {unsentFor && <UnsentTextDialog machines={machines} target={unsentFor} canRecover={unsentFor.pane.agent != null} onClose={closeUnsent} onRecover={recover} />}
       <CommandPalette key={selectedMachineId} machines={sidebarMachines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
-        // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
         view={terminalPeek !== null ? "terminal" : view} actions={actions} watching={auth?.role === "watch"} inboxMode={inMode} />
       <MarkdownLinkMenu />
     </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider>

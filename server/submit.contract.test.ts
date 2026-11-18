@@ -9,14 +9,6 @@ import * as herdr from "./herdr/client.ts";
 import * as conversation from "./conversation.ts";
 import { PtySession } from "./pty/session.ts";
 
-/**
- * Contract test for the composer's "submit" frame, against the real herdr server.
- * Each pane runs a raw-mode recorder that logs every chunk of input it reads with its
- * arrival time, so the test sees what the agent's TUI would: the text, then its Enter
- * as a separate keypress. One recorder is a plain program (the send_text path), the
- * other runs under the name `claude` and is reported as that agent (herdr's
- * agent.prompt path).
- */
 const root = mkdtempSync(join(tmpdir(), "ovis-submit-"));
 let server: { port: number; stop: () => void };
 const workspaces: string[] = [];
@@ -51,7 +43,6 @@ const chunks = (recorder: Recorder): Chunk[] =>
   readFileSync(recorder.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Chunk);
 const typed = (recorder: Recorder, from: number) => chunks(recorder).slice(from).map((chunk) => chunk.data).join("");
 
-/** the chunks read since `from`, once their bytes hold `count` Enters */
 async function received(recorder: Recorder, from: number, count: number): Promise<Chunk[]> {
   for (let i = 0; i < 100; i++) {
     if (typed(recorder, from).split("\r").length > count) return chunks(recorder).slice(from);
@@ -124,7 +115,6 @@ const paste = (text: string) => `\u001b[200~${text}\u001b[201~`;
 // #1174: typed raw, a long line reached Claude Code in pty-sized reads, and it kept only the tail
 const longLine = Array.from({ length: 24 }, (_, i) => `This is sentence number ${i + 1} of a long dictated message.`).join(" ");
 
-/** A promise the test settles itself: it orders a server's step against the test's own. */
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((settle) => { resolve = settle; });
@@ -141,7 +131,6 @@ async function nameDraft(socket: Socket, draft: string): Promise<void> {
   expect(await socket.result(id)).toMatchObject({ ok: false, code: "input_draft", draft });
 }
 
-/** Every read of `paneId` shows `screen`; a function gives the screen as it is at each read. */
 function mockClaudeInput(paneId: string, screen: string | (() => string)) {
   const originalRead = herdr.paneRead;
   const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
@@ -152,7 +141,6 @@ function mockClaudeInput(paneId: string, screen: string | (() => string)) {
   return { read, scroll };
 }
 
-/** Attaches `socket` to `pane` and waits until it may type there; the frames from then on start at the returned mark. */
 async function attached(socket: Socket, pane: string): Promise<number> {
   const mark = socket.seen.length;
   const ready = socket.waitFor((message) => socket.seen.indexOf(message) >= mark && message.type === "input-ready" && message.pane_id === pane);
@@ -646,7 +634,6 @@ describe("WebSocket submit", () => {
       second.send({ ...frame, id: 542 });
       expect(await first.result(541)).toMatchObject({ ok: true });
       expect(await second.result(542)).toMatchObject({ ok: true });
-      // The recorder processing a later serialized message proves all preceding bytes arrived.
       const barrier = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { watcher.close(); reject(new Error("recorder barrier timed out")); }, 5000);
         const watcher = watch(dirname(shell.log), () => {
@@ -764,25 +751,20 @@ describe("WebSocket submit", () => {
   {
     const plain = claudeInputScreen("\u276f do it");
     const grey = claudeInputScreen("\u276f \u001b[0m\u001b[7md\u001b[0m\u001b[2mo it\u001b[0m");
-    // the same words, accepted with Tab: typed now, the cursor after them
     const typedText = claudeInputScreen("\u276f do it\u001b[0m\u001b[7m \u001b[0m");
-    // what the send's last box check reads, in order: live, colored, live, colored (the screen scrolled)
     const rewind = readFileSync(join(import.meta.dir, "fixtures", "claude-rewind-2.1.304-confirm-apple-summarize-from-120.txt"), "utf8");
     const interleavings: [string, string[], string][] = [
-      // Tab pressed anywhere after the first colored read: the words stay, only the last read's colors change
       ["the suggestion accepted with Tab", [plain, grey, plain, typedText], "input_draft"],
       ["the suggestion dismissed, then a draft pasted", [plain, grey, claudeInputScreen("\u276f\u00a0"), claudeInputScreen("\u276f pasted words")], "input_draft"],
       // a dialog that takes the box's place before the last read: Enter there would answer it
       ["the rewind dialog opened", [plain, grey, plain, rewind], "rewind_dialog_open"],
       ["the box gone from the screen", [plain, grey, plain, "Password:"], "input_draft"],
-      // the pane shrank: the last read reaches an older, empty box above a screen with none
       ["the pane resized", [plain, grey, plain, `${claudeInputScreen("\u276f\u00a0")}\r\nPassword:`], "input_draft"],
     ];
     for (const [label, last, code] of interleavings) {
       it(`refuses a scrolled send whose box changes across its last check's reads: ${label}`, async () => {
         const socket = await Socket.connect();
         const from = chunks(agent).length;
-        // the send makes two box checks of four reads each (live, colored, live, colored)
         let reads = 0;
         const seen: string[] = [];
         const originalRead = herdr.paneRead;
@@ -790,7 +772,6 @@ describe("WebSocket submit", () => {
           const result = await originalRead(options, socketPath);
           if (options.paneId !== agent.pane) return result;
           const index = reads++;
-          // the first check sees Claude's grey suggestion throughout; the last one reads the script
           const text = index < 4 ? (options.format === "ansi" ? grey : plain) : last[index - 4] ?? last.at(-1)!;
           if (index >= 4) seen.push(text);
           return { ...result, text };
@@ -799,7 +780,6 @@ describe("WebSocket submit", () => {
         try {
           socket.send({ type: "submit", id: 803, pane_id: agent.pane, text: "chat over grey", payload: "chat over grey" });
           expect(await socket.result(803)).toMatchObject({ ok: false, code });
-          // refused in the last check, after reading all of it
           expect(reads).toBe(8);
           expect(seen).toEqual(last);
           expect(typed(agent, from)).not.toContain("chat over grey");
@@ -819,7 +799,6 @@ describe("WebSocket submit", () => {
     let reads = 0;
     const get = spyOn(herdr, "paneGet").mockImplementation(async (paneId, socketPath) => {
       const pane = await original(paneId, socketPath);
-      // the last state read before the clearing keys: the prompt opens while it is answered
       if (paneId === agent.pane && armed && ++reads === 3) shown = claudeInputScreen("❯ named draft") + "\r\nPassword:";
       return pane;
     });
@@ -879,7 +858,6 @@ describe("WebSocket submit", () => {
   it("lists the submit feature in the first snapshot", async () => {
     const socket = await Socket.connect();
     try {
-      // a pane-status can arrive first: the snapshot is found by its type
       expect(socket.seen.find((message) => message.type === "snapshot")?.features).toContain("submit");
       expect(socket.seen.find((message) => message.type === "snapshot")?.features).toContain("pending-input");
     } finally {
@@ -940,7 +918,6 @@ describe("WebSocket submit", () => {
       const from = chunks(shell).length;
       socket.send({ type: "submit", id: 1201, pane_id: shell.pane, text: "> quote\ncomment", payload: paste("> quote\rcomment"), agent_only: true });
       expect(await socket.result(1201)).toMatchObject({ ok: false, code: "agent_not_ready" });
-      // the next ordinary message arrives alone: nothing of the refused one was typed before it
       socket.send({ type: "submit", id: 1202, pane_id: shell.pane, text: "after", payload: paste("after") });
       expect(await socket.result(1202)).toMatchObject({ ok: true });
       expect((await received(shell, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("after")}\r`);
@@ -971,7 +948,6 @@ describe("WebSocket submit", () => {
       expect(await socket.result(1209)).toMatchObject({ ok: false, code: "agent_not_ready" });
       expect(prompt).toHaveBeenCalled();
       prompt.mockRestore();
-      // control: the next ordinary message arrives alone, so nothing of the refused one was typed
       socket.send({ type: "submit", id: 1210, pane_id: agent.pane, text: "after", payload: paste("after") });
       expect(await socket.result(1210)).toMatchObject({ ok: true });
       expect((await received(agent, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("after")}\r`);
@@ -1040,7 +1016,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 33, pane_id: agent.pane, text: "see C:\\temp\\", payload: "see C:\\temp\\" });
       expect(await socket.result(33)).toMatchObject({ ok: true });
       expect((await received(agent, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("see C:\\temp\\ ")}\r`);
-      // a backslash before the end, and another agent, go as written
       from = chunks(agent).length;
       socket.send({ type: "submit", id: 34, pane_id: agent.pane, text: "see C:\\temp\\x", payload: "see C:\\temp\\x" });
       expect(await socket.result(34)).toMatchObject({ ok: true });
@@ -1049,7 +1024,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 35, pane_id: omp.pane, text: "see C:\\temp\\", payload: "see C:\\temp\\" });
       expect(await socket.result(35)).toMatchObject({ ok: true });
       expect((await received(omp, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("see C:\\temp\\")}\r`);
-      // the terminal's input line types `\` + Enter as the keyboard does
       from = chunks(agent).length;
       socket.send({ type: "submit", id: 36, pane_id: agent.pane, text: "see C:\\temp\\", payload: "see C:\\temp\\", typed: true });
       expect(await socket.result(36)).toMatchObject({ ok: true });
@@ -1124,7 +1098,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 28, pane_id: agent.pane, text: "chat message", payload: "chat message" });
       const refused = await socket.result(28);
       expect(refused).toMatchObject({ ok: false, code: "input_draft" });
-      // bash mode is not a draft the chat clears
       expect(refused.draft).toBeUndefined();
       expect(prompt).not.toHaveBeenCalled();
       expect(sendText).not.toHaveBeenCalled();
@@ -1176,7 +1149,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 31, pane_id: hermes.pane, text: "PINEAPPLE", payload: "PINEAPPLE" });
       const refused = await socket.result(31);
       expect(refused).toMatchObject({ ok: false, code: "input_draft", message: "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message" });
-      // nothing to clear or send anyway: those are Claude's
       expect(refused.draft).toBeUndefined();
       expect(refused.box).toBeUndefined();
       expect(prompt).not.toHaveBeenCalled();
@@ -1228,7 +1200,6 @@ describe("WebSocket submit", () => {
       expect(prompt).toHaveBeenCalledWith(agent.pane, "chat message", undefined, expect.any(Function));
       expect(sendText).not.toHaveBeenCalled();
       expect(sendKeys).not.toHaveBeenCalled();
-      // the refusal is used up: a second send anyway is refused, typing nothing
       socket.send({ type: "submit", id: 92, pane_id: agent.pane, text: "chat message", payload: "chat message", send_anyway: true });
       expect(await socket.result(92)).toMatchObject({ ok: false, code: "pending_target_changed" });
       expect(prompt).toHaveBeenCalledTimes(1);
@@ -1295,7 +1266,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 103, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
       expect(await socket.result(103)).toMatchObject({ ok: false, code: "input_draft", box: "! rm -rf build" });
       expect(prompt).not.toHaveBeenCalled();
-      // the box the user now saw may be sent over
       socket.send({ type: "submit", id: 104, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
       expect(await socket.result(104)).toMatchObject({ ok: true });
       expect(prompt).toHaveBeenCalledTimes(1);
@@ -1307,7 +1277,6 @@ describe("WebSocket submit", () => {
 
   it("offers no send anyway over a box it cannot read whole, and refuses one", async () => {
     const socket = await Socket.connect();
-    // a draft taller than the pane: only the bottom rule is on screen
     const screen = mockClaudeInput(agent.pane, ["  more of a tall draft", "  its last line", claudeRule, "  footer"].join("\r\n"));
     const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
     try {
@@ -1330,9 +1299,7 @@ describe("WebSocket submit", () => {
     ["an image", "\u276f [Image #1]", 124],
     // Claude wraps its box at the pane's width, also inside a placeholder
     ["a folded paste wrapped over two rows", "\u276f look at this [Pasted text\r\n  #2 +40 lines] and fix it", 126],
-    // a box narrower than the placeholder's words: the wrap cuts one in two
     ["a folded paste wrapped inside a word", "\u276f [Pasted te\r\n  xt #1 +12 lines]", 128],
-    // wrapped twice, inside a word and between two
     ["a folded paste wrapped over three rows", "\u276f [Pasted te\r\n  xt #1 +12\r\n  lines]", 134],
     // Claude's placeholder for a paste it cut short
     ["a truncated paste", "\u276f [...Truncated text #1 +40 lines...]", 136],
@@ -1345,11 +1312,9 @@ describe("WebSocket submit", () => {
     try {
       socket.send({ type: "submit", id, pane_id: agent.pane, text: "chat", payload: "chat" });
       const refused = await socket.result(id);
-      // its own message, for the composer's note saying why nothing can be sent over it
       expect(refused).toMatchObject({ ok: false, code: "input_draft", message: CLAUDE_FOLDED_DRAFT_MESSAGE });
       expect(refused.box).toBeUndefined();
       expect(refused.draft).toBeUndefined();
-      // no refusal showed a box to send anyway over
       socket.send({ type: "submit", id: id + 1, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
       expect(await socket.result(id + 1)).toMatchObject({ ok: false, code: "pending_target_changed" });
       expect(prompt).not.toHaveBeenCalled();
@@ -1382,7 +1347,6 @@ describe("WebSocket submit", () => {
     const folded = claudeInputScreen("\u276f [Pasted text #1 +12 lines]");
     let colored = 0;
     const originalRead = herdr.paneRead;
-    // the history's end reads differently each time: nothing proves the box, which is refused as it reads
     const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
       const result = await originalRead(options, socketPath);
       if (options.paneId !== agent.pane) return result;
@@ -1434,7 +1398,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 105, pane_id: agent.pane, text: "chat", payload: "chat" });
       const refused = await socket.result(105);
       expect(refused).toMatchObject({ ok: false, code: "input_draft" });
-      // the note shows the box cut at 200 characters; the server keeps it whole
       expect(refused.box).toBe(`! ${"x".repeat(198)}…`);
       shown = claudeInputScreen("! " + "x".repeat(220) + " NEW");
       socket.send({ type: "submit", id: 106, pane_id: agent.pane, text: "chat", payload: "chat", send_anyway: true });
@@ -1490,7 +1453,6 @@ describe("WebSocket submit", () => {
     const order: string[] = [];
     const prompt = spyOn(herdr, "agentPrompt").mockImplementation(async () => { order.push("prompt"); });
     const sendText = spyOn(herdr, "paneSendText").mockResolvedValue(undefined);
-    // The clearing step changes the box before the following read.
     const sendKeys = spyOn(herdr, "paneSendKeys").mockImplementation(async (_pane, keys) => {
       order.push(keys.join(" "));
       shown = claudeInputScreen("❯\u00a0");
@@ -1527,7 +1489,6 @@ describe("WebSocket submit", () => {
     const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
     const sendKeys = spyOn(herdr, "paneSendKeys").mockImplementation(async () => {
       shown = claudeInputScreen("\u001b[38;2;153;153;153m\u276f\u001b[0m\u00a0");
-      // the first poll after the keys reads the draft live and colored, then the empty box
       lagging = 2;
     });
     try {
@@ -1549,7 +1510,6 @@ describe("WebSocket submit", () => {
   it("refuses a scrolled send over a colorless box, as under NO_COLOR, even when it reads like Claude's tip", async () => {
     const socket = await Socket.connect();
     const from = chunks(agent).length;
-    // typed by the user, in the very form of Claude's new-session tip, on a screen with no color at all
     const screen = mockClaudeInput(agent.pane, claudeInputScreen("\u276f Try \"x\""));
     screen.scroll.mockResolvedValue({ offset_from_bottom: 5, max_offset_from_bottom: 30, viewport_rows: 3 });
     try {
@@ -1742,7 +1702,6 @@ describe("WebSocket submit", () => {
       if (paneId === agent.pane && keys?.[0] === "esc") shown = claudeInputScreen("❯\u00a0");
     });
     try {
-      // the first send is what the box's copy is compared against
       socket.send({ type: "submit", id: 40, pane_id: agent.pane, text: "chat message", payload: "chat message" });
       expect(await socket.result(40)).toMatchObject({ ok: true });
       // as on a cancel right after it: Claude removes the turn and puts the text back, typed
@@ -1942,8 +1901,6 @@ describe("WebSocket submit", () => {
       socket.send({ type: "submit", id: 30, pane_id: codex.pane, text: "follow up", payload: paste("follow up") });
       expect(await socket.result(30)).toMatchObject({ ok: true, pane_id: codex.pane });
       expect(prompt).toHaveBeenCalledWith(codex.pane, "follow up", undefined, expect.any(Function));
-      // the viewport's colours, then Codex's live screen once, for one of its own screens over the composer and for
-      // typed text in it (composer.ts freeAgentInput)
       expect(read.mock.calls.map(([options]) => [options.paneId, options.source])).toEqual([[codex.pane, "visible"], [codex.pane, "detection"]]);
     } finally {
       prompt.mockRestore();
@@ -1990,7 +1947,6 @@ describe("WebSocket submit", () => {
       expect(await socket.result(12)).toMatchObject({ ok: true });
       const read = await received(agent, from, 1);
       expect(typed(agent, from)).toBe("2\r");
-      // the Enter keeps its own gap after the text, as a composer message's does
       const enter = read.findIndex((chunk) => chunk.data.includes("\r"));
       // the pane's recorder stamps each read when it gets it: a text read that comes a moment late
       // shortens the gap it sees (119 on CI), so this takes the tolerance the shell case has
@@ -2091,8 +2047,6 @@ describe("WebSocket submit", () => {
       expect(await socket.result(21)).toMatchObject({ ok: true });
       await received(codex, from, 1);
       expect(typed(codex, from)).toBe(`${paste("follow up")}\r`);
-      // the live screen twice, after the viewport's colours: before herdr is written to (one of Codex's own screens gets
-      // nothing, nor typed text in its composer: freeAgentInput), and after herdr's refusal, for the collapsed queue
       expect(read.mock.calls.filter(([options]) => options.paneId === codex.pane).map(([options]) => options.source)).toEqual(["visible", "detection", "detection"]);
     } finally {
       read.mockRestore();
@@ -2123,7 +2077,6 @@ describe("WebSocket submit", () => {
     const originalSendText = herdr.paneSendText;
     let releaseStop: (() => void) | undefined;
     // A busy sidecar can still hold a pty ESC when the later RPC paste reaches herdr.
-    // Force that interleaving without a clock: a pty ESC goes out only after the paste.
     const write = spyOn(PtySession.prototype, "write").mockImplementation(function (this: PtySession, text) {
       if (text === "\u001b") {
         releaseStop = () => { originalWrite.call(this, text); };
@@ -2158,8 +2111,6 @@ describe("WebSocket submit", () => {
     const originalSendText = herdr.paneSendText;
     const held: Array<() => void> = [];
     const flush = () => { for (const write of held.splice(0)) write(); };
-    // Hold the pty's writes as a busy sidecar would: they go out once all three frames were
-    // written, or once something sent through herdr meanwhile reached the pane ahead of them.
     const write = spyOn(PtySession.prototype, "write").mockImplementation(function (this: PtySession, text) {
       held.push(() => { originalWrite.call(this, text); });
       if (held.length === 3) flush();
@@ -2212,7 +2163,6 @@ describe("WebSocket submit", () => {
   it("still sends the Enter after the sender is gone", async () => {
     const socket = await Socket.connect();
     const from = chunks(shell).length;
-    // closed right after the tap, as a phone that locks: the server finishes the send
     socket.send({ type: "submit", id: 6, pane_id: shell.pane, text: "gone", payload: "gone" });
     await Bun.sleep(20);
     socket.close();
@@ -2280,12 +2230,10 @@ describe("a herdr without terminal attach (Windows)", () => {
       const first = await socket.waitFor((message) => message.type === "pty-data" && message.pane_id === pane);
       expect(socket.seen.indexOf(geometry)).toBeLessThan(socket.seen.indexOf(first));
       expect(first.data.startsWith("\u001b[?25l\u001b[0m\u001b[H\u001b[2J")).toBe(true);
-      // typing goes through herdr, and what the shell prints comes back as a new screen
       socket.send({ type: "resize", pane_id: pane, cols: 33, rows: 7 });
       socket.send({ type: "input", pane_id: pane, text: "echo mirror-$((40+2))\r" });
       await socket.waitFor((message) => message.type === "pty-data" && message.pane_id === pane && message.data.includes("mirror-42"));
       expect(socket.seen.filter((message) => message.type === "pane-geometry" && message.cols === 33)).toEqual([]);
-      // a second viewer gets the grid, then the current screen at once
       const late = await Socket.connect(bare.port);
       try {
         late.send({ type: "attach", pane_id: pane, cols: 80, rows: 24 });
@@ -2312,7 +2260,6 @@ describe("a herdr without terminal attach (Windows)", () => {
     try {
       socket.send({ type: "attach", pane_id: pane, cols: 80, rows: 24 });
       await socket.waitFor((message) => message.type === "pty-data" && message.pane_id === pane);
-      // a program that shows every byte it is sent, the escape of a paste marker as ^[
       socket.send({ type: "input", pane_id: pane, text: "cat -v\r" });
       await shows("cat -v");
       // no agent on the pane: the lines go as they came (#267: a program without paste support must get them bare)
@@ -2403,7 +2350,6 @@ describe("typing without terminal attach, at the edges", () => {
         socket.send({ type: "attach", pane_id: shell.pane, cols: 80, rows: 24 });
         await since(mark, (message) => message.type === "pty-data" && message.pane_id === shell.pane);
         const from = chunks(shell).length;
-        // the message holds the pane's turn while the typing waits behind it and the pane is left
         socket.send({ type: "submit", id, pane_id: shell.pane, text: "one", payload: "one" });
         socket.send({ type: "input", pane_id: shell.pane, text: "typed" });
         socket.send({ type: "detach", pane_id: shell.pane });
@@ -2429,8 +2375,6 @@ describe("typing without terminal attach, at the edges", () => {
     const gate = deferred();
     const entered = deferred();
     const originalSend = herdr.paneSendText;
-    // the message's text waits at herdr until the sender has left and rejoined: the typing queued behind it
-    // then finds the same attachment, kept open by the other client, with the sender a member again
     const send = spyOn(herdr, "paneSendText").mockImplementation(async (paneId, text, socketPath) => {
       if (paneId === shell.pane && text === "one") { entered.resolve(); await gate.promise; }
       return originalSend(paneId, text, socketPath);
@@ -2467,7 +2411,6 @@ describe("typing without terminal attach, at the edges", () => {
     const entered = deferred();
     const originalRead = herdr.paneRead;
     let held = false;
-    // the secret's live-screen check waits until the sender has left and rejoined, then finds the prompt
     const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
       const screen = await originalRead(options, socketPath);
       if (held || options.paneId !== shell.pane || options.source !== "detection" || options.format !== "text") return screen;
@@ -2500,7 +2443,6 @@ describe("typing without terminal attach, at the edges", () => {
 
   for (const [label, secret] of [["emoji", "\u{1F642}"], ["accent", "a\u00e9z"]] as const) {
     it(`refuses a mirrored non-ASCII ${label} secret without typing anything (#1065)`, async () => {
-      // Given a real recorder showing a password prompt on a mirrored pane.
       const target = await recorder(`secret-${label}`, process.execPath, "Password:");
       const bare = createServer({ port: 0, stateDir: join(root, `secret-${label}`), terminalAttach: false });
       const sender = await Socket.connect(bare.port);
@@ -2510,7 +2452,6 @@ describe("typing without terminal attach, at the edges", () => {
         await attached(sender, target.pane);
         const from = chunks(target).length;
         const result = sender.waitFor((message) => message.type === "secret-result" && message.id === 1065);
-        // When Unicode is submitted, even surrounded by printable ASCII.
         sender.send({ type: "secret", id: 1065, pane_id: target.pane, prompt: "Password:", secret });
         const response = await result;
         // Then no text or key RPC is issued, no bytes arrive, and the existing refusal is returned.
@@ -2530,7 +2471,6 @@ describe("typing without terminal attach, at the edges", () => {
   for (const transition of ["none", "rejoin", "observe", "observe-back", "enter-connect"] as const) {
     const secret = "sensitive900";
     it(`clears a mirrored ASCII secret instead of entering it after ${transition} (#900)`, async () => {
-      // Given a real masked shell read and a second client keeping the mirror alive.
       const label = `secret-ASCII-${transition}`;
       const output = join(root, `${label}.result`);
       const script = join(root, `${label}.sh`);
@@ -2564,7 +2504,6 @@ describe("typing without terminal attach, at the edges", () => {
       let watcher: ReturnType<typeof watch> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        // Subscribe before starting the reader; the command itself contains no prompt text.
         const prompt = keeper.waitFor((message) => message.type === "pty-data" && message.pane_id === pane && message.data.includes("Password:"));
         await attached(keeper, pane);
         await herdr.paneSendText(pane, `exec bash '${script}'\n`);
@@ -2597,12 +2536,12 @@ describe("typing without terminal attach, at the edges", () => {
         const response = await result;
         // Then controls keep normal delivery; regressions refuse stale authority and erase the buffer.
         if (transition === "none") {
-          expect(response).toMatchObject({ ok: true }); // control
-          expect(await completed).toBe(Buffer.from(secret).toString("hex")); // control
+          expect(response).toMatchObject({ ok: true });
+          expect(await completed).toBe(Buffer.from(secret).toString("hex"));
         } else {
           expect(response).toMatchObject({
             ok: false, code: transition.startsWith("observe") ? "read_only" : "not_attached",
-          }); // regression (fails on main)
+          });
           expect(keys).toHaveBeenLastCalledWith(pane, Array(secret.length).fill("Backspace"));
           await originalSend(pane, "X");
           await originalKeys(pane, ["Enter"]);
@@ -2628,7 +2567,6 @@ describe("typing without terminal attach, at the edges", () => {
     const gate = deferred();
     const entered = deferred();
     const originalKeys = herdr.paneSendKeys;
-    // every check before the RPC has passed; the sender watches and comes back before herdr is written to
     const keys = spyOn(herdr, "paneSendKeys").mockImplementation(async (paneId, sent, socketPath, guard) => {
       if (paneId === shell.pane) { entered.resolve(); await gate.promise; }
       return originalKeys(paneId, sent, socketPath, guard);
@@ -2664,7 +2602,6 @@ describe("typing without terminal attach, at the edges", () => {
     const gate = deferred();
     const entered = deferred();
     const originalPrompt = herdr.agentPrompt;
-    // every check before the RPC has passed; the sender switches to watching before herdr is written to
     const prompt = spyOn(herdr, "agentPrompt").mockImplementation(async (target, text, socketPath, guard) => {
       if (target === agent.pane && text === longLine) { entered.resolve(); await gate.promise; }
       return originalPrompt(target, text, socketPath, guard);
@@ -2700,7 +2637,6 @@ describe("typing without terminal attach, at the edges", () => {
     const message = "a chat message held while herdr is reached";
     const screen = mockClaudeInput(agent.pane, claudeInputScreen("\u276f\u00a0"));
     const originalPrompt = herdr.agentPrompt;
-    // every check before the RPC has passed; the sender switches to watching before herdr is written to
     const prompt = spyOn(herdr, "agentPrompt").mockImplementation(async (target, text, socketPath, guard) => {
       if (target === agent.pane && text === message) { entered.resolve(); await gate.promise; }
       return originalPrompt(target, text, socketPath, guard);
@@ -2737,7 +2673,6 @@ describe("typing without terminal attach, at the edges", () => {
     const entered = deferred();
     const line = "a line held while herdr is reached";
     const originalSend = herdr.paneSendText;
-    // every check before the RPC has passed; the sender switches to watching before herdr is written to
     const send = spyOn(herdr, "paneSendText").mockImplementation(async (paneId, text, socketPath, guard) => {
       if (paneId === shell.pane && text === line) { entered.resolve(); await gate.promise; }
       return originalSend(paneId, text, socketPath, guard);
@@ -2772,7 +2707,6 @@ describe("typing without terminal attach, at the edges", () => {
     const entered = deferred();
     const originalRead = herdr.paneRead;
     let held = false;
-    // the secret's live-screen check waits until the sender has watched and come back, then finds the prompt
     const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
       const screen = await originalRead(options, socketPath);
       if (held || options.paneId !== shell.pane || options.source !== "detection" || options.format !== "text") return screen;

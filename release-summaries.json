@@ -1,4 +1,90 @@
 {
+  "0.5.5": {
+    "en": {
+      "new": [
+        "Links can open a chat or terminal in the desktop app.",
+        "You can collapse the agents listed under a workspace.",
+        "New tabs and workspaces let you set DeepSeek's effort level.",
+        "The setup guide lets you choose a theme."
+      ],
+      "improved": [
+        "The setup guide walks you through connecting your phone.",
+        "A flick scrolls terminal history farther on a phone or tablet.",
+        "Two-line workspace rows put the workspace name first.",
+        "The usage notice explains anonymous button counts."
+      ],
+      "fixed": [
+        "Android alerts open the chat on the PC that sent them.",
+        "Android keeps unsent text when you switch PCs.",
+        "A PC's first device joins the account the PC is set up for.",
+        "The relay QR code appears once this PC is added to your account.",
+        "Terminal arrow keys respond right away on herdr-core."
+      ]
+    },
+    "ko": {
+      "new": [
+        "링크로 데스크톱 앱의 채팅이나 터미널을 열 수 있어요.",
+        "워크스페이스 아래의 에이전트 목록을 접을 수 있어요.",
+        "새 탭이나 워크스페이스에서 DeepSeek의 사고 수준을 고를 수 있어요.",
+        "설치 안내에서 테마를 고를 수 있어요."
+      ],
+      "improved": [
+        "설치 안내에서 휴대폰을 연결하는 방법을 단계별로 알려 줘요.",
+        "휴대폰이나 태블릿에서 빠르게 밀면 터미널 기록이 더 멀리 스크롤돼요.",
+        "두 줄 보기에서는 워크스페이스 이름이 맨 위에 표시돼요.",
+        "사용량 안내에 버튼 사용 횟수를 익명으로 집계한다고 나와요."
+      ],
+      "fixed": [
+        "Android 알림을 누르면 알림을 보낸 PC의 해당 채팅이 열려요.",
+        "Android에서 PC를 바꿔도 보내지 않은 글이 남아요.",
+        "PC의 첫 기기는 그 PC를 설정할 때 사용한 계정에 연결돼요.",
+        "이 PC를 내 계정에 추가하면 릴레이 QR 코드가 표시돼요.",
+        "herdr-core에서는 터미널의 방향키가 바로 반응해요."
+      ]
+    },
+    "ja": {
+      "new": [
+        "リンクからデスクトップアプリのチャットやターミナルを開けます。",
+        "ワークスペースの下に並ぶエージェントを折りたためます。",
+        "新しいタブやワークスペースで DeepSeek の思考レベルを選べます。",
+        "セットアップガイドでテーマを選べます。"
+      ],
+      "improved": [
+        "セットアップガイドでスマホの接続手順がわかります。",
+        "スマホやタブレットでフリックすると端末の履歴を遠くまでスクロールできます。",
+        "2 行表示ではワークスペース名が先に出ます。",
+        "利用状況のお知らせで、ボタンの利用回数を匿名で集計することを説明します。"
+      ],
+      "fixed": [
+        "Android の通知をタップすると、送信元の PC で該当のチャットが開きます。",
+        "Android で PC を切り替えても、未送信の文章が残ります。",
+        "PC の最初の端末は、その PC の設定に使ったアカウントに登録されます。",
+        "この PC をアカウントに追加すると、リレーの QR コードが出ます。",
+        "herdr-core のターミナルで矢印キーがすぐに反応します。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "可以通过链接在桌面应用中打开聊天或终端。",
+        "可以折叠工作区下的智能体列表。",
+        "新建标签页或工作区时可以选择 DeepSeek 的推理强度。",
+        "可以在设置向导中选择主题。"
+      ],
+      "improved": [
+        "设置向导会逐步说明怎样连接手机。",
+        "在手机或平板上快速滑动，可以滚动更远的终端历史。",
+        "两行显示时，工作区名称排在第一行。",
+        "用量通知说明了如何匿名统计按钮使用次数。"
+      ],
+      "fixed": [
+        "点按 Android 通知会打开来源电脑上的对应聊天。",
+        "在 Android 上切换电脑时，未发送的文字会保留。",
+        "电脑的第一台设备会加入设置这台电脑时所用的账户。",
+        "将这台电脑添加到账户后，就会显示中继二维码。",
+        "herdr-core 终端中的方向键会立即响应。"
+      ]
+    }
+  },
   "0.5.4": {
     "en": {
       "new": [

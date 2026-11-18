@@ -24,7 +24,6 @@ beforeEach(() => {
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-/** a PC where nothing is asked of a provider unless a test's own sign-in does */
 function context(): UsageContext {
   return {
     home, platform: "linux", env: {},
@@ -39,26 +38,18 @@ function context(): UsageContext {
 const session = (usedPercent: number, resetsAt: number | null): RecordedWindow => ({ kind: "session", scope: null, usedPercent, resetsAt, seconds: FIVE_HOURS });
 const week = (usedPercent: number, resetsAt: number | null): RecordedWindow => ({ kind: "week", scope: null, usedPercent, resetsAt, seconds: SEVEN_DAYS });
 
-/** what a tool recorded of the account `acct-1` at `readAt` */
 function record(readAt: number, windows: readonly RecordedWindow[] = [session(42, NOW + 3 * HOUR)], accountId = "acct-1"): RecordedReading {
   return { accountId, label: "me@example.com", readAt, windows };
 }
 
-/** a tool whose store holds `readings`, read again every five minutes while it runs */
 function recordedBy(readings: () => readonly RecordedReading[], staleAfterMs = 15 * MINUTE): RecordedSource {
   return { by: "omp", staleAfterMs, read: () => [...readings()] };
 }
 
-/** Claude with no sign-in on this PC, its limits recorded by `sources` */
 function recordedOnly(...sources: RecordedSource[]): UsageProvider {
   return { id: "claude", recorded: sources, async signIns() { return []; }, async read() { return null; } };
 }
 
-/**
- * This PC's own sign-in of `acct-1`, its limits also recorded by `source`: its endpoint says 10% of the session is
- * used, or refuses as `refusal` says now. `capturedAt`: its limits also captured locally then (as Claude's status
- * line keeps them), at 20%.
- */
 function ownSignIn(source: RecordedSource | null, refusal: () => UsageHttpError | null = () => null, capturedAt: number | null = null): UsageProvider {
   return {
     id: "claude",
@@ -107,7 +98,6 @@ describe("an account another tool recorded", () => {
   });
 
   it("says its own time with each report, as the report leaves: a page counts a record's age from it", async () => {
-    // a Hub that takes half a minute to answer: the report is that much later than the start of its collection
     const service = new UsageService(context(), [recordedOnly(recordedBy(() => [record(NOW)]))], async () => { now += 30_000; return []; });
     expect((await service.report()).server_time).toBe(iso(NOW + 30_000));
     now = NOW + 7 * MINUTE;
@@ -139,10 +129,8 @@ describe("an account another tool recorded", () => {
   it("loses a limit whose window has turned over, and one that names no reset once it is older than its window", async () => {
     const limits = async (readAt: number, windows: readonly RecordedWindow[]) =>
       (await listed(recordedOnly(recordedBy(() => [record(readAt, windows)]))))[0]?.windows.map((window) => window.kind) ?? [];
-    // the session reset an hour ago: its number counts a window that is gone, the week's still stands
     expect(await limits(NOW - 6 * HOUR, [session(90, NOW - HOUR), week(13, NOW + 2 * DAY)])).toEqual(["week"]);
     expect(await limits(NOW - 6 * HOUR, [session(90, NOW), week(13, NOW + 2 * DAY)])).toEqual(["week"]);
-    // no reset named: read inside its own length it may still hold, past it it cannot
     expect(await limits(NOW - 5 * HOUR + 1, [session(90, null), week(13, null)])).toEqual(["session", "week"]);
     expect(await limits(NOW - 5 * HOUR, [session(90, null), week(13, null)])).toEqual(["week"]);
     expect(await limits(NOW - 7 * DAY, [week(13, null)])).toEqual([]);
@@ -182,7 +170,6 @@ describe("an account this PC is signed in to and another tool recorded", () => {
   it("shows this PC's own reading while that is current, however new the record", async () => {
     const service = new UsageService(context(), [ownSignIn(recordedBy(() => [record(NOW + 2 * MINUTE)]))]);
     await service.report();
-    // the own reading is three minutes old and still inside its refresh interval; the record is a minute old
     now = NOW + 3 * MINUTE;
     const accounts = (await service.report()).providers;
     expect(accounts).toEqual([expect.objectContaining({ key: "claude:acct-1", plan: "max", problem: null, checked_at: iso(NOW), windows: [expect.objectContaining({ used_percent: 10 })] })]);
@@ -252,7 +239,6 @@ describe("an account this PC is signed in to and another tool recorded", () => {
   });
 
   it("shows a newer record over a local capture of this PC's own that is hours old", async () => {
-    // the endpoint is refused, so the capture from two hours ago stands in for it, without a problem
     const refused = () => new UsageHttpError(403, null);
     expect(await listed(ownSignIn(null, refused, NOW - 2 * HOUR))).toEqual([expect.objectContaining({ problem: null, checked_at: iso(NOW - 2 * HOUR) })]);
     const [usage] = await listed(ownSignIn(recordedBy(() => [record(NOW - 5 * MINUTE)]), refused, NOW - 2 * HOUR));

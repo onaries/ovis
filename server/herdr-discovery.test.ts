@@ -48,8 +48,6 @@ describe("running herdr discovery", () => {
 
   it("confines proc unix candidates even when HOME is the account home", async () => {
     const f = fixture();
-    // a desktop herdr under an XDG root outside HOME (its path holding a space), served by a program not named herdr: no
-    // process line names it
     const outside = tempRoot("herdr discovery xdg-");
     const socket = join(outside, "herdr/sessions/work/herdr.sock");
     listening(socket);
@@ -65,7 +63,6 @@ describe("running herdr discovery", () => {
   });
 
   it("accepts a real listening socket on this platform", async () => {
-    // no faked platform, uid or probe: the real connection check reaches the listener
     const home = tempRoot("hd-");
     const socket = join(home, ".config/herdr/sessions/work/herdr.sock"); listening(socket);
     const host = { home, platform: process.platform, uid: process.getuid?.() };
@@ -198,7 +195,6 @@ describe("running herdr discovery", () => {
 
 describe("the machine profile's own folders", () => {
   it("trust this account's private group alone, not macOS's admin group under Homebrew's prefixes", () => {
-    // the account's private group is 20 here, as a fake answer: no macOS needed
     const own = () => 20;
     // control: the rule of main's other callers trusts admin (80) there on macOS
     expect(harmlessGroups("darwin", own)(80, "/opt/homebrew/var/herdr")).toBe(true);

@@ -5,7 +5,7 @@
  * adds it with one approval: it types the number this PC shows, and the owner approves here.
  */
 import { importPublicKey } from "../../../shared/relay-e2ee.ts";
-import { decodeOffer } from "../../../shared/relay-offer.ts";
+import { decodeOffer, type RelayOffer } from "../../../shared/relay-offer.ts";
 import { closeRelayLink, fetchHealth, requestRelayLink } from "../api.ts";
 import { apiFetch } from "../api-request-id.ts";
 import { serverIdOfPath } from "../shellMode.ts";
@@ -13,7 +13,6 @@ import { pcAccountStatus, within } from "./join.ts";
 import { NEW_PC_MS } from "./myPcs.ts";
 import type { AccountService } from "./service.ts";
 
-/** The account this PC belongs to; null while it is in none. */
 export async function thisPcAccount(): Promise<string | null> {
   return (await pcAccountStatus(apiFetch)).account;
 }
@@ -34,25 +33,21 @@ export async function thisPcInNoAccount(): Promise<boolean> {
 
 /**
  * Opens this PC's approve-here pairing window again and nothing else: no directory call, so nothing is listed
- * and no device of the account is rung. A window lost to a restart of Ovis is back with the next call.
- * Answers the id of the PC that opened it (null when its link does not say), so a screen that resumed
- * a wait can tell the PC is the one it waited on.
+ * and no device of the account is rung. Answers the id of the PC that opened it (null when its link does not
+ * say), so a screen that resumed a wait can tell the PC is the one it waited on.
  */
 export async function reopenAddWindow(): Promise<string | null> {
   const { url } = await openAddWindow();
   try { return decodeOffer(url)?.server_id ?? null; } catch { return null; }
 }
 
-/** How long a close of this PC's window may take to answer before a new window is asked for all the same. */
 export const CLOSE_ANSWER_MS = 60_000;
 
-/** The closes of this PC's window this page sent that have not been answered yet, each for `CLOSE_ANSWER_MS` at most. */
 let closing: Promise<unknown> = Promise.resolve();
 
 /**
- * Closes this PC's pairing window (POST /api/relay/link/close), so nothing more is taken through it. The PC
- * closes whatever window is open when the request arrives, so one asked for after this call is asked for
- * only once this close was answered (`openAddWindow`): a close that arrives late never closes the window
+ * The PC closes whatever window is open when the request arrives, so one asked for after this call is asked
+ * for only once this close was answered (`openAddWindow`): a close that arrives late never closes the window
  * of a wait that began after it.
  */
 export function closeAddWindow(): Promise<{ readonly ok: true }> {
@@ -61,17 +56,11 @@ export function closeAddWindow(): Promise<{ readonly ok: true }> {
   return sent;
 }
 
-/**
- * Asks this PC for its approve-here pairing window, after every close this page sent before was answered
- * (or got no answer for `CLOSE_ANSWER_MS`: the window is then asked for all the same, and one such a close
- * shuts late is back with the wait's next reopen).
- */
 async function openAddWindow(): Promise<{ url: string }> {
   for (let seen: Promise<unknown> | null = null; seen !== closing;) { seen = closing; await seen; }
   return await requestRelayLink({ localOnly: true });
 }
 
-/** Where a waiting Add this PC screen is kept across a reload of its tab. */
 const WAITING_KEY = "ovis-add-pc-waiting";
 
 /**
@@ -79,15 +68,10 @@ const WAITING_KEY = "ovis-add-pc-waiting";
  * a tab that now shows another PC, or is signed in to another account, never resumes it.
  */
 export interface AddPcWaiting {
-  /** the name this PC is listed under */
   readonly name: string;
-  /** when the screen stops waiting (ms since the epoch) */
   readonly until: number;
-  /** the PC that waits */
   readonly serverId: string;
-  /** the account it was listed in */
   readonly account: string;
-  /** when it was last listed there (ms since the epoch): the next listing is due `RELIST_MS` after it */
   readonly listedAt: number;
 }
 
@@ -95,7 +79,6 @@ function tabStorage(): Storage | null {
   try { return typeof window === "undefined" ? null : window.sessionStorage ?? null; } catch { return null; }
 }
 
-/** The PC this page is scoped to at the hosted app (`/s/<server_id>/`); null on a PC's own address, which names none. */
 export function pagePc(): string | null {
   try { return typeof location === "undefined" ? null : serverIdOfPath(location.pathname ?? ""); } catch { return null; }
 }
@@ -116,7 +99,6 @@ export async function pcAnswers(serverId: string): Promise<boolean> {
 }
 const time = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** The waiting screen this tab kept, expired or not; null when it kept none, one of another shape, or its storage cannot be read. */
 export function readAddPcWaiting(): AddPcWaiting | null {
   try {
     const kept = JSON.parse(tabStorage()?.getItem(WAITING_KEY) ?? "null") as Partial<Record<keyof AddPcWaiting, unknown>> | null;
@@ -126,19 +108,13 @@ export function readAddPcWaiting(): AddPcWaiting | null {
   } catch { return null; }
 }
 
-/** The copies of the Add this PC screen in this page that want to hear of a wait kept or forgotten. */
 const watchers = new Set<(waiting: AddPcWaiting | null) => void>();
 
-/**
- * Tells `heard` of every wait this page keeps or forgets from now on (`keepAddPcWaiting`), until the function
- * returned is called: a copy of the screen that shows the offer takes up a wait another copy began.
- */
 export function onAddPcWaiting(heard: (waiting: AddPcWaiting | null) => void): () => void {
   watchers.add(heard);
   return () => { watchers.delete(heard); };
 }
 
-/** Keeps the waiting screen for a reload of this tab, or forgets it (null). Without storage the screen works as before, not resumed. */
 export function keepAddPcWaiting(waiting: AddPcWaiting | null): void {
   try {
     if (waiting === null) tabStorage()?.removeItem(WAITING_KEY);
@@ -147,13 +123,8 @@ export function keepAddPcWaiting(waiting: AddPcWaiting | null): void {
   for (const heard of [...watchers]) heard(waiting);
 }
 
-/** This PC as `listThisPc` listed it: its name there, its id, and the account it was listed in (null when no sign-in was stored when the listing began). */
 export interface ListedPc { readonly name: string; readonly serverId: string; readonly account: string | null }
 
-/**
- * Why `listThisPc` wrote nothing for a wait: the address answers for another PC now (`pc`), another sign-in
- * or none is stored (`sign-in`), or the wait ended while the listing was on its way (`ended`).
- */
 export class AddPcWaitOver extends Error {
   constructor(readonly why: "pc" | "sign-in" | "ended") {
     super(`The wait to add this PC is over: ${why}`);
@@ -161,7 +132,6 @@ export class AddPcWaitOver extends Error {
   }
 }
 
-/** The wait a listing is made for (`listThisPc`): its PC, its account, and whether it still runs. */
 export interface ListedFor {
   readonly serverId: string;
   readonly account: string;
@@ -169,7 +139,6 @@ export interface ListedFor {
   readonly running: () => boolean;
 }
 
-/** The sign-in a listing is made for without a press (`listThisPc`): its account, and whether the attempt it began still runs. */
 export interface ListedAs {
   readonly account: string;
   /** asked once the window opened, and right before every write to the directory and to the PC: false once the screen gave the attempt up */
@@ -234,4 +203,20 @@ export async function listThisPc(service: AccountService, options: { relistMs: n
     );
   }
   return { name, serverId: offer.server_id, account: session?.account ?? null };
+}
+
+/**
+ * Lists the PC a QR code's offer names in `account`, beside the code: the code is drawn first and the listing never
+ * holds it up. The offer gives the PC's relay key, so no
+ * other pairing window of the PC is opened or closed for it. Nothing is written
+ * when the account lists the PC already, however long ago (listed anew it would ring the account's devices at every
+ * code), and nothing at all when the sign-in stored now is another account's than the one the screen showed.
+ */
+export async function listOfferedPc(service: AccountService, offer: RelayOffer, account: string): Promise<void> {
+  const session = await service.session();
+  if (session?.account !== account) throw new AddPcWaitOver("sign-in");
+  const directory = service.forSignIn(session);
+  if ((await directory.listPcs()).some((pc) => pc.server_id === offer.server_id)) return;
+  const publicKey = Array.from(importPublicKey(offer.server_public_key), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  await directory.putPc(offer.server_id, { label: (offer.name ?? offer.server_id.slice(0, 8)).slice(0, 48), public_key: publicKey, relay: offer.relay });
 }

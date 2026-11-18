@@ -139,7 +139,6 @@ describe("the sampler", () => {
     advance(STALE_MS + 1);
     const before = calls.cpu;
     await sampler.read();
-    // the first reading takes two CPU samples (baseline, then the window); a stale one does the same
     expect(calls.cpu - before).toBe(2);
     advance(5000);
     const steady = calls.cpu;
@@ -170,7 +169,6 @@ describe("the sampler", () => {
     advance(5000);
     const second = await sampler.read();
     expect(second.disks).toEqual([]);
-    // one read is still pending, so no second thread was spent on the stuck mount
     expect(asked).toBe(1);
   });
 
@@ -213,7 +211,6 @@ describe("the sampler", () => {
     advance(5000);
     expect((await sampler.read()).disks).toEqual([disk]);
     late.resolve([{ ...disk, percent: 60 }]);
-    // the sampler's own handler on that read was attached first, so it has run once this await returns
     await late.promise;
     advance(5000);
     expect((await sampler.read()).disks[0]?.percent).toBe(60);

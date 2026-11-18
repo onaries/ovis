@@ -1,12 +1,3 @@
-/*
- * The relay shell's account part (AccountPcs.tsx), inside the sign-in column (RelayShell.css) and
- * Settings → Account. Sign-in is one centred 368px column on --bg: 44px mark, --fs-display h1,
- * equal neutral 44px provider buttons with 18px brand marks at a fixed --space-4 inset, saved-PC
- * continuation above the hairline when present, full-width ghost Pair with a QR or code below the
- * hairline, and --fs-xs fine print at the foot.
- */
-
-/* signed out: the column's mark, title and fine print centred */
 .account-centered {
   text-align: center;
 }
@@ -21,10 +12,6 @@
   gap: var(--space-2);
 }
 
-/*
- * Equal neutral outlined buttons at 44px (--touch-target), with the 18px brand mark anchored at a
- * fixed --space-4 (16px) left inset and the label centered across the full button width.
- */
 .account-provider {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   width: 100%; min-width: 0; height: auto; min-height: var(--touch-target);
@@ -91,7 +78,6 @@
   border-top: var(--hairline) solid var(--border);
 }
 
-/* the other way in: a ghost button or quiet link at touch-target height */
 .account-link {
   display: inline-flex; align-items: center; justify-content: center; width: 100%; min-width: 0;
   height: auto; min-height: var(--touch-target); margin-top: var(--space-2); padding: var(--space-2) var(--space-3);
@@ -143,7 +129,6 @@
   min-width: 0;
 }
 
-/* the state in words, after the shared inline StatusDot glyph */
 .account-pc-state {
   display: inline-flex;
   align-items: center;
@@ -154,7 +139,6 @@
   overflow-wrap: anywhere;
 }
 
-/* a PC to compare digits with: the row is the button, as a saved PC's row is the link */
 .account-pc-join {
   width: 100%;
   background: none;
@@ -165,7 +149,6 @@
   cursor: pointer;
 }
 
-/* sign out and leave: quiet links under the list; leaving asks once more, in the card */
 .account-actions {
   display: flex;
   flex-direction: column;
@@ -175,7 +158,6 @@
   border-top: var(--hairline) solid var(--border);
 }
 
-/* Settings on the PC's own page: GitHub's device code, set like the pairing code (.devices-code) */
 .account-device {
   display: flex;
   flex-direction: column;
@@ -212,7 +194,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Settings → Account: the account's ways to sign in, each with its provider's mark */
 .account-method-list {
   display: flex;
   flex-direction: column;
@@ -253,7 +234,6 @@
   gap: var(--space-2);
 }
 
-/* Check now: a compact ghost button above the list's right edge, over the rows it refreshes */
 .relay-shell-check {
   display: flex;
   justify-content: flex-end;
@@ -264,12 +244,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Settings → Devices and PCs: the line under the device list of an account that lists no PC yet */
 .account-no-pc {
   padding-top: var(--space-2);
 }
 
-/* under the account's PCs in that list: where a browser opens them, with the one link to it */
 .devices-row.account-pcs-open {
   flex-wrap: wrap;
   gap: var(--space-2);

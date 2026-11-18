@@ -51,7 +51,6 @@ export async function beginSignIn(provider: AccountProvider, options: { store: A
 
 export type SignInReturn = { code: string; state: string } | { error: string; state: string };
 
-/** The sign-in a fragment (or a native callback's query) brings back, or null when it is not one. */
 export function signInReturn(params: string): SignInReturn | null {
   const fields = new URLSearchParams(params.replace(/^[#?]/, ""));
   const state = fields.get("state");

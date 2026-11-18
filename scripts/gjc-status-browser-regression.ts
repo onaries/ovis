@@ -124,7 +124,16 @@ async function settled(paneId: string, status: Status, start?: number): Promise<
   if (start !== undefined) await until(() => frames.slice(start).some((frame) =>
     frame.type === "pane-status" && frame.pane_id === paneId && frame.agent_status === status), `${scenario}: pushed ${status}`);
   await until(async () => (await httpSnapshot()).panes.find((item) => item.pane_id === paneId)?.agent_status === status, `${scenario}: HTTP ${status}`);
-  await until(() => agentRow(paneId).locator(`.badge[data-status="${drawn(paneId, status)}"]`).isVisible(), `${scenario}: browser ${drawn(paneId, status)}`);
+  await until(() => agentRow(paneId).locator(`.badge[data-status="${drawn(paneId, status)}"]`).isVisible(), `${scenario}: browser ${drawn(paneId, status)}`).catch(async (error: Error) => {
+    // each read is bounded and falls back to null, so a stuck renderer still lets the wait's own error out
+    const read = (attribute: Promise<string | null> | undefined) => (attribute ?? Promise.resolve(null)).catch(() => null);
+    const state = page && {
+      badge: await read(agentRow(paneId).locator(".badge").first().getAttribute("data-status", { timeout: 2_000 })),
+      content: await read(page.locator(".chat-frame[data-pane-content]").first().getAttribute("data-pane-content", { timeout: 2_000 })),
+      selected: new URL(page.url()).searchParams.get("pane"),
+    };
+    throw new Error(`${error.message}; the page showed ${JSON.stringify(state)}`, { cause: error });
+  });
   await rawWorking(paneId);
 }
 async function checkpoint(name: string): Promise<void> {
@@ -176,8 +185,6 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((ids) => {
     localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
-    // Waiting first (the default Agents order) folds the resting rows, idle and an unread finish alike, under one
-    // line: this device keeps that line open, so every row's drawn state stays in sight for the checks below
     localStorage.setItem("ovis:agents-resting-open", "1");
     for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
   }, [paneId, delayedPaneId]);

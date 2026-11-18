@@ -23,19 +23,15 @@ import { isReportableWindowError } from "./lib/uncaughtErrors.ts";
 import "./lib/viewport.ts";
 import { watchSheetExits } from "./lib/sheets.ts";
 
-// a phone's sheets drop back down however they close (lib/sheets.ts)
 watchSheetExits();
 
 const container = document.getElementById("root");
 if (!container) throw new Error("#root is missing from index.html");
 const mount: HTMLElement = container;
 
-// a markdown file opened in a tab of its own is that page alone, not the app (FileReader)
 const reader = readerFromSearch(pageSearch());
 reloadWhenReaderChanges(reader);
 
-// an error nothing else caught still reaches the console under one name, where a bug report can find it
-// (but not the browser's benign ResizeObserver loop notice: lib/uncaughtErrors.ts)
 window.addEventListener("error", (event) => {
   if (isReportableWindowError(event.error, event.message)) console.error("Ovis: uncaught error", event.error ?? event.message);
 });

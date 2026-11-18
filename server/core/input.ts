@@ -1,8 +1,3 @@
-/**
- * Each pane's input order: the one queue its input waits in, and when its attach pty was last
- * typed into, which input sent around the pty waits on. The terminal input frames a connection
- * sends (`input`, `keys`, `secret`) are typed in that order.
- */
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import { paneAgentOf } from "../pane-context.ts";
@@ -13,21 +8,15 @@ import { HerdrError, paneRead, paneSendKeys, paneSendText } from "../herdr/clien
 import { secretPrompt, validSecret } from "../../shared/secret-prompt.ts";
 import { insertTextProblem } from "../../shared/terminal-insert.ts";
 import { mirrorInput } from "../mirror-input.ts";
+import { CoreAttachSession, CURSOR_KEY } from "../herdr-core/attach-session.ts";
 
 /** Keys that may wait to join one `pane.send_keys` while herdr answers the one before (a held arrow repeats ~30/s). */
 const MAX_WAITING_KEYS = 256;
-/** One terminal answer: a CSI report (parameters, intermediates, final byte), an OSC reply or a DCS string. */
 const REPLY_RE = /^\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|P[^\x1b]*\x1b\\)$/;
-/** An insert that waited this long behind earlier input is refused rather than typed late (as SUBMIT_DEADLINE_MS for a message). */
 const INSERT_DEADLINE_MS = 45_000;
 
 type Frame<T extends ClientMessage["type"]> = Extract<ClientMessage, { type: T }>;
 
-/**
- * `mayType` and `authorizeSocket` belong to the connections, which are built after the lane, so
- * they are called through: only a frame calls them. herdr's attach answer comes later than the
- * lane too, so `terminalAttachKnown` reads it as it is now.
- */
 export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight, poke, terminalAttach, terminalAttachKnown, mayType, authorizeSocket }: {
   TYPED_SETTLE_MS: number;
   KEY_SETTLE_MS: number;
@@ -39,34 +28,19 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
   mayType: (client: Client) => boolean;
   authorizeSocket: (client: Client) => void;
 }) {
-  /** each pane's input while a composer message is in flight, one step after another */
   const paneQueues = new Map<string, Promise<unknown>>();
-  /** when each pane last got keystrokes through its attach pty */
   const lastTyped = new Map<string, number>();
-  /**
-   * How many times a person's own input went to each pane: typing, a key, a line inserted, a masked answer. Not
-   * the terminal's answers to its program, nor the mouse. A message that waits at a pane (pending.ts waitForOmp)
-   * asks whether anything was typed there meanwhile.
-   */
   const typedInto = new Map<string, number>();
   const personTyped = (paneId: string): void => {
     const count = (typedInto.get(paneId) ?? 0) + 1;
-    // kept for the panes typed into last (set again, a key moves to the end): a wait is half a minute long, and
-    // its pane is not the 257th typed into since
     typedInto.delete(paneId);
     typedInto.set(paneId, count);
     if (typedInto.size > 256) typedInto.delete(typedInto.keys().next().value!);
   };
   /** panes whose last pty keystroke ended in an ESC, which herdr holds ~150ms: a key waits TYPED_SETTLE_MS there */
   const typedEscape = new Set<string>();
-  /** per pane, the WS keys still waiting at the tail of the pane's queue: later keys of the same sender join them */
   const waitingKeys = new Map<string, { keys: string[]; client: unknown; origin: unknown; pty: unknown; claim: unknown; roles: number; run: Promise<unknown> | null; sent: boolean }>();
 
-  /**
-   * Runs `task` after everything queued for the pane. While a composer message is in
-   * flight, the pane's other input (keystrokes, keys, prompt answers) waits behind it:
-   * a Stop tapped right after Send must not land between the text and its Enter.
-   */
   function serialize<T>(paneId: string, task: () => T | Promise<T>): Promise<T> {
     const run = (paneQueues.get(paneId) ?? Promise.resolve()).catch(() => {}).then(task);
     paneQueues.set(paneId, run);
@@ -74,11 +48,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
     return run;
   }
 
-  /**
-   * Waits until input sent through herdr's RPC can no longer overtake the pane's last pty keystroke
-   * still on its way through the sidecar and the attach: KEY_SETTLE_MS after it, or TYPED_SETTLE_MS
-   * when it ended in an ESC herdr may still be holding.
-   */
   async function settleAfterTyping(paneId: string): Promise<void> {
     const settle = typedEscape.has(paneId) ? TYPED_SETTLE_MS : KEY_SETTLE_MS;
     const typed = Date.now() - (lastTyped.get(paneId) ?? 0);
@@ -86,11 +55,8 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
     if (typed < settle) await Bun.sleep(settle - typed);
   }
 
-  /** The terminal input frames a connection sends, each handled as its `case` in the socket's frame switch was. */
   const inputFrames = {
     input(client: Client, message: Frame<"input">): void {
-      // feature "input-receipt": an input with an id is answered once written or refused. A connection
-      // that ended before its turn gets nothing: its browser holds what no receipt confirmed
       const id = Number.isSafeInteger(message.id) ? message.id : undefined;
       const receipt = (ok: boolean, code?: string) => {
         if (id !== undefined && clients.has(client)) send(client, { type: "input-result", id, pane_id: message.pane_id, ok, ...(code ? { code } : {}) });
@@ -131,9 +97,7 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         // and into the same attach, or still none: one made while this waited is someone else's (#732)
         const allowed = () => mayType(client) && connectionOf(client).roles === roles && typingGuards.herdrTyping(sighting.facts());
         void serialize(message.pane_id, async () => {
-          // a herdr that attaches: typing reaches an attached pane only
           if (await terminalAttach()) { inputFailed(); return; }
-          // a pasted block asks herdr what the pane runs, so it is shaped before the checks below
           const shaped = await mirrorInput(text, () => paneAgentOf(message.pane_id));
           if (!typingGuards.herdrTyping(sighting.facts())) { inputFailed(); return; }
           // nothing typed outlives its connection
@@ -142,7 +106,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
           await paneSendText(message.pane_id, shaped, undefined, allowed);
           personTyped(message.pane_id);
           receipt(true);
-          // the echo is read at once, not at the mirror's next idle read
           poke(message.pane_id);
         }).catch(inputFailed);
         return;
@@ -160,9 +123,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
           for (const [pane, at] of lastTyped) if (Date.now() - at > TYPED_SETTLE_MS) { lastTyped.delete(pane); typedEscape.delete(pane); }
         }
       };
-      // the composer's Stop: a message sent right after it must not reach the agent first, and a
-      // pty write only queues the ESC in the sidecar, so it goes the message's own way (send_text)
-      // in the pane's turn. Plain typing, a terminal ESC included, keeps the pty's FIFO order.
       const stop = message.stop === true && message.text === "\u001b";
       // the viewer's terminal answering a query (a herdr-core attach's own, or the program's) is no one
       // typing: it goes to the attach it answers, which takes out what was its own; typed through herdr
@@ -175,14 +135,15 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         // herdr encodes it for the program's mouse mode, send_text would type its bytes (#667).
         // The terminal's answers to its attach's questions go to that attach too, or they are typed (#2816):
         // only what the browser's terminal made itself, so a paste of the same bytes is still typed
-        const viaAttach = isMouseReport(text) || (message.automatic === true && isTerminalReply(text));
+        // A lone cursor key typed into a herdr-core attach goes there too, which sends it in the form the program reads
+        // when its turn comes, not the one the viewer's terminal believed in when it was pressed
+        const cursorKey = message.automatic !== true && sighting.pty instanceof CoreAttachSession && CURSOR_KEY.test(text);
+        const viaAttach = cursorKey || isMouseReport(text) || (message.automatic === true && isTerminalReply(text));
         // typed into the attach it saw: one that ended meanwhile (and was attached again) takes none of it
         const roles = connectionOf(client).roles;
         const allowed = () => mayType(client) && connectionOf(client).roles === roles && typingGuards.queuedTyping(sighting.facts());
         void serialize(message.pane_id, async () => {
-          // behind typing still in the sidecar, as a terminal key waits for it
           if (stop) await settleAfterTyping(message.pane_id);
-          // held while this waited its turn: it goes nowhere, as unqueued typing would
           if (!typingGuards.queuedTyping(sighting.facts())) { inputFailed(); return; }
           // nothing typed outlives its connection
           if (!clients.has(client)) return;
@@ -190,20 +151,18 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
           if (viaAttach) {
             if (!allowed() || !sighting.write(text, message.automatic === true)) { inputFailed(); return; }
             typedIntoPty(text);
+            if (cursorKey) personTyped(message.pane_id);
             receipt(true);
             return;
           }
           await paneSendText(message.pane_id, text, undefined, allowed);
           personTyped(message.pane_id);
           receipt(true);
-          // herdr still holds a lone ESC a moment: a message after the Stop waits out the same
-          // settling gap as after a typed one, and checks again for a question before pasting
           if (stop) typedIntoPty(text);
         }).catch(inputFailed);
       } else {
         if (!sighting.write(message.text, message.automatic === true)) { inputFailed(); return; }
         typedIntoPty(message.text);
-        // the terminal's own answers and the mouse are no one typing
         if (message.automatic !== true && !isMouseReport(message.text)) personTyped(message.pane_id);
         receipt(true);
       }
@@ -229,16 +188,10 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         send(client, { type: "error", code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent.", pane_id: message.pane_id });
         return;
       }
-      // A key behind keys of the same sender that have not gone out yet joins them, as long as
-      // nothing else was queued since: one RPC carries them all, so keys held faster than herdr
-      // answers (a slow herdr, a busy PC) never queue up an RPC each, and keep their order.
       const waiting = waitingKeys.get(message.pane_id);
       if (waiting && !waiting.sent && waiting.client === client && waiting.origin === sighting.origin && waiting.pty === sighting.pty && waiting.claim === sighting.claim
-        // a key pressed after the sender watched and came back is checked on its own: joined, the
-        // batch's older role would refuse it with the rest
         && waiting.roles === roles
         && waiting.run !== null && paneQueues.get(message.pane_id) === waiting.run) {
-        // a herdr that stopped answering does not collect keys without end: past this, they are refused
         if (waiting.keys.length + message.keys.length > MAX_WAITING_KEYS) {
           send(client, { type: "error", code: "input_failed", message: "Terminal input could not be confirmed. Check the terminal before typing again.", pane_id: message.pane_id });
           return;
@@ -264,7 +217,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
           if (clients.has(client)) send(client, { type: "error", code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent.", pane_id: message.pane_id });
           return;
         }
-        // held while this waited its turn (the attach was refused after the check above)
         if (facts.currentHeld) {
           send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
           return;
@@ -272,7 +224,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         // a key pressed by a connection that has gone since is not pressed
         if (!clients.has(client)) return;
         authorizeSocket(client);
-        // the same checks once more right before herdr is written to: its connect is awaited (#545)
         const allowed = () => mayType(client) && connectionOf(client).roles === roles && typingGuards.keys(sighting.facts());
         batch.sent = true;
         try {
@@ -387,7 +338,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
       if (!seen.ready) { result(false, "input_not_ready", "Terminal input is not ready. Nothing was sent."); return; }
       const roles = connectionOf(client).roles;
       const arrivedAt = Date.now();
-      // the same attach, session and claim, still this bridge's, ready and not held: what the pty's queued typing checks
       const standing = (): string | null => {
         if (!clients.has(client) || connectionOf(client).closing || connectionOf(client).roles !== roles || connectionOf(client).mode === "observe") return "read_only";
         const facts = sighting.facts();
@@ -402,7 +352,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         : "The pane's terminal changed before the text was typed; nothing was typed");
       await serialize(message.pane_id, async () => {
         try {
-          // behind typing still in the sidecar, as a key or a message waits for it
           if (!seen.mirror) await settleAfterTyping(message.pane_id);
           let lost = standing();
           if (lost) { refuse(lost); return; }
@@ -425,7 +374,6 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
           poke(message.pane_id);
           result(true);
         } catch {
-          // herdr answered with an error or not at all: the bytes may or may not have arrived
           result(false, "insert_failed", "The terminal did not confirm the text. Check it before inserting again.");
         }
       });
@@ -433,6 +381,5 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
     },
   };
 
-  // `lastTyped` stays the server's to read: a composer message and a pending one wait out the last keystroke too
   return { serialize, settleAfterTyping, lastTyped, typedInto: (paneId: string): number => typedInto.get(paneId) ?? 0, inputFrames };
 }

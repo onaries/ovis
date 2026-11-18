@@ -10,9 +10,6 @@ import { MAX_COMPOSER_CHARS } from "../src/lib/compose.ts";
 import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
 import { openLens } from "./header-lens.ts";
 
-// The draft in the message box, on the demo app as scripts/composer-fit-harness.ts patches it: an
-// upload that fails, the agent's suggestion and skill completion, and the box's size, wrapping and
-// scrolling as the draft, the font size and the zoom change.
 const app = mkdtempSync(join(tmpdir(), "herdr-composer-fit-demo-"));
 try {
   const { server, withCard } = await composerFitDemo(app);
@@ -71,8 +68,6 @@ try {
       });
       console.log("PASS phone and desktop upload failure has one named alert, retry survives edits, success is announced, and file-list failures use a persistent alert");
 
-      // a tap on the grey words only focuses the box, with the Suggestion chip on or off (#3807): typing there
-      // writes the user's own reply, and only the chip above the box (or Tab) takes the suggestion
       for (const suggestionChip of [false, true]) await withCard(browser, 390, { model: "gpt-5.6", status: "idle", pending: false, freezeConversation: true, suggestion: "Review the changes", suggestionChip }, async (page) => {
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".composer-text")?.placeholder === "Review the changes");
@@ -173,7 +168,6 @@ try {
             mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
             await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `slash-${agent}-${width}.png`), fullPage: true });
           }
-          // A committing IME Enter belongs to the input method, even while a skill is offered.
           await box.evaluate((node) => node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })));
           assert.equal(await box.inputValue(), "run tests then /del afterwards");
           await box.press("Tab");
@@ -203,7 +197,6 @@ try {
         await box.fill("see @src");
         await page.getByRole("listbox", { name: "Files", exact: true }).waitFor();
         await box.fill("look at /tmp");
-        // the send key: a phone's Return breaks the line by default, its hardware Mod+Enter sends
         await box.press(width <= 480 ? "ControlOrMeta+Enter" : "Enter");
         // the send is claimed in the pane's cross-tab lock (#2369), a moment after the key: the box empties then
         await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea.composer-text")?.value === "");
@@ -231,7 +224,6 @@ try {
 
       for (const width of [390, 1440]) await withCard(browser, width, { status: "idle", pending: false, model: "gpt-5.6", freezeConversation: true }, async (page) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
-        // A compact viewport supplies scrollable history without changing disclosure state.
         await page.setViewportSize({ width, height: 600 });
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         const draft = "An unsent draft.";
@@ -387,7 +379,6 @@ try {
             const height = document.querySelector(".composer-text")!.clientHeight;
             return growing ? height > initialHeight : height === initialHeight;
           }, { initialHeight, growing: text !== draft });
-          // Let layout observers finish, without waiting for the paragraph to be repaired.
           await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
           const after = await paragraph(reading.text);
           assert.ok(Math.abs(after.offset - reading.offset) <= 1 && after.gap > 48, `editing keeps the reader on the same paragraph: ${JSON.stringify({ reading, after })}`);
@@ -406,8 +397,6 @@ try {
           await box.fill(value);
           await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
           const size = await box.evaluate((box: HTMLTextAreaElement) => {
-            // Let the browser size a copy of the visible field's own wrapping rules,
-            // independently of the measurement field's styles, without moving the transcript.
             const probe = box.cloneNode() as HTMLTextAreaElement;
             probe.removeAttribute("aria-label");
             probe.setAttribute("aria-hidden", "true");
@@ -426,9 +415,6 @@ try {
       });
       console.log("PASS Korean, Japanese and Chinese drafts and wrapped placeholders fit their native text height on phone and desktop");
 
-      // Korean typed in the box keeps each word whole, as the rest of the app and the box's own placeholder do (#3374):
-      // a word that fits a line alone moves to the next line whole instead of being split after a short first word, so
-      // "가 <word> 나" takes three lines, not two, and the box grows to all three.
       for (const width of [390, 1440]) await withCard(browser, width, { language: "ko", status: "idle", pending: false, model: "gpt-5.6", freezeConversation: true }, async (page) => {
         const box = page.locator(".composer-text");
         const word = await box.evaluate(async (node: HTMLTextAreaElement) => {
@@ -438,7 +424,6 @@ try {
           const probe = document.body.appendChild(document.createElement("span"));
           Object.assign(probe.style, { position: "absolute", visibility: "hidden", whiteSpace: "pre", font: style.font, letterSpacing: style.letterSpacing });
           const line = node.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
-          // the longest word that still fits one line of the box
           let longest = "";
           try {
             for (let index = 0; ; index += 1) {
@@ -461,8 +446,6 @@ try {
       });
       console.log("PASS Korean typed in the message box keeps its words whole on phone and desktop");
 
-      // Changing the setting in an already-open chat rewraps the existing draft: an automatic
-      // box grows and shrinks with it.
       for (const width of [390, 1440]) await withCard(browser, width, { model: "claude-opus-5-5" }, async (page) => {
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         assert.equal(await page.getByRole("separator", { name: "Resize message box", exact: true }).count(), 0, "the message box has no resize grip");

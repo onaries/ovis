@@ -2,7 +2,6 @@ import type { AgentStatus } from "../../shared/protocol.ts";
 
 export type KnownStatus = "idle" | "working" | "blocked" | "done" | "waiting" | "unknown";
 
-/** The one word every surface (sidebar, palette, composer) uses for an agent state. */
 export const STATUS_WORD: Readonly<Record<KnownStatus, string>> = {
   idle: "READY",
   working: "RUN",
@@ -14,7 +13,6 @@ export const STATUS_WORD: Readonly<Record<KnownStatus, string>> = {
 
 /** herdr's two status indicator sets, its `[ui] status_indicators` ("dots" is herdr's default). */
 export type HerdrIndicators = "dots" | "symbols";
-/** The sidebar's state marks: this app's own (the default), or one of herdr's sets. */
 export type StatusIndicators = "classic" | HerdrIndicators;
 
 /**
@@ -37,11 +35,6 @@ export function knownStatus(status?: AgentStatus): KnownStatus {
   return (status !== undefined && KNOWN[status]) || "unknown";
 }
 
-/**
- * What a pane reads as. One at rest while work its turn started still runs in the background
- * (`background_wait`, server/background-wait.ts) is waiting on it, and says BG in place of DONE
- * or READY: that work's end starts the next turn by itself.
- */
 export function paneStatus(pane: { agent_status?: AgentStatus; background_wait?: true }): KnownStatus {
   const known = knownStatus(pane.agent_status);
   return pane.background_wait && known !== "working" && known !== "blocked" ? "waiting" : known;

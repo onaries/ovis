@@ -1,3 +1,15 @@
+/**
+ * herdr reports the agents' pickers, panels and dialogs as idle, and none of them writes its close to
+ * a transcript (Claude Code alone does, for some), so the screen is the only thing that says a
+ * command's screen has closed: the row the agent takes a message in is drawn again, empty, with
+ * nothing over or under it.
+ *
+ * The rules come from recordings of every command the automatic return lists, at 119 or 120 and at 40
+ * columns, idle, open and closed (Codex 0.163.0, omp 18.8.7, pi 0.86.0, gjc 0.18.12, OmO 5.1.40,
+ * Hermes classic 0.21.5, Devin 3000.11.92, agy 1.4.4, Grok 1.0.67), and Claude Code's box follows
+ * server/prompt.ts claudeInputBox.
+ */
+
 export type InputRowState = "ready" | "covered" | "draft" | "gone" | "unknown";
 
 export interface ScreenCell {
@@ -138,6 +150,8 @@ export const ompInputRow: InputRowRecognizer = (screen) => {
   return "ready";
 };
 
+// ---- pi and OmO (pi's TUI) ------------------------------------------------------------------------
+
 /**
  * pi: the editor is the one blank row between the screen's last two full-width rules, under it 1 to
  * 3 footer rows (the folder and branch, the context and model) and no autocomplete (`→ `). The
@@ -146,6 +160,11 @@ export const ompInputRow: InputRowRecognizer = (screen) => {
  * fail safe.
  */
 export const piInputRow: InputRowRecognizer = (screen, typed) => {
+  const stock = piStockInputRow(screen, typed);
+  return stock === "gone" ? piPowerlineInputRow(screen, typed) : stock;
+};
+
+const piStockInputRow: InputRowRecognizer = (screen, typed) => {
   const rows = filled(screen);
   const text = (index: number): string => screen.rows[index]!.text;
   const rules = rows.filter((index) => RULE.test(text(index)));
@@ -175,6 +194,31 @@ export const piInputRow: InputRowRecognizer = (screen, typed) => {
     return "draft";
   }
   return "gone";
+};
+
+/** pi-powerline-footer's editor border: a rule indented one column, `↑` or `↓` at its start where the editor scrolls. */
+const POWERLINE_RULE = /^ [↑↓─]─{9,}$/;
+
+/**
+ * pi with the pi-powerline-footer extension (0.22.0): its status bar sits above the editor, whose two borders
+ * are the screen's last rows. Its first row starts ` > ` (` $ ` in bash mode), the others `   `; nothing in it but
+ * the prompt is an empty box. Under the lower border only the extension's last-prompt row (` ↳ `, drawn once a
+ * prompt was sent) is taken; anything else there (an autocomplete list, another widget) fails safe.
+ * The editor has no placeholder; its cursor draws the character under it inverse, which is still typed text.
+ */
+const piPowerlineInputRow: InputRowRecognizer = (screen, typed) => {
+  const rows = filled(screen);
+  const text = (index: number): string => screen.rows[index]!.text;
+  const last = rows.at(-1);
+  const lower = last !== undefined && /^ ↳ /.test(text(last)) ? rows.at(-2) : last;
+  if (lower === undefined || !POWERLINE_RULE.test(text(lower))) return "gone";
+  const upper = rows.filter((index) => index < lower && POWERLINE_RULE.test(text(index))).at(-1);
+  if (upper === undefined || lower - upper < 2) return "gone";
+  const inner = Array.from({ length: lower - upper - 1 }, (_, offset) => upper + 1 + offset);
+  if (!/^ [>$](?: |$)/.test(text(inner[0]!)) || inner.slice(1).some((index) => !/^ {3}|^$/.test(text(index)))) return "gone";
+  if (inner.length === 1 && text(inner[0]!).trim().length === 1) return "ready";
+  for (const index of inner) typed?.push(...cellsFrom(screen.rows[index]!, 3).map((cell) => cell.inverse ? { ...cell, inverse: false } : cell));
+  return "draft";
 };
 
 /**
@@ -218,6 +262,7 @@ export const gjcInputRow: InputRowRecognizer = (screen, typed) => {
     const index = rows[position]!;
     if (!text(index).startsWith("│ >")) continue;
     const top = rows[position - 1]!;
+    // the draft check (`typed` given) also reads the rows a draft wraps onto, `│ …│` down to the bottom border
     const wrapped = typed === undefined ? 0 : Math.max(0, rows.slice(position + 1, position + 1 + BOX_MAX_ROWS).findIndex((row) => !/^│ .*│$/.test(text(row))));
     const bottom = rows[position + 1 + wrapped];
     if (!/^╭─+╮$/.test(text(top)) || bottom === undefined || !/^╰─+╯$/.test(text(bottom))) continue;
@@ -330,7 +375,8 @@ export const grokInputRow: InputRowRecognizer = (screen) => {
 
 /**
  * The agents whose input row is known, by herdr's agent name (OmO's own, not the `pi` herdr labels
- * it with).
+ * it with). OpenCode is not here: only its home screen was recorded, not the in-session layout most
+ * of its screens open over. Neither is Command Code, which was not recorded.
  */
 const RECOGNIZERS: Readonly<Record<string, InputRowRecognizer>> = {
   claude: claudeInputRow,
@@ -434,6 +480,7 @@ const kiloInputRow: InputRowRecognizer = (screen, typed) => {
 const ompDraftInputRow: InputRowRecognizer = (screen, typed) => {
   const bar = filled(screen).filter((index) => /^ ?π > .*▶/.test(screen.rows[index]!.text)).at(-1);
   if (bar === undefined || !screen.rows[bar + 1]?.text.startsWith("╰─")) return ompInputRow(screen);
+  // the draft's rows run on while they are indented three columns or blank; the last indented one ends it
   let end = bar + 2;
   for (let index = bar + 2; index < screen.rows.length && index < bar + 2 + BOX_MAX_ROWS; index++) {
     const text = screen.rows[index]!.text;
@@ -472,6 +519,15 @@ export function readsTypedDraft(agent: string | null | undefined): boolean {
   return agent != null && REPORTS_TYPED.has(agent);
 }
 
+/**
+ * Whether `agent`'s input box on this screen holds text a person typed, which a pasted chat message would
+ * join and its Enter send along. Only positive evidence counts: the recognizer found the box, answered
+ * "draft" and reported its cells (InputRowRecognizer `typed`), and one of them is drawn as typed text is,
+ * in the terminal's own colour or one TYPED_COLOURS lists for that agent, neither dim nor italic nor
+ * inverse. A placeholder or a suggestion (dim, grey, italic), a drawn cursor, a box not found, a screen a
+ * recognizer cannot read, and an agent without one all answer false: a send there goes as it always did,
+ * never refused for good on a misreading.
+ */
 export function typedDraft(agent: string | null | undefined, screen: ScreenSnapshot): boolean {
   if (!readsTypedDraft(agent)) return false;
   const typed: ScreenCell[] = [];

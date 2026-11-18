@@ -5,7 +5,6 @@ import { linkHold } from "./openLink.ts";
 // server's pages alike: main answers only those
 contextBridge.exposeInMainWorld("ovisUpdate", {
   current: (): Promise<unknown> => ipcRenderer.invoke("ovis:update"),
-  /** returns what stops the listening */
   onChange: (listener: (update: unknown) => void): (() => void) => {
     const heard = (_event: unknown, update: unknown) => listener(update);
     ipcRenderer.on("ovis:update", heard);
@@ -13,12 +12,12 @@ contextBridge.exposeInMainWorld("ovisUpdate", {
   },
   /** Restart to Update; settles only when Ovis keeps running after it (a .deb's password prompt cancelled) */
   install: (): Promise<void> => ipcRenderer.invoke("ovis:update-install"),
-  /** closes the line of that version */
   close: (version: string): void => ipcRenderer.send("ovis:update-close", version),
 });
 
 // only the app's own connection screen gets the bridge, never a page the server serves
-if (location.protocol === "file:") {
+const isConnectionScreen = location.protocol === "file:";
+if (isConnectionScreen) {
   contextBridge.exposeInMainWorld("ovisDesktop", {
     status: () => ipcRenderer.invoke("ovis:status"),
     onStatus: (listener: (status: unknown) => void) => {

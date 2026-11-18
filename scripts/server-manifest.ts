@@ -22,7 +22,6 @@ export const SUMS = "ovis-server.SHA256SUMS";
 /** the environment release-signing's secret, and the variable the sign step reads it from */
 export const SIGNING_KEY_VARIABLE = "OVIS_SERVER_SIGNING_KEY";
 export const KEY_FILE = "ovis-server-signing-key.pem";
-/** the built client (dist/), as one archive installers unpack beside the binary */
 export const DIST_ARCHIVE = "ovis-dist.tar.gz";
 /**
  * The public half of OVIS_SERVER_SIGNING_KEY: the release's sign and publish jobs refuse a manifest it does not verify,
@@ -31,10 +30,7 @@ export const DIST_ARCHIVE = "ovis-dist.tar.gz";
  */
 export const RELEASE_PUBLIC_KEY = "C8+dOD0gpFHoy008ZqHO89vXutaLqlt5uWyIh250OiY=";
 
-/** The name a platform's binary has in a release. */
 export const releaseFile = (platform: ServerPlatform): string => `ovis-server-${platform}${platform === "windows-x64" ? ".exe" : ""}`;
-/** The name the binary has where it runs, beside dist/. */
-/** The Rust PTY host builds a release carries (pty-sidecar.yml): one per Linux CPU and one universal macOS binary */
 export const PTY_ASSETS = ["linux-x64", "linux-arm64", "darwin-universal"] as const;
 export type PtyAsset = typeof PTY_ASSETS[number];
 export const ptyFile = (asset: PtyAsset): string => `ovis-pty-sidecar-${asset}`;
@@ -50,14 +46,12 @@ export const MANIFEST_SCHEMA = 1;
 export interface ServerManifest {
   schema: typeof MANIFEST_SCHEMA;
   version: string;
-  /** git tree ids of server/ and shared/ the binaries were built from */
   sources: { server: string; shared: string };
   assets: Record<ServerPlatform, ReleaseAsset>;
   dist: ReleaseAsset;
   /** the Rust PTY hosts, signed with the server: an installer runs no host but the one named here */
   pty: Record<PtyAsset, ReleaseAsset>;
 }
-/** every file the manifest vouches for, in the order the sums file lists them */
 const RELEASE_FILES = (): string[] => [...SERVER_PLATFORMS.map(releaseFile), DIST_ARCHIVE, ...PTY_ASSETS.map(ptyFile)];
 
 const root = resolve(import.meta.dir, "..");
@@ -130,7 +124,6 @@ function publicKeyObject(publicKey: string) {
   return createPublicKey({ key: Buffer.concat([ED25519_SPKI, raw]), format: "der", type: "spki" });
 }
 
-/** The public key of a PEM private key, as `verify` takes it. */
 export function publicKeyOf(privateKeyPem: string): string {
   const der = createPublicKey(createPrivateKey(privateKeyPem)).export({ format: "der", type: "spki" });
   return der.subarray(ED25519_SPKI.length).toString("base64");
@@ -142,7 +135,6 @@ export function generateKeyPair(): { privateKeyPem: string; publicKey: string } 
   return { privateKeyPem, publicKey: publicKeyOf(privateKeyPem) };
 }
 
-/** Signs `dir`'s manifest; returns the public key that verifies it. */
 export function signManifest(dir: string, privateKeyPem: string): string {
   const key = createPrivateKey(privateKeyPem);
   if (key.asymmetricKeyType !== "ed25519") throw new Error(`${SIGNING_KEY_VARIABLE} is not an Ed25519 private key`);
@@ -151,7 +143,6 @@ export function signManifest(dir: string, privateKeyPem: string): string {
   return publicKeyOf(privateKeyPem);
 }
 
-/** the sums file a manifest goes with: one line per file, as sha256sum writes them */
 const sumsOf = (manifest: ServerManifest): string => [...SERVER_PLATFORMS.map((platform) => manifest.assets[platform]), manifest.dist, ...PTY_ASSETS.map((build) => manifest.pty[build])].map(({ sha256: digest, file }) => `${digest}  ${file}\n`).join("");
 
 const sameKeys = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
@@ -173,7 +164,6 @@ function canonicalManifest(bytes: Buffer): ServerManifest | string {
   } catch {
     return `${MANIFEST} is not JSON`;
   }
-  // a manifest of another schema is of a newer release (or not one at all): said before the fields it holds
   if (typeof parsed === "object" && parsed !== null && "schema" in parsed && (parsed as Record<string, unknown>)["schema"] !== MANIFEST_SCHEMA) {
     return `${MANIFEST} is schema ${JSON.stringify((parsed as Record<string, unknown>)["schema"])}, and this reader knows only schema ${MANIFEST_SCHEMA}; a newer installer reads it`;
   }
@@ -197,11 +187,6 @@ function canonicalManifest(bytes: Buffer): ServerManifest | string {
 }
 
 /**
- * The manifest `bytes`, once `signatureText` (one line of strict base64) is `publicKey`'s signature over exactly them,
- * they are in their canonical form, and, when `expected.version` is given, for that version; else the one line that
- * says why not. What an installer checks before it reads a single file the manifest names.
- */
-/**
  * Whether `bytes` is a manifest of the shape releases had before schema 1 (todo 5's ovis-server.json: no "schema"), for
  * `version` and signed by `publicKey`: a release whose binaries no installer of this shape runs, so it ships no compiled
  * server for it, as a release without ovis-server.json. The signature is checked first; a manifest with any schema is
@@ -218,6 +203,11 @@ export function oldShapeRelease(bytes: Buffer, signatureText: string, publicKey:
   }
 }
 
+/**
+ * The manifest `bytes`, once `signatureText` (one line of strict base64) is `publicKey`'s signature over exactly them,
+ * they are in their canonical form, and, when `expected.version` is given, for that version; else the one line that
+ * says why not. What an installer checks before it reads a single file the manifest names.
+ */
 export function checkManifest(bytes: Buffer, signatureText: string, publicKey: string, expected: { version?: string } = {}): ServerManifest | string {
   try {
     const key = publicKeyObject(publicKey);

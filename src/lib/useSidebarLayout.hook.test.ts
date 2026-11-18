@@ -8,7 +8,6 @@ describe("useSidebarLayout", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let renderer: ReactTestRenderer | undefined;
   let layout: ReturnType<typeof useSidebarLayout>;
-  /** whether the window is wide enough for the sidebar to be a column (769px) */
   let wide: boolean;
 
   beforeEach(() => {
@@ -81,7 +80,6 @@ describe("useSidebarLayout", () => {
     expect(layout.secondTapOfOpening(1_100)).toBe(true);
     expect(layout.secondTapOfOpening(1_000 + SECOND_TAP_MS - 1)).toBe(true);
     expect(layout.secondTapOfOpening(1_000 + SECOND_TAP_MS)).toBe(false);
-    // closed another way (a swipe, Back), then opened by a swipe: nothing is left to pair with
     await act(async () => { layout.setDrawerOpen(false); });
     await act(async () => { layout.setDrawerOpen(true); });
     expect(layout.secondTapOfOpening(1_100)).toBe(false);

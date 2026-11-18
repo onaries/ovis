@@ -51,7 +51,7 @@ Windows에서는 PowerShell에서:
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**휴대폰에서:** 컴퓨터에서 **설정 → 기기와 PC → 연결 추가 → Ovis 릴레이**를 열어 스위치를 켜고 **QR 코드 표시**를 누른 다음, 나온 QR 코드를 휴대폰으로 찍으세요. 컴퓨터가 Ovis 계정에 들어 있으면 QR 코드 대신 휴대폰에서 로그인하라고 안내합니다. iPhone 앱은 [App Store](https://apps.apple.com/app/id6824664162)에, Android 앱은 [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app)에 있습니다. [휴대폰 설정 →](docs/guide.md#on-your-phone)
+**휴대폰에서:** 컴퓨터에서 **설정 → 기기와 PC → 연결 추가 → Ovis 릴레이**를 열어 스위치를 켜고, 나온 QR 코드를 휴대폰으로 찍으세요. 먼저 로그인하라는 안내가 나오면 로그인해 이 컴퓨터를 내 계정에 추가한 뒤 **QR 코드 표시**를 누르고, 같은 계정으로 로그인한 휴대폰으로 찍으세요. 그렇게 찍고 나면 컴퓨터가 그 계정에 들어가고, 그 뒤로 다른 휴대폰에는 QR 코드 대신 그 계정으로 로그인하라고 안내합니다. iPhone 앱은 [App Store](https://apps.apple.com/app/id6824664162)에, Android 앱은 [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app)에 있습니다. [휴대폰 설정 →](docs/guide.md#on-your-phone)
 
 <a href="https://apps.apple.com/app/id6824664162"><img src="ovis-site/assets/app-store/badge-ko.svg" alt="App Store에서 다운로드하기" height="48"></a> <a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-ko.svg" alt="Google Play에서 다운로드" height="48"></a>
 

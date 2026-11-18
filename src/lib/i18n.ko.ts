@@ -48,6 +48,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "이 턴에서 편집한 파일",
   "Open working-tree diff for {path}": "{path}의 작업 트리 변경 사항 열기",
   "This file is outside the pane's repository.": "이 파일은 패널의 저장소 밖에 있습니다.",
+  "A key may not have reached the terminal: the connection ended before it was confirmed.": "키가 터미널에 닿지 않았을 수 있습니다: 확인되기 전에 연결이 끊겼습니다.",
   "Open PC": "PC 열기",
   "View only": "보기 전용",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "붙여넣지 않았습니다: 파일 경로에 줄바꿈이 있어 터미널이 Enter로 받아들입니다.",
@@ -128,7 +129,6 @@ const BASE: Record<string, string> = {
   "Recent folders": "최근 폴더",
   "Dismiss": "닫기",
   "Input line": "입력창",
-  // ---- settings ----
   "Settings": "설정",
   "PCs": "PC",
   "PC {name}": "PC {name}",
@@ -138,7 +138,6 @@ const BASE: Record<string, string> = {
   "Devices and PCs": "기기와 PC",
   "Access token": "접속 토큰",
 
-  // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "패널과 명령 검색",
   "Switch chat / terminal": "채팅 / 터미널 전환",
   "Focus pane input": "패널 입력창으로 이동",
@@ -151,7 +150,6 @@ const BASE: Record<string, string> = {
   "Previous workspace": "이전 워크스페이스",
   "Next workspace": "다음 워크스페이스",
 
-  // ---- agent status words (lib/status.ts) ----
   "READY": "준비됨",
   "RUN": "실행",
   "INPUT": "응답 필요",
@@ -159,7 +157,6 @@ const BASE: Record<string, string> = {
   "BG": "백그라운드",
   "—": "—",
 
-  // ---- app header and shell ----
   "Opening link…": "링크 여는 중…",
   "Connecting to Ovis…": "Ovis에 연결하는 중…",
   "Close workspace list": "워크스페이스 목록 닫기",
@@ -234,7 +231,6 @@ const BASE: Record<string, string> = {
   "Alerts on in the app. Tap to turn them off": "앱에서 알림 켜짐. 누르면 꺼집니다",
   "Alerts on while this tab is open (closed-app alerts need https, and on iPhone the home-screen app). Tap to turn them off": "이 탭이 열려 있는 동안 알림이 옵니다 (앱을 닫은 뒤의 알림은 https가 필요하고, iPhone에서는 홈 화면 앱이어야 합니다). 누르면 꺼집니다",
 
-  // ---- sidebar ----
   "Rename pane": "패널 이름 바꾸기",
   "Branch": "브랜치",
   "Opening…": "여는 중…",
@@ -243,7 +239,6 @@ const BASE: Record<string, string> = {
   "Close": "닫기",
   "Rename failed: {reason}": "이름 바꾸기 실패: {reason}",
 
-  // ---- PCs sidebar ----
   "Filter workspaces and agents": "워크스페이스와 에이전트 필터",
   "Connecting…": "연결 중…",
   "Connected": "연결됨",
@@ -280,12 +275,10 @@ const BASE: Record<string, string> = {
   "Step {n} of {total}": "{total}단계 중 {n}",
   "{done} of {total}": "{total} 중 {done}",
 
-  // ---- command palette ----
   "Refresh": "새로 고침",
   "Search panes and actions": "패널과 명령 검색",
   "Search conversation": "대화 검색",
 
-  // ---- new workspace ----
   "Browse": "찾아보기",
   "Cancel": "취소",
   "Install": "설치",
@@ -294,29 +287,22 @@ const BASE: Record<string, string> = {
   "Sign in": "로그인",
   "Starting…": "시작 중…",
   "Start": "시작",
-  // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
 
-  // ---- folder browser ----
   "No matching folders": "일치하는 폴더가 없습니다",
   "This folder cannot be opened.": "이 폴더를 열 수 없습니다.",
   "Folders could not be loaded.": "폴더를 불러올 수 없습니다.",
   "Unlock agent": "에이전트 잠금 해제",
 
-  // ---- files ----
   "Files": "파일",
   "This image is {size}; download it to view.": "이 이미지는 {size}입니다. 보려면 다운로드하세요.",
   "Download": "내려받기",
   "Open {path}": "{path} 열기",
 
-  // ---- PC dialog ----
   "Continue": "계속",
 
-  // ---- updates ----
   "Reload app": "앱 새로 고침",
   "Details": "자세히",
 
-
-  // ---- prompt card ----
   "Submit": "제출",
   "Recommended": "추천",
   "Agents": "에이전트",
@@ -328,13 +314,10 @@ const BASE: Record<string, string> = {
   "Pairing code": "페어링 코드",
   "{agent} is ready": "{agent} 준비 완료",
 
-
-  // ---- composer ----
   "Drag to resize · double-click to reset": "끌어서 크기 조절 · 두 번 클릭하면 초기화",
   "Failed": "실패",
   "Send now": "지금 보내기",
 
-  // ---- chat view ----
   "Copied": "복사됨",
   "Worked for {duration}": "{duration} 작업",
   "Copy message": "메시지 복사",
@@ -342,19 +325,15 @@ const BASE: Record<string, string> = {
   "{m}m": "{m}분",
   "{h}h {m}m": "{h}시간 {m}분",
 
-  // ---- terminal ----
   "The question on screen changed; check it and answer again.": "화면의 질문이 바뀌었습니다. 확인하고 다시 답하세요.",
   "Reconnect": "다시 연결",
   "Discard": "버리기",
   "Undo": "되돌리기",
   "Held message — review and send": "보관된 메시지. 확인하고 보내세요",
 
-
-  // ---- voice input ----
   "Dictate (hold)": "받아쓰기 (길게 누르기)",
   "Hold message in chat": "채팅에서 메시지 보류",
   "Voice input needs HTTPS": "음성 입력에는 HTTPS가 필요합니다",
-  // ---- errors (lib/userError.ts) ----
   "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.": "이 브라우저는 더 이상 이 PC에 로그인되어 있지 않습니다. 설정 → 기기와 PC에서 다시 페어링하세요.",
   "That item no longer exists on the PC. Refresh and try again.": "그 항목은 PC에 더 이상 없습니다. 새로 고친 뒤 다시 시도하세요.",
   "It changed on the PC while you were acting. Check it and try again.": "작업하는 동안 PC에서 내용이 바뀌었습니다. 확인한 뒤 다시 시도하세요.",
@@ -377,20 +356,16 @@ const BASE: Record<string, string> = {
   "Try again; if it keeps failing, restart Ovis on the PC.": "다시 시도하고, 계속 실패하면 PC에서 Ovis를 다시 시작하세요.",
   "The server cannot save settings: check that its state folder is writable.": "서버가 설정을 저장할 수 없습니다. 서버의 상태 폴더에 쓸 수 있는지 확인하세요.",
 
-
-  // ---- devices ----
   "Loading…": "불러오는 중…",
   "Done": "완료",
   "Name": "이름",
   "Recent": "최근",
   "Needs you": "응답 필요",
 
-  // ---- phone ----
   "Copy": "복사",
   "…": "…",
   "Alerts": "알림",
   "Sending…": "보내는 중…",
-  // the alerts health notice over the pane and Settings → Alerts say these alike (lib/pushHealth.ts)
   "This device's push subscription is missing. Turn alerts on again.": "이 기기의 푸시 구독이 없습니다. 알림을\u00a0다시\u00a0켜세요.",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "이 기기의 알림 연결이 만료됐습니다.",
   "Turn alerts on again": "알림 다시 켜기",
@@ -411,7 +386,6 @@ const BASE: Record<string, string> = {
   "Queued messages": "대기 메시지",
   "Not confirmed. Check the terminal before sending again.": "전송 여부를 확인하지 못했습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Too large to attach: {name} ({size}). A file can be up to {limit}.": "첨부하기에는 너무 큽니다: {name} ({size}). 파일은 {limit}까지 첨부할 수 있습니다.",
-  // ---- subscription usage ----
   "Move {name} up": "{name} 위로 이동",
   "Move {name} down": "{name} 아래로 이동",
   "Subscription usage": "구독 사용량",
@@ -420,7 +394,6 @@ const BASE: Record<string, string> = {
   "{n} background tasks": "백그라운드 작업 {n}개",
   "Try again": "다시 시도",
   "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "릴레이를 켜면 기기 게이트가 닫힙니다. 그 뒤 새 브라우저는 페어링 코드나 접속 토큰이 필요합니다.",
-  // tabs: the strip over the pane, and the New tab dialog
   "New tab": "새 탭",
   "New tab with agent…": "에이전트로 새 탭…",
   "New worktree": "새 워크트리",
@@ -456,7 +429,6 @@ const BASE: Record<string, string> = {
   "Change PC": "PC 바꾸기",
   "Forget this PC": "이 PC 잊기",
   "Selected": "선택됨",
-  // Recover unsent text (components/UnsentText.tsx)
   "Unsent text · {destination}": "보내지 않은 글 · {destination}",
   "Text you had not sent before herdr restarted. Copy it and paste it where you need it. Nothing here is sent.": "재시작 전에 보내지 못한 글입니다. 복사해서 필요한 곳에 붙여 넣으세요. 자동으로 보내지 않습니다.",
   "Put in message box adds this text to {destination}. Nothing is sent.": "입력창에 넣기를 누르면 {destination}에 글이 들어갑니다. 보내지는 않습니다.",
@@ -661,7 +633,6 @@ const BASE: Record<string, string> = {
   "Show QR code": "QR 코드 보기",
 };
 
-/** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const KO_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: { ...SETTINGS_KO, ...SETTINGS_ACCESS_KO, ...SETTINGS_COMPOSER_KO, ...SETTINGS_LAYOUT_KO, ...SETTINGS_AGENTS_KO, ...SETTINGS_HELP_KO },

@@ -9,11 +9,10 @@ import { readProcessBirth } from "../server/process-owner.ts";
  * herdr plugin update builds the new version in a new installation folder while the server the old folder started
  * runs on. Stop, run from the new folder (HERDR_PLUGIN_ROOT) with the same plugin state folder, must stop that server
  * by the identity start recorded (pid and birth), and nothing else. Each case runs in a process of its own, as
- * scripts/plugin.ts reads its state folder once. ci.yml runs this file on Windows too.
+ * scripts/plugin.ts reads its state folder once.
  */
 const root = join(import.meta.dir, "..");
 
-/** `body` with plugin.ts's stop in scope, or `argv` (an entry and its arguments) run as is */
 async function runStop(scratch: string, body: string, argv?: string[]): Promise<{ code: number; out: string; err: string }> {
   const script = join(scratch, "stop.ts");
   writeFileSync(script, `const { stop } = await import(${JSON.stringify(join(root, "scripts", "plugin.ts"))});\n${body}`);
@@ -35,7 +34,6 @@ function scratchWithRecord(pid: number, birth?: { platform: string; value: strin
   return scratch;
 }
 
-// The Windows path with the process table it is handed: on every platform, so Linux and macOS check it too.
 const windowsCase = (rowStarted: number, commandLine: string) => `
   const own = '"' + process.execPath + '" "' + ${JSON.stringify(join(root, "server", "managed.ts"))}.replace(${JSON.stringify(root)}, process.env.HERDR_PLUGIN_ROOT) + '"';
   const pid = Number((await Bun.file(process.env.HERDR_PLUGIN_STATE_DIR + "/server.pid").text()).trim()), rows = [{ pid, parent: 0, path: process.execPath, commandLine: ${JSON.stringify(commandLine)} === "OWN" ? own : ${JSON.stringify(commandLine)}, started: ${rowStarted} }];
@@ -83,7 +81,6 @@ it("stops a real process recorded the way start records it, from another folder,
     await exited;
     expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
   } finally {
-    // the child ends whatever failed above, before or after its record was written
     if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   }

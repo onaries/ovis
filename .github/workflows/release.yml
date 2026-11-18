@@ -39,15 +39,11 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           bun scripts/release-notes.ts "$RELEASE_VERSION"
-          # the remote-vN this version names is published from this tree, and the Worker deploy is recorded
           bun scripts/release-guards.ts --release "$RELEASE_VERSION"
           if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
             echo 'This version already has a tag; choose a new version.' >&2
             exit 1
           fi
-  # The push to main already ran ci.yml on this commit: release-validate.yml takes that run when
-  # scripts/release-ci-reuse.ts verifies it green, running only Fast checks again on GitHub's runner,
-  # and otherwise (always with `revalidate`) runs ci.yml here.
   validate:
     needs: preflight
     uses: ./.github/workflows/release-validate.yml
@@ -56,7 +52,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-  # the Rust PTY host for Linux and macOS, attached when the release is created: installs read it by tag.
   # Its attest job signs each binary's build provenance, which needs these permissions.
   pty-sidecar:
     needs: preflight
@@ -114,13 +109,13 @@ jobs:
           path: ${{ runner.temp }}/server-binary/*
           if-no-files-found: error
   # The signing key reaches this job alone, on GitHub's runner. Beside it run only Bun, installed by the SHA-pinned
-  # oven-sh/setup-bun, and scripts/server-manifest.ts (Node's built-ins): none of the repository's dependencies is
-  # installed. The key is the secret OVIS_SERVER_SIGNING_KEY of the environment release-signing, which only main may
-  # use (docs/development.md, "The server binary's signing key"); no other job names that environment, and a job that
-  # deploys (production) never sees the key. Without the environment or its secret this job fails, and publish, which
-  # needs it, never runs: nothing is published unsigned. sign refuses a key whose public half is not
-  # RELEASE_PUBLIC_KEY (scripts/server-manifest.ts), the one key every installer trusts, so a key put into the secret by
-  # mistake fails the release too. In a fork the job is skipped, and so is publish.
+  # oven-sh/setup-bun, and scripts/build-server.ts with the scripts/server-manifest.ts it imports (Node's built-ins):
+  # none of the repository's dependencies is installed. The key is the secret OVIS_SERVER_SIGNING_KEY of the environment
+  # release-signing, which only main may use (docs/development.md, "The server binary's signing key"); no other job
+  # names that environment, and a job that deploys (production) never sees the key. Without the environment or its
+  # secret this job fails, and publish, which needs it, never runs: nothing is published unsigned. sign refuses a key
+  # whose public half is not RELEASE_PUBLIC_KEY (scripts/server-manifest.ts), the one key every installer trusts, so a
+  # key put into the secret by mistake fails the release too. In a fork the job is skipped, and so is publish.
   server-binary-sign:
     needs: server-binary
     if: github.repository == 'devswha/ovis' && github.ref == 'refs/heads/main'
@@ -135,7 +130,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
           no-cache: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -307,7 +302,7 @@ jobs:
     steps:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
           no-cache: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -432,7 +427,6 @@ jobs:
       tag: v${{ inputs.version }}
     permissions:
       contents: write
-  # the desktop app (app/electron): AppImages, dmg and zip, and the feed files it updates from
   desktop:
     needs: publish
     uses: ./.github/workflows/desktop.yml

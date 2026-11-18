@@ -7,7 +7,6 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 export const MARKER = "machine-profile.json";
-/** The most a marker may hold: the profile's own is a few bytes. */
 const MARKER_MAX_BYTES = 4096;
 /**
  * How the marker is opened: never through a link (a link is not the profile's own file) and never waiting (opening
@@ -41,7 +40,6 @@ export function markedByProfile(path: string): boolean {
   }
 }
 
-/** A server other than the profile on a profile's state folder (profileFolderRefusal): its message is the refusal. */
 export class ProfileFolderError extends Error {}
 
 /**

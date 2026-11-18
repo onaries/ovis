@@ -1,4 +1,3 @@
-/** Claude Code's recorded API error (fixture) -> real reader and API -> the chat shows it as a failed request, at 1280 and 390. */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";

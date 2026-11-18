@@ -13,7 +13,6 @@ writeFileSync(bin, `#!/bin/sh\nprintf '%s|%s|%s\\n' "$*" "$HC_SOCKET" "$OVIS_CAN
 chmodSync(bin, 0o755);
 
 it("never stops a core when the test's own core was never set up", async () => {
-  // a setup that threw before its environment was made leaves it empty
   await stopIsolatedCore(bin, {});
   expect(existsSync(record)).toBe(false);
 });

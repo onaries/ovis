@@ -156,7 +156,6 @@ describe("sign-in methods", () => {
       start: async () => "http://127.0.0.1:4567/callback",
       open: async (url: string) => new URL((await fake.fetch(url)).headers.get("location") ?? "").search.slice(1),
     };
-    // the page redeems with the browser's fetch, as the desktop app's page does
     const real = globalThis.fetch;
     globalThis.fetch = Object.assign(fake.fetch, { preconnect: real.preconnect });
     try {
@@ -206,7 +205,6 @@ describe("sign-in methods", () => {
     let linked: Awaited<ReturnType<typeof redirectSignIn>> | undefined;
     await expect(service.addMethod("google", async (token, bearer) => {
       linked = await redirectSignIn(fake, "google", store, { linkToken: token, bearer });
-      // another tab signs out while the token answer is still on its way
       await new AccountService({ store, fetch: fake.fetch, lock }).signOut();
       return linked;
     })).rejects.toBeInstanceOf(SignedOutError);

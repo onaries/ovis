@@ -249,12 +249,10 @@ export const COMPOSER_JA: Record<string, string> = {
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode が別のスキルを添付しました。チャットのテキストはここに残っています。再送信する前にターミナルを確認してください。",
   "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok のキューで、先に入っている {count} 件の後ろにあります。それらが送られた後に送られます。これ以上は押していません。このコピーは確認用にここに残り、再送信されません。",
   "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.": "Grok のキューにあります。Grok の番が来たら送られます。これ以上は押していません。このコピーは確認用にここに残り、再送信されません。",
-  // quoting a selection into the composer (lib/chatQuote.ts)
   "Quote": "引用",
   "Quote it in your message": "メッセージに引用",
   "Selection": "選択したテキスト",
   "Too long to quote: shorten the message or the selection.": "長すぎて引用できません。メッセージか選択を短くしてください。",
-  // comments on a reply (components/ReplyComments.tsx, #511)
   "Comment on the reply": "返答にコメント",
   "Add a comment": "コメントを追加",
   "1 comment waiting": "コメント1件が待機中",

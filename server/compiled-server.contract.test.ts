@@ -1,8 +1,3 @@
-/**
- * The server as releases, remote bundles and the desktop app ship it: compiled by scripts/server-artifact.ts for this
- * PC, then run. Everything else tests the server from source; the branches only the binary takes (server/entries.ts
- * COMPILED) are checked here. In the integration lane: the compile alone takes several seconds.
- */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
@@ -22,13 +17,10 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "ovc-")));
 const binary = join(root, "bin", binaryName(platform));
 const probe = join(root, "probe", binaryName(platform));
 const children: ReturnType<typeof Bun.spawn>[] = [];
-/** homes outside root (in /tmp), removed with it once the children are gone */
 const homes: string[] = [];
 
 beforeAll(async () => {
   mkdirSync(join(root, "probe-src"), { recursive: true });
-  // the login environment the compiled server hands herdr-core's terminals, computed by the server's own code compiled
-  // with the binary's flags (a herdr-core to start terminals on is not part of this lane)
   const entry = join(root, "probe-src", "terminal-env.ts");
   writeFileSync(entry, [
     `import { COMPILED } from ${JSON.stringify(join(import.meta.dir, "entries.ts"))};`,
@@ -48,10 +40,6 @@ function isolatedEnv(home: string): Record<string, string> {
   return { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "x"), XDG_STATE_HOME: join(home, "state"), SHELL: "/bin/sh" };
 }
 
-/**
- * Runs the binary's `serve` on a free loopback port against the lane's isolated herdr session (HERDR_SOCKET, set by
- * scripts/check.ts), and resolves once it says where it listens.
- */
 async function serve(home: string): Promise<string> {
   const herdrSocket = process.env["HERDR_SOCKET"];
   if (!herdrSocket) throw new Error("HERDR_SOCKET names no isolated herdr session: run this file through bun run check");
@@ -98,7 +86,6 @@ describe("the compiled server", () => {
 
   it.skipIf(!posix)("hands terminals a login environment without the BUN_BE_BUN it sets for its own probe", () => {
     const home = mkdtempSync(join(root, "h-"));
-    // a setting the login shell's profile makes: the probe ran it if the terminals get it
     writeFileSync(join(home, ".profile"), "export LOGIN_PROFILE_MARK=read\n");
     const result = Bun.spawnSync([probe], { cwd: home, env: isolatedEnv(home), stdout: "pipe", stderr: "pipe", timeout: 30_000 });
     expect(result.exitCode).toBe(0);
@@ -121,7 +108,6 @@ describe("the compiled server", () => {
     const bridges = join(home, ".config", "herdr-web-ui", "bridges");
     mkdirSync(bridges, { recursive: true, mode: 0o700 });
     const descriptor = join(bridges, `${createHash("sha256").update(socket).digest("hex")}.json`);
-    // subscribed before the bridge starts, so its registration cannot be missed
     const watcher = watch(bridges);
     try {
       const registered = new Promise<{ port: number; token: string; bundle_version: string }>((resolve, reject) => {
@@ -142,7 +128,6 @@ describe("the compiled server", () => {
       const health = await fetch(`http://127.0.0.1:${bridge.port}/api/health`, { headers: { authorization: `Bearer ${bridge.token}` } });
       expect(health.status).toBe(200);
       expect(((await health.json()) as { version?: string }).version).toBe(version);
-      // what setup asks the installed runtime (server/remote-host.ts), answered by the same binary
       const discovered = Bun.spawnSync([binary, "remote", "--discover"], { cwd: home, env, stdout: "pipe", stderr: "inherit" });
       expect(discovered.exitCode).toBe(0);
       expect((JSON.parse(discovered.stdout.toString()) as { socket_path: string }[]).map((found) => found.socket_path)).toContain(socket);

@@ -1,4 +1,3 @@
-/** Browser regression with the real Markdown component: a visualization reference's card in a chat answer. */
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +7,6 @@ import { chromePath } from "./chrome-path.ts";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-visualization-qa-"));
-// the card looks nothing up, so the file need not exist: only its path is shown and handed on
 const path = join(root, "before-after.html");
 const reference = (data: unknown) => `\uE200visualize\uE202${JSON.stringify(data)}\uE201`;
 const directive = reference({ path, mode: "wide", title: "Transmission comparison" });
@@ -39,21 +37,17 @@ try {
   await page.goto(origin);
   await page.waitForFunction(() => !!window.visualizationQa);
   await page.evaluate((text) => window.visualizationQa.update(`Intro\n${text}\nConclusion`), directive);
-  // in an answer the reference is a card: the file's own name, the reference's title under it, and one button
   const answer = page.locator("#answer"), card = answer.locator(".markdown-visualization");
   const preview = card.getByRole("button", { name: "Open preview", exact: true });
   await preview.waitFor();
   assert.equal(await card.locator(".markdown-visualization-name").innerText(), "before-after.html");
   assert.equal(await card.locator(".markdown-visualization-title").innerText(), "Transmission comparison");
   assert.equal(await card.getByRole("button").count(), 1);
-  // the button says which file it opens, to a reader that hears several "Open preview"
   assert.equal(await preview.evaluate((button) => document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent), "before-after.html");
-  // a copy of the card is the name and the title on two lines, without the button's words: as plain text and as rich text
   assert.equal(await preview.evaluate((button) => getComputedStyle(button).userSelect), "none");
   const copied = await page.evaluate(() => { getSelection()!.selectAllChildren(document.querySelector("#answer .markdown-visualization")!); const payload = window.visualizationQa.copied(); getSelection()!.removeAllRanges(); return payload; });
   assert.deepEqual(copied, { text: "before-after.html\nTransmission comparison", html: "before-after.html<br>Transmission comparison" });
   assert.ok(!await answer.innerText().then((text) => text.includes("\uE200visualize")), "the reference's own text is not shown in an answer");
-  // any other Markdown keeps the reference as the text it is
   assert.equal(await page.locator("#elsewhere .markdown-visualization").count(), 0);
   assert.ok(await page.locator("#elsewhere").innerText().then((text) => text.includes("visualize") && text.includes("before-after.html")), "the reference stays text outside an answer");
   mkdirSync(".ci/visualization", { recursive: true });
@@ -66,17 +60,14 @@ try {
   await page.evaluate((text) => window.visualizationQa.update(text), reference({ path: join(root, "report\u202Efdp.html"), title: "\u202Einvoice.pdf" }));
   await page.waitForFunction(() => document.querySelector("#answer .markdown-visualization-name")?.textContent === "reportfdp.html");
   assert.equal(await card.locator(".markdown-visualization-title").innerText(), "invoice.pdf");
-  // Codex's `mode` is not read: one this app has never seen draws the same card
   await page.evaluate((text) => window.visualizationQa.update(text), reference({ path, mode: "split", title: "Another layout" }));
   await page.waitForFunction(() => document.querySelector("#answer .markdown-visualization-title")?.textContent === "Another layout");
   assert.equal(await card.locator(".markdown-visualization-name").innerText(), "before-after.html");
-  // a reference indented under an ordered list's item is drawn in that item, and the list goes on as one
   await page.evaluate((text) => window.visualizationQa.update(`1. First\n   ${text}\n1. Second`), directive);
   const items = answer.locator("ol > li");
   await items.first().locator(".markdown-visualization").getByRole("button", { name: "Open preview", exact: true }).waitFor();
   assert.equal(await items.count(), 2, "the card does not end its list");
   assert.equal(await answer.locator("ol").count(), 1);
-  // a phone's width: the card and its button stay inside the page
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   const edge = (await items.first().locator(".markdown-visualization .btn").boundingBox())!;

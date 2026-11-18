@@ -27,7 +27,6 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   return new Response("not found", { status: 404 });
 } });
 
-/** Clicks `button` and resolves with the page that then shows `path`, the tab it opened or the one it steered. */
 async function follow(context: BrowserContext, page: Page, button: string, path: string): Promise<Page> {
   const shows = (url: URL): boolean => url.pathname === path;
   const waits = [

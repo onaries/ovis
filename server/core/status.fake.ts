@@ -12,7 +12,6 @@ import * as service from "../opencode-service.ts";
 import { PendingInputs } from "../pending-input.ts";
 import { connectionData, type Client } from "./connections.ts";
 
-// herdr's status events come from the test, as the collector would hand them over
 type Handlers = { onStatus: collector.StatusCollectorHandlers["onStatus"]; onBaseline: (panes: readonly unknown[]) => void; onReconciled: (panes: readonly HerdrPane[]) => void; onResync: NonNullable<collector.StatusCollectorHandlers["onResync"]>; onPaneEnded: (paneId: string) => void; onPaneClosed: (paneId: string) => void; herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void } };
 export let handlers: Handlers;
 export let collectorSnapshot: () => Promise<{ panes: HerdrPane[] }>;
@@ -35,7 +34,6 @@ afterAll(() => {
 const stubs: { mockRestore(): void }[] = [];
 afterEach(() => { for (const stub of stubs.splice(0)) stub.mockRestore(); });
 
-// an OpenCode parent session whose one child runs, and a resting Claude session with a background subagent its prompt started
 export const at = Date.now() - 10_000;
 const store = join(root, "opencode.db");
 {
@@ -63,10 +61,6 @@ export const opencode = (session: string | null) => ({ ...base, agent: "opencode
 export const claude = { ...base, agent: "claude", agent_session: { agent: "claude", source: "hook", kind: "id", value: CLAUDE } };
 
 let hubs = 0;
-/**
- * The status hub with herdr, OpenCode's service and the Claude lookup stood in for; what a browser and web push are sent.
- * `herdrIdentity`: what the stood-in herdr's socket reads as (server/finishes.ts), when a test needs one.
- */
 export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?: PendingInputs<Owner, Lease>, drain?: (paneId: string) => void, herdrIdentity?: () => string | null) {
   let panes: unknown[] = [];
   let gate: Promise<void> | null = null;
@@ -81,13 +75,11 @@ export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?
     spyOn(service, "readOpenCodeService").mockReturnValue(null),
     spyOn(conversation, "claudePaneSession").mockResolvedValue({ path, startedAt: null, pid: null } as never),
     spyOn(conversation, "claudePanePid").mockResolvedValue(null as never),
-    // the fixtures' shell pids are made up: no process of this PC answers for them
     spyOn(conversation, "stoppedAgentJob").mockResolvedValue(false),
   );
   const frames: { type: string; agent_status?: string; background_tasks?: number; background_wait?: boolean }[] = [];
   const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: (encoded: string) => { frames.push(JSON.parse(encoded)); return 1; }, close: () => {} };
   const pending = queued ?? new PendingInputs<Owner, Lease>(() => {});
-  /** panes whose held messages were turned away, and why */
   const held: { paneId: string; code: string }[] = [];
   const status = createStatusHub({
     options: { stateDir: join(root, `state${++hubs}`), opencodeDb: store, machines: false, ...(herdrIdentity ? { herdrIdentity } : {}) },
@@ -104,13 +96,9 @@ export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?
   stubs.push(spyOn(status.push, "onEnded").mockImplementation(async (paneId: string) => { ended.push(paneId); }));
   return {
     alerts, pending, status, held,
-    /** "terminal ended" alerts sent: push's and the pane-exited frames clients alert from */
     ended: () => ({ push: [...ended], frames: frames.filter((seen) => seen.type === "pane-exited").length }),
-    /** herdr's panes from now on, as a snapshot or a pane lookup reads them */
     herdrSays: (pane: unknown) => { panes = [pane]; },
-    /** a snapshot, both trackers reading it (Claude's lookup awaited) */
     snapshot: async () => { const snapshot = await status.clientSnapshot(); await status.claudeAgents.refresh(panes as HerdrPane[]); return snapshot; },
-    /** a snapshot whose read begins now and is answered when `open` is called */
     heldSnapshot: async () => {
       const opened = Promise.withResolvers<void>();
       const started = Promise.withResolvers<void>();
@@ -122,14 +110,11 @@ export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?
       reading = undefined;
       return async () => { opened.resolve(); await read; };
     },
-    /** the pane's last status frame */
     last: () => {
       const frame = frames.filter((seen) => seen.type === "pane-status").at(-1);
       return { status: frame?.agent_status, tasks: frame?.background_tasks ?? 0, bg: frame?.background_wait === true };
     },
-    /** the Claude tracker's poll, as its timer runs it */
     poll: () => status.claudeAgents.poll(),
-    /** the lookups and reads a status event set off */
     settle: async () => { await Promise.all(lookups); await Promise.all(polls); },
   };
 }
@@ -137,7 +122,6 @@ export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?
 export const line = (value: unknown) => `${JSON.stringify(value)}\n`;
 const ts = (ms: number) => new Date(at + ms).toISOString();
 let fixtures = 0;
-/** Each turn regression has its own transcript, parent session and streaming child. */
 export async function workingClaude<Owner = unknown, Lease = unknown>(queued?: PendingInputs<Owner, Lease>, drain?: (paneId: string) => void) {
   const id = `33333333-3333-4333-8333-${String(++fixtures).padStart(12, "0")}`;
   const path = join(root, `${id}.jsonl`);

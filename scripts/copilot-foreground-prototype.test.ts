@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { observeCopilotForeground } from "./copilot-foreground-prototype.ts";
 import * as processOwner from "../server/process-owner.ts";
-import { forgetCopilotForeground, readCopilotForeground } from "../server/copilot-foreground.ts";
+import { COPILOT_RPC_TIMEOUT_MS, forgetCopilotForeground, readCopilotForeground } from "../server/copilot-foreground.ts";
 
 const first = "12aa83d8-48bc-41f2-a498-7055c5c44a01";
 const second = "12aa83d8-48bc-41f2-a498-7055c5c44a02";
@@ -171,7 +171,7 @@ linux("never reuses a binding after a transport gap or explicit reader cleanup",
 // One attempt can wait on three of the product's 2 s deadlines in turn: the connection with its
 // `connect` RPC, then each of the two `session.getForeground` requests a read makes.
 const attempts = 3;
-const attemptBudget = 3 * 2_000;
+const attemptBudget = 3 * COPILOT_RPC_TIMEOUT_MS;
 const fixtureStart = 5_000;
 for (const mode of ["switch", "event", "event-after-final", "malformed", "wrong-id", "empty", "oversize", "truncated", "close", "version", "stall"]) {
   linux(`rejects ${mode} instead of returning a stale foreground ID`, async () => {

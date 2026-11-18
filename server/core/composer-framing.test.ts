@@ -4,10 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrError } from "../herdr/client.ts";
 import { PendingInputError } from "../pending-input.ts";
-import { createSubmitText, pendingFault, pendingText, submitFraming } from "./composer.ts";
+import { closeBackslash, createSubmitText, pendingFault, pendingText, submitFraming } from "./composer.ts";
 
-// The real RPC client against a unix socket this test owns; only herdr's answers are synthetic. The pane runs a
-// shell (herdr names no agent), so a chat message falls back from agent.prompt to the payload, as a typed line does.
 let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
@@ -56,7 +54,6 @@ const submitter = () => createSubmitText({
 });
 const START = "\u001b[200~";
 const END = "\u001b[201~";
-/** Every herdr write a send made: its text and keys, and a draft clear's keys among them. */
 const writes = () => calls.filter((call) => call.method === "pane.send_text" || call.method === "pane.send_keys" || call.method === "agent.prompt");
 const refusal = async (send: Promise<void>): Promise<string> => {
   const error = await send.then(() => null, (error: unknown) => error);
@@ -66,8 +63,6 @@ const refusal = async (send: Promise<void>): Promise<string> => {
 
 describe("an immediate submit's paste framing", () => {
   it("accepts bare and exactly once wrapped canonical submits", async () => {
-    // typed (the terminal's input line) and chat, each bare and wrapped once: CRLF and a lone CR read as LF,
-    // the payload has a CR for each, trailing newlines are dropped, and tabs and Unicode go as written
     const text = "첫 줄\tcolumn\r\nsecond ✓\rthird 🙂\n\n";
     const body = "첫 줄\tcolumn\rsecond ✓\rthird 🙂";
     for (const typed of [true, false]) for (const payload of [body, START + body + END]) {
@@ -76,7 +71,6 @@ describe("an immediate submit's paste framing", () => {
       expect(calls.find((call) => call.method === "pane.send_text")?.params.text, `typed ${typed}`).toBe(payload);
       expect(calls.filter((call) => call.method === "pane.send_keys").map((call) => call.params.keys), "one Enter of its own").toEqual([["Enter"]]);
     }
-    // empty content: a bare Enter from the input line, and an empty paste from chat
     for (const [typed, payload] of [[true, ""], [false, START + END]] as const) {
       calls.length = 0;
       await submitter()("w:p1", "", payload, Date.now(), typed);
@@ -106,7 +100,6 @@ describe("an immediate submit's paste framing", () => {
       expect(await refusal(submitter()("w:p1", text, payload, Date.now(), typed)), `${what}, typed ${typed}`).toBe("invalid_submit_text");
       expect(calls, `${what}, typed ${typed}: herdr is not even asked`).toEqual([]);
     }
-    // a send over a named draft clears nothing either
     calls.length = 0;
     const confirmation = { draft: "old draft", identity: { agent: "claude", terminalId: "w:p1", session: null } };
     expect(await refusal(submitter()("w:p1", "ls", "ls\r", Date.now(), false, () => {}, "old draft", confirmation))).toBe("invalid_submit_text");
@@ -139,15 +132,11 @@ it("reads a message of line breaks that do not end it in one pass, before it ref
   for (const typed of [false, true]) expect(() => submitFraming(breaks, breaks.replace(/\n/g, "\r"), typed)).toThrow("at most");
   expect(() => pendingText(breaks)).toThrow("at most");
   expect(() => pendingText(`${"\r\n".repeat(30_000)}a`)).toThrow("at most");
-  // the line breaks a message ends in still go, however many
   expect(submitFraming(`hi${"\r\n".repeat(50_000)}`, "hi", false)).toEqual({ text: "hi", payload: "hi" });
   expect(pendingText(`a\r\nb${"\n".repeat(50_000)}`)).toBe("a\nb");
 }, 5_000);
 
 it("refuses a message of more than twice its limit, and takes one of up to twice its limit that is short enough once read", () => {
-  // a CRLF is read as one character, so a message as written may be up to twice its limit: one of exactly that
-  // is still taken. A longer one cannot fit, so it is refused by its length as written (megabytes of it are not
-  // rewritten first, which this does not show)
   for (const [typed, limit] of [[false, 20_000], [true, 32_768]] as const) {
     const most = `${"\r\n".repeat(limit - 1)}a`;
     expect(submitFraming(most, `\u001b[200~${"\r".repeat(limit - 1)}a\u001b[201~`, typed).text, `${limit}`).toBe(`${"\n".repeat(limit - 1)}a`);
@@ -164,11 +153,19 @@ describe("a pending row's fault", () => {
     const view = () => ({ code: "worded", message: "the view's words" });
     const failed = () => new HerdrError("connect_failed", "herdr's own words", false, true);
     expect([pendingFault(failed(), view), pendingFault(failed(), undefined)]).toEqual([view(), { code: "connect_failed", message: "herdr's own words" }]);
-    // a refusal the bridge words itself keeps its own fault
     expect(pendingFault(new HerdrError("agent_blocked", "the bridge's words"), view)).toEqual({ code: "agent_blocked", message: "the bridge's words" });
     expect(pendingFault(new PendingInputError("pending_wait", "the bridge's words"), view)).toEqual({ code: "pending_wait", message: "the bridge's words" });
-    // any other fault keeps its code, in the view's sentence where there is one, and as it is without
     expect([pendingFault(new TypeError("other"), view), pendingFault(new TypeError("other"), undefined)])
       .toEqual([{ code: "submit_failed", message: view().message }, { code: "submit_failed", message: "other" }]);
+  });
+});
+
+describe("closeBackslash", () => {
+  // Pi's editor (pi-tui 1.5.2) reads `\` + Enter as a new line too: the message stayed in its box, and its later
+  // record (without the backslash) never matched the chat's receipt, which then waited for its transcript forever
+  it("gives a Pi message that ends in a backslash a space, so its Enter sends", () => {
+    expect(closeBackslash("pi", "under requisiciones? \\")).toBe("under requisiciones? \\ ");
+    expect(closeBackslash("pi", "\u001b[200~see C:\\temp\\\u001b[201~")).toBe("\u001b[200~see C:\\temp\\ \u001b[201~");
+    expect(closeBackslash("pi", "see C:\\temp\\x")).toBe("see C:\\temp\\x");
   });
 });

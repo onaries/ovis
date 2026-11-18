@@ -24,7 +24,7 @@ writeFileSync(errorPage, errorHtml.replace(link, `<style>${readFileSync(join(www
 const appUrl = process.env["OVIS_APP_URL"];
 if (appUrl) {
   let parsed: URL | null = null;
-  try { parsed = new URL(appUrl); } catch { /* reported below */ }
+  try { parsed = new URL(appUrl); } catch {}
   if (parsed?.protocol !== "https:" || parsed.origin !== appUrl) throw new Error(`OVIS_APP_URL must be an https origin with no path, such as https://app.ovis.sh: ${appUrl}`);
   const shellJs = join(www, "shell.js");
   const constant = 'export const APP_ORIGIN = "https://app.ovis.sh";';

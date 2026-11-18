@@ -25,22 +25,15 @@ describe("signing in on a PC's own page", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let renderer: ReactTestRenderer | undefined;
   let fake: FakeAccountService;
-  /** the account this PC is in; null while it is in none */
   let pcAccount: string | null;
-  /** every request to the PC: its path, and whether it asked for an approve-here window */
   let asked: { path: string; localOnly: boolean }[];
   let tab: Map<string, string>;
   let userCode: string | null;
-  /** who approves the next sign-in's code, and with which provider */
   let approveWith: "github" | "google";
-  /** how far the account service's clock runs ahead of this one */
   let ahead: number;
-  /** this PC's relay, and what this browser may do on the PC */
   let relay: "online" | "off";
   let role: "drive" | "watch";
-  /** while true, this PC's account is asked for and never answered */
   let statusHangs: boolean;
-  /** while true, the account service takes no sign-in for good any more: `ended` is the one stored when it first said so */
   let refuses: boolean;
   let ended: AccountSession | undefined;
 
@@ -96,14 +89,11 @@ describe("signing in on a PC's own page", () => {
         ended ??= await indexedAccountStore.get("session");
         return Response.json({ error: { code: "unauthorized", message: "Sign in again" } }, { status: 401 });
       }
-      // the link page's code is approved there as this page's first poll comes in
-      // (a provider's own device page, which a sign-in again goes to, likewise)
       if (url.pathname === "/v1/token" && userCode !== null) { fake.approveOnLinkPage(userCode, ACCOUNT, approveWith); fake.approveDevice(userCode, ACCOUNT); userCode = null; }
       const answer = await fake.fetch(input, init);
       if (!url.pathname.startsWith("/v1/signin/") || !answer.ok) return answer;
       const started = await answer.json() as Record<string, unknown>;
       userCode = String(started["user_code"]);
-      // the first poll comes at once rather than after the service's five seconds
       return Response.json({ ...started, interval: 0.001 });
     };
     setTransport({ ...nativeTransport, fetch: fetch as typeof nativeTransport.fetch });
@@ -125,7 +115,6 @@ describe("signing in on a PC's own page", () => {
 
   const text = (node: ReactTestInstance): string => node.children.map((child) => typeof child === "string" ? child : text(child)).join("");
   const buttons = (): string[] => renderer!.root.findAll((node) => node.type === "button").map(text);
-  /** waits, in real time, until the screen shows what is asked for */
   const until = async (shown: () => boolean): Promise<void> => {
     for (let turn = 0; turn < 400 && !shown(); turn++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
     expect(shown()).toBe(true);
@@ -133,7 +122,6 @@ describe("signing in on a PC's own page", () => {
   const mount = async (): Promise<void> => {
     await act(async () => { renderer = create(<SettingsProvider><AccountSection /></SettingsProvider>); });
   };
-  /** asks the section to read the stored sign-in again, as Settings does */
   const recheck = async (count: number): Promise<void> => {
     await act(async () => { renderer!.update(<SettingsProvider><AccountSection recheck={count} /></SettingsProvider>); });
   };
@@ -146,7 +134,6 @@ describe("signing in on a PC's own page", () => {
 
   it("lists the PC and waits once the sign-in finishes, with no second press, and only then", async () => {
     await mount();
-    // the one button says what it leads to on a PC in no account
     await until(() => buttons().includes("Sign in and add this PC"));
     expect(links()).toHaveLength(0);
     await press("Sign in and add this PC");
@@ -160,12 +147,10 @@ describe("signing in on a PC's own page", () => {
     expect((await new AccountService({ store: indexedAccountStore }).listPcs()).map((pc) => pc.server_id)).toEqual([SERVER]);
     expect(JSON.parse(tab.get(MARKER)!)).toMatchObject({ name: "desk", serverId: SERVER, account: ACCOUNT });
 
-    // Stop waiting closes the window on the PC
     await press("Stop waiting");
     await until(() => asked.some((request) => request.path === "/api/relay/link/close"));
     expect(buttons()).toContain("Add this PC to my account");
 
-    // the same sign-in, now one that was already there when the screen opened: the offer, and nothing listed or opened
     await act(async () => { renderer?.unmount(); });
     const before = asked.length;
     await mount();
@@ -180,7 +165,6 @@ describe("signing in on a PC's own page", () => {
     await press("Sign in and add this PC");
     await until(() => buttons().includes("Stop waiting"));
     await press("Stop waiting");
-    // the account gets a second way in: the same person signs in with Google on the link page
     await press("Sign out of GitHub");
     await until(() => buttons().includes("Sign in and add this PC"));
     approveWith = "google";
@@ -263,7 +247,6 @@ describe("signing in on a PC's own page", () => {
     relay = "off";
     await mount();
     await until(() => buttons().includes("Sign in"));
-    // the person turns the relay on (its switch in the same fold, or another tab) and presses at once
     relay = "online";
     expect(buttons()).not.toContain("Sign in and add this PC");
     await press("Sign in");
@@ -284,7 +267,6 @@ describe("signing in on a PC's own page", () => {
     relay = "online";
     await recheck(1);
     await until(() => buttons().includes("Sign in and add this PC"));
-    // and without being asked, within a few seconds
     relay = "off";
     const deadline = Date.now() + 8_000;
     while (!buttons().includes("Sign in") && Date.now() < deadline) await act(async () => { await Bun.sleep(25); });
@@ -293,7 +275,6 @@ describe("signing in on a PC's own page", () => {
   });
 
   it("a provider's own button says nothing of adding the PC, so its sign-in adds nothing: the offer stays", async () => {
-    // an account service without the link page: Continue with GitHub, by GitHub's device page
     fake = new FakeAccountService(() => Date.now() + ahead);
     await mount();
     await until(() => buttons().includes("Continue with GitHub"));
@@ -311,7 +292,6 @@ describe("signing in on a PC's own page", () => {
   it("a sign-in that ended before the PC was read is none that just finished: the same account stored again later lists nothing by itself", async () => {
     await mount();
     await until(() => buttons().includes("Sign in and add this PC"));
-    // the PC does not answer for its account, and the account service ends the sign-in as soon as it is made
     statusHangs = true;
     await press("Sign in and add this PC");
     await until(() => text(renderer!.root).includes("Signed in with GitHub"));
@@ -321,7 +301,6 @@ describe("signing in on a PC's own page", () => {
     expect(ended?.account).toBe(ACCOUNT);
     expect(links()).toHaveLength(0);
 
-    // another tab of this browser signs in to the same account, and this screen reads it
     refuses = false;
     statusHangs = false;
     await indexedAccountStore.set("session", ended);

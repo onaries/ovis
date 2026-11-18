@@ -14,8 +14,8 @@ describe("pending target identity", () => {
 
   it("refuses a hookless Claude's session switched by /clear or /resume in the same process (regression #540)", () => {
     expect(samePendingIdentity({ ...identity, claudeSession: "before-clear" }, { ...identity, claudeSession: "after-clear" })).toBe(false);
-    expect(samePendingIdentity({ ...identity, claudeSession: "same" }, { ...identity, claudeSession: "same" })).toBe(true); // control
-    expect(samePendingIdentity({ ...identity, claudeSession: null }, { ...identity, claudeSession: "learned" })).toBe(true); // control: learned later
+    expect(samePendingIdentity({ ...identity, claudeSession: "same" }, { ...identity, claudeSession: "same" })).toBe(true);
+    expect(samePendingIdentity({ ...identity, claudeSession: null }, { ...identity, claudeSession: "learned" })).toBe(true);
     expect(samePendingIdentity({ ...identity, claudeSession: "known" }, { ...identity, claudeSession: null })).toBe(true); // control: record unreadable now (a send refuses it in pendingContext, #2125)
   });
 
@@ -93,15 +93,12 @@ describe("bridge pending input", () => {
     let id = 0;
     const data = new Map<string, string>();
     const page = new PendingMessageStore(() => ({ getItem: (key) => data.get(key) ?? null, setItem: (key, value) => { data.set(key, value); }, removeItem: (key) => { data.delete(key); } }));
-    // each pane's frames go to the page as its connection's (the owner is the page's scope)
     const queue = new PendingInputs<string, string>((owner, pane, messages, removed) => page.publish(pane, messages, removed ?? [], owner), () => 1_000, 100, () => `pending-${++id}`);
     const identity: PendingIdentity = { agent: "claude", terminalId: "t1", session: null };
     const fault = { code: "agent_blocked", message: "The agent is waiting for an answer in the terminal" };
-    // `delivery: "hold"` (Alt+Enter, or a follow-up with automatic sending off): held at once, with no reason
     const asked = queue.enqueue("a", "asked", 1, "hold me", "lease", identity, true);
     expect(asked.message.state).toBe("held");
     expect(asked.message.error).toBeUndefined();
-    // every hold the bridge makes by itself names its reason: a lost lease, one message, a whole pane, a refused send
     const lost = queue.enqueue("a", "lost", 2, "queued, then its lease was lost", "lease", identity);
     queue.hold("a", "lost");
     const one = queue.enqueue("a", "one", 3, "queued, then held alone", "lease", identity);
@@ -115,12 +112,10 @@ describe("bridge pending input", () => {
     const panes = ["asked", "lost", "one", "pane", "refused"];
     const shown = (read: (pane: string) => unknown) => Object.fromEntries(panes.map((each) => [each, read(each)]));
     expect(shown((each) => page.read(each)[0]?.heldByRequest === true)).toEqual({ asked: true, lost: false, one: false, pane: false, refused: false });
-    // a Send now of the asked one refused with nothing typed gives it a reason too: the page still knows it was asked for
     expect(queue.claim(asked, false)).toBe(true);
     queue.settle(asked, fault);
     expect(asked.message).toMatchObject({ state: "held", error: fault });
     expect(page.read("asked")[0]).toMatchObject({ state: "held", heldByRequest: true, error: fault });
-    // the connection ends: the bridge's own holds are uncertain on the page until a receipt proves them, the asked one stays held
     queue.close("a");
     expect(asked.message).toMatchObject({ state: "held", error: fault });
     page.suspendScope("a");
@@ -229,14 +224,11 @@ describe("bridge pending input", () => {
     expect(f.queue.discard(first)).toBe(true);
     for (let request = 3; request <= 1024; request++) expect(f.queue.discard(f.enqueue(request))).toBe(true);
     expect(() => f.enqueue(1025)).toThrow(PendingInputError);
-    // Already accepted input still has room for its final outcome.
     expect(f.queue.discard(reserved)).toBe(true);
     const submit = async () => ({ ok: true });
     expect((await f.queue.resend("p1", first.message.id, "fingerprint", submit)).ok).toBe(false);
     f.advance(60_001);
     expect(f.enqueue(1025)).toBeDefined();
-    // The bounded-window policy deliberately preserves stale-copy recovery after
-    // disposition eviction, just as after a bridge restart.
     expect((await f.queue.resend("p1", first.message.id, "fingerprint", submit)).ok).toBe(true);
   });
   it("does not withdraw while a held-copy delivery is in flight", async () => {
@@ -543,7 +535,6 @@ describe("an owner counted per pane", () => {
     for (let pane = 0; pane < MAX_PENDING_PER_OWNER + 8; pane++) store.enqueue("bridge", `p${pane}`, -1 - pane, "first", null, identity);
     expect(MAX_PENDING_PER_PANE).toBe(1);
     expect(() => store.enqueue("bridge", "p0", -999, "second", null, identity)).toThrow(PendingInputError);
-    // a connection's own messages still count across panes (control)
     for (let id = 1; id <= MAX_PENDING_PER_OWNER; id++) store.enqueue("connection", `q${id}`, id, "mine", null, identity);
     expect(() => store.enqueue("connection", "q-more", 999, "mine", null, identity)).toThrow(PendingInputError);
   });
@@ -551,7 +542,7 @@ describe("an owner counted per pane", () => {
     const store = new PendingInputs<string, null>(() => {}, Date.now, undefined, undefined, () => true);
     const item = store.enqueue("bridge", "p", -1, "first", null, { agent: "claude", terminalId: "t", session: null });
     store.status("p", "idle");
-    expect(store.next("p")).toBe(item); // control: a ready pane offers it
+    expect(store.next("p")).toBe(item);
     store.holdItem(item, { code: "first_message_unattended", message: "gone" });
     expect(store.list("bridge", "p")).toEqual([expect.objectContaining({ state: "held", error: { code: "first_message_unattended", message: "gone" } })]);
     expect(store.next("p")).toBeNull();
@@ -590,7 +581,6 @@ describe("a pane moved to a new ID (#1503)", () => {
     expect(f.queue.next("p2")).toBeNull();
     expect(f.receipts.filter((r) => r.owner === "a" && r.pane === "p1").at(-1)?.messages).toEqual([]);
     expect(f.receipts.filter((r) => r.owner === "a" && r.pane === "p2").at(-1)?.messages).toHaveLength(1);
-    // an explicit send and its outcome go under the new ID
     expect(f.queue.claim(queued, false)).toBe(true);
     f.queue.settle(queued);
     expect(f.queue.outcome("a", "p2", queued.message.id)).toBe("sent");
@@ -659,20 +649,16 @@ describe("what a pane's messages wait for besides their turn", () => {
     queue.enqueue("c", "q", 3, "elsewhere", "lease", identity);
     told.length = 0;
     queue.waitingFor("p", "omp_starting");
-    // the owner of a queued row is told; a held row waits for its sender, and another pane's for nothing
     expect(told).toEqual([{ owner: "a", states: ["queued omp_starting"] }]);
     expect(queue.list("b", "p").map((message) => message.waiting)).toEqual([undefined]);
     expect(queue.list("c", "q").map((message) => message.waiting)).toEqual([undefined]);
-    // said once
     queue.waitingFor("p", "omp_starting");
     expect(told).toHaveLength(1);
-    // a row that joins the queue meanwhile waits for the same
     queue.enqueue("a", "p", 4, "three", "lease", identity);
     expect(queue.list("a", "p").map((message) => message.waiting)).toEqual(["omp_starting", "omp_starting"]);
     told.length = 0;
     queue.waitingFor("p", undefined);
     expect(told).toEqual([{ owner: "a", states: ["queued", "queued"] }]);
-    // and a pane that ends takes it along
     queue.waitingFor("p", "omp_starting");
     queue.forget("p");
     expect(queue.list("a", "p").map((message) => message.waiting)).toEqual([undefined, undefined]);
@@ -689,7 +675,6 @@ describe("what a pane's messages wait for besides their turn", () => {
     queue.holdQueued("p", { code: "typed_while_waiting", message: "typed" });
     expect(told).toEqual([{ owner: "a", states: ["sending omp_starting", "held"] }, { owner: "b", states: ["held"] }]);
     expect(queue.list("b", "p")[0]).toMatchObject({ state: "held", error: { code: "typed_while_waiting" } });
-    // its note goes when its wait does
     told.length = 0;
     queue.sendingWaitsFor(sending, undefined);
     expect(told).toEqual([{ owner: "a", states: ["sending", "held"] }]);

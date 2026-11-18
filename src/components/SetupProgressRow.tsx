@@ -6,17 +6,9 @@ import { openSetupGuide } from "../lib/setupGuide.ts";
 import { setupLeft, type SetupFacts } from "../lib/setupGuideFlow.ts";
 import "./SetupProgressRow.css";
 
-/**
- * The sidebar's Setup: N left, once a setup guide that was begun closed with something not set up (the agent, the
- * phone or the alerts, by what the app knows now; lib/firstHints.ts setupRowState): a ring of the parts done and the count, which opens the guide
- * at the first part left; its close button hides it for good in this browser. Linear and Notion keep their
- * getting-started list at the sidebar's foot the same way.
- */
 export function SetupProgressRow({ facts }: { facts: SetupFacts }) {
   const t = useT();
-  // read as it mounts, which is once the guide is gone: a begun guide that just closed has marked it on
   const [hidden, setHidden] = useState(() => { const store = storage(); return store === null || setupRowState(store) !== "on"; });
-  // hidden in another tab of this browser: hidden here too (#3907 review)
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => { if (event.key === SETUP_ROW_KEY || event.key === null) { const store = storage(); setHidden(store === null || setupRowState(store) !== "on"); } };
     window.addEventListener("storage", onStorage);

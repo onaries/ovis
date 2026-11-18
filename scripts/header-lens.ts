@@ -1,13 +1,7 @@
-/**
- * The header's Chat/Terminal switch, for the browser scripts: both lenses on a track from 641px, and at
- * 640px and below one button to the other lens (components/LensToggle.tsx), whose `data-view` is the lens
- * shown (a terminal peek over the chat counts as the terminal).
- */
 import type { Page } from "playwright-core";
 
 export type Lens = "chat" | "terminal";
 
-/** Opens `lens` from the header, by a click or a finger's tap; a phone's button is left alone when `lens` is shown. */
 export async function openLens(page: Page, lens: Lens, how: "click" | "tap" = "click"): Promise<void> {
   // The header draws one control or the other by the page's width (App.tsx, SHEET_QUERY) and redraws it a frame after
   // a resize: the one to use follows the width the page has now, not what is drawn at that moment (just after a

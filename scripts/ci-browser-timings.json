@@ -179,6 +179,7 @@
   "scripts/workspace-rows-regression.ts": 4,
   "scripts/terminal-release-no-watch-demo-regression.ts": 4,
   "scripts/core-history-scroll-demo-regression.ts": 4,
+  "scripts/core-kept-grid-demo-regression.ts": 4,
   "scripts/claude-image-browser-qa.ts": 4,
   "scripts/web-panel-mobile-regression.ts": 4,
   "scripts/application-paging-regression.ts": 3,

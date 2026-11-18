@@ -1,6 +1,14 @@
 import type { InlineNode, MarkdownBlock } from "./markdown.ts";
 import { markdownFileNode, safeMarkdownHref, webLikeHref } from "./markdown.ts";
 
+/**
+ * The HTML a README carries (a centered logo, a row of badges, `<details>`), read into the blocks
+ * the markdown view already draws: never markup put on the page. Only what reads as text comes
+ * through: paragraphs and headings (centered when `align="center"` says so), links, images,
+ * emphasis, code and line breaks. Any other tag is left out and its text kept; a comment, a script
+ * and a style are dropped.
+ * An HTML block starts with one of these tags or a comment and ends at a blank line (CommonMark).
+ */
 const BLOCK_TAGS = new Set(["p", "div", "center", "details", "summary", "picture", "h1", "h2", "h3", "h4", "h5", "h6", "table", "tr", "td", "th", "tbody", "thead", "ul", "ol", "li", "blockquote", "figure", "figcaption", "section"]);
 const START_TAGS = new Set([...BLOCK_TAGS, "img", "a", "br", "source", "b", "strong", "em", "i", "code", "kbd", "sub", "sup", "span", "hr"]);
 
@@ -10,6 +18,7 @@ export function startsHtml(line: string): boolean {
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", middot: "·", copy: "©", reg: "®", mdash: "—", ndash: "–", hellip: "…" };
+/** a numeric reference outside Unicode, a surrogate or zero (`&#1114112;`) is the replacement character, never a throw */
 function codePoint(value: number): string {
   return Number.isInteger(value) && value > 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff) ? String.fromCodePoint(value) : "\ufffd";
 }
@@ -31,6 +40,8 @@ type Holder = { kind: "link"; href: string | null; file: string | null; children
 export function parseHtmlBlock(lines: readonly string[], index: number): { blocks: MarkdownBlock[]; next: number } {
   let next = index;
   const body: string[] = [];
+  // a comment runs to the line that ends it, blank lines and all, and no further: the heading or
+  // the fence on the next line is markdown again; anything else runs to the first blank line
   if (/^ {0,3}<!--/.test(lines[index] ?? "")) {
     while (next < lines.length) { const line = lines[next++] ?? ""; body.push(line); if (line.includes("-->")) break; }
   } else {
@@ -81,6 +92,7 @@ function readHtml(source: string): MarkdownBlock[] {
   };
 
   const token = /<!--[\s\S]*?(?:-->|$)|<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)|</g;
+  // what a script or a style holds is no text
   let hidden: string | null = null;
   for (const match of source.matchAll(token)) {
     const [whole, closing, rawName, attributes = "", text] = match;
@@ -88,6 +100,7 @@ function readHtml(source: string): MarkdownBlock[] {
     if (hidden !== null) { if (closing && rawName?.toLowerCase() === hidden) hidden = null; continue; }
     if (!closing && (rawName?.toLowerCase() === "script" || rawName?.toLowerCase() === "style")) { hidden = rawName.toLowerCase(); continue; }
     if (text !== undefined || rawName === undefined) {
+      // HTML folds its whitespace: a line break in the source is a space
       const value = decode((text ?? whole).replace(/\s+/g, " "));
       if (value.trim() !== "" || target().length > 0) push({ type: "text", value });
       continue;

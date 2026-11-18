@@ -68,7 +68,7 @@ final class PushStore {
             PushKeys keys = read(prefs);
             if (keys != null) return keys;
         } catch (PushKeys.Damaged damaged) {
-            // Replace all three fields together; each PC receives them on its next app load.
+            // Replace all three fields together; each PC receives the new p256dh and auth on its next app load.
         }
         PushKeys keys = PushKeys.generate();
         Base64.Encoder encoder = Base64.getEncoder();
@@ -91,7 +91,6 @@ final class PushStore {
         return new Endpoint(entry.optString("endpoint"), entry.optString("token"), entry.optString("vapidKey"));
     }
 
-    /** The origin `endpoint` was made for (the key saveEndpoint kept it under), or null when no PC has it. */
     static synchronized String originOf(Context context, String endpoint) {
         return originOf(endpoints(context), endpoint);
     }
@@ -107,7 +106,7 @@ final class PushStore {
     }
 
     /**
-     * The random value this app's own alert taps carry (OvisMessagingService.EXTRA_PROOF), made once
+     * The random value this app's own alert taps carry (AlertProof.EXTRA), made once
      * and kept only here: MainActivity is exported, so any app can send it an alert's intent, but
      * none can read this one's preferences or the extras of its notifications' PendingIntents.
      */
@@ -152,7 +151,7 @@ final class PushStore {
         try {
             return new JSONObject(prefs(context).getString("endpoints", "{}"));
         } catch (JSONException damaged) {
-            return new JSONObject(); // a damaged list starts empty: each PC subscribes again
+            return new JSONObject();
         }
     }
 }

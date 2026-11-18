@@ -7,8 +7,7 @@ import { DIST_ARCHIVE, generateKeyPair, MANIFEST, releaseFile, PTY_ASSETS, ptyFi
 import { download, installServer, NoBinaryRelease, releasesBase, verifiedInstall } from "./server-install.ts";
 
 /**
- * scripts/server-install.ts, which scripts/plugin-launch.ts runs: a release folder signed with a key made for the test,
- * reached as a file:// address, installed into a folder of the test's own. The key reaches the installer only as the
+ * The key reaches the installer only as the
  * option a test passes; the launcher passes none, so it checks the committed key.
  */
 const dirs: string[] = [];
@@ -24,7 +23,6 @@ const sha256 = (path: string) => createHash("sha256").update(readFileSync(path))
 const sources = { server: "a".repeat(40), shared: "b".repeat(40) };
 const PLATFORM = "linux-x64";
 
-/** `<base>/v<version>/`: five stand-in binaries, the client archive, the manifest and its signature */
 function release(base: string, version: string, privateKeyPem: string, client: Record<string, string> = { "index.html": "<!doctype html>" }, host?: string): string {
   const dir = join(base, `v${version}`);
   mkdirSync(dir, { recursive: true });
@@ -41,8 +39,6 @@ function release(base: string, version: string, privateKeyPem: string, client: R
   return dir;
 }
 
-/** `<base>/v<version>/` as main's release step (todo 5) writes it: ovis-server.json holds only version, sources and
- * assets, signed by `privateKeyPem`; `edit` changes the manifest before it is signed */
 function oldShape(base: string, version: string, privateKeyPem: string, edit: (manifest: Record<string, unknown>) => void = () => {}): string {
   const dir = join(base, `v${version}`);
   mkdirSync(dir, { recursive: true });
@@ -70,7 +66,6 @@ function fixture(version = "1.2.3") {
   return { root, releases, home, key, dir, install, binary: join(home, "bin", "ovis-server") };
 }
 
-/** every file under the install, with its SHA-256: what must not change when an install is refused */
 function snapshot(home: string): Record<string, string> {
   if (!existsSync(home)) return {};
   const files: Record<string, string> = {};
@@ -111,7 +106,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     const newer = release(releases, "1.2.4", key.privateKeyPem);
     expect((await install({ version: "1.2.4" })).installed).toBe(true);
     expect(sha256(binary)).toBe(sha256(join(newer, releaseFile(PLATFORM))));
-    // the release bin named before stays, for a server still running from it, until the next install
     expect(readdirSync(join(home, "releases")).filter((name) => !name.startsWith(".")).sort().map((name) => name.split("-")[0])).toEqual(["1.2.3", "1.2.4"]);
     release(releases, "1.2.5", key.privateKeyPem);
     expect((await install({ version: "1.2.5" })).installed).toBe(true);
@@ -147,7 +141,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     const outside = join(root, "evil");
     mkdirSync(join(outside, "inner"), { recursive: true });
     writeFileSync(join(outside, "escaped"), "x");
-    // a member named ../escaped, as an archive crafted to write outside the folder holds it
     expect(Bun.spawnSync(["tar", "-czPf", join(dir, DIST_ARCHIVE), "-C", join(outside, "inner"), "../escaped"]).exitCode).toBe(0);
     writeManifest(dir, { version: "1.2.3", sources });
     signManifest(dir, key.privateKeyPem);
@@ -170,7 +163,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     mkdirSync(join(home, "releases", ".stage-interrupted"));
     writeFileSync(join(home, "releases", ".stage-interrupted", "ovis-server"), "half");
     expect(sha256(binary)).toBe(before);
-    // nothing to do takes no lock, so it removes nothing; the next install, holding the lock, does
     expect((await install()).installed).toBe(false);
     release(releases, "1.2.4", key.privateKeyPem);
     expect((await install({ version: "1.2.4" })).installed).toBe(true);
@@ -227,7 +219,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     const install = (sources: { server: string; shared: string } | { error: string }, at = `file://${releases}`, fetchFile?: typeof fetch) =>
       installServer({ home, version: "1.2.3", platform: PLATFORM, releases: at, publicKey: key.publicKey, sources, fetchFile });
     await expect(install({ server: "c".repeat(40), shared: "b".repeat(40) })).rejects.toBeInstanceOf(NoBinaryRelease);
-    // sources nothing ties to a release take no binary whatever it holds: it is not asked, so one out of reach changes nothing
     const asked: string[] = [];
     const offline = (async (url: string | URL | Request) => { asked.push(String(url)); throw new TypeError("fetch failed"); }) as typeof fetch;
     const untied = await install({ error: "git is not on PATH, so the binaries cannot be tied to their sources" }, "https://releases.invalid", offline).catch((error: unknown) => error);
@@ -237,7 +228,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     expect(asked).toEqual([]);
     expect(existsSync(join(home, "bin"))).toBe(false);
     expect((await install({ server: "a".repeat(40), shared: "b".repeat(40) })).installed).toBe(true);
-    // a binary installed and verified runs as before where git ties nothing: the release is not asked for it either
     expect(await install({ error: "git is not on PATH, so the binaries cannot be tied to their sources" }, "https://releases.invalid", offline)).toMatchObject({ installed: false });
     expect(asked).toEqual([]);
   });
@@ -269,7 +259,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     await install();
     expect(verifiedInstall(home, "1.2.3", PLATFORM, key.publicKey)).toBe(binary);
     expect(existsSync(join(home, ".verified.json"))).toBe(true);
-    // the same length, other bytes, and a newer mtime: the remembered match no longer holds
     const bytes = readFileSync(binary);
     bytes[bytes.length - 2] ^= 1;
     writeFileSync(binary, bytes);
@@ -280,7 +269,6 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
   it("hashes the binary again after a rename puts other bytes of the same size and mtime in its place", async () => {
     const { install, home, key, binary } = fixture();
     await install();
-    // a whole-millisecond mtime the replacement can carry exactly, found whole and remembered with it
     const mtime = new Date(1_700_000_000_000), atime = mtime;
     utimesSync(binary, atime, mtime);
     expect(verifiedInstall(home, "1.2.3", PLATFORM, key.publicKey)).toBe(binary);
@@ -328,11 +316,9 @@ describe.skipIf(process.platform === "win32")("installing the server from a rele
     const secondWaits = new Promise<void>((resolve) => { waited = resolve; });
     const install = (version: string, hold: boolean) => installServer({
       home, version, platform: PLATFORM, releases: `file://${releases}`, publicKey: key.publicKey, onLockWait: hold ? undefined : waited,
-      // in the window (both files checked, nothing moved yet); the first waits, at most 2 s, for the second to arrive
       inWindow: async () => {
         events.push(`${version} in`);
         if (!hold) secondIn = true;
-        // the first goes on once the second waits for the lock, or (only without a lock) reaches this window itself
         if (hold) await Promise.race([secondWaits, new Promise<void>((resolve) => { const check = setInterval(() => { if (secondIn) { clearInterval(check); resolve(); } }, 10); })]);
         events.push(`${version} out`);
       },

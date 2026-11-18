@@ -107,7 +107,6 @@ function parseCodexQuestion(screen: string): ParsedPrompt | null {
     responder: "codex-question", menuLabels: rows.map((row) => row.label),
     selectedIndex: rows.findIndex((row) => row.selected), checkedOptionIndices: [], customMenuIndex: customIndex,
     rejectWithEscapeIndex: null,
-    // Back and Next come from the hint, which a narrow pane may cut: the same question keeps its id without them
   }, { can_step_back: undefined, can_step_next: undefined });
 }
 
@@ -123,7 +122,6 @@ function parseCodexAsyncQuestion(screen: string): ParsedPrompt | null {
   if (hintIndex < 0) return null;
   const header = findLastIndex(lines.slice(Math.max(0, hintIndex - 48), hintIndex), (line) => CODEX_QUEUE_HEADER_RE.test(cleanLine(line)));
   const top = header < 0 ? Math.max(0, hintIndex - 48) : Math.max(0, hintIndex - 48) + header + 1;
-  // without the header the rows are read from well above: a message sent before can be there too
   const rows = menuRows(lines, top, hintIndex);
   const text = (from: number, to: number) => lines.slice(from, to).map(cleanLine).filter((line) => line && !isDivider(line));
   let position: RegExpMatchArray | null = null;
@@ -209,8 +207,7 @@ function parseCodexApproval(screen: string): ParsedPrompt | null {
  * list. Under `enter default · s session` (`enter apply` on Ultra) the row picks: `s` for this
  * session, Enter to save the pick as the default for every new one. A model with a single
  * reasoning level picks from the first list already. So which key a row takes is only known
- * with the cursor on it: `rowKey` is that key for the row under the cursor now, and an answer
- * takes it from the screen it reads after its moves (the `pick` step).
+ * with the cursor on it.
  *
  * Enter is sent in one list only, the list of models, where a row opens that model's levels.
  * In a list of levels the row that opens a list ("More reasoning…") stands beside rows whose
@@ -232,7 +229,6 @@ const CODEX_MODEL_ROW_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(\S.*)$/;
 /** lines Codex puts under a list's title, at most: what the list is for, a warning */
 const CODEX_MODEL_NOTE_LINES = 2;
 
-/** how far back a footer is looked for, including words split across very narrow lines */
 const CODEX_MODEL_TAIL_LINES = 30;
 
 // Key names a list hint can display, including remapped keys. Restrict the key field so
@@ -264,7 +260,6 @@ function codexModelHeader(lines: string[], first: number, allowPresets = false):
   return (match || (allowPresets && whole === "Select Model")) && notes.length <= CODEX_MODEL_NOTE_LINES ? { title: whole, model: match?.[1], notes } : null;
 }
 
-/** The key a Codex list's footer names for picking the row under the cursor; null for any other footer. */
 function codexModelRowKey(footer: string): AnswerStep | null {
   if (CODEX_MODEL_PICK_HINT_RE.test(footer)) return { text: "s" };
   return CODEX_MODEL_OPEN_HINT_RE.test(footer) ? { keys: [KEY.enter] } : null;
@@ -287,8 +282,6 @@ export function codexModelListWaits(screen: string): boolean {
     const footer = shown.slice(start).map(({ text }) => text).join("").replace(/\s+/g, "");
     if (/^enter(?:default|apply)·ssession·escback$/i.test(footer)) return true;
     if (!CODEX_MODEL_GUARD_HINT_RE.test(footer)) continue;
-    // The generic list footer needs a model header in the block immediately above its rows.
-    // Quick presets are recognized only by this guard, never offered as a readable card.
     const { rows, first, last } = listRows(lines, shown[start]!.index, CODEX_MODEL_ROW_RE, null);
     const intervening = lines.slice(last + 1, shown[start]!.index).some((line) => cleanLine(line) && !isDivider(cleanLine(line)));
     if (rows.length > 0 && !intervening && codexModelHeader(lines, first, true) !== null) return true;
@@ -329,12 +322,10 @@ const CODEX_KEY_CAPTURE_RE = /(?:^|\s)esc cancels\.$/i;
 const CODEX_TRANSCRIPT_RE = /^Browsing(?: transcript)? · (?:.+ · )?esc(?: back)?$/;
 /**
  * Narrower, the label alone: Codex keeps the first of those forms that fits its footer, the pane less two columns, and
- * from 15 columns down only `Browsing` does (under 10 nothing does, and no footer is drawn). The word ends the screen
- * as its footer only there: a screen with a wider row does not read it as one.
+ * from 15 columns down only `Browsing` does (under 10 nothing does, and no footer is drawn).
  */
 const CODEX_TRANSCRIPT_LABEL_COLUMNS = 15;
 
-/** What a chat send to a Codex pane is refused with while one of those screens is open (`agent_blocked`). */
 export const CODEX_OWN_SCREEN_MESSAGE = "Codex has one of its own screens open in the terminal; close it there, then send";
 
 /** rows at the end of the screen a footer is looked for in: two rows of keys (/resume), or one a narrow pane wrapped */
@@ -396,7 +387,6 @@ function parseCodexModel(screen: string): ParsedPrompt | null {
   const hintIndex = findLastIndex(lines, (_, index) => codexModelRowKey(wrapped(lines, index)) !== null);
   if (hintIndex < 0) return null;
   const { rows, first, last, unread } = listRows(lines, hintIndex, CODEX_MODEL_ROW_RE, null);
-  // the rows end right over their footer, and one of them carries the cursor
   if (unread || rows.length < 2 || rows.filter((row) => row.cursor).length !== 1 || lines.slice(last + 1, hintIndex).some((line) => line.trim() !== "")) return null;
   const header = codexModelHeader(lines, first);
   const names = listNames(rows);
@@ -405,10 +395,7 @@ function parseCodexModel(screen: string): ParsedPrompt | null {
   const selectedIndex = rows.findIndex((row) => row.cursor);
   const footer = codexModelRowKey(wrapped(lines, hintIndex))!;
   const opens = footer.keys !== undefined;
-  // the list of models, where a row opens a model's levels and Enter is its key
   const models = header.title === "Select Model and Effort";
-  // elsewhere a row that only opens a list is left to the terminal: the one Codex names so, and
-  // the one under the cursor when its footer says so
   const offered = rows.flatMap((_, row) => !models && (CODEX_MODEL_MORE_ROW_RE.test(drawn[row]!.label) || (row === selectedIndex && opens)) ? [] : [row]);
   if (offered.length === 0) return null;
   const current = names.findIndex(({ name }) => /\s\(current\)$/.test(name));
@@ -428,12 +415,9 @@ function parseCodexModel(screen: string): ParsedPrompt | null {
     multi_select: false,
     custom_option_index: null,
   }, {
-    // every row drawn, by its list, its number and what it says (the reasoning list of another
-    // model has the same rows): the cursor moves among all of them, offered or not
     responder: "codex-model", menuLabels: rows.map((row, index) => `${header.title}  ${row.number}. ${drawn[index]!.label}  ${drawn[index]!.description ?? ""}`), selectedIndex,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: offered.map((row) => [...keySteps(navigationKeys(row - selectedIndex)), { pick: true as const }]),
-    // Enter in the list of models alone; `s` wherever the footer offers it; no key otherwise
     rowKey: opens ? models ? footer : null : footer,
   });
 }

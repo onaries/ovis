@@ -1,5 +1,3 @@
-/* the first-run setup guide (SetupGuide): a dialog over the app, as Settings is (.modal), at a fixed 16:9
-   size so a step never moves its edges. At 640px and below the app's own rule makes it a bottom sheet */
 .setup-scrim[hidden] {
   display: none;
 }
@@ -13,7 +11,6 @@
   width: min(100%, var(--setup-w));
 }
 
-/* as tall as its step, within the 16:9 frame: a step with little to show is no half-empty card */
 @media (min-width: 641px) {
   .setup-dialog {
     height: auto;
@@ -22,7 +19,6 @@
   }
 }
 
-/* the head: the name at the left, the steps' list in the middle (once there are several), close at the right */
 .setup-head {
   display: grid;
   flex: none;
@@ -52,14 +48,11 @@
   border-radius: var(--radius-sm);
 }
 
-/* the close glyph, not its hover box, ends on the body's gutter */
 .setup-head > .icon-button {
   justify-self: end;
   margin-inline-end: calc(-1 * var(--space-2));
 }
 
-/* the body: the dialog's one scroll owner (.modal-body), two columns: the step at the left, its result
-   or preview at the right */
 .setup-body {
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
@@ -72,12 +65,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* the left column is plain block flow: 8px under the title, 24px under the lead, 16px between controls */
 .setup-main {
   min-width: 0;
 }
 
-/* written under .setup-dialog so they outrank the margin: 0 of the lines they space (.setup-note, .setup-error, …) */
 .setup-dialog .setup-main > * {
   margin-block: 0;
 }
@@ -95,7 +86,6 @@
   text-wrap: balance;
 }
 
-/* the title takes focus as its step opens, for a screen reader; no ring for that */
 .setup-title:focus {
   outline: none;
 }
@@ -119,7 +109,6 @@
   margin-top: var(--space-6);
 }
 
-/* the right column: a tonal surface as tall as its content, its hairline kept in a theme whose --bg is the dialog's own */
 .setup-side {
   display: flex;
   flex-direction: column;
@@ -144,7 +133,6 @@
   line-height: var(--lh-base);
 }
 
-/* the picked agent at the top of the side panel: its mark, its name, its version */
 .setup-agent-head {
   display: flex;
   align-items: center;
@@ -153,7 +141,6 @@
   font-size: var(--fs-lg);
 }
 
-/* rows of a 16px glyph and a sentence; .is-done colours the glyph */
 .setup-list {
   display: flex;
   flex-direction: column;
@@ -184,13 +171,11 @@
   color: var(--status-done);
 }
 
-/* a sign-in link inside a sentence keeps the sentence's line */
 .setup-item .setup-link {
   min-height: 0;
   font-size: inherit;
 }
 
-/* Done's summary: a name column, then what was set */
 .setup-summary-row {
   display: flex;
   flex-wrap: wrap;
@@ -202,7 +187,6 @@
   color: var(--text-dim);
 }
 
-/* one labelled control in the step: its label, the control, a line under it */
 .setup-field {
   display: flex;
   flex-direction: column;
@@ -210,10 +194,8 @@
   gap: var(--space-2);
 }
 
-/* the phone and alerts step's left column: this computer's alerts, its chips a line that wraps */
 .setup-alerts > .settings-chips {
   align-self: stretch;
-  /* under its label at the left, where Settings' rows set it at the right edge */
   justify-content: flex-start;
 }
 
@@ -221,7 +203,6 @@
   display: none;
 }
 
-/* alerts the system refuses: the warning glyph in the blocked colour, the sentence plain */
 .setup-note-blocked svg {
   color: var(--status-blocked);
 }
@@ -231,7 +212,6 @@
   font-weight: var(--fw-semibold);
 }
 
-/* the theme step's cards: a grid of three, wrapping, never a sideways row (Settings has that one) */
 .setup-theme-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -243,7 +223,6 @@
   font-size: var(--fs-sm);
 }
 
-/* the preview: a miniature of the app in the page's own colours, which the step's picks set (ThemePreview) */
 .setup-preview {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 5fr);
@@ -317,7 +296,6 @@
   white-space: nowrap;
 }
 
-/* the Chat | Terminal switch, drawn: the chosen half on the raised surface */
 .setup-preview-lens {
   display: inline-flex;
   flex: none;
@@ -402,7 +380,6 @@
   color: var(--status-done);
 }
 
-/* the footer: the ghost fast path at the left edge (its label on the body's gutter), Back and Continue at the right */
 .setup-foot {
   flex: none;
   flex-wrap: wrap;
@@ -426,7 +403,6 @@
   height: var(--icon-size-sm);
 }
 
-/* line breaks come from text-wrap alone: no hand-placed breaks in the strings */
 .setup-dialog :is(p, li, .setup-choice-text > span) {
   text-wrap: pretty;
 }
@@ -454,7 +430,6 @@
   margin-top: var(--space-px-3);
 }
 
-/* the welcome's line about usage counts: its sentence opens Settings, Turn off beside it */
 .setup-note-usage {
   flex-wrap: wrap;
   align-items: center;
@@ -479,8 +454,6 @@
   font-size: var(--fs-sm);
 }
 
-/* a quiet text button: Look again, Not now. Its words stay small; its box reaches the pointer floor,
-   and the touch floor on a phone */
 .setup-link {
   display: inline-flex;
   align-items: center;
@@ -512,7 +485,6 @@
   }
 }
 
-/* the big choices: I'm new, I've used Ovis before */
 .setup-choices {
   display: flex;
   flex-direction: column;
@@ -536,12 +508,10 @@
   transition: border-color var(--dur-fast) var(--ease-out);
 }
 
-/* the accent border is the pointer's; keyboard focus is the shared ring alone, never both lines */
 .setup-choice:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
-/* the first-run path: the one tonal fill on the welcome, as the picked tile's; the other choice stays a plain card */
 .setup-choice-primary {
   background: var(--accent-tint);
 }
@@ -558,7 +528,6 @@
   color: var(--text-dim);
 }
 
-/* the choice's picture: a neutral ink, so the one accent on the screen is the action taken, not a decoration */
 .setup-choice-icon {
   display: grid;
   place-items: center;
@@ -612,7 +581,6 @@
   height: var(--icon-size-sm);
 }
 
-/* the PC check */
 .setup-check {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -672,7 +640,6 @@
   gap: var(--space-2);
 }
 
-/* over the pane while the guide stands aside: a quiet line, not an alert */
 .setup-resume {
   display: flex;
   flex: 0 0 auto;
@@ -685,7 +652,6 @@
   font-size: var(--fs-sm);
 }
 
-/* one column below 960px: the side panel goes under the step */
 @media (max-width: 960px) {
   .setup-body {
     grid-template-columns: minmax(0, 1fr);
@@ -707,14 +673,12 @@
     min-height: var(--touch-target);
   }
 
-  /* the fast path takes its own line above Back and Continue, so those two keep a row together */
   .setup-foot > .btn-ghost {
     flex: 1 1 100%;
     justify-content: flex-start;
   }
 }
 
-/* Connect your phone: the QR code and the address, in the Done screen's side panel */
 .setup-phone-qr {
   display: flex;
   flex-wrap: wrap;
@@ -748,7 +712,6 @@
   letter-spacing: 0.1em;
 }
 
-/* Connect your phone through the Ovis relay: its line and button, its state, then its QR code */
 .setup-phone-relay {
   display: flex;
   flex-direction: column;
@@ -795,10 +758,8 @@
   height: var(--icon-size-sm);
 }
 
-/* Sign in to an installed Claude Code or Codex, under the tiles */
 .setup-sign-in .setup-link { margin-inline-start: var(--space-1); }
 
-/* the phone's side of the step: everything in view at once, no scroll inside the dialog */
 .setup-side-phone {
   gap: var(--space-3);
   padding: var(--space-5);
@@ -919,7 +880,6 @@
   margin: 0;
 }
 
-/* the relay in the step: no box of its own, the QR code and its one line side by side */
 .setup-method-area .setup-phone-relay {
   gap: var(--space-2);
   padding: 0;
@@ -942,7 +902,6 @@
   height: 168px;
 }
 
-/* the QR code's view: its one line only (the countdown and the rest wait behind Other ways) */
 .setup-relay-tight:not(.is-more) .relay-pairing-text > :not(.settings-label, .relay-error) {
   display: none;
 }
@@ -963,7 +922,6 @@
   margin: 0;
 }
 
-/* the other ways: their buttons side by side, wrapping when narrow; this PC's ID on its own line */
 .setup-relay-tight.is-more .relay-pairing-text {
   flex-direction: row;
   flex-wrap: wrap;
@@ -984,7 +942,6 @@
   margin-top: var(--space-2);
 }
 
-/* variant B: a numbered path */
 .setup-path {
   display: flex;
   flex-direction: column;
@@ -1063,7 +1020,6 @@
   font-size: var(--fs-sm);
 }
 
-/* held while the relay starts */
 .setup-path-tab[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: var(--disabled-opacity, 0.5);
@@ -1074,7 +1030,6 @@
   color: var(--text-strong);
 }
 
-/* the alerts half: a sample alert and where alerts go */
 .setup-alert-sample {
   display: flex;
   align-items: center;
@@ -1134,7 +1089,6 @@
     flex-wrap: wrap;
   }
 
-  /* the three tabs stay one row, as three equal columns: the icon, the name, the pill under it */
   .setup-path-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1148,7 +1102,6 @@
   }
 }
 
-/* the head's step bar, as Orca's: thin segments and n / N */
 .setup-steps-bar {
   display: flex;
   align-items: center;
@@ -1190,12 +1143,10 @@
   color: var(--text-dim);
 }
 
-/* only Set up later sits at the far left: Start now stays with Back and Continue */
 .setup-foot > .setup-later ~ .btn-ghost {
   margin-inline-end: 0;
 }
 
-/* on a phone only n / N: the title beside it keeps its room in every language */
 @media (max-width: 640px) {
   .setup-steps-bar .setup-steps {
     position: absolute;

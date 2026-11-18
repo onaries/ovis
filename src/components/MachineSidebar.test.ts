@@ -24,7 +24,6 @@ describe("a PC's own Ovis on its card", () => {
   it("is offered only as what the PC waits for: its update, or a setup it cannot run itself", () => {
     expect(ownOvisAction(pc({ remote_ovis: offer(true), action_required: "update_bridge" }))).toEqual(offer(true));
     expect(ownOvisAction(pc({ remote_ovis: offer(false), action_required: "setup" }))).toEqual(offer(false));
-    // an offer the PC no longer waits for is told the usual way (#2054)
     expect(ownOvisAction(pc({ remote_ovis: offer(true), action_required: "setup" }))).toBeNull();
     expect(ownOvisAction(pc({ remote_ovis: offer(false), action_required: "update_bridge" }))).toBeNull();
     expect(ownOvisAction(pc({ remote_ovis: offer(true), action_required: "bridge_conflict" }))).toBeNull();
@@ -36,7 +35,6 @@ describe("a PC's own Ovis on its card", () => {
     expect(ownUpdateFailure(pc({ remote_ovis: offer(true), action_required: "update_bridge", error: failed }))).toBe(failed);
     expect(ownUpdateFailure(pc({ remote_ovis: offer(true), action_required: "update_bridge", error: `${OWN_UPDATE_OFFER} to v0.4.18.` }))).toBeNull();
     expect(ownUpdateFailure(pc({ remote_ovis: offer(true), action_required: "update_bridge" }))).toBeNull();
-    // a refusal is the setup card's reason, not a failed update offered again
     expect(ownUpdateFailure(pc({ remote_ovis: offer(false), action_required: "setup", error: failed }))).toBeNull();
   });
 });
@@ -81,7 +79,6 @@ describe("Manage PC's menu", () => {
   });
 
   it("holds a rename, a connect or disconnect, Hide and a removal while one of them runs", () => {
-    // hiding the PC drops its row, and with it the guard on the request still running
     expect(waiting(ssh(), true)).toEqual(["rename", "toggle", "hide", "remove"]);
     expect(waiting(ssh({ kind: "hc", target: undefined }), true)).toEqual(["hide"]);
   });

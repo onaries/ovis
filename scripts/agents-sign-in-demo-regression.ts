@@ -7,9 +7,6 @@
  *   in, and the dialog names the account. Open terminal is there until it ends.
  * - Codex's Add account → On this PC → Start sign-in follows the login in the browser: its device page
  *   on auth.openai.com and its one-time code, then the account it signed in.
- * - The setup guide offers Sign in under its tiles for an installed Claude Code without an account.
- *
- * With UI_EVIDENCE_DIR, each step is captured under agents-sign-in/.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +17,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { sheetEntryLeft } from "./sheets-settled.ts";
+import { serveDemo } from "./demo-server.ts";
 
 const app = mkdtempSync(join(tmpdir(), "ovis-agents-sign-in-"));
 const evidence = process.env["UI_EVIDENCE_DIR"] ? join(process.env["UI_EVIDENCE_DIR"], "agents-sign-in") : null;
@@ -32,17 +30,7 @@ try {
   await buildDemoApp(app);
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n    <script type="module"`));
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith("/app/")) return new Response("not found", { status: 404 });
-    let file: string;
-    try { file = decodeURIComponent(path.slice("/app/".length)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  server = serveDemo(app, { prefix: "/app/" });
   const root = `http://127.0.0.1:${server.port}/app/?pane=${encodeURIComponent(panes.api)}&demo_sign_in=1`;
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   for (const width of [1280, 390] as const) {
@@ -63,7 +51,6 @@ try {
       };
       const press = (locator: ReturnType<Page["locator"]>) => width === 390 ? locator.tap() : locator.click();
       try {
-        // Claude Code's first sign-in, from its Agents row
         await page.goto(`${root}&settings=agents`);
         const claude = page.locator(".agents-item[data-agent='claude']");
         await claude.waitFor();
@@ -92,7 +79,6 @@ try {
         await dialog.waitFor({ state: "detached" });
         console.log(`PASS Claude Code signs in from its Agents row: its page on claude.com, the pasted code, the account named (${at})`);
 
-        // Codex's Add account → On this PC, followed in the browser
         const codex = page.locator(".agents-item[data-agent='codex']");
         await press(codex.locator(".agents-toggle"));
         await press(codex.getByRole("button", { name: "Add account", exact: true }));
@@ -108,12 +94,9 @@ try {
         await follow.getByText("Signed in as codex@example.test.", { exact: true }).waitFor();
         await shot("4-codex-signed-in");
         await press(follow.getByRole("button", { name: "Done", exact: true }));
-        // Done ends the whole Add account flow: no dialog is left behind
         await page.locator(".usage-account-dialog").first().waitFor({ state: "detached" });
         console.log(`PASS Codex's Add account follows its device code in the browser, then names the account (${at})`);
 
-        // Sign in again on a shut row: the dialog lives on the page, so a click into it toggles no row
-        // and the end of the expiry it was opened for does not take it away
         // the dialog that just closed steps off its history entry first: a page load asked for before that is dropped
         await sheetEntryLeft(page);
         await page.goto(`${root}&demo_usage=refused&settings=agents`);

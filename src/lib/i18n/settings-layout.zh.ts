@@ -41,7 +41,6 @@ export const SETTINGS_LAYOUT_ZH: Record<string, string> = {
   "herdr's TUI server is not running: start herdr after the switch.": "herdr 的 TUI 服务器未运行：切换后请启动 herdr。",
   "herdr's TUI server is not running.": "herdr 的 TUI 服务器未运行。",
 
-  // the one-line conditions Settings' bare pages show under a row's name (design pass G-095 to G-098)
   "By state applies to this device; the other orders to every browser.": "按状态仅对此设备生效，其他排序对所有浏览器生效。",
   "Auto: the chat on a touch screen, the terminal elsewhere.": "自动：触摸屏上打开聊天，其他设备上打开终端。",
   "Beside the pane needs a wide window; on this screen a file opens in a popup.": "在窗格旁打开需要较宽的窗口；在此屏幕上文件会以弹窗打开。",
@@ -54,7 +53,6 @@ export const SETTINGS_LAYOUT_ZH: Record<string, string> = {
   "A drag in a Codex pane selects through its whole history; Shift+drag still copies in Ovis.": "在 Codex 窗格中拖动会在完整历史中选择；Shift+拖动仍在 Ovis 中复制。",
   "Opens the side conversations an OMP session saved with /btw.": "从输入框打开 OMP 会话用 /btw 保存的旁支对话。",
   "A subagent counts as running until the session that started it is told it ended.": "子代理即使空闲，也在启动它的会话被告知结束前算作运行中。",
-  // the one line under each page's title (G-173)
   "How conversations look and what the message box offers.": "对话的显示方式和输入框功能。",
   "How terminal panes look and take input.": "终端窗格的外观和输入。",
   "When this device alerts you, and where else alerts go.": "此设备何时提醒你，以及提醒还发往何处。",
@@ -62,6 +60,5 @@ export const SETTINGS_LAYOUT_ZH: Record<string, string> = {
   "Keyboard shortcuts, and herdr's prefix keys.": "快捷键和 herdr 前缀键。",
   "Phones, browsers and PCs that reach this Ovis.": "连接到此 Ovis 的手机、浏览器和 PC。",
   "Features still being shaped; they may change.": "仍在完善的功能，可能会变化。",
-  // the range under a typed font size it refused (G-179)
   "Enter {min}–{max}px": "请输入 {min}–{max}px 之间的数值。",
 };

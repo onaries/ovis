@@ -51,7 +51,7 @@ curl -fsSL https://ovis.sh/install.sh | sh
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**在手机上：** 在电脑上打开 **设置 → 设备和电脑 → 添加连接 → Ovis 中继**，开启开关，点击 **显示这个二维码**，再用手机扫描。如果电脑已经在某个 Ovis 账户中，这里会改为提示在手机上登录。iPhone 应用已在 [App Store](https://apps.apple.com/app/id6824664162) 上架，Android 应用已在 [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app) 上架。[手机设置 →](docs/guide.md#on-your-phone)
+**在手机上：** 在电脑上打开 **设置 → 设备和电脑 → 添加连接 → Ovis 中继**，开启开关，再用手机扫描显示的二维码。如果这里提示先登录，就登录并把这台电脑添加到你的账户，然后点击 **显示这个二维码**，再用已登录同一账户的手机扫描。这样扫描后电脑就在这个账户中了，之后要添加其他手机时，这里会改为提示在手机上登录该账户。iPhone 应用已在 [App Store](https://apps.apple.com/app/id6824664162) 上架，Android 应用已在 [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app) 上架。[手机设置 →](docs/guide.md#on-your-phone)
 
 <a href="https://apps.apple.com/app/id6824664162"><img src="ovis-site/assets/app-store/badge-zh.svg" alt="在 App Store 下载" height="48"></a> <a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-zh.svg" alt="去 Google Play 商店下载" height="48"></a>
 

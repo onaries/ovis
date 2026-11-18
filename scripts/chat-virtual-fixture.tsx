@@ -11,7 +11,6 @@ declare global {
     chatQa: {
       refresh: () => void;
       page: (direction: -1 | 1) => void;
-      /** the chat's height, and its width (a split pane's) when given */
       resize: (height: number, width?: number) => void;
       machine: (machine: string) => void;
       mount: (mounted: boolean) => void;

@@ -36,9 +36,6 @@ function render(bare: boolean, model = updates(blocked)): string {
 
 const heading = (html: string): string => /<h3 id="settings-updates-title"[^>]*>/.exec(html)?.[0] ?? "";
 
-// About joins its sections into one card (herdr-app's About list): a caption between two of its
-// rows splits that card in two. The full section (a blocked check, an install, a failure) keeps its
-// name for a link and a screen reader there, out of sight like the compact line's.
 describe("the Updates section's heading", () => {
   it("is out of sight inside About's joined card", () => {
     expect(heading(render(true))).toContain('class="visually-hidden"');
@@ -51,7 +48,6 @@ describe("the Updates section's heading", () => {
   });
 });
 
-// the offer line closes for its release on this device (G-102), as the done line does, and offers the next one again
 describe("the update offer line", () => {
   const offer = (revision: string, closed: string | null, model?: Partial<UpdatesModel>): string => {
     const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -140,7 +136,6 @@ describe("update failure announcements", () => {
   });
 });
 
-// the desktop app's downloaded update (lib/desktopUpdate.ts): the tray's Restart to Update, on the release line's row
 describe("the desktop app's update line", () => {
   const line = (update: Parameters<typeof DesktopUpdateNotice>[0]["update"], language = "en"): string => {
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
@@ -170,7 +165,6 @@ describe("the desktop app's update line", () => {
     expect(line(null)).toBe("");
   });
 
-  // the line's button is the tray's item: the words the app's own menu uses (app/electron/src/text.ts)
   it("names Restart to Update as the app's tray does, in every language", async () => {
     const { desktopText } = await import("../../app/electron/src/text.ts");
     for (const language of ["ko", "ja", "zh"] as const) {

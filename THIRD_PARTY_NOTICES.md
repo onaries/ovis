@@ -92,7 +92,7 @@ None of them is in this repository.
 - [herdr-core](https://github.com/herdrdev/herdr-core) 0.1.17 (`hc`), under Apache-2.0, from
   `releases.herdr.dev`. Its `LICENSE` and `THIRD-PARTY-NOTICES` ship beside it, in the app's
   `resources/ovis/licenses/herdr-core/`.
-- [Bun](https://github.com/oven-sh/bun) 1.4.2, under MIT. Its `LICENSE.md` ships beside it, in
+- [Bun](https://github.com/oven-sh/bun) 1.4.4, under MIT. Its `LICENSE.md` ships beside it, in
   `resources/ovis/licenses/bun/`. Bun statically links JavaScriptCore and WebKit (LGPL-2) and the
   other libraries that file lists; the sources of the WebKit it links are at
   [oven-sh/WebKit](https://github.com/oven-sh/WebKit).

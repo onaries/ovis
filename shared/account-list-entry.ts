@@ -1,9 +1,12 @@
+/** A body is bytes, never JSON; nobody re-encodes an entry, so two members cannot differ over its bytes. */
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { SPKI_BYTES, SPKI_PREFIX } from "./account-records.ts";
 import { fromBase64Url, toBase64Url } from "./relay-pair-sas.ts";
 
+/** Every body starts with these bytes; they differ from `ovis-account/1` and `ovis-relay-auth/1` at the sixth byte. */
 export const LIST_BODY_PREFIX = "ovis-list/1";
+/** The entry hash is SHA-256 over these bytes and the body. */
 export const LIST_ENTRY_HASH_PREFIX = "ovis-list-entry/1";
 export const LIST_BODY_MAX = 8192;
 export const LIST_NAME_MAX = 32;
@@ -44,8 +47,10 @@ export interface EntryBody {
   readonly seq: number;
   readonly signer: string;
   readonly v: number;
+  /** The fields `adds` and `power`, which come together or not at all. */
   readonly adds?: { readonly key: string; readonly power: SignerPower };
   readonly ends?: string;
+  /** Every other field, in body order: the envelope checks their names, never their values. */
   readonly own: readonly ListField[];
 }
 
@@ -84,18 +89,21 @@ export function isListHash(text: string): boolean {
   return /^[0-9a-f]{64}$/.test(text);
 }
 
+/** The bytes a base64url text spells when it is their one spelling (no padding); null for anything else. */
 function canonicalBase64Url(text: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) return null;
   const bytes = fromBase64Url(text);
   return toBase64Url(bytes) === text ? bytes : null;
 }
 
+/** The 91 bytes of a key in its one spelling; null for anything else. */
 function keyBytes(text: string): Uint8Array | null {
   if (text.length !== LIST_KEY_LENGTH) return null;
   const bytes = canonicalBase64Url(text);
   return bytes !== null && bytes.length === SPKI_BYTES && SPKI_PREFIX.every((byte, index) => bytes[index] === byte) ? bytes : null;
 }
 
+/** A P-256 public key in its one spelling: 122 base64url characters of SPKI DER with the uncompressed point. Not checked: that the point is on the curve (isListPoint). */
 export function isListKeyEncoding(text: string): boolean {
   return keyBytes(text) !== null;
 }
@@ -104,6 +112,12 @@ function bigOf(bytes: Uint8Array): bigint {
   return BigInt(`0x0${bytesToHex(bytes)}`);
 }
 
+/**
+ * Whether a key in its one spelling names a point of P-256: its X and Y lie below p, and
+ * Y² = X³ - 3X + b (mod p). That is the whole of it: the uncompressed spelling has no point at
+ * infinity, and every point of the curve but that one has order n. Judged here, so that no
+ * runtime's way of refusing a key decides anything.
+ */
 export function isListPoint(key: string): boolean {
   const bytes = keyBytes(key);
   if (bytes === null) return false;
@@ -113,12 +127,19 @@ export function isListPoint(key: string): boolean {
   return (y * y - (x * x * x - 3n * x + P256_B)) % P256_FIELD === 0n;
 }
 
+/** Bytes as one character each, so a byte above 0x7f never matches a form. */
 function latin1(bytes: Uint8Array): string {
   let text = "";
   for (const byte of bytes) text += String.fromCharCode(byte);
   return text;
 }
 
+/**
+ * The field form (docs/account-list.md, "The form") under `prefix` (ASCII text, part of the bytes):
+ * the fields, read strictly (the prefix, the lengths, names in form and strictly ascending, the end
+ * exactly after the last field, at most LIST_BODY_MAX bytes in all); refuses `entry_malformed`. For
+ * what is written "like an entry" under a prefix of its own.
+ */
 export function readFieldsUnder(prefix: string, bytes: Uint8Array): ListField[] {
   const head = utf8ToBytes(prefix);
   withinLimit(bytes.length);
@@ -147,6 +168,7 @@ export function readFieldsUnder(prefix: string, bytes: Uint8Array): ListField[] 
   return fields;
 }
 
+/** The field form under `prefix`: the one form of these fields, names ascending; refuses `entry_malformed` for fields it cannot hold. */
 export function writeFieldsUnder(prefix: string, fields: readonly ListField[]): Uint8Array {
   const head = utf8ToBytes(prefix);
   const sorted = [...fields].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -232,6 +254,7 @@ export function writeBody(body: EntryBody): Uint8Array {
   return bytes;
 }
 
+/** The entry hash: SHA-256 over `ovis-list-entry/1` and the body, as 64 lowercase hex digits. The list id is entry 0's. */
 export function entryHash(body: Uint8Array): string {
   return bytesToHex(sha256(concatBytes(HASH_PREFIX, body)));
 }
@@ -241,16 +264,29 @@ function scalarInRange(bytes: Uint8Array): boolean {
   return value > 0n && value < P256_ORDER;
 }
 
+/** The signature: whether it is 64 bytes whose `r` and `s` each lie from 1 to n-1; judged here, whatever the runtime's ECDSA accepts. */
 export function signatureInRange(signature: Uint8Array): boolean {
   return signature.length === LIST_SIGNATURE_BYTES && scalarInRange(signature.subarray(0, 32)) && scalarInRange(signature.subarray(32));
 }
 
+/** Signs a body with the private half of its `signer`. */
 export async function signEntry(body: EntryBody, privateKey: CryptoKey): Promise<Entry> {
   const bytes = writeBody(body);
   const signature = new Uint8Array(await crypto.subtle.sign(SIGN, privateKey, new Uint8Array(bytes)));
   return { body: bytes, signature };
 }
 
+/**
+ * The signature (docs/account-list.md, "The signature, the hash and the list id"): whether
+ * `signature` (`r || s`, each from 1 to n-1, a high `s` included) is `signer`'s ECDSA
+ * P-256 SHA-256 over `body`. A signature out of range, and a signer that is no key in its one
+ * spelling or whose point is not on the curve, verify nothing: false, judged here before the
+ * runtime is asked. So the runtime gets only a key it must take, and whatever it throws is a
+ * fault, as is a runtime without WebCrypto (a page on plain http at a LAN address): it says
+ * nothing about the entry. The body and the signature are copied before anything is judged, and
+ * the runtime verifies those copies: the verdict is of the bytes as they were handed over,
+ * whatever the caller does to them while the key is imported.
+ */
 export async function verifySignature(body: Uint8Array, signature: Uint8Array, signer: string): Promise<boolean> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) throw new Error("WebCrypto is not available here (crypto.subtle is missing), so no signature can be checked");
@@ -262,11 +298,20 @@ export async function verifySignature(body: Uint8Array, signature: Uint8Array, s
   return await subtle.verify(SIGN, key, judged, signed);
 }
 
+/**
+ * When an entry holds (docs/account-list.md): entry n holds, given the entry before it (null for
+ * entry 0) and nothing else: (1) its body has the form, (2) its `seq` is n and it continues the
+ * chain, (3) its signature verifies. Checked in that order; throws ListEntryError with the first
+ * that fails. Everything is read once, before the signature is awaited: the entry is copied (with
+ * `new Uint8Array`: on Node's Buffer, `slice()` is a view of the same memory), once its sizes are
+ * judged, and the seq, hash and list id of the entry before are taken. What comes back is built
+ * from those alone, so it is of the bytes whose signature was checked and of the state they were
+ * checked against, whatever the caller does to its buffers or to that state meanwhile or later.
+ */
 export async function entryHolds(shown: Entry, before: HeldEntry | null): Promise<HeldEntry> {
   const { body: shownBody, signature: shownSignature } = shown;
   if (shownSignature.length !== LIST_SIGNATURE_BYTES) malformed(`A signature is ${LIST_SIGNATURE_BYTES} bytes`);
   withinLimit(shownBody.length);
-  // new Uint8Array, not slice(): on Node's Buffer, slice() is a view of the same memory
   const entry: Entry = { body: new Uint8Array(shownBody), signature: new Uint8Array(shownSignature) };
   const chain = before === null ? null : { seq: before.body.seq, hash: before.hash, list: before.list };
   const body = readBody(entry.body);
@@ -284,6 +329,11 @@ export async function entryHolds(shown: Entry, before: HeldEntry | null): Promis
   return { entry, body, hash, list: chain === null ? hash : chain.list };
 }
 
+/**
+ * The first state: entry 0, which holds, and its signer. Given a list id (by an offer or a join
+ * line), only the entry with that hash is taken as entry 0: another refuses `list_mismatch`, after
+ * the checks of entryHolds.
+ */
 export async function firstState(entry: Entry, givenList?: string): Promise<{ readonly first: HeldEntry; readonly signer: string }> {
   const first = await entryHolds(entry, null);
   if (givenList !== undefined && first.hash !== givenList) refuse("list_mismatch", "Entry 0 does not hash to the given list id");
@@ -294,6 +344,7 @@ export function entryToText(entry: Entry): string {
   return `${toBase64Url(entry.body)}.${toBase64Url(entry.signature)}`;
 }
 
+/** An entry's text, read strictly (two parts in their one spelling, nothing else); refuses `entry_malformed`. The body is judged by entryHolds. */
 export function entryFromText(text: string): Entry {
   const parts = text.split(".");
   if (parts.length !== 2) malformed("An entry's text is two parts joined by one dot");

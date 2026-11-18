@@ -28,7 +28,6 @@ it("expires singleton evidence and reconciles a newer ambiguous scan", async () 
     expect(await windowsHeldPaths(4242, holders, candidates)).toEqual(["A"]);
     both = true;
     now = 6_000;
-    // Another pane completes a scan before the original pane resolves again.
     await windowsHeldPaths(4243, holders, candidates);
     expect(await windowsHeldPaths(4242, holders, candidates)).toEqual(["A", "B"]);
     now = 12_000;
@@ -66,7 +65,6 @@ it("keeps each unresolved pid's backoff while other panes scan in between", asyn
   try {
     const scans: number[] = [];
     const holders = (path: string) => { if (path === "A") scans.push(now); return []; };
-    // two panes without a lock poll in turn every six seconds
     for (now = 0; now <= 120_000; now += 6_000) await windowsHeldPaths(now % 12_000 === 0 ? 4242 : 4243, holders, () => ["A", "B"]);
     expect(scans.length).toBeLessThan(15);
   } finally { Date.now = realNow; }
@@ -75,7 +73,6 @@ it("keeps each unresolved pid's backoff while other panes scan in between", asyn
 it("proves nothing from a scan whose owners moved before they were confirmed", async () => {
   resetWindowsScanCacheForTest();
   let bCalls = 0, moved = false;
-  // the pid holds A and B; B's hold moves to C after the pass read C and before B is confirmed
   const holders = (path: string) => {
     if (path === "B" && ++bCalls === 2) moved = true;
     return path === "A" || (path === "B" && !moved) || (path === "C" && moved) ? [4242] : [];
@@ -92,13 +89,11 @@ it("backs off a pid whose lock keeps changing hands during every scan", async ()
   try {
     const scans: number[] = [];
     let bCalls = 0;
-    // A stays held; B answers held and then free, so every pass sees its owners move
     const holders = (path: string) => {
       if (path === "A") scans.push(now);
       return path === "A" || (path === "B" && ++bCalls % 2 === 1) ? [4242] : [];
     };
     for (now = 0; now <= 120_000; now += 6_000) expect(await windowsHeldPaths(4242, holders, () => ["A", "B"])).toEqual([]);
-    // the 5, 10, 20, 40, 60 second schedule, read on a six-second poll
     expect([...new Set(scans)]).toEqual([0, 6_000, 18_000, 42_000, 84_000]);
   } finally { Date.now = realNow; }
 });
@@ -114,7 +109,6 @@ for (const recovery of ["a new lock file", "another pane's scan"]) {
       let paths = ["A", "B"];
       const holders = (path: string) => moving && path === "A" ? (++aCalls % 2 ? [4242] : []) : path === active ? [4242] : [];
       const candidates = () => paths;
-      // the moving lock pushes the pid's backoff up to its 60-second cap
       for (now of [0, 5_000, 15_000, 35_000, 75_000]) expect(await windowsHeldPaths(4242, holders, candidates)).toEqual([]);
       moving = false;
       now = 76_000;
@@ -159,7 +153,6 @@ it("does not accept singleton evidence from an overflowing candidate listing", a
       writeFileSync(join(root, "presence", `00000000-0000-4000-8000-${i.toString().padStart(12, "0")}.lock`), "");
     }
     const candidates = () => windowsLockCandidates({ ANTIGRAVITY_APP_DATA_DIR: root }, root);
-    // The pid holds the first and last entries; a truncated scan sees only the first.
     const names = readdirSync(join(root, "presence"));
     const held = [join(root, "presence", names[0]!), join(root, "presence", names.at(-1)!)];
     const holders = (path: string) => held.includes(path) ? [4242] : [];
@@ -180,9 +173,7 @@ for (const ambiguous of [false, true]) {
         if (path === "A") scans.push(now);
         return ambiguous ? [4242] : [];
       };
-      // A poll every six seconds, driven entirely by the controlled clock.
       for (now = 0; now <= 204_000; now += 6_000) await windowsHeldPaths(4242, holders, candidates);
-      // Ambiguous results confirm each held path after each scan as well.
       expect([...new Set(scans)]).toEqual([0, 6_000, 18_000, 42_000, 84_000, 144_000, 204_000]);
     } finally { Date.now = realNow; }
   });
@@ -213,7 +204,6 @@ for (const ambiguous of [false, true]) {
       now = 18_000;
       await windowsHeldPaths(4243, holders, candidates);
       expect(calls).toBeGreaterThan(afterChange);
-      // With no directory change, retries remain bounded rather than stopping discovery forever.
       now = 80_000;
       const beforeDeadline = calls;
       await windowsHeldPaths(4242, holders, candidates);
@@ -333,10 +323,8 @@ it("discovers a newly held lock after overlapping callers when TTL expires", asy
   expect(res2).toEqual([lock2]);
   expect(candidateCalls).toBe(1);
 
-  // New lock acquired by pid3:
   activeHolders = { [lock1]: [pid1], [lock2]: [pid2], [lock3]: [pid3] };
 
-  // At +6 seconds, TTL expires: a new scan must run and discover lock3
   const realNow = Date.now;
   try {
     Date.now = () => realNow() + 6_000;
@@ -386,11 +374,6 @@ it("retries and reallocates when RmGetList returns ERROR_MORE_DATA (234) with gr
   expect(callIndex).toBe(3);
 });
 
-/**
- * Answers `pane.process_info` for one lookup, in the order asked; `names` lists pids as Agy.
- * `asked` counts the asks of that lookup: both lookups answer null on any error, one asked too
- * often included, so only the count tells how often herdr was asked.
- */
 function processInfoAnswers() {
   type Answer = () => herdr.ProcessInfo | Promise<herdr.ProcessInfo>;
   let queue: Answer[] = [];
@@ -405,7 +388,6 @@ function processInfoAnswers() {
   return { names, answers: (...next: Answer[]) => { queue = next; asked = 0; }, asked: () => asked, restore: () => spy.mockRestore() };
 }
 
-/** An Agy start screen nothing was typed into yet. */
 const UNUSED_START_SCREEN = [
   "       ▄▀▀▄         Antigravity CLI 1.4.4",
   "      ▀▀▀▀▀▀        user@example.test (Demo plan    )",
@@ -419,11 +401,6 @@ const UNUSED_START_SCREEN = [
   " ? for shortcuts   Gemini 3.8 Flash · high",
 ].join("\n");
 
-/**
- * A stand-in Agy holding the one lock, which says so itself: before its exec, the pid still shows
- * this runtime's descriptors. `first` null starts it with no lock, as an Agy that has begun no
- * conversation. `take` has it leave that lock for `next`, as `/new` does, and answers once it holds it.
- */
 function standInAgy(first: string | null, next: string) {
   const script = `
     const fs = require('node:fs');
@@ -465,15 +442,11 @@ it.skipIf(process.platform === "win32")("answers a store only while the pane sti
     answers(names([agy.pid]), names([agy.pid]));
     expect(await resolveAgyStore(pane)).toMatchObject({ root, session, pid: agy.pid, path: transcript(session) });
     expect(asked()).toBe(2);
-    // The pid herdr named first was another process's by the time its locks were to be read (an exited
-    // Agy's pid, reused): asked again, the pane names a different process, or not this one alone.
     for (const now of [[process.pid], [agy.pid, process.pid], []]) {
       answers(names([agy.pid]), names(now));
       expect(await resolveAgyStore(pane)).toBeNull();
       expect(asked()).toBe(2);
     }
-    // A lookup the first answer settles asks herdr once: a pane with no Agy, or with more than one,
-    // and for the greeting, an Agy started on a conversation.
     for (const first of [[], [agy.pid, process.pid]]) {
       answers(names(first));
       expect(await resolveAgyStore(pane)).toBeNull();
@@ -482,16 +455,12 @@ it.skipIf(process.platform === "win32")("answers a store only while the pane sti
     answers(names([agy.pid], ["agy", "--continue"]));
     expect(await agyFreshSession(pane, UNUSED_START_SCREEN)).toBeNull();
     expect(asked()).toBe(1);
-    // herdr is asked again before the locks are read, so what they then show costs both asks: a
-    // process with no store (this test's own), and for the greeting, one that holds a lock.
     answers(names([process.pid]), names([process.pid]));
     expect(await resolveAgyStore(pane)).toBeNull();
     expect(asked()).toBe(2);
     answers(names([agy.pid]), names([agy.pid]));
     expect(await agyFreshSession(pane, UNUSED_START_SCREEN)).toBeNull();
     expect(asked()).toBe(2);
-    // The locks are the last thing read: an Agy that moved to another conversation while herdr
-    // answered the second time is answered with that one, not the one it left.
     let moved = "";
     answers(names([agy.pid]), async () => {
       moved = await take();
@@ -500,9 +469,6 @@ it.skipIf(process.platform === "win32")("answers a store only while the pane sti
     expect(await resolveAgyStore(pane)).toMatchObject({ root, session: next, pid: agy.pid, path: transcript(next) });
     expect(moved).toBe("moved\n");
     expect(asked()).toBe(2);
-    // The process is gone by the time herdr answers again with its pid: its locks cannot be read, and
-    // the lookup ends there. (A pid another process took by then has locks to read: only the start
-    // identity read after them refuses that one, which the order test below pins on Linux.)
     answers(names([agy.pid]), async () => {
       agy.kill();
       await agy.exited;
@@ -511,7 +477,6 @@ it.skipIf(process.platform === "win32")("answers a store only while the pane sti
     expect(await resolveAgyStore(pane)).toBeNull();
     expect(asked()).toBe(2);
     expect(agy.killed).toBe(true);
-    // And a process whose start identity cannot be read is not asked about again.
     answers(names([agy.pid]));
     expect(await resolveAgyStore(pane)).toBeNull();
     expect(asked()).toBe(1);
@@ -530,25 +495,20 @@ it.skipIf(process.platform === "win32")("greets a fresh Agy only while the pane 
   const lock = join(root, "presence", "00000000-0000-4000-8000-000000000003.lock");
   mkdirSync(join(root, "presence"));
   writeFileSync(lock, "");
-  // a stand-in Agy that holds no lock yet, can take its first one, and can exit
   const { child: idle, says, take } = standInAgy(null, lock);
   const { names, answers, asked, restore } = processInfoAnswers();
   try {
     expect(await says()).toBe("up\n");
-    // this test process holds no presence lock, as an Agy that has begun no conversation
     answers(names([process.pid]), names([process.pid]));
     expect(await agyFreshSession(pane, screen)).toStartWith(`unwritten:agy:agy-pane:${process.pid}:`);
     expect(asked()).toBe(2);
     answers(names([idle.pid]), names([idle.pid]));
     expect(await agyFreshSession(pane, screen)).toStartWith(`unwritten:agy:agy-pane:${idle.pid}:`);
-    // asked again, the pane names another process, or the same pid started on a conversation
     for (const now of [names([process.pid + 1]), names([process.pid], ["agy", "--continue"])]) {
       answers(names([process.pid]), now);
       expect(await agyFreshSession(pane, screen)).toBeNull();
       expect(asked()).toBe(2);
     }
-    // The locks are the last thing read here too: an Agy that took its first lock while herdr answered
-    // the second time has begun a conversation, and is not greeted as one that has not.
     let moved = "";
     answers(names([idle.pid]), async () => {
       moved = await take();
@@ -557,8 +517,6 @@ it.skipIf(process.platform === "win32")("greets a fresh Agy only while the pane 
     expect(await agyFreshSession(pane, screen)).toBeNull();
     expect(moved).toBe("moved\n");
     expect(asked()).toBe(2);
-    // The process is gone by the time herdr answers again with its pid: here too its locks cannot be
-    // read, and the lookup ends there.
     answers(names([idle.pid]), async () => {
       idle.kill();
       await idle.exited;
@@ -567,7 +525,6 @@ it.skipIf(process.platform === "win32")("greets a fresh Agy only while the pane 
     expect(await agyFreshSession(pane, screen)).toBeNull();
     expect(asked()).toBe(2);
     expect(idle.killed).toBe(true);
-    // And a process whose start identity cannot be read is not asked about again, as in resolveAgyStore.
     answers(names([idle.pid]));
     expect(await agyFreshSession(pane, screen)).toBeNull();
     expect(asked()).toBe(1);
@@ -586,8 +543,6 @@ it.skipIf(process.platform !== "linux")("reads a process's locks last, between t
   mkdirSync(join(root, "presence"));
   writeFileSync(lock, "");
   const pane = { pane_id: "agy-pane", agent: "agy" } as HerdrPane;
-  // this test process stands in for the Agy: what a lookup reads of it, in the order it does. `reused`
-  // has the identity read after the locks tell another start, as a pid another process took by then
   const order: string[] = [];
   const steps = ["ask", "identity", "ask", "locks", "identity"];
   let reused = false;
@@ -613,13 +568,9 @@ it.skipIf(process.platform !== "linux")("reads a process's locks last, between t
   const ask = () => { order.push("ask"); return names([process.pid])(); };
   let held: number | null = null;
   try {
-    // it holds no lock yet, as an Agy that has begun no conversation
     answers(ask, ask);
     expect(await agyFreshSession(pane, UNUSED_START_SCREEN)).toStartWith(`unwritten:agy:agy-pane:${process.pid}:`);
     expect(order).toEqual(steps);
-    // The identity read after the locks decides. A pid another process took between herdr's second
-    // answer and the lock read is told by nothing else: herdr named it and its locks were read, yet
-    // with another start there the greeting is refused, every step having been taken.
     reused = true;
     order.length = 0;
     answers(ask, ask);
@@ -631,7 +582,6 @@ it.skipIf(process.platform !== "linux")("reads a process's locks last, between t
     answers(ask, ask);
     expect(await resolveAgyStore(pane)).toMatchObject({ root, session, pid: process.pid });
     expect(order).toEqual(steps);
-    // and so is the store, though the lock that was read names one conversation
     reused = true;
     order.length = 0;
     answers(ask, ask);

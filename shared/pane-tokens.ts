@@ -1,4 +1,14 @@
 /**
+ * herdr plugins attach short text values to a pane (`herdr pane report-metadata --token
+ * name=value`): the Quota plugin's usage left, herdr-projects' summary and progress. herdr's own
+ * sidebar draws one where the user's `[ui.sidebar.agents]` rows name it as `$name`. The web UI's
+ * agent rows follow the `$name` tokens of those rows (server/herdr-sidebar.ts reads them from the
+ * herdr config.toml of the PC the browser talks to, as herdr's sidebar is the client's config,
+ * remote PCs included). Where the config names none they draw every token a pane has, save a blank
+ * or non-text value and a `role` of `background`.
+ */
+
+/**
  * One of a `$name` token's `rules`, kept only for whether it hides the token: the web UI draws
  * every token in its own dim style, so herdr's `fg`, `bold` and `dim` overrides are left out.
  * Each rule has exactly one condition.
@@ -29,8 +39,10 @@ export interface AgentRowTokens {
   by_agent: Record<string, PaneTokenSpec[]>;
 }
 
+/** herdr's rule for a token's name (`report-metadata --token name=value`) */
 export const PANE_TOKEN_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 
+/** a whole finite number, as herdr's `gt` and `lt` read a value: no space, unit, NaN or infinity */
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
@@ -41,6 +53,7 @@ export function isBackgroundRole(value: unknown): boolean {
   return typeof value === "string" && asciiLower(value.trim()) === "background";
 }
 
+/** Whether a rule's condition holds for a token's whole value, as herdr's sidebar tests it. */
 export function paneTokenRuleMatches(rule: PaneTokenRule, value: string): boolean {
   if (rule.gt !== undefined || rule.lt !== undefined) {
     if (!NUMBER.test(value)) return false;
@@ -59,6 +72,7 @@ export function paneTokenSpecs(layout: AgentRowTokens | null, agent: string | nu
   return (layout && agent !== null && Object.hasOwn(layout.by_agent, agent) ? layout.by_agent[agent] : undefined) ?? layout?.rows ?? null;
 }
 
+/** The values are text the row writes as it is, never markup. */
 export function paneTokenValues(layout: AgentRowTokens | null, agent: string | null, tokens: Readonly<Record<string, unknown>> | null | undefined): string[] {
   if (!tokens) return [];
   const valueOf = (name: string): string | null => {

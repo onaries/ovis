@@ -32,7 +32,6 @@ describe("parseOsc52", () => {
   it("drops oversized payloads instead of wedging the clipboard", () => {
     const big = "x".repeat(MAX_OSC52_BYTES + 1);
     expect(parseOsc52(`c;${b64(big)}`)).toBeNull();
-    // exactly at the cap still decodes
     expect(parseOsc52(`c;${b64("y".repeat(MAX_OSC52_BYTES))}`)).toBe("y".repeat(MAX_OSC52_BYTES));
   });
 });

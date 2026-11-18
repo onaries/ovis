@@ -1,3 +1,9 @@
+/**
+ * Font files the user puts in the state folder's `fonts/` (default `~/.config/ovis/fonts/`): the
+ * server lists and serves them, so a phone, which has none of a PC's fonts, can draw the terminal
+ * and the chat in a family typed in Settings (#412). Nothing is fetched from anywhere else.
+ */
+
 export const USER_FONTS_PATH = "/api/fonts";
 
 /** One file of `fonts/`, as GET /api/fonts lists it. */

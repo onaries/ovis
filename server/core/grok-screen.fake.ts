@@ -1,23 +1,14 @@
-/**
- * A working Grok's live screen in the layout Grok 1.0.77 draws (src/lib/fixtures-input-rows/grok-1.0.77, 119 columns),
- * for tests that drive the chat's Send now through a stand-in Grok. grok-queue.test.ts checks that it reads as the
- * recorded screens do.
- */
 export type GrokScreenState = {
   readonly status: string;
   readonly output: readonly string[];
-  /** what is typed in the prompt, a line per row */
   readonly prompt: string;
-  /** the queued messages, top first */
   readonly queue: readonly string[];
-  /** the approval card for a shell command, which replaces the input box */
   readonly card?: boolean;
   readonly minimal?: boolean;
 };
 
 const WIDTH = 113;
 
-/** a queued message as Grok draws its row: its first line, cut with `…`, the rest counted */
 function queuedRow(message: string): string {
   const [first = "", ...rest] = message.split("\n");
   const cut = first.length > 107 ? `${first.slice(0, 107)}…` : first;

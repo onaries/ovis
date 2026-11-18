@@ -13,15 +13,7 @@ import { handlePreferencesRequest, PreferenceStore } from "../server/preferences
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
-
-/**
- * The Agents list's Mute alerts (#1052) on the unmodified app over the demo's fixture transport,
- * with the shared preferences served by the real PreferenceStore (server/preferences.ts) through
- * this script's loopback server, so two tabs are two browsers of one server. Status events are
- * injected into the app's event stream, the tab's Notification and AudioContext are spies, and a
- * control pane's visible status change is the barrier that says an event was handled before a
- * "nothing happened" assertion. No herdr session is opened; every file stays in a temp directory.
- */
+import { pressInSettings, sheetRisen } from "./settings-page.ts";
 
 interface RosterPatch { secondPc?: "connected" | "disconnected" | null; longLabel?: { paneId: string; label: string } | null; empty?: boolean; loading?: boolean }
 declare global {
@@ -54,7 +46,6 @@ function installMuteFixture(): void {
   const fetchDemo = window.fetch;
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-    // the shared document lives in this script's server, as it lives in the web ui server: the demo's own copy is bypassed
     if (url.pathname === "/api/preferences") return fetchDemo("/fixture/preferences", init);
     const response = await fetchDemo(input, init);
     if (url.pathname === "/api/health" && watch) {
@@ -81,11 +72,9 @@ function installMuteFixture(): void {
       Object.defineProperty(this, "onmessage", {
         get: () => (event: MessageEvent<string>) => {
           const body = JSON.parse(event.data);
-          // the demo's own document is not the one shared here: the fixture server's stream stands in for it
           if (body.type === "preferences") return;
           if (body.type === "machines") body.machines = patched(body.machines);
           handlers.get(this)?.(new MessageEvent("message", { data: JSON.stringify(body) }));
-          // as the server's stream opens with the shared document: the latest heard follows the roster
           if (body.type === "machines" && !primed.has(this) && documents.length > 0) {
             primed.add(this);
             handlers.get(this)?.(new MessageEvent("message", { data: JSON.stringify({ type: "preferences", preferences: documents[documents.length - 1] }) }));
@@ -115,7 +104,6 @@ function installMuteFixture(): void {
     state = "running";
     destination = {};
     private readonly started = performance.now();
-    // a clock that runs: a chime that sounds (lib/alertSound.ts) tells the alerts that come while it does
     get currentTime(): number { return (performance.now() - this.started) / 1000; }
     async resume(): Promise<void> {}
     async close(): Promise<void> {}
@@ -140,11 +128,9 @@ function installMuteFixture(): void {
   };
 }
 
-// ---- the fixture server: the demo build, and the shared preferences on the real store ----------
-
-const P = panes.omp;             // "Plan the config file": the pane that is muted
-const CONTROL = panes.web;       // "Guard the export button": its status change is the barrier
-const OPENED = panes.api;        // "Idempotent payments": on screen, so the demo's own finish alerts nothing
+const P = panes.omp;
+const CONTROL = panes.web;
+const OPENED = panes.api;
 const LONG_LABEL = "Rewrite the whole configuration loader so that every environment variable is validated before the service boots";
 const app = mkdtempSync(join(tmpdir(), "herdr-pane-mute-demo-"));
 const stateRoot = mkdtempSync(join(tmpdir(), "herdr-pane-mute-state-"));
@@ -155,7 +141,6 @@ const strip = (document: SharedPreferences): SharedPreferences => {
   const { muted_panes: _muted, ...older } = document;
   return older;
 };
-/** a store of its own: fresh, or over a file from before the mute list existed */
 function openStore(kind: "fresh" | "pre-feature"): void {
   const dir = join(stateRoot, `${kind}-${++stores}`);
   mkdirSync(dir, { recursive: true });
@@ -179,9 +164,6 @@ async function capture(page: Page, theme: string, language: string, state: strin
   const viewport = page.viewportSize()!;
   const file = `pane-mute-${viewport.width}-${theme}${language === "ko" ? "-ko" : ""}-${state}.png`;
   const path = join(evidence, file);
-  // a sheet that just closed or a drawer that just opened is drawn before the shot: two frames, then any finite animation
-  // but an alert's, whose countdown is its life and would outlast it; a closed sheet slides out as a copy in an inert
-  // host at the end of <body> (lib/sheets.ts `leave`), gone once it has slid out
   await page.waitForFunction(() => ![...document.body.children].some((node) => node instanceof HTMLDivElement && node.inert && node.getAttribute("aria-hidden") === "true" && node.childElementCount === 0));
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => {
@@ -191,8 +173,6 @@ async function capture(page: Page, theme: string, language: string, state: strin
   await page.screenshot({ path, animations: "disabled" });
   manifest.push({ file, width: viewport.width, height: viewport.height, scale: viewport.width === 390 ? 3 : 1, theme, language, state, sha256: createHash("sha256").update(readFileSync(path)).digest("hex"), capturedAt: new Date().toISOString() });
 }
-
-// ---- the pages -----------------------------------------------------------------------------------
 
 const row = (page: Page, machineId: string, paneId: string) => page.locator(`.agents-sidebar .agent-item[data-machine="${machineId}"][data-pane="${paneId}"]`);
 const status = (page: Page, machineId: string, paneId: string, value: string) => row(page, machineId, paneId).locator(`.sidebar-status[data-status="${value}"]`);
@@ -206,7 +186,6 @@ async function newContext(browser: Browser, phone: boolean, settings: Record<str
   const context = await browser.newContext(phone ? { ...devices["iPhone 14"], locale: settings["language"] === "ko" ? "ko-KR" : "en-US" } : { viewport: { width: 1440, height: 900 }, locale: "en-US" });
   await context.addInitScript((stored) => {
     localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat", alertsOn: true, alertInput: true, alertDone: "always", alertSound: true, ...stored }));
-    // the muted agent is idle: the one-line list folds it under its resting line, opened on this device as its toggle keeps it
     localStorage.setItem("ovis:agents-resting-open", "1");
   }, settings);
   return context;
@@ -220,7 +199,6 @@ async function openTab(context: BrowserContext, query = ""): Promise<Page> {
   await page.goto(`${url}?pane=${encodeURIComponent(OPENED)}${query}`);
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await row(page, "local", P).waitFor({ state: "attached" });
-  // the shared document arrived: the row menu offers what the server keeps
   await page.waitForFunction(() => window.muteFixture.documents.length > 0);
   // the demo's own turn on the open pane ends 4.5 s after load (site/demo/transport.ts): every count and
   // every capture comes after it, so none races that finish
@@ -229,23 +207,22 @@ async function openTab(context: BrowserContext, query = ""): Promise<Page> {
 }
 const errorsOf = (page: Page): string[] => (page as Page & { fixtureErrors: string[] }).fixtureErrors;
 
-/** the page's own GET, as the app makes it */
 const getPreferences = (page: Page): Promise<SharedPreferences> => page.evaluate(async () => (await fetch("/api/preferences")).json() as Promise<SharedPreferences>);
 
 async function openDrawer(page: Page): Promise<void> {
-  const toggle = page.locator('button[aria-controls="workspace-drawer"]');
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.tap();
+  const drawer = page.locator("#workspace-drawer.is-open");
+  if (await drawer.count() === 0) await page.locator('#drawer-toggle[aria-expanded="false"]').tap();
+  await sheetRisen(page, "#workspace-drawer.is-open");
   const agents = page.locator(".agents-sidebar .agent-section-toggle");
   if (await agents.getAttribute("aria-expanded") !== "true") await agents.tap();
 }
 
-/** opens the row's menu: a right-click on a desktop, the ⋯ and its sheet on a phone */
 async function openMenu(page: Page, phone: boolean, machineId: string, paneId: string): Promise<void> {
   const target = row(page, machineId, paneId);
   if (phone) {
     await openDrawer(page);
     await target.locator(".row-menu-toggle").tap();
-    await page.locator(".row-sheet").waitFor();
+    await sheetRisen(page, ".row-sheet");
   } else {
     await target.locator(".agent-select").click({ button: "right" });
     await page.locator(".row-menu").waitFor();
@@ -264,7 +241,6 @@ async function toggleMute(page: Page, phone: boolean, machineId: string, paneId:
   await page.locator(".row-menu, .row-sheet").waitFor({ state: "detached" });
 }
 
-/** a status frame as the server sends one; `done` is a new finish each time */
 let finishes = 100;
 async function statusFrame(page: Page, machineId: string, paneId: string, agentStatus: "working" | "blocked" | "done" | "idle"): Promise<void> {
   const epoch = await page.evaluate(async () => ((await (await fetch("/api/session")).json()) as { snapshot: { finish_epoch: string } }).snapshot.finish_epoch);
@@ -274,7 +250,6 @@ async function statusFrame(page: Page, machineId: string, paneId: string, agentS
 async function endedFrame(page: Page, machineId: string, paneId: string): Promise<void> {
   await page.evaluate(({ machineId, message }) => window.muteFixture.frame(machineId, message), { machineId, message: { type: "pane-exited", pane_id: paneId } as ServerMessage });
 }
-/** the control pane changes between two statuses that alert nobody; once its cell shows the change, every frame before it was handled */
 let controlWorking = false;
 async function barrier(page: Page): Promise<void> {
   controlWorking = !controlWorking;
@@ -290,14 +265,7 @@ async function quiet(page: Page, label: string): Promise<void> {
   assert.deepEqual(seen, { notifications: [], chimes: 0 }, `${label}: no notification and no chime`);
 }
 
-/**
- * Runs one part of this check. Each part is a browser script of its own, so that the browser lane's
- * workers share the check instead of one of them running all of it: the five behaviour sections
- * (pane-mute-demo-regression.ts), and the captures of every state
- * (pane-mute-captures-demo-regression.ts).
- */
 export async function runPaneMute(part: "behaviour" | "captures"): Promise<void> { try {
-  // the captures part makes nothing but its screenshots: with no folder to write them into, it has nothing to run
   if (part === "captures" && !evidence) { console.log("SKIP the captures of Mute alerts: UI_EVIDENCE_DIR is not set, and this part only writes its captures there"); return; }
   await buildDemoApp(app);
   const index = join(app, "index.html");
@@ -331,15 +299,13 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           send(store.get());
           const unsubscribe = store.subscribe(send);
           const heartbeat = setInterval(() => { try { controller.enqueue(encoder.encode(": heartbeat\n\n")); } catch { stop(); } }, 15_000);
-          stop = () => { clearInterval(heartbeat); unsubscribe(); try { controller.close(); } catch { /* closed already */ } };
+          stop = () => { clearInterval(heartbeat); unsubscribe(); try { controller.close(); } catch {} };
           request.signal.addEventListener("abort", stop, { once: true });
         },
         cancel() { stop(); },
       });
       return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
     }
-    // the brand mark is root-absolute (<img src="/icons/..."> in src/App.tsx); the published demo rewrites it
-    // (scripts/build-site.ts), this server serves it from the build as the web ui server does
     if (!path.startsWith("/herdr-web-ui/demo/app/") && !path.startsWith("/icons/")) return new Response("not found", { status: 404 });
     let file: string;
     try { file = decodeURIComponent(path.startsWith("/icons/") ? path.slice(1) : path.slice("/herdr-web-ui/demo/app/".length)); }
@@ -359,7 +325,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
 
       // the behaviour sections stay together and in this order: the finish and barrier counters run on from one to the next
       if (part === "behaviour") {
-        // ---- a document from before the list, and a fresh one: both offer the first mute ----
         openStore("pre-feature");
         {
           const context = await newContext(browser, false, {});
@@ -370,7 +335,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           assert.equal(await muteItem(page).getAttribute("aria-checked"), "false", "the row menu offers Mute alerts, unchecked");
           await muteItem(page).click();
           const saved = await storeHolds("the first mute", (document) => document.muted_panes?.includes(key) === true);
-          // the first save names the state folder (shared/preferences.ts state_id)
           const { state_id: savedId, ...savedRest } = saved;
           assert.match(savedId ?? "", /^[0-9a-f]{32}$/, "the first save names the state folder");
           assert.deepEqual(savedRest, { revision: 4, settings: {}, pins: [], muted_panes: [key] }, "the first mute is saved over the pre-feature document");
@@ -394,7 +358,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           checks.push("fresh store: GET says muted_panes: [], and the first mute is saved as revision 1");
         }
 
-        // ---- two tabs, four channels ----
         openStore("fresh");
         const context = await newContext(browser, false, {});
         const a = await openTab(context);
@@ -404,16 +367,13 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         await toggleMute(a, false, "local", P);
         const muted = await storeHolds("tab A's mute", (document) => document.muted_panes?.includes(key) === true);
         assert.equal(muted.revision, 1);
-        // tab B hears the revision on its stream and draws the row muted
         await b.waitForFunction((revision) => window.muteFixture.documents.some((document) => document.revision === revision), muted.revision);
         await row(b, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
         await row(a, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
         checks.push("tab B received tab A's mute as preference revision 1 and draws the indicator");
-        // a second PC with the same pane: the mute keys the pane with its PC
         await a.evaluate(() => window.muteFixture.roster({ secondPc: "connected" }));
         await row(a, "pc-2", P).waitFor({ state: "attached" });
         await a.locator(".droplet").waitFor({ state: "detached" });
-        // the muted pane: blocked, done and ended reach the roster and no channel
         await statusFrame(a, "local", P, "working");
         await statusFrame(a, "local", P, "blocked");
         await status(a, "local", P, "blocked").waitFor({ state: "attached" });
@@ -424,7 +384,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         await endedFrame(a, "local", P);
         await quiet(a, "muted pane ended");
         checks.push("local P blocked, done and exited while muted: no droplet, no chime, no notification; its row still shows each status");
-        // the other PC's same-named pane: every channel the visible tab has
         await statusFrame(a, "pc-2", P, "working");
         await statusFrame(a, "pc-2", P, "blocked");
         await droplet(a).waitFor({ state: "visible" });
@@ -442,11 +401,9 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         assert.equal(await a.locator(".droplet").getAttribute("data-kind"), "ended");
         await a.locator(".droplet").waitFor({ state: "detached" });
         let seen = await spies(a);
-        // the three alerts came within one chime's length: the first sounds, and tells the others too
         assert.ok(seen.chimes >= 1, `the other PC's pane chimed: ${JSON.stringify(seen)}`);
         assert.deepEqual(seen.notifications, [], "a visible tab shows no system notification");
         checks.push("pc-2's same-named P: droplets for blocked, done and ended, and chimes, as before");
-        // the hidden tab: the notification channel
         await a.evaluate(() => window.muteFixture.hide(true));
         await statusFrame(a, "local", P, "working");
         await statusFrame(a, "local", P, "blocked");
@@ -463,7 +420,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         assert.equal(seen.notifications[0]!.body, "waiting for your input");
         await a.evaluate(() => window.muteFixture.hide(false));
         checks.push("hidden tab: no notification for muted local P, one for pc-2's P");
-        // an unmute tells only what changes after it
         const chimesBefore = seen.chimes;
         await toggleMute(a, false, "local", P);
         await storeHolds("tab A's unmute", (document) => document.muted_panes?.length === 0);
@@ -479,7 +435,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         await a.waitForFunction((before) => window.muteFixture.spies.oscillators / 2 > before, chimesBefore);
         await a.locator(".droplet").waitFor({ state: "detached" });
         checks.push("after the unmute only a new transition alerts");
-        // a PC that is away, or not in this page's roster at all, keeps its mutes through this page's changes
         const theirs = paneStorageId("pc-2", P);
         await toggleMute(a, false, "pc-2", P);
         await storeHolds("the other PC's mute", (document) => document.muted_panes?.includes(theirs) === true);
@@ -503,9 +458,7 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         checks.push("a PC missing from the roster or away keeps its mute through this page's changes, and shows it again when back");
         await context.close();
 
-        // ---- an older server: no list, no mute offered, none sent ----
         openStore("fresh");
-        // a server that already holds pins: a pin alone is then a change that goes out (lib/preferencesSync.ts)
         fixture.store.set({ settings: {}, pins: [] });
         fixture.old = true;
         {
@@ -514,7 +467,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           assert.equal("muted_panes" in (await getPreferences(page)), false, "the older server's document has no list");
           await openMenu(page, false, "local", P);
           assert.equal(await muteItem(page).count(), 0, "no Mute alerts on an older server");
-          // a change of something else (a pin) goes out without a list
           await page.locator('.row-menu [role="menuitem"]', { hasText: "Pin agent" }).click();
           await storeHolds("the pin", (document) => (document.pins?.length ?? 0) > 0);
           assert.ok(fixture.puts.length > 0 && fixture.puts.every((body) => !("muted_panes" in body)), `no fabricated list was sent: ${JSON.stringify(fixture.puts)}`);
@@ -548,7 +500,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
         fixture.watch = false;
       }
 
-      // ---- the captures: both widths, both themes, Korean on a phone ----
       if (evidence) {
         if (part === "captures") for (const phone of [false, true]) for (const theme of ["dark", "light"]) for (const language of phone ? ["en", "ko"] : ["en"]) {
           if (language === "ko" && theme === "light") continue;
@@ -567,7 +518,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
             await page.mouse.move(0, 0);
             await page.mouse.up();
           } else {
-            // a finger held on the item: the sheet's row fills while pressed (RowMenu.css `:active`)
             const box = (await muteItem(page).boundingBox())!;
             await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
             await page.mouse.down();
@@ -580,7 +530,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           }
           await closeMenu(page);
           if (phone) {
-            // a phone with a keyboard: the arrows walk the sheet's items to the mute item
             await openMenu(page, phone, "local", P);
             for (let step = 0; step < 4 && !await muteItem(page).evaluate((item) => item === document.activeElement); step += 1) await page.keyboard.press("ArrowDown");
             await page.waitForFunction(() => document.activeElement?.matches(".row-sheet-item[aria-pressed]") === true);
@@ -600,7 +549,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           await toggleMute(page, phone, "local", P);
           await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
           if (phone) await openDrawer(page);
-          // the mark is drawn at rest on a phone, and under the pointer on a desktop (the compact rows)
           if (!phone) await row(page, "local", P).hover();
           await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "visible" });
           await capture(page, theme, language, "rest-muted");
@@ -620,32 +568,28 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
             await page.evaluate(() => window.muteFixture.roster({ secondPc: "disconnected" }));
             await row(page, "pc-2", P).and(page.locator(".is-offline")).waitFor({ state: "attached" });
             if (phone) await openDrawer(page);
-            // the offline PC's muted row at the list's bottom edge, with the rest of its rows still below
             await row(page, "pc-2", P).evaluate((item) => item.scrollIntoView({ block: "end" }));
             await capture(page, theme, language, "offline-pc");
             await page.locator(".agents-sidebar .agent-list-contents").evaluate((list) => { list.scrollTop = list.scrollHeight; });
             await capture(page, theme, language, "list-end");
-            // the alert of a pane that is not muted draws as before, over the muted roster
             await page.evaluate(() => window.muteFixture.roster({ secondPc: "connected" }));
             await statusFrame(page, "local", CONTROL, "working");
             await statusFrame(page, "local", CONTROL, "blocked");
             await droplet(page).waitFor({ state: "visible" });
             await capture(page, theme, language, "alert-unmuted-pane");
             await page.locator(".droplet").waitFor({ state: "detached" });
-            // the server cannot save: Settings says so
             fixture.error = true;
             await toggleMute(page, phone, "local", panes.cli);
             await page.keyboard.press("ControlOrMeta+Shift+Comma");
-            await page.locator(".settings-dialog").waitFor();
-            const alerts = page.locator(".settings-dialog").getByRole("tab", { name: "Alerts", exact: true });
-            // tapped on a phone, as a finger does: a mouse click would rest on the row the page draws under it
-            if (await alerts.count() > 0) await (phone ? alerts.tap() : alerts.click());
+            await sheetRisen(page);
+            const settings = page.locator(".settings-dialog");
+            await pressInSettings(settings.getByRole("tab", { name: "Alerts", exact: true }));
+            await settings.getByRole("tabpanel", { name: "Alerts", exact: true }).waitFor();
             await page.locator(".settings-save-error").waitFor({ timeout: 10_000 });
             await capture(page, theme, language, "save-error");
             fixture.error = false;
-            await page.keyboard.press("Escape");
-            await page.locator(".settings-dialog").waitFor({ state: "detached" });
-            // a watching device's menu
+            await pressInSettings(settings.getByRole("button", { name: "Close settings", exact: true }));
+            await settings.waitFor({ state: "detached" });
             fixture.watch = true;
             const watching = await openTab(context, "&mute-fixture=watch");
             await openMenu(watching, phone, "local", P);
@@ -653,7 +597,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
             await closeMenu(watching);
             await watching.close();
             fixture.watch = false;
-            // the roster before it is known, and with nothing in it
             await page.evaluate(() => window.muteFixture.roster({ secondPc: null, loading: true }));
             if (phone) await openDrawer(page);
             await page.locator(".agents-sidebar .agent-empty", { hasText: "Loading" }).waitFor();
@@ -665,8 +608,6 @@ export async function runPaneMute(part: "behaviour" | "captures"): Promise<void>
           assert.deepEqual(errorsOf(page), []);
           await context.close();
         }
-        // each part lists the captures it made, in a file of its own (the serial lane gives both parts one
-        // folder): the behaviour sections made one, of the other PC's alert
         writeFileSync(join(evidence, part === "captures" ? "manifest.json" : `manifest-${part}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
         checks.push(`${manifest.length} captures written to ${evidence}`);
       }

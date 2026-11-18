@@ -2,7 +2,6 @@
   width: min(100%, 520px);
 }
 
-/* opened from Settings only, so above it even where Settings is raised over a file preview (SettingsDialog.css) */
 .modal-scrim:has(> .connect-phone-dialog) {
   z-index: calc(var(--z-modal) + 3);
 }
@@ -22,7 +21,6 @@
   margin: 0;
 }
 
-/* the identity reset is the relay's last and quietest action */
 .connect-phone-reset {
   padding-top: var(--space-2);
   border-top: var(--hairline) solid var(--border);
@@ -41,7 +39,6 @@
   margin: 0;
 }
 
-/* on a phone: this phone's own one-tap relay pairing, then the link for another device under a hairline */
 .connect-phone-self,
 .relay-pairing-phone {
   display: flex;
@@ -89,7 +86,6 @@
   color: var(--text);
 }
 
-/* Add a connection's ways, one tab each across the top, as herdr's Add a machine */
 .connect-tabs {
   align-self: stretch;
 }
@@ -125,7 +121,6 @@
   border-top: var(--hairline) solid var(--border);
 }
 
-/* the PCs a way found: its name, how it is reached, where it was found, then Add, Connect or Added */
 .connect-found {
   display: flex;
   flex-direction: column;
@@ -215,7 +210,6 @@
   align-self: flex-start;
 }
 
-/* the relay tab's QR code behind a press: its own part under the sign-in or the account's line */
 .connect-account-qr,
 .connect-account-qr-notice {
   display: flex;
@@ -228,8 +222,6 @@
   border-top: var(--hairline) solid var(--border);
 }
 
-/* signed in, on a PC in an account whose relay is online: nothing is above it, so no hairline under the tabs, and
-   the sign-in's place holds only what a screen reader hears */
 .connect-account-qr[data-first] {
   padding-top: 0;
   border-top: 0;
@@ -261,7 +253,6 @@
   background: var(--danger-tint);
 }
 
-/* on a phone the address goes under the name, so the name, its source and its button keep one line */
 @media (max-width: 480px) {
   .connect-found-row {
     flex-wrap: wrap;

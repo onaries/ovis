@@ -27,7 +27,6 @@ function draw(node: ReactElement): string {
     else Reflect.deleteProperty(navigator, "languages");
   }
 }
-/** the words drawn in the one element of class `name`, its hidden prefix left out */
 const said = (markup: string, name: string): string | null => {
   const found = new RegExp(`<span class="${name}(?: [^"]*)?">(?:<span class="visually-hidden">[^<]*</span>)?([^<]*)</span>`).exec(markup);
   return found ? found[1]!.replaceAll("&amp;", "&") : null;
@@ -50,7 +49,6 @@ describe("a phone thread's title", () => {
     expect(said(title(thread("w1C:p1")), "thread-state")).toBe("Working");
     expect(said(title(thread("w1E:p1", { activity: statusOf({ "w1E:p1": "done" }) })), "thread-state")).toBe("Done");
     expect(said(title(thread("w1E:p1")), "thread-state")).toBe("Ready");
-    // waiting on background work is working, as the list's filter has it
     expect(said(title(thread("w1E:p1", { activity: statusOf({ "w1E:p1": "waiting" }) })), "thread-state")).toBe("Working");
   });
 
@@ -92,7 +90,6 @@ describe("the zone over a wide thread", () => {
     expect(markup).toContain('class="thread-top"');
     expect(markup.indexOf("test-note")).toBeLessThan(markup.indexOf("thread-chip"));
     expect(markup.indexOf("thread-chip")).toBeLessThan(markup.indexOf("test-control"));
-    // the chip says the thread and is no control: nothing in it can be pressed
     expect(/<div class="thread-chip"[^>]*>(?:(?!<\/div>).)*<button/.test(markup)).toBe(false);
   });
 
@@ -122,11 +119,9 @@ describe("the mode's shell before the app has connected", () => {
   it("is the list's own surface as the screen on a phone: no header, no sidebar, no control, one status line", () => {
     const markup = draw(createElement(InboxConnecting, { wide: false }));
     expect(markup).toMatch(/^<div class="app sidebar-collapsed is-inbox is-inbox-list">/);
-    // nor the wide layout's rail: a phone's list is the screen
     for (const classic of ["app-header", "terminal-placeholder", "brand", "<aside", "<button", "inbox-rail"]) expect(markup).not.toContain(classic);
     expect(markup.match(/class="mode-inbox"/g)).toHaveLength(1);
     expect(markup).toContain('<div class="pane-column"><div class="pane-split"><section class="mode-inbox" aria-label="Agent inbox">');
-    // the line is in the document before its words (lib/useAnnouncedText.ts), where the list's own loading line will be
     expect(markup.match(/role="status"/g)).toHaveLength(1);
     expect(markup).toContain('<div class="inbox-scroll"><p class="visually-hidden" role="status"></p></div>');
   });
@@ -134,7 +129,6 @@ describe("the mode's shell before the app has connected", () => {
   it("is the column beside an empty pane on a wide window, at the width the column will have, its rail an empty surface before the list", () => {
     const markup = draw(createElement(InboxConnecting, { wide: true, sidebarWidth: 360 }));
     expect(markup).toMatch(/^<div class="app is-inbox is-inbox-wide" style="--sidebar-user-w:360px">/);
-    // the rail's surface holds its width so nothing shifts when the list arrives; with no control in it, it is no landmark
     for (const classic of ["app-header", "terminal-placeholder", "brand", "<button", "<nav"]) expect(markup).not.toContain(classic);
     expect(markup).toContain('<aside class="sidebar inbox-column"><div class="inbox-rail"></div><section class="mode-inbox is-wide" aria-label="Agent inbox">');
     expect(markup).toContain('<div class="pane-column"><div class="pane-split"></div></div>');
@@ -148,7 +142,6 @@ describe("the way into the mode at the sidebar's foot", () => {
     expect(markup.match(/<button/g)).toHaveLength(1);
     expect(markup).toContain('class="btn btn-ghost sidebar-footer-action sidebar-footer-pc inbox-foot-entry"');
     expect(markup).toContain('<span class="sidebar-footer-pc-name">Open agent inbox</span>');
-    // one glyph, the inbox's, before its words: no chevron after them, which the Agents row above it starts with
     expect(markup.match(/<svg/g)).toHaveLength(1);
     expect(markup).toMatch(/<svg[^>]*lucide-inbox[^>]*>.*<\/svg><span class="sidebar-footer-pc-name">/s);
     expect(markup).toMatch(/Open agent inbox<\/span><\/button>$/);

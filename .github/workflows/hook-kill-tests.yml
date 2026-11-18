@@ -8,7 +8,6 @@ name: Hook kill tests
 # that is matched by its name must run and report on every pull request, drafts included.
 on:
   pull_request:
-    # the default types, and ready_for_review: a draft opened before this file reached main gets its run when marked ready
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]

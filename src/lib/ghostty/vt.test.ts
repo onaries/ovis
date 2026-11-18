@@ -9,12 +9,10 @@ const Terminal = await patchedTerminal(join(import.meta.dir, "../../.."));
 
 interface Layout { cells: [number, string][]; cursor: number }
 
-/** Each drawn cell's column and grapheme on the first row, and the cursor's column, as libghostty lays out `text`. */
 async function ghosttyLayout(...chunks: string[]): Promise<Layout> {
   return await ghosttyScreen(40, 0, chunks);
 }
 
-/** The same on one row of a `cols`-wide terminal, given in `chunks` with a reset() after the `resetAfter`th (0: none). */
 async function ghosttyScreen(cols: number, resetAfter: number, chunks: string[], row = 0): Promise<Layout> {
   const vt = await GhosttyVt.create(cols, 2);
   try {
@@ -39,7 +37,6 @@ async function ghosttyScreen(cols: number, resetAfter: number, chunks: string[],
   }
 }
 
-/** The same, as xterm counts them with herdr's widths: the grid the cursor, selection and links use. */
 async function xtermLayout(text: string, cols = 40, row = 0): Promise<Layout> {
   const term = new Terminal({ allowProposedApi: true, cols, rows: 2 });
   matchHerdrWidths(term);

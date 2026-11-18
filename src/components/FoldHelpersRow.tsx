@@ -3,7 +3,6 @@ import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { SettingsRow, Toggle } from "./SettingsControls.tsx";
 
-/** Settings → Appearance → Fold helpers under their agent: the Agents list's helpers fold (components/AgentSidebar.tsx, #772). */
 export function FoldHelpersRow() {
   const { settings, update } = useSettings();
   const t = useT();

@@ -65,7 +65,6 @@ case "${1:?setup|register|supervise|stop}" in
       dockerd_up || { sleep 30; continue; }
       # never a job without the firewall
       firewall || { echo "$(date -u +%FT%TZ) firewall could not be applied; no job taken" >> "$LOG"; sleep 30; continue; }
-      # a job container a previous supervisor started finishes first (the name is one per VM)
       sudo -n docker wait ovis-vm-job >/dev/null 2>&1
       started=$SECONDS
       out=$HOME/.ovis-ci/job.out

@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildDemoApp } from "./demo-build.ts";
 
-/** The real client with one inert SSH registration over the demo's own transport. */
 export const MACHINE_CONTROLS_FIXTURE_SCRIPT = String.raw`(() => {
   const demoFetch = window.fetch.bind(window);
   const DemoEventSource = window.EventSource;
@@ -162,7 +161,6 @@ export const MACHINE_CONTROLS_FIXTURE_SCRIPT = String.raw`(() => {
   };
 })();`;
 
-/** Copy the shared production-client build, then install demo transport before this fixture. */
 export async function prepareMachineControlsDemo(app: string): Promise<void> {
   await buildDemoApp(app);
   const index = join(app, "index.html");

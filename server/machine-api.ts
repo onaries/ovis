@@ -49,54 +49,31 @@ const CODE_FAILURES: Record<TypedCodeFailure, [string, number]> = {
  * is still queued, never afterwards, so a stream opening with one does not end at its next frame.
  */
 export const MACHINE_EVENTS_QUEUE_BYTES = 4 * 1024 * 1024;
-/**
- * What every machine events stream together may hold, every queued byte counted, large frames and
- * watching devices included. Past it, the streams that stopped reading are ended, the one holding
- * the most first: a stream whose browser has taken nothing from its queue for MACHINE_EVENTS_STALL_MS.
- * One that reads on is never that, however much it has waiting, and one that has just been sent its
- * roster has not stopped reading either, so neither is ended nor ends another.
- */
 export const MACHINE_EVENTS_TOTAL_BYTES = 32 * 1024 * 1024;
-/** How long a browser may take nothing from a waiting queue before its stream counts as stopped reading. */
 export const MACHINE_EVENTS_STALL_MS = 30_000;
-/**
- * What every stream together may hold even while none has stopped reading yet (browsers opening at
- * once with large rosters): past it a frame is refused and its stream ended, and the browser opens it
- * again. A frame its stream is alone in holding always goes, so one roster larger than this does too.
- */
 export const MACHINE_EVENTS_CEILING_BYTES = 64 * 1024 * 1024;
-/** When a browser last took from its queue is read from this; tests move it on instead of waiting. */
 export const machineEventsClock = {
   now: (): number => performance.now(),
   heartbeat: (send: () => void): ReturnType<typeof setInterval> => setInterval(send, 15_000),
 };
 
-/** Relay source queues share the channel's bounded payload budget, without the large-roster exception. */
 export interface EventStreamBudget {
   reserve(bytes: number): boolean;
   release(bytes: number): void;
 }
 
-/**
- * `told`: what the stream held when it was last written to; a queue only shrinks between writes, so it
- * is never less. `taken`: every byte its browser has taken so far; `movedAt`: when that was last seen
- * to grow, or the queue to be empty.
- */
 interface EventsQueue { queued: () => number; taken: () => number; drop: () => void; told: number; seenTaken: number; movedAt: number }
-/** Notes whether the browser has taken anything since it was last looked at: reading on, however slowly, is no stall. */
 const observe = (queue: EventsQueue, now: number): void => {
   const taken = queue.taken();
   if (taken !== queue.seenTaken || queue.queued() === 0) { queue.seenTaken = taken; queue.movedAt = now; }
 };
 const eventsQueues = new Set<EventsQueue>();
-/** The sum of every stream's `told`: never less than what all of them hold, so the total is counted exactly only near it. */
 let toldTotal = 0;
 const forgetQueue = (queue: EventsQueue): void => {
   if (!eventsQueues.delete(queue)) return;
   toldTotal -= queue.told;
   queue.told = 0;
 };
-/** Bytes waiting in every open machine events stream. */
 export const machineEventsQueuedBytes = (): number => {
   let total = 0;
   for (const queue of eventsQueues) total += queue.queued();
@@ -119,12 +96,6 @@ export const nonCanonicalPath = (pathname: string): boolean => pathname.includes
 export const MACHINE_PROXY_PATH = /^(?:session|sessions\/(?:history|resume)|agents|agent-catalog(?:\/(?:install|sign-in))?|integrations|system|usage\/statusline|pane\/(?:read|scroll|find|selection|conversation(?:\/image|\/tool-output)?|summary|commands|files|docs|omo-tasks|background-agent|plan|artifacts|btw|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|move|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file|diff\/repositories|diff\/refs|git\/log|git\/branches|git\/show|pr|pr\/log|pr\/merge)|worktree\/(?:create|list|inventory|open|remove)|tab\/(?:create|rename|close|move|move-to-workspace)|layout\/ratio|agent\/(?:rename|commands)|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon|text))$/;
 
 
-/**
- * A PC that could not be reached. A timed-out or aborted call is not a broken connection:
- * the PC is there and the answer did not come in time (or the client gave up first), so it
- * says so, and the cause is logged either way — the cause is the only thing that tells a
- * slow PC from an offline one.
- */
 function transportFailure(id: string, path: string, error: unknown): Response {
   const timedOut = error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
   console.error(`machine proxy ${id}${path}: ${timedOut ? "timed out" : "unreachable"}: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
@@ -202,7 +173,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       let queue: EventsQueue | undefined;
       let charged = 0;
       let accountTaken = () => {};
-      // the browser went away: what still waits for it is dropped, not kept for a reader that is gone
       const aborted = () => drop();
       const cleanup = () => {
         stop?.(); unwatchDevice?.(); clearInterval(heartbeat);
@@ -228,7 +198,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
             relayBudget.release(charged - remaining);
             charged = remaining;
           };
-          // frames larger than the bound, by where they end in the stream: each counts only until it has left the queue
           let written = 0;
           const large: { end: number; bytes: number }[] = [];
           const largeQueued = (): number => {
@@ -253,13 +222,9 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
             const now = machineEventsClock.now();
             retell();
             observe(own, now);
-            // the backlog this frame adds beyond the one large frame a stream may hold: all of a small frame, of a
-            // large one what the large one already waiting leaves uncovered (none when it is the first)
             const counted = bytes.byteLength > MACHINE_EVENTS_QUEUE_BYTES ? Math.min(bytes.byteLength, largeQueued()) : bytes.byteLength;
             if (own.told - largeQueued() + counted > MACHINE_EVENTS_QUEUE_BYTES) { drop(); return; }
             if (toldTotal + bytes.byteLength > MACHINE_EVENTS_TOTAL_BYTES) {
-              // perhaps over the total: count every stream exactly, then end those that stopped reading, the one
-              // holding the most first, this one too if it is that one
               toldTotal = 0;
               for (const other of eventsQueues) { other.told = other.queued(); toldTotal += other.told; observe(other, now); }
               while (toldTotal + bytes.byteLength > MACHINE_EVENTS_TOTAL_BYTES) {
@@ -269,7 +234,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
                 most.drop();
                 if (most === own) return;
               }
-              // still past the ceiling with no stopped reader left to end: refused, unless this stream is alone in holding any
               if (toldTotal + bytes.byteLength > MACHINE_EVENTS_CEILING_BYTES && toldTotal - own.told > 0) { drop(); return; }
             }
             try { controller.enqueue(bytes); } catch { drop(); return; }
@@ -331,17 +295,16 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         catch (error) { return refused(error); }
       }
       if (parts[2] === "pair") {
-        // one line when the digits are known, then one with the PC added or why not; closing the request cancels it
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
-            const line = (value: unknown): void => { try { controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`)); } catch { /* the window left */ } };
+            const line = (value: unknown): void => { try { controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`)); } catch {} };
             void manager.pairAccountPc(body.ticket, (digits) => line({ digits }), request.signal)
               .then((machine) => line({ machine }), (error: unknown) => {
                 if (error instanceof AccountPcError) line({ error: { code: `account_pc_${error.failure}`, message: error.message } });
                 else line({ error: { code: "internal_error", message: error instanceof Error ? error.message : String(error) } });
               })
-              .finally(() => { try { controller.close(); } catch { /* already closed */ } });
+              .finally(() => { try { controller.close(); } catch {} });
           },
         });
         return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-store", "x-accel-buffering": "no" } });
@@ -452,19 +415,16 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       if (!isJsonObject(body) || shown !== undefined && typeof shown !== "string") return fail("invalid_body", "Expected nothing, or { revision } of the offer shown", 400);
       try { return jsonResponse(manager.update(id, shown as string | undefined) satisfies PcUpdateStarted, 202); }
       catch (error) {
-        // one that cannot run now, whatever stopped it, is told the same way (docs/remote-pcs.md)
         if (error instanceof PcUpdateRefused || error instanceof MachineActionRequired) return fail("update_unavailable", error.message, 409);
         throw error;
       }
     }
     if (parts.length === 2 && parts[1] === "update-bridge" && request.method === "POST") {
       setRequestRoute("/api/machines/:machine_id/update-bridge");
-      // the release the card showed, when the client names it; otherwise the PC's last read offer (MachineManager.updateBridge)
       const text = await request.text();
       const body: unknown = text.trim() === "" ? {} : (() => { try { return JSON.parse(text); } catch { return null; } })();
       const shown = isJsonObject(body) ? body.revision : undefined;
       if (!isJsonObject(body) || shown !== undefined && typeof shown !== "string") return fail("invalid_body", "Expected nothing, or { revision } of the offer shown", 400);
-      // its address and those of the running jobs, resolved first, as for a setup
       await manager.resolveFor({ machine_id: id });
       return jsonResponse(manager.updateBridge(id, false, shown as string | undefined), 202);
     }
@@ -495,7 +455,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       if (readOnly && !["GET", "HEAD", "OPTIONS"].includes(request.method)) return fail("read_only", "this device can only watch", 403);
       const endpoint = manager.endpoint(id);
       if (!endpoint) {
-        // a chat opened while the PC waits to reconnect asks it to try now, not after its delay
         manager.retryNow(id);
         return fail("machine_offline", "This PC is disconnected", 503);
       }
@@ -504,7 +463,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       const headers = new Headers({ authorization: `Bearer ${endpoint.token}` });
       const contentType = request.headers.get("content-type");
       if (contentType) headers.set("content-type", contentType);
-      // a remote conversation answers 304 when unchanged, as a local one does
       const ifNoneMatch = request.headers.get("if-none-match");
       if (ifNoneMatch) headers.set("if-none-match", ifNoneMatch);
       // what that PC asks of a move from its own page; this server's own guards already passed it here
@@ -546,17 +504,13 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // nor has it the PC run its shell profile again: the PC sees this server's full token, not the watch
       if (readOnly && path === "agent-catalog") target.searchParams.delete("recheck");
       const untrack = manager.trackTerminal(id, () => abort.abort());
-      // a move's PC reads its roster again once the move is confirmed, so its receipt is soon shown
       const moved = path === "workspace/move" && request.method === "POST" ? manager.refreshAfterMove(id) : null;
       try {
         const response = await fetch(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(path === "runtime/move/install" ? 200_000 : slowMachinePath(path) ? 165_000 : 75_000)]) });
         if (moved && response.ok) moved();
-        // a start, cancel or stop shows on the PC's badge soon, not at its next slow read
         if (movePath && request.method !== "GET" && response.ok) manager.moveOfferSoon(id);
         const etag = response.headers.get("etag");
-        // that PC's clock as it answered a conversation read, a 304 too (src/lib/sentWaiting.ts)
         const serverTime = response.headers.get("x-server-time");
-        // a PC's "try again in a moment" (a 503 file_busy: its file threads or a commands scan were busy)
         const retryAfter = response.status === 503 ? response.headers.get("retry-after") : null;
         // held whole before it is passed on (and parsed, for a watcher's prompt), so only up to a size
         let body: Uint8Array<ArrayBuffer> | null = response.status === 304 ? null : await readCapped(response, watchedPrompt ? REMOTE_LIMITS.watchedPrompt : REMOTE_LIMITS.proxy);

@@ -1630,7 +1630,6 @@
   --chat-w: 72rem;
 }
 
-/* the whole pane: each column keeps its own gutter */
 [data-chat-width="full"] {
   --chat-w: 100%;
 }
@@ -1676,8 +1675,6 @@
   }
 }
 
-/* ---------- reset + base ---------- */
-
 * {
   box-sizing: border-box;
 }
@@ -1722,10 +1719,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* index.html's loading status, drawn until React's first frame replaces it (#2329): on a slow
-   link the app's script takes seconds, and a page with nothing on it looks frozen. It shows only
-   after a moment, so a fast start does not flash it (scripts/boot-loading-demo-regression.ts holds
-   that contract). Its words are drawn, not only read out, under the ring, in a generic family no
+/* Its words are drawn, not only read out, under the ring, in a generic family no
    @font-face backs: the app's faces would otherwise download beside the app's script, on the link
    the spinner is waiting for. */
 .boot {
@@ -1777,8 +1771,6 @@ body {
   }
 }
 
-/* ---------- line breaking ---------- */
-
 /* The UI language is <html lang> (lib/settings.ts applyToDocument). Set on body alone so that every
    text inherits it once and no descendant sets it again: Korean keeps each word whole (keep-all
    breaks at spaces and punctuation only, never "시도하 / 세요."), Japanese and Chinese take strict
@@ -1792,16 +1784,12 @@ html:is(:lang(ja), :lang(zh)) body {
 }
 
 /* Code, keys, the terminal and the two text boxes keep the browser's breaking, and their children
-   inherit this reset: a path or a command is not a word, and xterm lays out its own cells.
-   overflow-wrap is not part of this rule; the chat's and the composer's own rules keep it. */
+   inherit this reset: a path or a command is not a word, and xterm lays out its own cells. */
 :is(pre, code, kbd, samp, .xterm, .composer-text, .composer-measure, .terminal-input-text) {
   word-break: normal;
   line-break: auto;
 }
 
-/* The two boxes' placeholders are interface copy, not typed text: Korean keeps their words whole
-   too ("넣지 않습니다", never "넣지 않 / 습니다"). The pseudo-element alone takes keep-all, so the
-   terminal's input line and the code and terminal subtrees keep the reset above. */
 html:lang(ko) :is(.composer-text, .composer-measure, .terminal-input-text)::placeholder {
   word-break: keep-all;
 }
@@ -1814,15 +1802,12 @@ html:lang(ko) :is(.composer-text, .composer-measure) {
   word-break: keep-all;
 }
 
-/* A failure's folded line quotes what the PC or the browser said (lib/userError.ts): a sentence,
-   often a translated one, so it takes the interface face. The mono stack has no Hangul: Korean set
+/* The mono stack has no Hangul: Korean set
    in it gets a letter-wide space between words and a period set off from its word. */
 :is([role="alert"], .composer-note-text, .composer-note-details, .chat-failure-details) > code {
   font-family: var(--font-ui);
 }
 
-/* A title that wraps takes even lines, never a full line over a one-word stub: dialog titles, the
-   empty chat's greeting and a Settings group's caption. */
 .modal-title,
 .composer-greeting-title,
 .settings-section h3 {
@@ -1839,8 +1824,6 @@ button {
   outline-offset: var(--ring-offset);
 }
 
-/* only dots pulse (connection, RUN, "Working…"): state words stay at full contrast, so the
-   trough can go deep enough to read as motion */
 @keyframes pulse {
   0%,
   100% {
@@ -1851,7 +1834,6 @@ button {
   }
 }
 
-/* read by assistive tech, not drawn: a live status that would repeat what a dot shows */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1864,11 +1846,7 @@ button {
   border: 0;
 }
 
-/* ---------- shell ---------- */
-
 .app {
-  /* the sidebar column's width: the one the user dragged its edge to (--sidebar-user-w, written
-     by App), else the density's; never more than half the window */
   --sidebar-shown-w: min(var(--sidebar-user-w, var(--sidebar-w)), 50vw);
   /* the docked file panel's width (FileViewer.css): the one its edge was dragged to (--file-panel-user-w,
      written by App), else min(42vw, 560px). The panel yields first to leave 320px for the pane. */
@@ -1902,7 +1880,6 @@ button {
 }
 
 .sidebar {
-  /* positioned for its resize grip (SidebarResizer.css) */
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1943,7 +1920,6 @@ button {
   display: none;
 }
 
-/* the pane and, over it, its workspace's tab strip when there is more than one pane to pick */
 .pane-column {
   display: flex;
   flex: 1 1 auto;
@@ -1952,7 +1928,6 @@ button {
   min-height: 0;
 }
 
-/* a refusal of a palette layout call, over the pane for a moment: the tab strip's own line, with no strip to sit at the end of */
 .pane-notice {
   flex: 0 0 auto;
   margin: 0;
@@ -1968,15 +1943,10 @@ button {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* the terminal's own colour, not the panel's: a palette may set the two apart (catppuccin),
-     and the rows the grid leaves over must not show as a band of another colour */
   background: var(--term-bg);
   padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
-/* the pane area: one pane, or several side by side and stacked (lib/split.ts). Each slot has its
-   own tab strip and terminal; split, every slot is placed at the share of the area its layout gives
-   it (App's style), and keeps its element, and its terminals, wherever the layout moves it */
 .pane-split {
   position: relative;
   display: flex;
@@ -2005,7 +1975,6 @@ button {
   border-bottom: var(--hairline) solid var(--border-strong);
 }
 
-/* a boundary between slots with rows and columns (SplitDividers): a band to the pointer, a line to the eye */
 .pane-split-divider {
   position: absolute;
   z-index: 1;
@@ -2036,9 +2005,6 @@ button {
   outline: none;
 }
 
-/* a half's close sits at the end of its tab strip (TabStrip.css); a half with no strip (its pane
-   gone, or crashed) keeps it in a bar of its own. The active half's row carries the accent, as
-   the pane the header, the palette and the shortcuts act on */
 .pane-slot-bar {
   display: flex;
   flex: none;
@@ -2073,7 +2039,6 @@ button {
   white-space: nowrap;
 }
 
-/* the half's grip: the free end of its row, which drags its pane to a half (App), with its close */
 .pane-slot-grip {
   display: flex;
   align-items: center;
@@ -2099,7 +2064,6 @@ button {
   height: 14px;
 }
 
-/* the inactive half is a step quieter, so the one keys go to reads at a glance */
 .pane-slot.is-inactive .terminal-host {
   opacity: 0.88;
 }
@@ -2110,12 +2074,9 @@ button {
   padding-bottom: 0;
 }
 
-/* the tab strip's panel inside .terminal-host: a role for screen readers, no box of its own */
 .terminal-tabpanel {
   display: contents;
 }
-
-/* ---------- header ---------- */
 
 .brand {
   display: inline-flex;
@@ -2137,10 +2098,6 @@ button {
   height: var(--mark-size);
 }
 
-/* The selected pane on one line: mark and title, then PC › workspace › folder. The title may
-   shorten; the crumb may not: when it does not fit whole beside a whole title it wraps to a second
-   line that the height clips, so it is all there or gone, and the title has the row. The full
-   location is in the tooltip and at the top of the More menu. */
 .context {
   --context-line: calc(var(--fs-lg) * var(--lh-base));
   display: flex;
@@ -2152,7 +2109,6 @@ button {
   flex: 1 1 auto;
   min-width: 0;
   max-height: var(--context-line);
-  /* the title never touches the lens switch */
   margin-right: var(--space-1);
   overflow: hidden;
   line-height: var(--lh-tight);
@@ -2165,8 +2121,6 @@ button {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  /* the first line is as tall as the box that clips the second: the title sits the same with
-     the crumb beside it or gone */
   min-height: var(--context-line);
   font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
@@ -2182,8 +2136,6 @@ button {
   flex: none;
 }
 
-/* the header note's sentence (.header-note-text, App.tsx) is cut like the title it stands in for; its
-   own class keeps .context-title-text on the pane title alone (the browser checks measure it) */
 .context-title-text,
 .header-note-text {
   min-width: 0;
@@ -2208,16 +2160,11 @@ button {
   white-space: nowrap;
 }
 
-/* a watching device on a phone (App.tsx, G-004): the crumb line leads with View only where the status
-   bar would say it, set apart from the place after it as the status bar's pill is */
 .context-watch {
   color: var(--text-strong);
   font-weight: var(--fw-medium);
 }
 
-/* the chat's session totals after the crumb (lib/sessionStats.ts): an item of its own, so it wraps out
-   of sight first, whole or not at all like the crumb. A phone's header line is the title's: there the
-   More menu says them */
 .context-session {
   gap: var(--space-2);
 }
@@ -2239,22 +2186,16 @@ button {
   }
 }
 
-/* the PC's name is whole in the crumb, like the rest of it: the crumb fits or is not drawn.
-   Its cap (Machines.css) is for the header with no pane, where it sits beside the brand. */
 .context-sub .machine-context-name {
   max-width: none;
   overflow: visible;
 }
 
-/* the connection said in the crumb's place (App.tsx, lib/headerConnection.ts): it shares the title's
-   line instead of wrapping out of sight, the title giving it room, so a phone reads it too and the
-   header keeps its height. A word swapped in place, never animated. */
 .context.has-connection,
 .context:has(.context-watch) {
   flex-wrap: nowrap;
 }
 
-/* a larger text size or a narrow window may not fit the word: it shortens, it is never cut off unseen */
 .context-connection {
   flex-shrink: 1;
   min-width: 0;
@@ -2276,10 +2217,6 @@ button {
   color: var(--status-done);
 }
 
-/* a phone has no room for both on one line: the word goes under the title, as a messenger's header
-   says it under a chat's name, both lines inside the header's height. A watching phone (G-004) says
-   View only on that line the same way: the crumb, which a phone otherwise wraps out of sight, takes
-   the connection word's place under the title, one line that ends in an ellipsis */
 @media (max-width: 768px) {
   .context.has-connection,
   .context.has-connection.has-tabs,
@@ -2311,8 +2248,6 @@ button {
   }
 }
 
-/* the workspace-list toggle and the palette: in the bar below 769px and beside a collapsed
-   sidebar, the sidebar's own top row otherwise (further down) */
 .header-side {
   display: contents;
 }
@@ -2326,8 +2261,6 @@ button {
   font-size: var(--fs-xs);
 }
 
-/* the lens switch (App.tsx): both lenses, the open one on a thumb that slides between them, as
-   Apple's segmented control. Both mode labels share the UI sans face. */
 .view-switch {
   position: relative;
   display: inline-grid;
@@ -2435,8 +2368,6 @@ button {
   justify-content: center;
 }
 
-/* a phone: the two glyphs in a bordered control as tall as the density's --control-h, so it keeps
-   clear of the bar's edges; each option is a thumb's width and height while the track stays compact */
 @media (max-width: 768px) {
   .view-switch {
     height: var(--control-h);
@@ -2464,15 +2395,13 @@ button {
   }
 }
 
-/* the Ovis wordmark at the head of the sidebar (App.tsx SidebarBrand), the theme's own pair */
 .sidebar-brand img {
   display: block;
   width: auto;
   height: var(--space-5);
 }
 
-/* the wordmark as the way into the inbox mode: a plain button around it, filled as an icon button is under a
-   hovering pointer and a press; a button, so the installed app's title-bar drag region gives it the click */
+/* a button, so the installed app's title-bar drag region gives it the click */
 .sidebar-brand.is-entry {
   padding: var(--space-half) var(--space-1);
   margin-left: calc(-1 * var(--space-1));
@@ -2489,7 +2418,6 @@ button {
   }
 }
 
-/* under a finger (a tablet from 769px) as tall as the header's icon buttons there; a mouse keeps the slim one */
 @media (pointer: coarse) {
   .sidebar-brand.is-entry {
     min-height: var(--touch-target);
@@ -2500,8 +2428,6 @@ button {
   background: var(--bg-elevated);
 }
 
-/* the pane's tools at the end of the header's row: Chat/Terminal, Files (and More beside them) as
-   compact pills, as a browser keeps its actions apart from its tabs */
 .header-text-button {
   display: inline-flex;
   align-items: center;
@@ -2569,7 +2495,6 @@ button {
   border-radius: var(--radius-pill);
 }
 
-/* a note (herdr's prefix, a copied link) beside the row takes its own width; the tabs give way */
 .app-header.has-tab-row > .context,
 .app-header.has-phone-tabs > .context {
   flex: 0 1 auto;
@@ -2596,8 +2521,6 @@ button {
   background: var(--strip-bg);
 }
 
-/* no tab is drawn narrower than its name and close need (lib/tabOverflow.ts TAB_MIN_WIDTH): the ones
-   that do not fit wait behind the More button after the + (TabStrip) */
 .header-tabs .tab-strip-item {
   position: relative;
   align-items: center;
@@ -2651,6 +2574,16 @@ button {
   padding: 0 var(--space-2);
 }
 
+/* one pane of a split at a time: the open tab is named for its pane, whose name can be long; the
+   tab's place and its ⋯ stay in view before the row's + */
+@media (max-width: 768px) {
+  .pane-slot .tab-strip-label {
+    max-width: min(var(--tab-max-w), 40vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 .header-tabs .tab-strip-label {
   min-width: 0;
   overflow: hidden;
@@ -2663,8 +2596,6 @@ button {
   color: var(--text-dim);
 }
 
-/* the agent's state after its name, beside the open tab's close, as the Herdr app's tab draws it: a
-   working one's small turning ring, a waiting or finished one's dot */
 .header-tabs .tab-strip-agent { order: 0; }
 .header-tabs .tab-strip-label { order: 1; }
 
@@ -2772,8 +2703,6 @@ button {
   height: 14px;
 }
 
-/* a touch screen wide enough for the header's row (a tablet): each tab is a finger tall, and its menu,
-   its close and the + a finger's size */
 @media (pointer: coarse) {
   .header-tabs .tab-strip-item {
     height: 44px;
@@ -2791,9 +2720,6 @@ button {
   }
 }
 
-
-/* how this device reaches Ovis (components/ConnectionRouteMark.tsx): a quiet glyph and a short word,
-   always there, never a button and never wrapped */
 .conn-route {
   display: inline-flex;
   align-items: center;
@@ -2809,8 +2735,6 @@ button {
   height: 14px;
 }
 
-/* the selected tab's place in its workspace's strip (App.tsx): after the title, quieter than it, and
-   kept whole while the title shortens */
 .context-position {
   flex: 0 0 auto;
   font-size: var(--fs-xs);
@@ -2902,7 +2826,6 @@ button {
   border-radius: var(--radius-sm);
 }
 
-/* the ring goes round the whole target, inside the header's clipped box */
 .context-tabs:focus-visible {
   outline: none;
 }
@@ -2922,8 +2845,6 @@ button {
   }
 }
 
-/* one chip for the connection, drawn only while the bridge is not live; the herdr version lives
-   in its tooltip and in Settings */
 .conn {
   position: relative;
   display: inline-flex;
@@ -2974,10 +2895,6 @@ button {
   background: var(--status-reconnecting);
 }
 
-/* The title area or the status bar says the connection in words (.context-connection, App.tsx): the
-   chip is then heard, not seen. It leaves the flow like the live chip, so the lens switch and Files
-   hold their place while reconnecting (G-144), and stays a status a screen reader reads; its dot
-   does not pulse where nothing shows it. */
 .conn.conn-quiet {
   position: absolute;
   width: 1px;
@@ -2992,10 +2909,6 @@ button {
   animation: none;
 }
 
-/* A narrow window whose title does not say the connection (a header note stands in the crumb's place,
-   or there is no crumb): the chip keeps its pulsing dot and gives its word's room to the pane title.
-   The word stays for a screen reader and in the chip's title. A header whose row is the tabs has no
-   title to say it, so its chip keeps the word. */
 @media (max-width: 900px) {
   .app-header:not(.has-tab-row) .conn-reconnecting {
     gap: 0;
@@ -3011,15 +2924,11 @@ button {
   }
 }
 
-/* New tab, Browse files and Alerts are one menu's items (RowMenu, through its portal) */
 .header-more {
   position: relative;
   display: inline-flex;
 }
 
-/* alerts are off on this device: the one state of the menu worth a glance. The button's name
-   and the Alerts item say it in words. */
-/* a session waiting where no tab row carries the sessions' pill (App.tsx): More's first item opens it */
 .header-more-dot.is-waiting {
   background: var(--status-blocked);
 }
@@ -3035,10 +2944,6 @@ button {
   pointer-events: none;
 }
 
-/* the waiting dot says how many (App.tsx data-count, G-015): the numeral widens the dot into a pill
-   from the dot's own corner, so the button, its glyph and the dot's place stay; the ink is the
-   panel's paper, which every palette's blocked colour clears as an indicator (themes.contrast.test.ts)
-   and the pill's line box scales with the type, not a fixed height */
 .header-more-dot.is-waiting[data-count]::after {
   content: attr(data-count);
   position: absolute;
@@ -3058,9 +2963,6 @@ button {
   font-variant-numeric: var(--font-numeric);
 }
 
-/* the menu's first thing, two lines on purpose: "PC › workspace", then the whole path in the
-   mono face. It is where a touch screen reads the path. A path longer than six lines scrolls
-   here, so the items under it stay on the screen. */
 .header-more-crumb {
   display: flex;
   flex-direction: column;
@@ -3088,19 +2990,13 @@ button {
   user-select: text;
 }
 
-/* the selected chat's totals and goal under the path (lib/sessionStats.ts), at every width */
 .header-more-session {
   display: flex;
   flex-direction: column;
   margin-top: var(--space-1);
 }
 
-/* From 769px the header is two zones. Over the sidebar, the sidebar's own top row (its toggle
-   and the palette) on the sidebar's surface, the seam between sidebar and pane running to the
-   top of the window. Over the pane, the pane's surface: under the chat lens no bar and no rule,
-   the transcript scrolls under a short fade (ChatView.css); under the terminal lens the
-   terminal's colour and the rule. A collapsed sidebar leaves one bar. A phone keeps the
-   --bg-panel bar and its rule: the installed app's theme-color matches it. */
+/* A phone keeps the --bg-panel bar and its rule: the installed app's theme-color matches it. */
 @media (min-width: 769px) {
   .app-header.is-zoned {
     background: var(--term-bg);
@@ -3115,9 +3011,6 @@ button {
     padding-left: 0;
   }
 
-  /* stretched over the header's top inset and its bottom rule, so the sidebar's surface is
-     one piece from the window's top down; padded by both, so its buttons stay centred on the
-     header's other controls */
   .app:not(.sidebar-collapsed) .header-side {
     display: flex;
     flex: 0 0 var(--sidebar-shown-w);
@@ -3189,8 +3082,6 @@ button {
   }
 }
 
-/* ---------- primitives ---------- */
-
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -3244,8 +3135,6 @@ button {
   display: none;
 }
 
-/* the open drawer's named way out where the X was (App.tsx markInDrawer): read by a screen reader, drawn as a button
-   only while the keyboard is on it */
 .drawer-close:focus-visible {
   position: static;
   display: flex;
@@ -3262,7 +3151,6 @@ button {
   color: var(--text-strong);
 }
 
-/* text buttons: .btn (neutral), .btn-primary, .btn-danger, .btn-ghost */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -3277,7 +3165,7 @@ button {
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   white-space: nowrap;
-  text-decoration: none; /* a link styled as a button (Reconnect, Star on GitHub) */
+  text-decoration: none;
   cursor: pointer;
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -3321,8 +3209,6 @@ button {
   color: var(--danger-text);
 }
 
-/* hovered, a danger button keeps its tint and border: the neutral hover fill above would read as
-   the risk going away. Its border draws twice as thick instead, so the pointer still shows */
 @media (hover: hover) {
   .btn-danger:hover:not(:disabled) {
     background: var(--danger-tint);
@@ -3363,13 +3249,10 @@ button {
   background: var(--danger-tint);
 }
 
-/* a pill that carries a sentence (the header's link and copy notes): the interface face, for the
-   same reason as a failure's detail line above */
 .header-note {
   font-family: var(--font-ui);
 }
 
-/* a lens that is on its way: inside a segmented button, so it stays small */
 .pill-soon {
   height: auto;
   padding: 0 var(--space-1);
@@ -3380,7 +3263,6 @@ button {
   text-transform: uppercase;
 }
 
-/* status badge: tinted background + text, the state readable as a word */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -3437,13 +3319,11 @@ button {
   background: var(--status-done-tint);
 }
 
-/* BG: the turn ended on work still running in the background. The working colours, holding still */
 .badge-waiting {
   color: var(--status-working);
   background: var(--status-working-tint);
 }
 
-/* unknown keeps the dim text color (contrast) and is told apart by the dashed edge */
 .badge-unknown {
   color: var(--text-dim);
   border-color: var(--border);
@@ -3468,7 +3348,7 @@ button {
 .segmented > button {
   display: inline-flex;
   align-items: center;
-  justify-content: center; /* a min-width wider than the glyph keeps it in the middle */
+  justify-content: center;
   gap: var(--space-1);
   white-space: nowrap; /* Hangul/CJK may break between any two syllables: keep a label on one line */
   height: calc(var(--control-h) - var(--segmented-inset));
@@ -3497,12 +3377,10 @@ button {
   box-shadow: var(--segmented-chosen-shadow);
 }
 
-/* the chosen lens carries the selection color on its glyph, like the rail does in the list */
 .segmented > button[aria-pressed="true"] svg {
   color: var(--accent);
 }
 
-/* keyboard key hint */
 .kbd {
   display: inline-flex;
   align-items: center;
@@ -3518,7 +3396,7 @@ button {
   line-height: 1;
 }
 
-/* modal dialog: scrim + centered card; mobile: bottom sheet. The card keeps clear of the screen's
+/* The card keeps clear of the screen's
    safe-area insets too: a landscape phone puts its notch on the left or right and its home
    indicator below, where a card filling the scrim (Settings) would otherwise reach */
 .modal-scrim {
@@ -3601,10 +3479,6 @@ button {
   }
 }
 
-/* A phone's sheet moves as an iPhone's does: it rises from the bottom edge over a scrim that
-   darkens with it, follows a finger dragged down, and drops back down however it was closed.
-   lib/sheets.ts drives the drag and puts a closed sheet's last frame back for .is-leaving.
-   Every surface on a .modal-scrim is a sheet here: the dialogs, the palette, the row sheet. */
 @media (max-width: 640px) {
   .modal-scrim {
     animation: scrim-in var(--dur-sheet) var(--ease-out);
@@ -3678,7 +3552,6 @@ button {
   }
 }
 
-/* form fields inside dialogs */
 .field {
   display: flex;
   flex-direction: column;
@@ -3762,7 +3635,6 @@ button {
   }
 }
 
-/* popover menu (palette rows, slash/@ completions) */
 .menu {
   display: flex;
   flex-direction: column;
@@ -3797,7 +3669,6 @@ button {
   color: var(--text-dim);
 }
 
-/* the app's own mark in an item's icon place (OvisMark.tsx: Back to Ovis), in the icon's box */
 .menu-item .ovis-mark {
   width: var(--icon-size-md);
   height: var(--icon-size-md);
@@ -3847,8 +3718,6 @@ button {
   color: var(--text-dim);
 }
 
-/* ---------- sidebar error state (App-owned) ---------- */
-
 .error-state {
   margin: var(--space-2);
   padding: var(--space-3);
@@ -3883,7 +3752,6 @@ button {
   }
 }
 
-/* fingers: the header controls grow to the touch target; the header still fits them */
 @media (pointer: coarse) {
   .icon-button {
     width: var(--touch-target);
@@ -3901,8 +3769,6 @@ button {
     height: var(--touch-target);
   }
 
-  /* a disclosure's one-line summary (Add a connection's Advanced settings, MachineDialog.tsx) is a
-     finger's height, its words kept on its middle (G-091) */
   .machine-dialog summary {
     min-height: var(--touch-target);
     align-content: center;
@@ -3939,14 +3805,11 @@ button {
   }
 }
 
-/* ---------- mobile: sidebar becomes a drawer ---------- */
-
 @media (max-width: 768px) {
   .drawer-toggle {
     display: inline-flex;
   }
 
-  /* drawer mode: the collapse toggle has nothing to collapse */
   .sidebar-toggle {
     display: none;
   }
@@ -3972,7 +3835,6 @@ button {
       visibility 0s linear var(--dur-base);
   }
 
-  /* the open drawer holds the focus itself (lib/useFocusTrap.ts startOnSurface): a surface, not a control, so no ring */
   .sidebar[role="dialog"]:focus {
     outline: none;
   }
@@ -4003,17 +3865,12 @@ button {
   }
 }
 
-/* the key bar (KeyBar.css) shows under the same query and carries env(safe-area-inset-bottom) itself,
-   the one bar that reaches the bottom of the screen (KeyBar.tsx) */
 @media (pointer: coarse), (max-width: 768px) {
   .terminal-host:has(.key-bar) {
-    padding-bottom: 0; /* no pane = no bar, and the host keeps the inset */
+    padding-bottom: 0;
   }
 }
 
-/* phones: the version pill is the least useful header item; below that, the brand word goes
-   too - the mark keeps the identity. The palette's button gives its room to the pane's title:
-   the palette is the More menu's first item there. */
 @media (max-width: 480px) {
   .conn {
     padding: 0 var(--space-1);
@@ -4030,10 +3887,6 @@ button {
   }
 }
 
-
-/* phones: every header control is a full thumb target. The lens track draws smaller than the bar,
-   so it never meets the header's rule, and its buttons reach the target's height through an
-   invisible expander */
 @media (max-width: 768px) {
   .app-header .icon-button {
     width: var(--touch-target-header);
@@ -4047,15 +3900,6 @@ button {
   }
 }
 
-/* ---------- phone: an app, not a page ---------- */
-
-/* Over the chat on a phone the header is glass, as an iPhone's bar is: the transcript scrolls on
-   under it, blurred, instead of stopping at a ruled edge. Only when the transcript is right under
-   the header; a tab strip or a notice between them keeps the plain bar. The header pulls the body
-   up under itself by its own height (--header-over), and the stack gives that height back above
-   everything in it, so a prompt card, the held messages and the composer never go under the bar:
-   only the transcript reaches up into it (ChatView.css), its first line still below it, and the
-   banners start below it (PaneTerminal.css). The terminal lens keeps the bar in the flow as before. */
 @media (max-width: 768px) {
   .app:has(> .app-body > .pane-column.is-chat > .pane-split:first-child > .pane-slot > .terminal-host:first-child) {
     --header-over: calc(var(--header-h) + env(safe-area-inset-top, 0px));
@@ -4128,8 +3972,6 @@ button {
     border-color: var(--border);
   }
 
-  /* no weight of its own: a row that fills when pressed (an iPhone list row) says so in its own
-     stylesheet, with its opacity left whole */
   :where(button, [role="button"], a):where(:active:not(:disabled)) {
     opacity: 0.55;
   }
@@ -4159,8 +4001,6 @@ button {
   }
 }
 
-/* more contrast asked of the OS: glass turns to its panel, hairlines to the strong border, and an edge
-   that must stay readable (a field, a card, a chip, a switch) takes the text ink through --border-contrast */
 @media (prefers-contrast: more) {
   :root {
     --bar-bg: var(--bg-panel);
@@ -4172,7 +4012,6 @@ button {
   }
 }
 
-/* shared role connections for status markers, tabular numerals, selection weight and heading steps */
 .tab-sheet-marks > .tab-strip-dot:not(.tab-strip-glyph):is([data-status="idle"], [data-status="unknown"]) {
   box-shadow: inset 0 0 0 1.5px var(--status-marker-idle);
 }

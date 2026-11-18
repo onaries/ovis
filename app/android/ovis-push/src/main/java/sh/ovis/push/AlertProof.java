@@ -6,8 +6,7 @@ import android.content.Intent;
 /**
  * Tells the tap of an alert this app showed from another app's intent. MainActivity is exported, so
  * any app can send it OvisMessagingService.ACTION_OPEN_ALERT with any extras; only this app's own
- * PendingIntents carry its proof (PushStore.alertProof) in EXTRA. Apart from OvisMessagingService,
- * whose Firebase superclass the app module does not compile against.
+ * PendingIntents carry its proof (PushStore.alertProof) in EXTRA.
  */
 public final class AlertProof {
     public static final String EXTRA = "sh.ovis.push.proof";

@@ -6,7 +6,6 @@ const source = readFileSync(join(import.meta.dir, "..", "renderer", "connect.js"
 
 interface Element { hidden: boolean; disabled: boolean; textContent: string; dataset: Record<string, string>; addEventListener(type: string, listener: () => void): void }
 
-/** The connection screen's script (renderer/connect.js) on a stand-in page: its elements by id and the app's two bridges. */
 function screen() {
   const elements = new Map<string, Element>();
   const element = (id: string): Element => {

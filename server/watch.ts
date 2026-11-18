@@ -3,7 +3,6 @@ export interface WatchStreamOptions {
   onEnd: () => void;
 }
 
-/** Incremental NDJSON and frame decoder, independent of the observer process. */
 export class WatchStreamParser {
   private pending = "";
   private readonly decoder = new TextDecoder();
@@ -25,7 +24,6 @@ export class WatchStreamParser {
     this.pending = this.ended ? "" : this.pending.slice(start);
   }
 
-  /** Consume a final record without a newline and flush any incomplete UTF-8. */
   finish(): void {
     if (this.ended) return;
     this.line(this.pending);
@@ -65,15 +63,13 @@ export interface PaneWatchOptions extends WatchStreamOptions {
   rows: number;
   /** The same socket the bridge's RPCs use, not the CLI's default session. */
   socketPath: string;
-  /** How long the process may take to end once asked (KILL_GRACE_MS). */
   killGraceMs?: number;
 }
 
 const STDERR_TAIL_CHARS = 4096;
 /**
- * How long an observe process asked to end may take before it is killed outright. Its exit is waited for: a
- * pane's next view starts after it, and its place among a connection's watches is its until then
- * (core/connections.ts), so one that ignored the request would hold both for good.
+ * Its exit is waited for: a pane's next view starts after it, and its place among a connection's watches is its
+ * until then (core/connections.ts), so one that ignored the request would hold both for good.
  */
 const KILL_GRACE_MS = 1_000;
 
@@ -121,10 +117,9 @@ export class PaneWatch {
     });
   }
 
-  /** Reads no more of the process's output: both reads end, whoever holds the pipes. */
   private dropOutput(): void {
     for (const reader of this.readers) {
-      try { void reader.cancel().catch(() => { /* read to its end already */ }); } catch { /* read to its end already */ }
+      try { void reader.cancel().catch(() => {}); } catch {}
     }
   }
 
@@ -164,7 +159,6 @@ export class PaneWatch {
       }
       this.stderrTail = (this.stderrTail + decoder.decode()).slice(-STDERR_TAIL_CHARS);
     } catch {
-      // The process can close the pipe underneath us; retain the tail already read.
     } finally {
       reader.releaseLock();
     }
@@ -176,22 +170,19 @@ export class PaneWatch {
     this.options.onEnd();
   }
 
-  /** Asks the process to end, and ends it outright when it has not by the grace period. */
   private stopChild(): void {
     if (this.gone) return;
-    try { this.proc.kill(); } catch { /* already exited */ }
+    try { this.proc.kill(); } catch {}
     if (this.killer) return;
     this.killer = setTimeout(() => {
-      try { this.proc.kill("SIGKILL"); } catch { /* already exited */ }
+      try { this.proc.kill("SIGKILL"); } catch {}
     }, this.options.killGraceMs ?? KILL_GRACE_MS);
-    // a server on its way out does not wait for it
     this.killer.unref?.();
   }
 
   kill(): void {
     if (this.killed) return;
     this.killed = true;
-    // one whose process is gone already may still be read from: nothing more of it is wanted
     if (this.gone) this.dropOutput();
     this.stopChild();
   }

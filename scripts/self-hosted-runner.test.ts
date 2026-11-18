@@ -82,18 +82,11 @@ function probeIsolation(): { ok: true; mode: Isolation } | { ok: false; reason: 
   return { ok: false, reason: reasons.join("; ") };
 }
 
-/**
- * The process that starts the hook (hook-test-harness.sh): the worker; the worker with a shell between them;
- * the worker named systemd; a process named systemd that calls itself Runner.Worker; any other name; a parent
- * that ends after the hook's start, before its refusal; or a process named systemd that ends once the hook says
- * it blocks.
- */
 type HookParent = "worker" | "nested" | "renamed" | "posing" | "gone" | "leaves" | `named:${string}`;
 
 /**
  * What answers the hook's ps where it finds no /proc, as on macOS: procps itself, or a stub that fails, prints
- * nothing, or names the parent like the worker but not quite. The hook is then a copy whose one line naming
- * /proc and ps names a missing directory and that ps.
+ * nothing, or names the parent like the worker but not quite.
  */
 type HookPs = "procps" | "fails" | "silent" | "lookalike";
 
@@ -122,7 +115,6 @@ async function runHookIsolated(
     const bin = join(tempDir, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "logger"), `#!/bin/sh\nprintf '%s\\n' "$*" >>'${tempDir}/logger.log'\n`, { mode: 0o755 });
-    // the hook's bash, alone, where jq is missing
     if (event.noJq) symlinkSync(spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim(), join(bin, "bash"));
     let hook = jobStarted;
     if (event.ps) {
@@ -146,7 +138,6 @@ async function runHookIsolated(
         HOOK: hook,
         HOOK_PATH: event.noJq ? bin : `${bin}${delimiter}${process.env.PATH ?? ""}`,
         GITHUB_EVENT_NAME: eventName,
-        // in a runner container the refusal also reaches the container's output: named as a test's
         GITHUB_RUN_ID: "job-started-test",
         ...(event.repository === "unset" ? {} : { GITHUB_REPOSITORY: "devswha/ovis" }),
         ...(eventPath === undefined ? {} : { GITHUB_EVENT_PATH: eventPath }),
@@ -182,51 +173,32 @@ function runRunner(options: {
   ghTokenExitCode?: number;
   dockerExitCode?: number;
   failedSlot?: number;
-  /** "present" writes a host env file and passes it, "missing" passes a path that does not exist */
   envFile?: "present" | "missing" | "bare" | "secret" | "nul" | "twice" | "shards";
-  /** a grep on PATH that fails with a read error (exit 2), as on a file that passes -r but cannot be read */
   grepReadError?: boolean;
-  /** more launcher arguments, after --count */
   args?: string[];
-  /** XDG_CACHE_HOME for the launcher, kept after the run; a fresh one inside the run's temp dir otherwise */
   cacheHome?: string;
-  /** XDG_STATE_HOME for the launcher (the build cache's outboxes), kept after the run; fresh otherwise */
   stateHome?: string;
   gitFetchExitCode?: number;
-  /** exit status of the container that builds the Bun cache */
   cacheBuildExitCode?: number;
-  /** "fetch" makes the mirror's git fetch, "ls-remote" its default-branch query, "build" the Bun cache build, wait until killed; each writes a byte to the FIFO <tempDir>/hung first */
   hang?: "fetch" | "ls-remote" | "build";
-  /** the hung stub ignores SIGTERM, as a git or docker client that will not stop; "helper": the git stub
-   * stops, but leaves a child (a transport helper) that ignores it */
   stubborn?: boolean | "helper";
   repo?: string;
-  /** what GitHub names as the default branch: a branch, "" for no answer, or "fail" for a failed ls-remote */
   defaultBranch?: string;
-  /** branches the mirror holds; main's commit and lock are commitSha and lockBlob, any other branch's otherCommit and otherLock */
   branches?: string[];
-  /** the check slots: "no-volume" fails the volume's creation, "fail" every making of the files, "fail-later" every one after the launcher's first; "started-elsewhere" has another slot's loop start the keeper in the same moment */
   slots?: "no-volume" | "fail" | "fail-later" | "started-elsewhere";
-  /** the slots' docker networks: "fail" fails their creation */
   networks?: "fail";
-  /** a slot's docker network there from the start, as the launcher's inspect of it reads: "<containers> <subnet>" */
   network?: string;
-  /** subnets docker refuses to make a network on, as another network of its overlaps them */
   takenSubnets?: string[];
-  /** more of the host's routes and addresses, as `ip -4 route show table all` and `ip -4 -o addr show` print them */
   routes?: string[];
   addrs?: string[];
-  /** the kernel's route to the internet (`ip route get`): "none" (at boot, before the LAN is up), one in a policy "table" of its
-   * own, "until-retry" (none until the slot's first wait to try again), "lost-after-rm" (gone once a network is removed) */
   routeGet?: "none" | "table" | "until-retry" | "lost-after-rm";
-  /** OVIS_CI_NETWORK_BLOCK, the block of the runner networks */
   networkBlock?: string;
+  selinux?: "on" | "chcon-fails";
 } = {}) {
   const { tempDir, args, env, logPath, envFile } = prepareRunner(options);
   try {
     const result = spawnSync("bash", args, { encoding: "utf8", timeout: 10_000, env });
     expect(result.error).toBeUndefined();
-    // a launcher that refused its arguments ran no gh or docker command, so wrote no log
     return { result, calls: existsSync(logPath) ? readFileSync(logPath, "utf8") : "", envFile };
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -235,18 +207,12 @@ function runRunner(options: {
 
 type RunnerOptions = NonNullable<Parameters<typeof runRunner>[0]>;
 
-/**
- * How long a launcher may take to reach its stub's hang, or to end after it, on a loaded host. A
- * bound, not a wait: each wait ends at its event. The hung stub (120 s) outlasts it, so a launcher
- * that waits for the hang still ends late.
- */
+/** The hung stub (120 s) outlasts it, so a launcher that waits for the hang still ends late. */
 const LOADED_BOUND_MS = 30_000;
-/** The longest one runRunnerUntilHung call can take: the hang, the end, and its stderr closing. */
 const HUNG_RUN_MS = 3 * LOADED_BOUND_MS;
 /** A stop "at once": under the 5 s after which run.sh's timeouts kill what ignored the stop. */
 const STOP_AT_ONCE_MS = 4_000;
 
-/** Runs `argv` until it ends, or kills it after `ms`: whether it ended by itself with status 0. */
 async function endsWithin(argv: string[], ms: number) {
   const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
   const status = await Promise.race([proc.exited, Bun.sleep(ms).then(() => null)]);
@@ -255,11 +221,6 @@ async function endsWithin(argv: string[], ms: number) {
   return status === 0;
 }
 
-/**
- * Starts the launcher as runRunner does, waits until its stub hangs (options.hang), then sends it
- * `signal` (none: lets it go on, and lets a runner have its token). Returns how it ended, within
- * `endMs` of the hang.
- */
 async function runRunnerUntilHung(options: RunnerOptions & { hang: "fetch" | "ls-remote" | "build" }, signal: NodeJS.Signals | null, endMs = LOADED_BOUND_MS) {
   const { tempDir, args, env, logPath } = prepareRunner(options);
   const child = Bun.spawn(["bash", ...args], { env, stdout: "ignore", stderr: "pipe" });
@@ -267,9 +228,7 @@ async function runRunnerUntilHung(options: RunnerOptions & { hang: "fetch" | "ls
   const stderrText = new Response(child.stderr).text();
   let release: ReturnType<typeof Bun.spawn> | undefined;
   try {
-    // the hanging stub writes a byte to this FIFO as it hangs: reading it blocks until then
     if (!await endsWithin(["head", "-c", "1", env.RUNNER_TEST_HUNG!], LOADED_BOUND_MS)) throw new Error("the stub never hung");
-    // the gh stub hands out a token once this FIFO opens: only now, so no runner starts before the hang
     if (!signal) release = Bun.spawn(["sh", "-c", 'echo go > "$0"', env.RUNNER_TEST_TOKEN_GATE!], { stdout: "ignore", stderr: "ignore" });
     if (signal) child.kill(signal);
     const ended = await Promise.race([child.exited, Bun.sleep(endMs).then(() => "still running" as const)]);
@@ -284,11 +243,6 @@ async function runRunnerUntilHung(options: RunnerOptions & { hang: "fetch" | "ls
   }
 }
 
-/**
- * Shell helpers of the fake docker and the fake `ip`: the networks the fake docker holds, one
- * "<name> <subnet>" a line (the ones it made, and slot 1's from the start until it is removed), and
- * address arithmetic.
- */
 const fakeNetworks = `held_networks() {
   for file in "$RUNNER_TEST_LOG".network-*; do
     case "$file" in *.network-rm-*) continue ;; esac
@@ -339,7 +293,6 @@ case " $* " in
     ;;
 esac
 `);
-    // one line per call: the Bun cache build's script spans several
     writeFileSync(join(binDir, "docker"), `#!/bin/sh
 ${fakeNetworks}
 printf 'docker %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ')" >> "$RUNNER_TEST_LOG"
@@ -402,6 +355,7 @@ case "$1" in
   run)
     # docker's own refusal of a CPU list the host does not have
     case " $* " in *" --cpuset-cpus 0-500 "*) echo "docker: Requested CPUs are not available" >&2; exit 125 ;; esac
+    case " $* " in *" --cgroup-parent missing "*) echo "docker: cgroup-parent for systemd cgroup should be a valid slice" >&2; exit 125 ;; esac
     # the launcher's check of its CPU list, and the check slots' keeper: neither reads a token
     case " $* " in
       *" --entrypoint true "*) exit 0 ;;
@@ -438,7 +392,6 @@ case "$1" in
   *) exit 0 ;;
 esac
 `);
-    // the launcher's git mirror: no network, and HEAD resolves once symbolic-ref has named the branch
     writeFileSync(join(binDir, "git"), `#!/bin/sh
 printf 'git %s\\n' "$*" >> "$RUNNER_TEST_LOG"
 dir=""
@@ -493,9 +446,6 @@ case "$1" in
 esac
 exit 0
 `);
-    // The host's routes and addresses: none in the runner networks' block unless a test adds them, but
-    // the lines Linux prints for the bridge of every network the fake docker holds. `route get`: the
-    // kernel's answer for a packet to the internet (RUNNER_TEST_ROUTE_GET).
     writeFileSync(join(binDir, "ip"), `#!/bin/sh
 ${fakeNetworks}
 unrouted() { echo "RTNETLINK answers: Network is unreachable" >&2; exit 2; }
@@ -536,8 +486,6 @@ esac
 exit 0
 `);
     chmodSync(join(binDir, "ip"), 0o755);
-    // The launcher's wait before every container of a slot is logged and not sat out; every other
-    // sleep of the launcher is the system's own.
     const sleep = spawnSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
     writeFileSync(join(binDir, "sleep"), `#!/bin/sh
 if [ "$*" = 2 ]; then printf 'sleep 2\\n' >> "$RUNNER_TEST_LOG"; exit 0; fi
@@ -546,13 +494,24 @@ if [ -n "\${RUNNER_TEST_NO_BACKOFF:-}" ] && [ "$*" = 30 ]; then printf 'sleep 30
 exec "${sleep}" "$@"
 `);
     chmodSync(join(binDir, "sleep"), 0o755);
+    // SELinux is off unless a test turns it on, whatever the host running the tests has
+    writeFileSync(join(binDir, "selinuxenabled"), `#!/bin/sh
+[ -n "\${RUNNER_TEST_SELINUX:-}" ]
+`);
+    // as SELinux does, refuses to relabel a file of another user (here: a file named "foreign")
+    writeFileSync(join(binDir, "chcon"), `#!/bin/sh
+printf 'chcon %s\\n' "$*" >> "$RUNNER_TEST_LOG"
+[ "\${RUNNER_TEST_SELINUX:-}" != chcon-fails ] || exit 1
+depth=0; [ "$1" = -R ] && depth=99
+for arg; do case "$arg" in /*) [ -z "$(find "$arg" -maxdepth "$depth" -name foreign -print -quit)" ] || exit 1 ;; esac; done
+`);
+    chmodSync(join(binDir, "selinuxenabled"), 0o755);
+    chmodSync(join(binDir, "chcon"), 0o755);
     chmodSync(join(binDir, "gh"), 0o755);
     chmodSync(join(binDir, "docker"), 0o755);
     chmodSync(join(binDir, "git"), 0o755);
-    // a sleep named by its path in this run's directory, so a test can find one left running
     copyFileSync(sleep, join(binDir, "hang-sleep"));
     chmodSync(join(binDir, "hang-sleep"), 0o755);
-    // FIFOs: the test waits for the hang, and the gh stub for the test, by blocking on them, not polling
     if (options.hang) spawnSync("mkfifo", [join(tempDir, "hung"), join(tempDir, "token-gate")]);
     const envFile = join(tempDir, "host.env");
     if (options.envFile === "present") writeFileSync(envFile, "# P620\n\nCHECK_HOST_MAX_RUNS=6\nCHECK_HOST_BROWSER_WORKERS=10\n");
@@ -594,6 +553,8 @@ exec "${sleep}" "$@"
       ...(options.addrs ? { RUNNER_TEST_ADDRS: options.addrs.join("\n") } : {}),
       ...(options.routeGet ? { RUNNER_TEST_ROUTE_GET: options.routeGet } : {}),
       ...(options.networkBlock !== undefined ? { OVIS_CI_NETWORK_BLOCK: options.networkBlock } : {}),
+      // never what the shell running the tests exports: SELinux is off unless a test turns it on
+      RUNNER_TEST_SELINUX: options.selinux ?? "",
       RUNNER_TEST_DEFAULT_BRANCH: options.defaultBranch ?? "main",
       RUNNER_TEST_BRANCHES: (options.branches ?? ["main"]).join(" "),
       XDG_CACHE_HOME: options.cacheHome ?? join(tempDir, "cache"),
@@ -604,15 +565,12 @@ exec "${sleep}" "$@"
       DOCKER_EXIT_CODE: String(options.dockerExitCode ?? 42),
       DOCKER_FAIL_SLOT: String(options.failedSlot ?? ""),
     };
-    // the launcher's own block unless a test names one, whatever the host running the tests sets
     if (options.networkBlock === undefined) delete env.OVIS_CI_NETWORK_BLOCK;
     return { tempDir, args, env, logPath, envFile };
   }
 }
 
-/** A runner container: it reads its registration token on stdin. */
-const runnerRun = /^docker run (?:--cpuset-cpus \S+ )?--rm -i /;
-/** What the git stub reports for the mirror's default branch and its bun.lock. */
+const runnerRun = /^docker run (?:--cpuset-cpus \S+ )?(?:--cgroup-parent \S+ )?--rm -i /;
 const commitSha = "1".repeat(40);
 const lockBlob = "2".repeat(40);
 const otherCommit = "3".repeat(40);
@@ -640,7 +598,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     const runs = tmpfsCalls(["--work-tmpfs", "16g"]);
     expect(runs).toHaveLength(2);
     for (const run of runs) {
-      // the runner registers with --work /w as uid 1001 (entrypoint.sh), so the mount must be its own
       expect(run).toContain("--tmpfs /w:rw,exec,nosuid,size=16g,uid=1001,gid=1001,mode=0755");
       expect(run).toContain("--tmpfs /tmp:rw,exec,nosuid,size=16g,mode=1777");
     }
@@ -697,7 +654,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect([mode(join(root, "entries")), mode(join(root, "used")), mode(first)]).toEqual(["755", "755", "1777"]);
       // what the launcher hands a runner for the cache, not the words: the temp directory's own name may hold them
       expect(runRunner().calls).not.toMatch(/:\/build-cache|OVIS_BUILD_CACHE_|build-cache-locks/);
-      // what an earlier job left in a directory of its outbox, the host user cannot delete: a container as the runners' user does
       mkdirSync(join(first, "junk"), { recursive: true });
       writeFileSync(join(first, "junk/blob"), "x");
       mkdirSync(join(outboxes, ".taken", "left"), { recursive: true });
@@ -724,15 +680,71 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     }
   });
 
+  it("labels the build cache and its outboxes for containers under SELinux, and runs without the cache when it cannot", () => {
+    const home = mkdtempSync(join(tmpdir(), "herdr-runner-build-cache-selinux-test-"));
+    try {
+      const stateHome = join(home, "state");
+      const args = ["--build-cache", join(home, "cache")];
+      const outboxes = join(stateHome, "ovis-ci-runner/build-outbox/owner/repo");
+      const host = spawnSync("hostname", ["-s"], { encoding: "utf8" }).stdout.trim();
+      const slot = join(outboxes, `herdr-ci-${host}-1`);
+      const runs = (calls: string) => calls.split("\n").filter((call) => runnerRun.test(call));
+
+      const off = runRunner({ stateHome, args });
+      expect(off.calls).not.toContain("chcon");
+      expect(runs(off.calls)[0]).toContain(":/build-cache:ro ");
+
+      // an earlier job's directory the launcher could not empty, holding a file this user may not relabel
+      mkdirSync(join(slot, "left"), { recursive: true });
+      writeFileSync(join(slot, "left/foreign"), "x");
+      const on = runRunner({ stateHome, args, selinux: "on" });
+      expect(on.result.status).toBe(0);
+      const lines = on.calls.split("\n");
+      const before = (call: string) => lines.indexOf(call) >= 0 && lines.indexOf(call) < lines.findIndex((line) => runnerRun.test(line));
+      expect(before(`chcon -R -t container_file_t -l s0 ${join(home, "cache/owner/repo")}`)).toBe(true);
+      expect(before(`chcon -t container_file_t -l s0 ${outboxes}`)).toBe(true);
+      expect(before(`chcon -t container_file_t -l s0 ${slot}`)).toBe(true);
+      expect(on.result.stderr).not.toContain("container_file_t for SELinux");
+      expect(runs(on.calls)[0]).toContain(":/build-cache:ro ");
+
+      const refused = runRunner({ stateHome, args, selinux: "chcon-fails" });
+      expect(refused.result.status).toBe(0);
+      expect(refused.result.stderr).toContain("container_file_t for SELinux: running without it");
+      expect(runs(refused.calls)[0]).not.toMatch(/:\/build-cache|OVIS_BUILD_CACHE_/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("pins every container it starts to --cpuset-cpus, and none without it", () => {
     const { result, calls } = runRunner({ count: 2, args: ["--cpuset-cpus", "0-95"] });
     expect(result.status).toBe(0);
     const runs = calls.split("\n").filter((call) => call.startsWith("docker run "));
-    // the check slots' keeper and both runners, each pinned
     expect(runs.filter((call) => call.startsWith("docker run --cpuset-cpus 0-95 -d "))).toHaveLength(1);
     expect(runs.filter((call) => runnerRun.test(call))).toHaveLength(2);
     for (const call of runs) expect(call).toContain("--cpuset-cpus 0-95 ");
     expect(runRunner().calls).not.toContain("--cpuset-cpus");
+  });
+
+  it("puts every container it starts under --cgroup-parent, after --cpuset-cpus, and none without it", () => {
+    const { result, calls } = runRunner({ count: 2, args: ["--cgroup-parent", "ovis-ci.slice", "--cpuset-cpus", "0-95"] });
+    expect(result.status).toBe(0);
+    const runs = calls.split("\n").filter((call) => call.startsWith("docker run "));
+    expect(runs.filter((call) => runnerRun.test(call))).toHaveLength(2);
+    for (const call of runs) expect(call).toContain("--cpuset-cpus 0-95 --cgroup-parent ovis-ci.slice ");
+    expect(runRunner().calls).not.toContain("--cgroup-parent");
+    const built = runRunner({ args: ["--build", "--cgroup-parent", "ovis-ci.slice"] }).calls.split("\n").filter((call) => call.startsWith("docker build "));
+    expect(built).toHaveLength(1);
+    expect(built[0]).toStartWith("docker build --cgroup-parent ovis-ci.slice -t ");
+    expect(runRunner({ args: ["--build"] }).calls).not.toContain("--cgroup-parent");
+  });
+
+  it("refuses a cgroup parent docker cannot use before starting anything", () => {
+    const { result, calls } = runRunner({ count: 2, args: ["--cgroup-parent", "missing"] });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--cgroup-parent missing");
+    expect(calls).not.toContain("registration-token");
+    expect(calls.split("\n").filter((call) => runnerRun.test(call) || call.includes(" -d "))).toEqual([]);
   });
 
   it("refuses a CPU list docker cannot give before starting anything", () => {
@@ -750,13 +762,11 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     const child = Bun.spawn(["bash", ...args], { env: { ...env, RUNNER_TEST_SLOT_HELD: held }, stdout: "ignore", stderr: "ignore" });
     try {
       const calls = () => (existsSync(logPath) ? readFileSync(logPath, "utf8") : "");
-      // it asks about the slot's container before anything else of the slot
       const deadline = Date.now() + LOADED_BOUND_MS;
       while (!/docker container inspect .*herdr-ci-\S+-1/.test(calls()) && Date.now() < deadline) await Bun.sleep(25);
       expect(calls()).toMatch(/docker container inspect .*herdr-ci-\S+-1/);
       expect(calls()).not.toContain("registration-token");
       expect(calls().split("\n").filter((call) => runnerRun.test(call))).toEqual([]);
-      // the two seconds before a container count from the end of the one before: not yet
       expect(calls()).not.toContain("sleep 2");
       rmSync(held);
       expect(await Promise.race([child.exited, Bun.sleep(LOADED_BOUND_MS).then(() => "still running")])).toBe(0);
@@ -867,8 +877,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       const network = `${call.match(/--name (\S+)/)![1]!}-net`;
       // its own, and no other: not the host's, not another container's namespace
       expect(call.match(/--network \S+/g)).toEqual([`--network ${network}`]);
-      // made before its runner starts, as a bridge network of docker's on the slot's own /28 of the
-      // block (slot N on its Nth), with docker's own gateway
       const slot = Number(network.match(/-(\d+)-net$/)![1]);
       const made = lines.indexOf(`docker network create --driver bridge --subnet 10.213.0.${16 * (slot - 1)}/28 ${network}`);
       expect(made).toBeGreaterThanOrEqual(0);
@@ -876,49 +884,36 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       return network;
     });
     expect(new Set(networks).size).toBe(2);
-    // removed once every runner container has stopped
     const lastStop = Math.max(...lines.map((call, index) => (/^docker stop -t 30 herdr-ci-\S+-\d+$/.test(call) ? index : -1)));
     for (const network of networks) expect(lines.indexOf(`docker network rm ${network}`)).toBeGreaterThan(lastStop);
   });
 
-  /** The subnets the launcher asked docker for, in order: every slot's, or one slot's. */
   const subnetsAsked = (calls: string, slot?: number) => calls.split("\n").flatMap((call) => (slot === undefined || call.endsWith(`-${slot}-net`) ? /^docker network create .*--subnet (\S+) /.exec(call)?.[1] ?? [] : []));
-  /** The runner networks' calls that make or remove one before the first runner starts, without the network's name. */
   const networkChanges = (calls: string) => {
     const lines = calls.split("\n");
     const runner = lines.findIndex((call) => runnerRun.test(call));
     expect(runner).toBeGreaterThanOrEqual(0);
     return lines.slice(0, runner).filter((call) => /^docker network (rm|create) /.test(call)).map((call) => call.replace(/ herdr-ci-\S+-net$/, ""));
   };
-  /** The calls that make or remove a network before the launcher's stop. */
   const changesBeforeStop = (calls: string) => {
     const lines = calls.split("\n");
     const lastStop = Math.max(...lines.map((call, index) => (/^docker stop -t 30 herdr-ci-\S+-\d+$/.test(call) ? index : -1)));
     return lines.slice(0, lastStop).filter((call) => /^docker network (rm|create) /.test(call));
   };
 
-  /**
-   * Runs the launcher with its slots' loops going on (no --once, the first 30 s wait before a slot
-   * tries again not sat out) until slot 1's runner has asked for its token `tokens` times, which
-   * it does only once it has its network: whether it got there, and its calls until then.
-   */
   async function runUntilToken(options: RunnerOptions, tokens = 1) {
     const { tempDir, args, env, logPath } = prepareRunner({ ...options, args: ["--no-cache", ...(options.args ?? [])] });
     const gate = join(tempDir, "token-gate");
-    // one FIFO for each request, and one more, which no one opens, for a request after them
     spawnSync("mkfifo", Array.from({ length: tokens + 1 }, (_, index) => `${gate}.${index + 1}`));
-    // a process group of its own: the slot's loop runs on until it is killed with it
     const child = spawn("bash", args.filter((arg) => arg !== "--once"), { env: { ...env, RUNNER_TEST_TOKEN_GATE: gate, RUNNER_TEST_TOKEN_GATES: "1", RUNNER_TEST_NO_BACKOFF: "1" }, detached: true, stdio: "ignore" });
     const exited = new Promise((resolve) => child.once("exit", resolve));
     try {
-      // the gh stub reads request n's FIFO when the slot asks for its nth token: opening it for writing waits for that
       const reached = await endsWithin(["sh", "-c", 'i=1; while [ "$i" -le "$1" ]; do echo go > "$0.$i"; i=$((i + 1)); done', gate, String(tokens)], LOADED_BOUND_MS);
       return { reached, calls: readFileSync(logPath, "utf8") };
     } finally {
       try {
         process.kill(-child.pid!, "SIGKILL");
       } catch (error) {
-        // ESRCH: every process of the group has ended already
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
       await exited;
@@ -932,13 +927,11 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       addrs: ["9: br-b    inet 10.213.0.20/30 brd 10.213.0.23 scope global br-b"],
     });
     expect(result.status).toBe(0);
-    // .0/28 is routed, .16/28 holds an address of the host, .32/27 (two /28s) is routed
     expect(subnetsAsked(calls)).toEqual(["10.213.0.64/28"]);
     expect(calls.split("\n").filter((call) => runnerRun.test(call))).toHaveLength(1);
   });
 
   it("counts the host's own address on a point-to-point link, which has no network of its own", () => {
-    // as `ip -o addr` prints it, and as the local table holds it
     for (const host of [{ addrs: ["7: tun0    inet 10.213.0.6 peer 10.213.0.5/32 scope global tun0"] }, { routes: ["local 10.213.0.6 dev tun0 table local proto kernel scope host src 10.213.0.6"] }]) {
       const { result, calls } = runRunner(host);
       expect(result.status).toBe(0);
@@ -946,17 +939,14 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     }
   });
 
-  /** A full-tunnel VPN's routes in place of a default route. */
   const fourQuarters = ["0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/2", "192.0.0.0/2"].map((route) => `${route} dev tun0 scope link`);
 
   it("takes a route broader than /8 for a default, not a network, and counts /8 and narrower", () => {
-    // broader than /8: a /7, one /1 alone, a VPN's four /2s
     for (const routes of [["10.0.0.0/7 via 10.8.0.1 dev tun0"], ["0.0.0.0/1 via 10.8.0.1 dev tun0"], fourQuarters]) {
       const { result, calls } = runRunner({ routes });
       expect(result.status).toBe(0);
       expect(subnetsAsked(calls)).toEqual(["10.213.0.0/28"]);
     }
-    // a LAN beside the four /2s still counts
     const lan = runRunner({ routes: [...fourQuarters, "10.213.0.0/28 dev eth1 proto kernel scope link src 10.213.0.2"] });
     expect(lan.result.status).toBe(0);
     expect(subnetsAsked(lan.calls)).toEqual(["10.213.0.16/28"]);
@@ -969,7 +959,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(subnetsAsked(calls)).toEqual([]);
       expect(result.stderr).toMatch(/\[herdr-ci-\S+-1\] .*OVIS_CI_NETWORK_BLOCK.*; retrying in 30s/);
       expect(calls).not.toContain("registration-token");
-      // a host that routes all of 10.0.0.0/8 takes a block in 172.16.0.0/16
       const other = runRunner({ routes, networkBlock: "172.16.0.0/16" });
       expect(other.result.status).toBe(0);
       expect(subnetsAsked(other.calls)).toEqual(["172.16.0.0/28"]);
@@ -977,7 +966,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   });
 
   it("goes on from the block's start for a slot whose own /28 and every one after it are taken", () => {
-    // slot 1 keeps its network on .32/28; slot 2's own .16/28 and everything from .48 are routed
     const { result, calls } = runRunner({ count: 2, networkBlock: "10.213.0.0/24", network: "0 10.213.0.32/28", routes: ["10.213.0.16/28 dev eth1", "10.213.0.48/28 dev eth1", "10.213.0.64/26 dev eth1", "10.213.0.128/25 dev eth1"] });
     expect(result.status).toBe(0);
     expect(subnetsAsked(calls, 1)).toEqual([]);
@@ -1009,16 +997,13 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     expect(none.result.stderr).toMatch(/\[herdr-ci-\S+-1\] this host has no default route yet.*; retrying in 30s/);
     expect(changesBeforeStop(none.calls)).toEqual([]);
     expect(none.calls).not.toContain("registration-token");
-    // a default route in a policy table of its own is a route
     const table = runRunner({ routeGet: "table" });
     expect(table.result.status).toBe(0);
     expect(subnetsAsked(table.calls)).toEqual(["10.213.0.0/28"]);
-    // asked again after a removal: a route gone meanwhile makes nothing
     const lost = runRunner({ routeGet: "lost-after-rm", network: "0 172.18.0.0/16" });
     expect(lost.result.status).toBe(1);
     expect(lost.result.stderr).toMatch(/\[herdr-ci-\S+-1\] this host has no default route yet.*; retrying in 30s/);
     expect(changesBeforeStop(lost.calls).map((call) => call.replace(/ herdr-ci-\S+-net$/, ""))).toEqual(["docker network rm"]);
-    // the route comes up while the slot waits to try again
     const later = await runUntilToken({ routeGet: "until-retry" });
     expect(later.reached).toBe(true);
     const lines = later.calls.split("\n");
@@ -1030,20 +1015,15 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
 
   it("keeps a slot's network whose only range is a /28 of the block, across the slot's starts, and makes any other again when no container is on it", async () => {
     expect(networkChanges(runRunner({ network: "0 10.213.0.48/28" }).calls)).toEqual([]);
-    // made at the first start, kept at the second, with its bridge's lines in the host's routes
     const twice = await runUntilToken({}, 2);
     expect(twice.reached).toBe(true);
     expect(twice.calls.split("\n").filter((call) => call.includes("registration-token")).length).toBeGreaterThanOrEqual(2);
     expect(subnetsAsked(twice.calls)).toEqual(["10.213.0.0/28"]);
     expect(twice.calls).not.toContain("docker network rm");
     for (const network of [
-      // made by docker from its own pools, as before the block
       "0 172.18.0.0/16",
-      // in the block, but not one /28 of it
       "0 10.213.0.0/24",
-      // a /28 of the block, and another range
       "0 10.213.0.48/28 10.213.0.64/28",
-      // no range at all
       "0",
     ]) {
       const { result, calls } = runRunner({ network });
@@ -1093,7 +1073,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     const { result, calls } = runRunner({ networks: "fail" });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/\[herdr-ci-\S+-1\] could not make the docker network herdr-ci-\S+-1-net; retrying in 30s/);
-    // a bounded number of ranges, each tried once
     const tried = subnetsAsked(calls);
     expect(tried.length).toBeGreaterThan(1);
     expect(tried.length).toBeLessThanOrEqual(16);
@@ -1111,13 +1090,11 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     // RAM, small, and root's directory: a job cannot remove or replace a file in it
     const volume = lines.indexOf(`docker volume create --driver local --opt type=tmpfs --opt device=tmpfs --opt o=size=1m,mode=0755,uid=0,gid=0 ${slots}`);
     expect(volume).toBeGreaterThanOrEqual(0);
-    // one keeper, started once: what holds the name without running is removed first
     const keepers = lines.map((call, index) => ({ call, index })).filter(({ call }) => call.startsWith("docker run -d "));
     expect(keepers.map(({ call }) => call)).toEqual([`docker run -d --rm --name ${slots} --network none --security-opt no-new-privileges --cap-drop ALL --user 0:0 -v ${slots}:/check-slots --entrypoint sleep herdr-ci-runner:local infinity`]);
     const removed = lines.indexOf(`docker rm ${slots}`);
     expect(removed).toBeGreaterThan(volume);
     expect(removed).toBeLessThan(keepers[0]!.index);
-    // the files: one for every port a run of check.ts would listen on, made in a directory that is root's alone
     const ports = Array.from({ length: ticketPorts(DEFAULT_LOCK_PORT, MAX_RUNS_LIMIT, MAX_RUNS_LIMIT).at(-1)! - DEFAULT_LOCK_PORT + 1 }, (_, index) => DEFAULT_LOCK_PORT + index);
     const made = lines.map((call, index) => ({ call, index })).filter(({ call }) => call.startsWith(`docker exec ${slots} sh -c `));
     for (const { call } of made) {
@@ -1126,7 +1103,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(call).toContain('for file; do : >> "$file" || exit 1; done; chmod 0666 "$@"');
       expect(call.endsWith(` sh ${ports.join(" ")}`)).toBe(true);
     }
-    // by the launcher before anything else of a slot, and again before each runner
     expect(made).toHaveLength(3);
     expect(made[0]!.index).toBeGreaterThan(keepers[0]!.index);
     expect(made[0]!.index).toBeLessThan(lines.findIndex((call) => call.includes("registration-token")));
@@ -1137,10 +1113,8 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(call).toContain(" -e CHECK_SLOTS_DIR=/check-slots ");
     }
     expect(Math.max(...made.map(({ index }) => index))).toBeLessThan(Math.max(...runners.map(({ index }) => index)));
-    // stopped after every runner and every network of a slot
     const stopped = lines.indexOf(`docker stop -t 5 ${slots}`);
     expect(stopped).toBeGreaterThan(Math.max(...lines.map((call, index) => (/^docker (stop -t 30|network rm) /.test(call) ? index : -1))));
-    // and after it, what a launcher from before left when it was killed: the container whose network namespace its runners shared
     expect(lines.indexOf(`docker stop -t 5 herdr-ci-${host}-net`)).toBeGreaterThan(stopped);
   });
 
@@ -1152,11 +1126,9 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(calls).not.toContain("registration-token");
       expect(calls).not.toMatch(/docker network (inspect|create)/);
       expect(calls.split("\n").filter((call) => runnerRun.test(call))).toEqual([]);
-      // no keeper is started for a volume that is not there, and one that was started is not left behind
       expect(calls.split("\n").filter((call) => call.startsWith("docker run -d "))).toHaveLength(slots === "no-volume" ? 0 : 1);
       expect(calls).toMatch(/docker rm -f herdr-ci-\S+-check-slots\n/);
     }
-    // the files gone later (the keeper killed, say): the slot starts no runner and asks for no token
     const { result, calls } = runRunner({ slots: "fail-later" });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/\[herdr-ci-\S+-1\] could not make the check slots in herdr-ci-\S+-check-slots; retrying in 30s/);
@@ -1166,13 +1138,11 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   });
 
   it("makes the check slots' files in the keeper another slot's loop started in the same moment, once it runs", () => {
-    // Slot loops that find no keeper all start one. This launcher's own start fails on the name, and
-    // the keeper that holds it does not run yet at the first two looks: docker refuses to make the
-    // files in it until it does.
+    // This launcher's own start fails on the name, and the keeper that holds it does not run yet at the first two
+    // looks: docker refuses to make the files in it until it does.
     const { result, calls } = runRunner({ slots: "started-elsewhere" });
     expect(result.status).toBe(0);
     const lines = calls.split("\n");
-    // the files are made in it only once it runs: no making was tried before, which would have stopped the launcher
     const looks = lines.map((call, index) => (/^docker container inspect .*-check-slots$/.test(call) ? index : -1)).filter((index) => index >= 0);
     const made = lines.findIndex((call) => call.startsWith("docker exec "));
     expect(looks.filter((index) => index < made)).toHaveLength(4);
@@ -1191,7 +1161,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     // the file's CHECK_HOST_MAX_RUNS, the last one as docker itself takes a file's
     expect(limits("present").limit).toBe("6");
     expect(limits("twice").limit).toBe("5");
-    // a host that names none leaves the workflow's: the variable is not handed on, not even empty
     expect(limits("shards").call).not.toContain("CHECK_SLOTS_MAX_RUNS");
     expect(limits().call).not.toContain("CHECK_SLOTS_MAX_RUNS");
     for (const { call, sentence } of [limits("present"), limits()]) {
@@ -1199,7 +1168,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(sentence).toBeDefined();
       expect(sentence).toContain("/check-slots");
       expect(call).toContain(" -e CHECK_SLOTS_DIR=/check-slots ");
-      // what a check.ts from before does with it: it takes it for its run limit, and stops
       const before: Record<string, string | undefined> = { CHECK_MAX_RUNS: "6", CHECK_HOST_MAX_RUNS: sentence };
       applyHostLimits(before);
       expect(() => maxRuns(before, 32)).toThrow(`not "${sentence}"`);
@@ -1207,16 +1175,11 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   });
 
   it("waits two seconds before every container of a slot, the first after its start included", () => {
-    // One slot: its calls are logged in the order its loop makes them. (Two slots' loops run side by
-    // side, and the stand-in sleep cannot say whose wait it is.)
     const { result, calls } = runRunner();
     expect(result.status).toBe(0);
     const lines = calls.split("\n");
     const waits = lines.map((call, index) => (call === "sleep 2" ? index : -1)).filter((index) => index >= 0);
     expect(waits).toHaveLength(1);
-    // after the look for a container left in the slot's name, and before anything is made, asked or
-    // started for its own: the check slots' files (the launcher's own making of them came before
-    // the slot's loop), the network, the token, the runner
     expect(waits[0]).toBeGreaterThan(lines.findLastIndex((call) => /^docker container inspect .*herdr-ci-\S+-1$/.test(call)));
     const first = Math.min(
       lines.findLastIndex((call) => call.startsWith("docker exec ")),
@@ -1226,7 +1189,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     );
     expect(first).toBeGreaterThanOrEqual(0);
     expect(waits[0]).toBeLessThan(first);
-    // and one wait for each slot's container
     const two = runRunner({ count: 2 });
     expect(two.result.status).toBe(0);
     expect(two.calls.split("\n").filter((call) => call === "sleep 2")).toHaveLength(2);
@@ -1263,11 +1225,8 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       const { result, calls } = runRunner({ count: 2, cacheHome });
       expect(result.status).toBe(0);
       const lines = calls.split("\n");
-      // one directory per repository
       const cacheDir = join(cacheHome, "ovis-ci-runner/owner/repo");
       const mirror = join(cacheDir, "git/repo.git");
-      // this repository's branches and tags only, from GitHub
-      // set up under another name, then moved into place whole
       const setup = lines.find((call) => call.includes(" config remote.origin.url "))!.match(/^git -C (\S+) /)![1]!;
       expect(setup).toStartWith(join(cacheDir, "git/.new-"));
       expect(lines).toContain(`git -C ${setup} config remote.origin.url https://github.com/owner/repo.git`);
@@ -1277,7 +1236,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(existsSync(setup)).toBe(false);
       expect(lines.filter((call) => call.includes("remote.origin.fetch")).map((call) => call.split(" ").at(-1)))
         .toEqual(["+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"]);
-      // bounded: a stalled transfer gives up instead of holding the refresh
       const fetched = lines.findIndex((call) => call.startsWith(`git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -C ${mirror} fetch `));
       const runners = lines.map((call, index) => ({ call, index })).filter(({ call }) => runnerRun.test(call));
       expect(runners).toHaveLength(2);
@@ -1325,7 +1283,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   it.skipIf(process.platform !== "linux")("still starts the runners when a refresh or a build fails, builds nothing after a failed refresh, and retries a failed build only after 30 minutes", () => {
     const cacheHome = mkdtempSync(join(tmpdir(), "herdr-runner-cache-"));
     try {
-      // a refresh that failed builds nothing: what the mirror holds was not confirmed this time
       const unfetched = runRunner({ cacheHome, gitFetchExitCode: 1 });
       expect(unfetched.result.status).toBe(0);
       expect(unfetched.result.stderr).toContain("[cache] could not refresh the git mirror");
@@ -1337,7 +1294,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
       expect(first.calls.split("\n").filter((call) => cacheBuild.test(call))).toHaveLength(1);
       expect(first.calls.split("\n").filter((call) => runnerRun.test(call))).toHaveLength(1);
       const bun = join(cacheHome, "ovis-ci-runner/owner/repo/bun");
-      // nothing half-built is left for a runner to read
       expect(readdirSync(bun)).toEqual([`.failed-${lockBlob}`]);
       const again = runRunner({ cacheHome });
       expect(again.result.status).toBe(0);
@@ -1370,7 +1326,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
   it.skipIf(process.platform !== "linux")("starts the runners after --cache-wait when the first refresh hangs, and leaves nothing of it running", async () => {
     for (const hang of ["fetch", "build"] as const) {
       const { ended, stderr, calls, stuck } = await runRunnerUntilHung({ hang, args: ["--cache-wait", "1"] }, null);
-      // --once: its one runner ran its job, so the launcher ended, stopping the hung refresh
       expect(ended).toBe(0);
       expect(stderr).toContain("[cache] the caches are not ready after 1s");
       expect(calls).toContain("registration-token");
@@ -1435,7 +1390,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
         const { result, calls } = runRunner({ cacheHome, ...github });
         expect(result.status).toBe(0);
         expect(result.stderr).toContain("[cache] could not refresh the git mirror");
-        // never the mirror's initial HEAD (main) nor any other branch
         expect(calls.split("\n").filter((call) => cacheBuild.test(call))).toEqual([]);
         expect(existsSync(join(cacheHome, "ovis-ci-runner/owner/repo/bun/current"))).toBe(false);
         expect(calls.split("\n").filter((call) => runnerRun.test(call))).toHaveLength(1);
@@ -1449,7 +1403,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
     for (const [hang, stubborn] of [["fetch", true], ["fetch", "helper"], ["ls-remote", true], ["build", true]] as const) {
       const { ended, calls, stuck } = await runRunnerUntilHung({ hang, stubborn }, "SIGTERM");
       expect(ended).toBe(143);
-      // checked the moment the launcher ended: nothing of the refresh may be left
       expect(stuck).toBe("");
       if (hang === "build") {
         const cacheCalls = calls.split("\n").filter((call) => /^docker \S+ .*herdr-ci-.+-cache\b/.test(call));
@@ -1482,7 +1435,6 @@ describe.skipIf(process.platform === "win32")("self-hosted runner launcher", () 
         mkdirSync(join(bun, version), { recursive: true });
         utimesSync(join(bun, version), hoursAgo, hoursAgo);
       }
-      // a symlink as the launcher writes it: the default branch's lockfile was replaced-now's until this run
       spawnSync("ln", ["-s", "replaced-now", join(bun, "current")]);
       const { result } = runRunner({ cacheHome });
       expect(result.status).toBe(0);
@@ -1536,14 +1488,12 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
   const fork = { pull_request: { head: { repo: { full_name: "someone/ovis" } } } };
   type Run = Awaited<ReturnType<typeof runHookIsolated>>;
 
-  /** A refused job: its worker SIGKILLed before the next step, nothing else dead, the refusal said where it is kept. */
   function expectKilled(run: Run, output: "said" | "closed" = "said") {
     // a failing hook alone would let `if: always()` steps run: the worker itself is killed
     expect(run.parent).toBe("137");
     expect(run.nextStepRan).toBe(false);
     expect(run.decoys).toBe("alive");
     expect(run.above).toBe("alive");
-    // a closed output takes the refusal with it: the kill alone is the evidence there
     if (output === "said") {
       expect(run.output).toContain("::error::");
       // Linux writes it to PID 1's output (a container's), never to logger
@@ -1552,7 +1502,6 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
     }
   }
 
-  /** A refusal whose parent is not proven the worker: nothing killed, the hook blocks in its step, no step after it. */
   function expectBlocked(run: Run) {
     expect(run.hook).toBe("blocked");
     expect(run.parent).toBe("running");
@@ -1597,12 +1546,10 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
       { raw: "[]" },
       { raw: '"devswha/ovis"' },
       { raw: '{"pull_request": "someone/ovis"}' },
-      // two documents: the second one alone would pass
       { raw: `${JSON.stringify(fork)}\n${JSON.stringify(forkless)}` },
       { repository: "unset" },
       { noJq: true },
       { path: "missing", closedOutput: true },
-      // the shell's own `${VAR:?}` message on a closed stderr
       { path: "unset", closedOutput: true },
       { repository: "unset", closedOutput: true },
     ] as const) {
@@ -1622,7 +1569,6 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
       ["workflow_run", { workflow_run: {} }],
       ["issue_comment", {}],
       ["issue_comment", { comment: { id: 2 } }],
-      // no event name: the runner always sets one
       ["", { ref: "refs/heads/main" }],
     ] as const) {
       expectKilled(await runHook(event, payload));
@@ -1637,7 +1583,6 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
     expect(run.above).toBe("alive");
     expect(run.output).toContain("::error::");
     expect(run.psCalls).not.toBe("");
-    // with no /proc, the refusal goes to the system log
     expect(run.logged).toContain("-t ovis-runner-guard");
   }, 60_000);
 
@@ -1654,7 +1599,6 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
           // a name is not an executable: both must be Runner.Worker
           { parent: "renamed" },
           { parent: "posing" },
-          // without /proc: ps fails, prints nothing, or names the parent like the worker but not quite
           { ps: "fails" },
           { ps: "silent" },
           { ps: "lookalike" },
@@ -1664,11 +1608,9 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
     for (const run of runs) expectBlocked(run);
   }, 60_000);
 
-  /** A blocked refusal whose parent has ended: the hook ends too, having killed nothing; nothing waits on it any more. */
   function expectEndedAfterBlock(run: Run) {
     expect(run.output).toContain("this hook blocks (pid ");
     expect(run.hook).toBe("ended");
-    // the parent ended by itself, with status 0
     expect(run.parent).toBe("0");
     expect(run.nextStepRan).toBe(false);
     expect(run.decoys).toBe("alive");
@@ -1676,12 +1618,10 @@ describe.skipIf(!isolation.ok)("self-hosted runner job-started hook, isolated", 
   }
 
   it("kills nothing when its parent ends before the refusal, whatever adopted it, and ends", async () => {
-    // the parent ends after the hook started: its `$PPID` names a pid that is gone
     expectEndedAfterBlock(await runHook("pull_request", fork, { parent: "gone" }));
   }, 60_000);
 
   it("ends a block once the parent it started under is gone, killing nothing", async () => {
-    // a parent that is not the worker lives through the refusal, then ends
     expectEndedAfterBlock(await runHook("pull_request", fork, { parent: "leaves" }));
   }, 60_000);
 });
@@ -1691,20 +1631,6 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
   const key = "a".repeat(64);
   const slot = "herdr-ci-host-3";
 
-  /**
-   * A job's outbox holding one build, promoted against a GitHub that answers as `github` says. The
-   * slot's container registered runner 31, and the run's job started on it ten seconds after the
-   * container did. `jobStarted` starts the job that many seconds after the container instead (a
-   * negative number: before it, as an earlier container's job), `runnerId` puts it on another
-   * runner, `registered` names the runner registered under the slot's name now (null: none), and
-   * `container` says what docker answers for the slot: nothing at all, one that never started, one
-   * that has stopped, one that started after the build was left in the outbox, or another
-   * container by the time GitHub has answered about the jobs. `older` has the system say that the
-   * claim, or the build, was last changed one millisecond before the container started. `linked`
-   * gives files a second name (a hard link): "marker" the claim and the build, as restore markers,
-   * which the promoter removes, in an outbox whose container started just after they were written;
-   * "claim" or "tar" that file alone, under a name nothing removes.
-   */
   function promote(github: { event?: string; branch?: string; headRepo?: string; actor?: string; author?: string; prSha?: string; runner?: string; status?: string; fail?: boolean; runnerId?: number; jobStarted?: number; registered?: number | null; container?: "none" | "created" | "stopped" | "younger" | "changes"; older?: "claim" | "tar"; linked?: "marker" | "claim" | "tar" } = {}, build: "files" | "link" | "sealed" = "files", writer = "devswha", junkSlot: false | "claim" | "tar" = false, used = false, claim = "7 1\n", extraClaims = 0, ownManifest = false, later: string[] = [], slotHeldOffUntilNow = false, thenGithub?: typeof github) {
     const dir = mkdtempSync(join(tmpdir(), "herdr-build-cache-promote-test-"));
     try {
@@ -1719,7 +1645,6 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
       writeFileSync(join(dist, "assets/a.js"), "a");
       if (build === "link") symlinkSync("/etc/hostname", join(dist, "leak"));
       if (ownManifest) writeFileSync(join(dist, ".manifest"), "the app's own");
-      // a directory nothing can be removed from as it is, beside a file nobody may read
       if (build === "sealed") chmodSync(join(dist, "assets"), 0o555);
       spawnSync("tar", ["-cf", join(outbox, `${key}.tar`), "-C", dist, "."]);
       if (build === "sealed") {
@@ -1734,9 +1659,7 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
         spawnSync("tar", ["-cf", join(outbox, `${other}.tar`), "-C", dist, "."]);
         writeFileSync(join(outbox, `${other}.claim`), "7 1\n");
       }
-      // an earlier slot whose job left a directory named like a claim
       if (junkSlot === "claim") mkdirSync(join(outboxes, "herdr-ci-host-1", `${"b".repeat(64)}.claim`), { recursive: true });
-      // or a "tar" that is a directory this user cannot delete, as one of the runners' user is
       if (junkSlot === "tar") {
         const junk = join(outboxes, "herdr-ci-host-1", `${"b".repeat(64)}.tar`);
         mkdirSync(join(junk, "x"), { recursive: true });
@@ -1744,7 +1667,6 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
         chmodSync(join(junk, "x"), 0o000);
         writeFileSync(join(outboxes, "herdr-ci-host-1", `${"b".repeat(64)}.claim`), "7 1\n");
       }
-      // a restore's use of an entry in another run's directory, and a used marker that is a link
       if (used) {
         mkdirSync(join(root, "entries", "3", "c".repeat(64)), { recursive: true });
         writeFileSync(join(outbox, `used-${"c".repeat(64)}`), "");
@@ -1753,9 +1675,6 @@ describe.skipIf(process.platform === "win32")("build cache promotion", () => {
       const sha = "5".repeat(40);
       const answer = (github: NonNullable<Parameters<typeof promote>[0]>) => {
       if (github.fail) writeFileSync(join(dir, "fail"), ""); else rmSync(join(dir, "fail"), { force: true });
-      // what docker names as the slot's container, and whether it is another once GitHub was asked about the jobs
-      // When the slot's container started. The build above was written just now: the fixed day is before
-      // it, an hour from now after it, and with "marker" it started 20 ms after the claim was written.
       let started = Date.UTC(2026, 10, 10, 12, 0, 0) + 123;
       if (github.container === "younger") started = Date.now() + 3_600_000;
       if (github.linked === "marker") for (const [index, file] of [`${key}.claim`, `${key}.tar`].entries()) linkSync(join(outbox, file), join(outbox, `used-${String(index + 1).repeat(64)}`));
@@ -1800,13 +1719,11 @@ case "$2" in
 esac
 `);
       chmodSync(join(bin, "gh"), 0o755);
-      // docker container inspect <slot>: the slot's container, when it has one
       writeFileSync(join(bin, "docker"), `#!/bin/sh
 [ "$1 $2" = "container inspect" ] && [ -f "\${0%/bin/docker}/container" ] || { echo "Error: No such container" >&2; exit 1; }
 cat "\${0%/bin/docker}/container"
 `);
       chmodSync(join(bin, "docker"), 0o755);
-      // stat -c %.3Z <file>: when the file was last changed, which the test says for the claim or the build; the system's stat otherwise
       writeFileSync(join(bin, "stat"), `#!/bin/sh
 if [ "$1 $2" = "-c %.3Z" ] && [ -f "\${0%/bin/stat}/older" ]; then
   read -r which at < "\${0%/bin/stat}/older"
@@ -1817,7 +1734,6 @@ PATH="\${PATH#*:}" exec stat "$@"
       chmodSync(join(bin, "stat"), 0o755);
       const pass = () => spawnSync("bash", [promoteScript, "owner/repo", root, outboxes, writer, "2048", ...(junkSlot ? ["herdr-ci-host-1"] : []), slot], { encoding: "utf8", env: { ...process.env, PATH: [bin, process.env.PATH].join(delimiter) } });
       const result = pass();
-      // later passes, each after the job claimed again (the claim's run and attempt), each for another build
       const callsBefore: number[] = [];
       later.forEach((again, i) => {
         const other = String(i).padStart(64, "f");
@@ -1825,23 +1741,19 @@ PATH="\${PATH#*:}" exec stat "$@"
         writeFileSync(join(outbox, `${other}.claim`), again);
         callsBefore.push(existsSync(join(dir, "gh.log")) ? readFileSync(join(dir, "gh.log"), "utf8").split("\n").filter(Boolean).length : 0);
         if (thenGithub) answer(thenGithub);
-        // the slot's ten minutes are over
         if (slotHeldOffUntilNow) {
           const old = new Date(Date.now() - 20 * 60_000);
           for (const name of readdirSync(join(outboxes, ".refused")).filter((name) => name.startsWith("slot-"))) utimesSync(join(outboxes, ".refused", name), old, old);
         }
         pass();
       });
-      // an entry is filed under the run GitHub confirmed for the claim: 7 in every claim taken in here
       const entry = join(root, "entries", "7", key);
       const runs = readdirSync(join(root, "entries"));
       return {
         status: result.status,
         stderr: result.stderr,
         outbox: readdirSync(outbox),
-        /** what entries/ holds itself: a directory per run with an entry */
         runs,
-        /** every entry, as `<run id>/<key>` */
         entries: runs.flatMap((run) => readdirSync(join(root, "entries", run)).map((name) => `${run}/${name}`)),
         manifest: existsSync(join(entry, ".manifest")) ? readFileSync(join(entry, ".manifest"), "utf8") : null,
         used: existsSync(join(root, "used")) ? readdirSync(join(root, "used")) : [],
@@ -1912,7 +1824,6 @@ PATH="\${PATH#*:}" exec stat "$@"
   });
 
   it("never lets a claim from another slot refuse a trusted run's own claims", () => {
-    // another slot's job names run 7, whose job runs on this slot only once GitHub says so below
     const run = promote({ runner: "herdr-ci-host-9" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], true, { runner: slot });
     expect(run.entries).toHaveLength(1);
   });
@@ -1924,9 +1835,7 @@ PATH="\${PATH#*:}" exec stat "$@"
   });
 
   it("refuses a stale run of the writer's pull request without holding off its slot", () => {
-    // the pull request moved on to another head while run 7's job was still running
     const run = promote({ prSha: "6".repeat(40) }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 2\n"], false, {});
-    // its re-run on the same slot, at the pull request's head, is taken in
     expect(run.entries).toHaveLength(1);
   });
 
@@ -1961,23 +1870,19 @@ PATH="\${PATH#*:}" exec stat "$@"
       promote({ event: "workflow_dispatch" }),
       promote({}, "files", ""),
       promote({}, "link"),
-      // a claim too big to be one: never read
       promote({}, "files", "devswha", false, false, `7 1${" ".repeat(100)}\n`),
     ];
     for (const run of refused) {
       expect(run.status).toBe(0);
-      // no entry, and no directory left for the run either
       expect(run.runs).toEqual([]);
       expect(run.outbox).toEqual([`judged-${key}`]);
     }
   });
 
   it("takes in a build only while the container whose job wrote its claim is still the slot's", () => {
-    // the slot's job ended and its next container started while GitHub answered: its word is about that one's job
     const moved = promote({ container: "changes" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
     expect(moved.stderr).toContain("the container that built it is no longer the slot's");
     expect(moved.callsBefore[0]).toBeGreaterThan(0);
-    // the next container's own claim is taken in: the slot was not held off
     expect(moved.entries).toEqual([`7/${"0".padStart(64, "f")}`]);
     // a slot without a running container: nothing GitHub says could be about the claim's job, so it is not asked
     for (const container of ["none", "created", "stopped"] as const) {
@@ -1990,14 +1895,11 @@ PATH="\${PATH#*:}" exec stat "$@"
   });
 
   it("refuses a build an earlier job left in the outbox, which the slot's container did not write", () => {
-    // the launcher could not empty the outbox before it started this container: the claim names a run this container's job is of
     const left = promote({ container: "younger" }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
     expect(left.stderr).toContain("written before the slot's container started");
-    // GitHub was not asked about it, and the slot is not held off: the container's own build, written after it started, is taken in
     expect(left.callsBefore[0]).toBe(0);
     expect(left.entries).toEqual([`7/${"0".padStart(64, "f")}`]);
     expect(left.outbox.sort()).toEqual([`judged-${"0".padStart(64, "f")}`, `judged-${key}`].sort());
-    // by the claim's time and by the build's, each to the millisecond (the container started at 12:00:00.123)
     for (const older of ["claim", "tar"] as const) {
       const one = promote({ older });
       expect(one.stderr).toContain("written before the slot's container started");
@@ -2028,7 +1930,6 @@ PATH="\${PATH#*:}" exec stat "$@"
     const dead = promote({ jobStarted: -810 }, "files", "devswha", false, false, "7 1\n", 0, false, ["8 1\n"]);
     expect(dead.stderr).toContain("started before the slot's container did");
     expect(dead.runs).toEqual([]);
-    // the claim is at fault, so its slot is held off: the next claim costs no call
     expect(dead.callsBefore[0]).toBe(1);
     expect(dead.ghCalls).toHaveLength(1);
     // to the second: run.sh waits two before a slot's next container, so a job even one second older than
@@ -2039,13 +1940,10 @@ PATH="\${PATH#*:}" exec stat "$@"
   });
 
   it("refuses a claim naming a run whose job under the slot's name is on another runner than the one registered now", () => {
-    // a job of an earlier registration, which GitHub still lists as running
     const stale = promote({ runnerId: 30 }, "files", "devswha", false, false, "7 1\n", 0, false, ["8 1\n"]);
     expect(stale.runs).toEqual([]);
-    // the claim is at fault, so its slot is held off: the next claim costs no call
     expect(stale.callsBefore[0]).toBe(2);
     expect(stale.ghCalls).toHaveLength(2);
-    // no runner under the name any more (the job ended while GitHub was asked): refused, and the slot is not held off
     const ended = promote({ registered: null }, "files", "devswha", false, false, "7 1\n", 0, false, ["7 1\n"], false, {});
     expect(ended.stderr).toContain("no runner is registered as");
     expect(ended.entries).toEqual([`7/${"0".padStart(64, "f")}`]);

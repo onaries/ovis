@@ -94,7 +94,6 @@ it("returns pairing_rate_limited on the eleventh HTTP code issue", async () => {
   }
 });
 
-/** Fails every flush of a private state file, before its rename, until restored. */
 function failFileSync() {
   return spyOn(privateStateFs, "fsyncSync").mockImplementation(() => { throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" }); });
 }
@@ -123,7 +122,6 @@ async function until(check: () => boolean): Promise<void> {
 
 it("keeps the gate closed, and a device paired in the install's other state dir signed in, on a fresh state dir", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));
-  // an update from a fresh 0.4.14 install starts on the old dir, while the phone was paired in the new one
   const [active, sibling] = [join(root, "herdr-web-ui"), join(root, "ovis")];
   for (const dir of [active, sibling]) mkdirSync(dir);
   const token = "7".repeat(64);
@@ -132,7 +130,6 @@ it("keeps the gate closed, and a device paired in the install's other state dir 
   writeFileSync(join(sibling, "preferences.json"), JSON.stringify({ revision: 1, settings: { language: "en", sidebarRows: "two" } }));
   const server = createServer({ port: 0, stateDir: active, siblingStateDir: sibling, tailscaleOwner: null });
   const base = `http://127.0.0.1:${server.port}`;
-  // a request through a proxy on this PC stands for one from another device
   const remote = { "x-forwarded-for": "100.64.0.9" };
   try {
     expect((await fetch(`${base}/api/preferences`, { headers: remote })).status).toBe(401);
@@ -151,7 +148,6 @@ it("keeps the gate closed, and a device paired in the install's other state dir 
 
 it("serves the state dir it merged into, even when the merge gave the old dir files of its own", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));
-  // the old name holds only the bridge registry; the phone is paired in the new dir
   const [legacy, next] = [join(root, "herdr-web-ui"), join(root, "ovis")];
   mkdirSync(join(legacy, "bridges"), { recursive: true });
   writeFileSync(join(legacy, "bridges", "local.json"), "{}");
@@ -162,7 +158,6 @@ it("serves the state dir it merged into, even when the merge gave the old dir fi
   const env = { XDG_CONFIG_HOME: process.env["XDG_CONFIG_HOME"], OVIS_STATE_DIR: process.env["OVIS_STATE_DIR"] };
   process.env["XDG_CONFIG_HOME"] = root;
   delete process.env["OVIS_STATE_DIR"];
-  // the copy of the registry for the old dir fails; its merge record does not, and gives it files of its own
   const rename = privateStateFs.renameSync;
   const failing = spyOn(privateStateFs, "renameSync").mockImplementation((from, to) => {
     if (to === join(legacy, "devices.json")) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
@@ -185,7 +180,6 @@ it("serves the state dir it merged into, even when the merge gave the old dir fi
     rmSync(root, { recursive: true, force: true });
   }
 });
-/** The next frame that satisfies `predicate`: subscribed before the frame is provoked, with a deadline instead of a poll. */
 function nextMessage(socket: WebSocket, predicate: (message: ServerMessage) => boolean, label: string, ms = 5000): Promise<ServerMessage> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { socket.removeEventListener("message", onMessage); reject(new Error(`${label}: no such frame within ${ms} ms`)); }, ms);
@@ -200,11 +194,6 @@ function nextMessage(socket: WebSocket, predicate: (message: ServerMessage) => b
   });
 }
 
-/**
- * An open machines event stream: its `events` are the JSON data lines as they arrive, `next`
- * resolves with the first event satisfying `predicate` (subscribed before it is provoked), and
- * `ended` resolves when the server closes the stream, or when the test aborts it.
- */
 async function openEvents(base: string, headers: Record<string, string>, signal: AbortSignal) {
   const response = await fetch(`${base}/api/machines/events`, { headers, signal });
   expect(response.status).toBe(200);
@@ -243,7 +232,6 @@ async function openEvents(base: string, headers: Record<string, string>, signal:
       listeners.add(listener);
     });
   };
-  // the browser's stream key, when the server gave it one with this stream (shared/protocol.ts, "Browser stream keys")
   const setCookies = response.headers.getSetCookie();
   return { events, next, ended, setCookies, cookie: setCookies[0]?.split(";")[0] ?? null };
 }
@@ -289,7 +277,6 @@ it(`keeps native WS and SSE open on rename until ${action}`, async () => {
 }, 10_000);
 }
 
-/** A browser's cookie jar: what each answer set, by cookie name, and the Cookie header its next request sends. */
 function cookieJar() {
   const cookies = new Map<string, string>();
   return {
@@ -385,7 +372,6 @@ it("revoking every device closes each paired client's streams at once, voids eve
     const cookieA = await pair("A");
     const cookieB = await pair("B");
     const watchCookie = `${DEVICE_COOKIE}=${watch.token}`;
-    // A's and the owner's streams are open before C is enrolled: both hear of it, once, as one event
     const streamA = await openEvents(base, { ...stranger, cookie: cookieA }, abort.signal);
     const owner = await openEvents(base, { authorization: "Bearer test-revoke-all" }, abort.signal);
     const isPairing = (label: string) => (event: MachineEvent): event is DevicePairedEvent => event.type === "device-paired" && event.label === label;
@@ -395,7 +381,6 @@ it("revoking every device closes each paired client's streams at once, voids eve
     const [toldA, toldOwner] = await Promise.all([heardByA, heardByOwner]) as [DevicePairedEvent, DevicePairedEvent];
     expect(toldA).toEqual({ type: "device-paired", event_id: expect.stringMatching(/^[0-9a-f]{16}$/), device_id: expect.stringMatching(/^[0-9a-f]{16}$/), label: "C", enrolled_at: expect.any(String) });
     expect(toldOwner).toEqual(toldA);
-    // C's own stream, opened after its enrollment, hears nothing of itself; a later enrollment (D) reaches A, the owner and C
     const streamC = await openEvents(base, { ...stranger, cookie: cookieC }, abort.signal);
     const heardD = [streamA, owner, streamC].map((stream) => stream.next(isPairing("D"), "hears of D"));
     const cookieD = await pair("D");
@@ -406,7 +391,6 @@ it("revoking every device closes each paired client's streams at once, voids eve
     const { devices } = await (await fetch(`${base}/api/devices`, { headers: admin })).json() as { devices: { id: string; label: string }[] };
     expect(devices.map((device) => device.label).sort()).toEqual(["A", "B", "C", "D", "Watch"]);
 
-    // live terminals for A (local) and B, and page media A's render was given
     const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-device-revoke-all" });
     workspaceId = created.workspace.workspace_id;
     const paneId = created.root_pane.pane_id;
@@ -427,7 +411,6 @@ it("revoking every device closes each paired client's streams at once, voids eve
     expect((await fetch(`${base}/api/devices/revoke-all/`, { method: "POST", headers: admin })).status).toBe(404);
     expect((await fetch(`${base}/api/devices//revoke-all`, { method: "POST", headers: admin })).status).toBe(404);
     expect((await revokeAll(admin, "GET")).status).toBe(400);
-    // nothing above changed anything: every stream is still open and every credential still works
     expect(a.socket.readyState).toBe(WebSocket.OPEN);
     for (const cookie of [cookieA, cookieB, cookieC, cookieD, watchCookie]) expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
 
@@ -478,7 +461,6 @@ it("revoking every device closes each paired client's streams at once, voids eve
 
 it("revoking every device closes relayed remote terminals through /ws?machine_id=, and one whose upgrade is still pending is never left open", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-revoke-all-relay-"));
-  // the other PC: a fictional bridge that accepts the relay's bearer token, and can hold one upgrade until let go
   const opened: unknown[] = [];
   const upgrades: Request[] = [];
   const watchers = new Set<() => void>();
@@ -521,11 +503,9 @@ it("revoking every device closes relayed remote terminals through /ws?machine_id
     };
     const cookieA = await pair("A");
     const cookieB = await pair("B");
-    // A's terminal on the other PC, relayed and open
     const a = await connect(relayed, cookieA); sockets.push(a.socket);
     await within(() => opened.length === 1, "A's relay reached the other PC");
 
-    // B's upgrade is authenticated, and waits while the relay dials the other PC
     let reached!: () => void;
     let release!: () => void;
     const reachedRemote = new Promise<void>((resolve) => { reached = resolve; });
@@ -538,11 +518,9 @@ it("revoking every device closes relayed remote terminals through /ws?machine_id
     await reachedRemote;
     hold = null;
 
-    // every device goes while B's upgrade is still pending
     const revoked = await fetch(`${base}/api/devices/revoke-all`, { method: "POST", headers: admin });
     expect(revoked.status).toBe(200);
     expect((await revoked.json()) as DevicesRevokedAll).toEqual({ revoked: 2 });
-    // the open relayed terminal ends at once, its connection to the other PC with it
     expect((await a.closed).code).toBe(1008);
     await within(() => closedUpstreams >= 1, "A's connection to the other PC closed");
 
@@ -587,7 +565,6 @@ it("a revocation of every device that cannot be persisted changes nothing, and o
   try {
     const owner = await openEvents(base, {}, abort.signal);
     const pairings = () => owner.events.filter((event) => event.type === "device-paired") as DevicePairedEvent[];
-    // nothing paired yet: a credential issued now is unconfirmed, a code is pending, and the gate is open
     const candidate = await issue(await start());
     const pendingCode = await start();
     expect((await session(forwarded)).status).toBe(200);
@@ -600,7 +577,6 @@ it("a revocation of every device that cannot be persisted changes nothing, and o
     expect(() => readFileSync(join(root, "devices.json"), "utf8")).toThrow();
     expect((await session({ ...forwarded, cookie: candidate })).status).toBe(500);
     failing.mockRestore();
-    // once writes work: the pending code still pairs, the candidate still confirms, and that confirmation is the one enrollment heard
     const told = owner.next((event) => event.type === "device-paired", "the owner hears of the confirmed device");
     const sibling = await issue(pendingCode);
     expect((await session({ ...forwarded, cookie: candidate })).status).toBe(200);
@@ -608,7 +584,6 @@ it("a revocation of every device that cannot be persisted changes nothing, and o
     expect(pairings()).toHaveLength(1);
     // a sibling candidate is stale once a first cookie closed the gate (the rule from before this route)
     expect((await session({ ...forwarded, cookie: sibling })).status).toBe(401);
-    // gated now, with one device and a fresh pending code: the write succeeds, and everything issued before it is void
     const staleCode = await start();
     const revoked = await revokeAll();
     expect(revoked.status).toBe(200);
@@ -618,10 +593,8 @@ it("a revocation of every device that cannot be persisted changes nothing, and o
     expect(stale.status).toBe(401);
     expect(await stale.json()).toMatchObject({ error: { code: "invalid_code" } });
     expect((await session(forwarded)).status).toBe(401);
-    // revoking announces nothing, and the owner's stream is still the owner's
     expect(pairings()).toHaveLength(1);
     expect((await session({})).status).toBe(200);
-    // the registry on disk says gated with nothing in it, and a restart agrees
     abort.abort();
     await owner.ended;
     server.stop();
@@ -685,7 +658,6 @@ it("keeps a forwarded first-pair gate open until a returned cookie is durably co
     expect(retryCookie).not.toBe(droppedCookie);
     server.stop();
 
-    // No first-pair candidate or gate survives a restart before confirmation.
     server = createServer(options);
     base = `http://127.0.0.1:${server.port}`;
     expect((await stranger()).status).toBe(200);
@@ -723,21 +695,18 @@ it("never tells a browser of the device it paired itself, on any stream or push 
   const pairedLabels = (stream: { events: MachineEvent[] }) => stream.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label);
   const pushed = (label: string) => (push: { payload: { body: string } }) => push.payload.body === `New device paired: ${label}`;
   const issued = /^ovis_stream_([0-9a-f]{32})=1; Path=\/; HttpOnly; SameSite=Strict; Max-Age=31536000$/;
-  // "Pair this device" from a signed-in browser: a code, then the pairing from that same browser
   const selfPair = async (jar: ReturnType<typeof cookieJar>, label: string) => {
     const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, ...bearer, cookie: jar.header() } })).json() as { code: string };
     const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...bearer, cookie: jar.header() }, body: JSON.stringify({ code, label }) });
     expect(response.status).toBe(204);
     jar.take(response.headers.getSetCookie());
   };
-  // a device paired by someone else, from a browser of its own that holds no key
   const otherPair = async (label: string) => {
     const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, ...bearer } })).json() as { code: string };
     expect((await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code, label }) })).status).toBe(204);
   };
   const subscribe = (subscription: unknown, cookie: string) => fetch(`${base}/api/push/subscribe`, { method: "POST", headers: { ...guard, ...bearer, cookie }, body: JSON.stringify({ subscription }) });
   try {
-    // two tabs of one browser open at once, before it holds any key: each answer issues a key in a cookie of its own name
     const browser = cookieJar();
     const [tab, otherTab] = await Promise.all([openEvents(base, bearer, abort.signal), openEvents(base, bearer, abort.signal)]);
     for (const stream of [tab, otherTab]) {
@@ -745,19 +714,15 @@ it("never tells a browser of the device it paired itself, on any stream or push 
       expect(stream.setCookies[0]).toMatch(issued);
     }
     expect(tab.setCookies[0]!.match(issued)![1]).not.toBe(otherTab.setCookies[0]!.match(issued)![1]);
-    // the browser keeps both, since neither overwrites the other, and sends both from now on
     browser.take([...tab.setCookies, ...otherTab.setCookies]);
     expect(browser.names()).toHaveLength(2);
-    // a third tab carries the keys: nothing new is issued, and it is the same browser
     const thirdTab = await openEvents(base, { ...bearer, cookie: browser.header() }, abort.signal);
     expect(thirdTab.setCookies).toEqual([]);
-    // this browser's alerts were on before it paired anything (a token sign-in: no owner); the answer issues nothing new
     const ownSubscription = await subscribe(selfPush.subscription, browser.header());
     expect(ownSubscription.status).toBe(204);
     expect(ownSubscription.headers.getSetCookie()).toEqual([]);
     expect(JSON.parse(readFileSync(join(root, "push-subscriptions.json"), "utf8"))[0]).toMatchObject({ device_id: null, browser_keys: expect.arrayContaining(browser.names().map((name) => name.slice("ovis_stream_".length))) });
 
-    // another browser signed in with the same token: its push subscription comes first, and that answer gives it its key
     const other = cookieJar();
     const otherSubscription = await subscribe(otherPush.subscription, "");
     expect(otherSubscription.status).toBe(204);
@@ -765,12 +730,10 @@ it("never tells a browser of the device it paired itself, on any stream or push 
     other.take(otherSubscription.headers.getSetCookie());
     const owner = await openEvents(base, { ...bearer, cookie: other.header() }, abort.signal);
     expect(owner.setCookies).toEqual([]);
-    // a key cookie that is malformed is no key: the stream is served, not refused, and given a real one (a browser of its own)
     const malformed = await openEvents(base, { ...bearer, cookie: `ovis_stream_${"A".repeat(32)}=1; ovis_stream_${"a".repeat(32)}=0; ovis_stream=${"a".repeat(32)}` }, abort.signal);
     expect(malformed.setCookies).toHaveLength(1);
     expect(malformed.setCookies[0]).toMatch(issued);
 
-    // the store is not gated yet: the pairing issues a first-pair cookie, and its first return enrolls it
     const heardSelf = [owner, malformed].map((stream) => stream.next(isPairing("Self"), "another browser hears of Self"));
     const pushedSelf = otherPush.waitFor(pushed("Self"), "the other browser is pushed Self", 5000);
     await selfPair(browser, "Self");
@@ -781,8 +744,6 @@ it("never tells a browser of the device it paired itself, on any stream or push 
     const keysOnly = browser.header().split("; ").filter((pair) => pair.startsWith("ovis_stream_")).join("; ");
     expect(keysOnly.split("; ")).toHaveLength(2);
     expect((await fetch(`${base}/api/machines/events`, { headers: { cookie: keysOnly, "x-forwarded-for": "192.0.2.1" } })).status).toBe(401);
-    // a later enrollment by someone else reaches every tab and both subscriptions; a stream is ordered,
-    // so had Self reached a tab it came first, and Self's push went out before this one was asked for
     const tabs = [tab, otherTab, thirdTab];
     const heardBarrier = [...tabs, owner, malformed].map((stream) => stream.next(isPairing("Barrier"), "hears of Barrier"));
     const pushedBarrier = [selfPush, otherPush].map((fake) => fake.waitFor(pushed("Barrier"), "pushed Barrier", 5000));
@@ -792,12 +753,9 @@ it("never tells a browser of the device it paired itself, on any stream or push 
     expect(pairedLabels(owner)).toEqual(["Self", "Barrier"]);
     expect(pairedLabels(malformed)).toEqual(["Self", "Barrier"]);
     expect(selfPush.received.map((push) => push.payload.body)).toEqual(["New device paired: Barrier"]);
-    // the event the other browser heard was this browser's own enrollment
     const { devices } = await (await fetch(`${base}/api/devices`, { headers: bearer })).json() as { devices: { id: string; label: string }[] };
     expect(devices.find((entry) => entry.label === "Self")?.id).toBe(self.device_id);
 
-    // the gate is closed now: the same browser, holding its device cookie, pairs again and is enrolled at once;
-    // none of its tabs or its subscription hears of it, the other browser does
     const heardAgain = owner.next(isPairing("Again"), "the other browser hears of Again");
     const pushedAgain = otherPush.waitFor(pushed("Again"), "the other browser is pushed Again", 5000);
     await selfPair(browser, "Again");
@@ -843,9 +801,7 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
     // the shared settings: a watching device reads them, and cannot change them for every browser
     expect((await fetch(`${base}/api/preferences`, { headers })).status).toBe(200);
     expect((await fetch(`${base}/api/preferences`, { method: "PUT", headers, body: JSON.stringify({ settings: { theme: "light" }, pins: [] }) })).status).toBe(403);
-    // herdr's copy_on_select: a watching device selects text too, so it reads it (#1559)
     expect((await fetch(`${base}/api/herdr-ui`, { headers })).status).toBe(200);
-    // what was read in the other browsers: a watching device sees it, and its own views stay its own
     expect((await fetch(`${base}/api/seen`, { headers })).status).toBe(200);
     const told = await fetch(`${base}/api/seen`, { method: "POST", headers, body: JSON.stringify({ pc: "local", epoch: "e", pane: "p", id: 1 }) });
     expect(told.status).toBe(403);
@@ -916,12 +872,10 @@ it("a route spelled with a trailing, doubled or encoded slash is no route, for a
         expect([label, path, response.status]).toEqual([label, path, 404]);
       }
     }
-    // the canonical spellings: refused to a watching device on this PC, its alias and another PC's route
     for (const path of ["api/sessions/history", "api/machines/local/sessions/history", "api/machines/pc1/sessions/history"]) {
       const response = await fetch(`${base}/${path}${query}`, { headers: { cookie: `ovis_device=${watch.token}` } });
       expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
     }
-    // and answered for a driving one (no such workspace here; no such PC connected)
     const driving = { cookie: `ovis_device=${drive.token}` };
     const absent = await fetch(`${base}/api/sessions/history?workspace_id=ovis-test-absent&agent=pi`, { headers: driving });
     expect([absent.status, ((await absent.json()) as { error: { code: string } }).error.code]).toEqual([404, "workspace_not_found"]);
@@ -947,7 +901,6 @@ it("a pane's command rows are refused to a watching device on this PC, its alias
       const response = await fetch(`${base}/${path}${query}`, { headers: { cookie: `ovis_device=${watch.token}` } });
       expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
     }
-    // a driving device reaches the route: this PC asks herdr for the pane, its alias too, and no such PC is connected
     const driving = { cookie: `ovis_device=${drive.token}` };
     for (const path of ["api/pane/commands", "api/machines/local/pane/commands"]) {
       const response = await fetch(`${base}/${path}${query}`, { headers: driving });
@@ -978,7 +931,6 @@ it("the paths under a pane's folder and a plugin run's output are refused to a w
         expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
       }
     }
-    // a driving device reaches the routes: this PC asks herdr, its alias too, and no such PC is connected
     const driving = { cookie: `ovis_device=${drive.token}` };
     for (const prefix of ["api", "api/machines/local"]) {
       for (const [route, code] of [[routes[0], "pane_not_found"], [routes[1], "plugin_log_not_found"], [routes[2], "pane_not_found"]] as const) {
@@ -1001,15 +953,12 @@ it("a repository's checkouts are refused to a watching device on this PC, its al
   store.match(drive.token);
   const server = createServer({ port: 0, stateDir: root, token: "test-worktree-list", tailscaleOwner: null });
   const base = `http://127.0.0.1:${server.port}`;
-  // every checkout of the workspace's repository: paths and branches, those not open in herdr too;
-  // the inventory answers the same for several workspaces at once (#2661)
   try {
     for (const route of ["worktree/list?workspace_id=ovis-test-absent", "worktree/inventory?workspace_id=ovis-test-absent"]) for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
       const path = `${prefix}/${route}`;
       const response = await fetch(`${base}/${path}`, { headers: { cookie: `ovis_device=${watch.token}` } });
       expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
     }
-    // a driving device reaches the route: this PC asks herdr, its alias too, and no such PC is connected
     const driving = { cookie: `ovis_device=${drive.token}` };
     const route = "worktree/list?workspace_id=ovis-test-absent";
     for (const prefix of ["api", "api/machines/local"]) {
@@ -1072,7 +1021,6 @@ it("never announces a pairing to a stream that came in through the open LAN: it 
   const server = createServer({ port: 0, stateDir: root, token: "", tailscaleOwner: null });
   const base = `http://127.0.0.1:${server.port}`;
   const abort = new AbortController();
-  // a request through a proxy on this PC stands for one from another device; with nothing paired it gets in through the open LAN
   const lan = { "x-forwarded-for": "100.64.0.9" };
   const isPairing = (label: string) => (event: MachineEvent): event is DevicePairedEvent => event.type === "device-paired" && event.label === label;
   const pairedLabels = (stream: { events: MachineEvent[] }) => stream.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label);
@@ -1081,7 +1029,6 @@ it("never announces a pairing to a stream that came in through the open LAN: it 
     const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...lan }, body: JSON.stringify({ code, label }) });
     expect(response.status).toBe(204);
     const cookie = response.headers.getSetCookie().find((line) => line.startsWith(`${DEVICE_COOKIE}=`))!.split(";")[0]!;
-    // its first return confirms a first-pair credential (and closes the gate); a gated pairing is in already
     expect((await fetch(`${base}/api/session`, { headers: { ...lan, cookie } })).status).toBe(200);
   };
   try {
@@ -1100,7 +1047,6 @@ it("never announces a pairing to a stream that came in through the open LAN: it 
     const heardSecond = local.next(isPairing("Second"), "this PC hears of Second");
     await pair("Second");
     await heardSecond;
-    // a stream is ordered: a change made after both pairings reaches this PC's stream after them, and the ended one hears none of it
     const barrier = local.next((event) => event.type === "preferences" && event.preferences.settings["theme"] === "light", "this PC hears the barrier");
     expect((await fetch(`${base}/api/preferences`, { method: "PUT", headers: guard, body: JSON.stringify({ settings: { theme: "light" } }) })).status).toBe(200);
     await barrier;
@@ -1126,7 +1072,6 @@ it("a script pairs for its token in JSON and authenticates with Authorization: D
     expect(await browser.text()).toBe("");
     const browserCookie = browser.headers.get("set-cookie")!.split(";")[0]!;
     expect(browserCookie).toStartWith("ovis_device=");
-    // its cookie coming back confirms the first pairing, so the script pairs through the closed gate
     expect((await fetch(`${base}/api/session`, { headers: { cookie: browserCookie } })).status).toBe(200);
 
     const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, accept: "application/json" }, body: JSON.stringify({ code: await code(), label: "Script" }) });
@@ -1192,7 +1137,6 @@ it("a device downgraded to watch while its relayed /ws?machine_id= upgrade is pe
     const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...stranger }, body: JSON.stringify({ code, label: "Phone" }) });
     expect(paired.status).toBe(204);
     const cookie = paired.headers.get("set-cookie")!.split(";")[0]!;
-    // its cookie coming back confirms the pairing
     expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
     const { devices } = await (await fetch(`${base}/api/devices`, { headers: { ...stranger, cookie } })).json() as { devices: { id: string; current: boolean }[] };
     const id = devices.find((device) => device.current)!.id;
@@ -1201,7 +1145,6 @@ it("a device downgraded to watch while its relayed /ws?machine_id= upgrade is pe
     socket = new RuntimeSocket(`${base.replace("http:", "ws:")}/ws?machine_id=fictional-remote`, { headers: { cookie } });
     const closed = new Promise<CloseEvent>((resolve) => socket!.addEventListener("close", resolve, { once: true }));
     await reachedRemote;
-    // the role changes while the relay still dials the other PC: the socket was authorized to drive
     app.context.services.devices.update(id, { role: "watch" });
     release();
     socket.addEventListener("open", () => socket!.send(JSON.stringify({ type: "attach", pane_id: "remote-pane", cols: 80, rows: 24, receipt_resume_id: crypto.randomUUID() })), { once: true });
@@ -1300,10 +1243,8 @@ it("a key re-paired on a PC in no account with a code another device started sta
     if (!starter || !first) throw new Error("Expected relay enrollment");
     store.revoke(first.device.id);
     const tombstones = readFileSync(join(stateDir, "account-tombstones.json"));
-    // a second later, as a person pairing again would be
     const later = Date.now() + 1_000;
     expect(store.pairRelay(store.startPairing(later, { remote: true, startedBy: starter.device.id, memberRequired: false }).code, "Phone", publicKey, later)).not.toBeNull();
-    // the revoke's tombstone back, as a stop before it was cleared or a sibling dir's merge leaves it
     writeFileSync(join(stateDir, "account-tombstones.json"), tombstones, { mode: 0o600 });
     expect(new DeviceStore(stateDir).hasKey(publicKey)).toBe(true);
   } finally {
@@ -1336,7 +1277,6 @@ it("POST /api/devices/pair/cancel with a code ends only that pairing, not one st
   try {
     const start = async () => (await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string }).code;
     const shown = await start();
-    // Settings, or another device, starts a pairing of its own while `link --code` still runs
     const newer = await start();
     const stale = await fetch(`${base}/api/devices/pair/cancel`, { method: "POST", headers: admin, body: JSON.stringify({ code: shown }) });
     expect(stale.status).toBe(200);
@@ -1378,7 +1318,6 @@ it("ends a socket the open LAN let in once the first device is paired, and refus
   const stateDir = mkdtempSync(join(tmpdir(), "ovis-open-socket-"));
   const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", tailscaleOwner: null, machines: false, sidecar: false });
   const base = `http://127.0.0.1:${app.port}`;
-  // another machine on the LAN, as a proxy in front of this server names it
   const stranger = { "x-forwarded-for": "192.168.0.20" };
   const RuntimeSocket = WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => WebSocket;
   const open = (): { socket: WebSocket; opened: Promise<boolean>; closed: Promise<CloseEvent> } => {
@@ -1398,10 +1337,8 @@ it("ends a socket the open LAN let in once the first device is paired, and refus
     sockets.push(first.socket);
     expect(await first.opened).toBe(true);
     const store = app.context.services.devices;
-    // a first pairing whose cookie has not come back closes nothing: the socket stays
     const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
     expect([store.gated, first.socket.readyState]).toEqual([false, WebSocket.OPEN]);
-    // the cookie comes back: the gate closes, and with it the connection nothing but the open LAN stood behind
     store.match(phone.token);
     const ended = await Promise.race([first.closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the open socket outlived the gate")), 5000))]);
     expect([ended.code, ended.reason]).toEqual([1008, "Pairing required"]);
@@ -1423,7 +1360,6 @@ it("a pairing code the open LAN started does not pair once the first device clos
   const stranger = { ...guard, "x-forwarded-for": "192.168.0.20" };
   try {
     const store = app.context.services.devices;
-    // the owner's phone redeemed its code; until its cookie comes back the gate is open
     const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
     const started = await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: stranger });
     expect(started.status).toBe(200);

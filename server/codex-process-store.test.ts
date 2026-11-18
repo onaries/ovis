@@ -61,7 +61,6 @@ it.skipIf(process.platform !== "linux").each([
     const reader = child.stdout.getReader();
     await reader.read();
     if (inspectFailure) {
-      // Both stores remain held; only inspecting one candidate's path fails mid-scan.
       const inaccessible = files[inspectFailure === "database" ? 2 : 3]!;
       const stat = fs.statSync;
       spies.push(spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {

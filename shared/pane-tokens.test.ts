@@ -28,6 +28,7 @@ describe("paneTokenValues", () => {
     expect(paneTokenValues(layout, null, tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);
     expect(paneTokenValues(layout, "codex", tokens)).toEqual(["40% 12m"]);
     expect(paneTokenValues(layout, "constructor", tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);
+    // rows that name no token draw none, as herdr's would
     expect(paneTokenValues({ rows: [], by_agent: {} }, "claude", tokens)).toEqual([]);
     expect(paneTokenValues({ rows: null, by_agent: { codex: [] } }, "claude", tokens)).toHaveLength(3);
   });
@@ -47,6 +48,7 @@ describe("paneTokenValues", () => {
       rows: [{ name: "quota", rules: [{ equals: "unknown", hide: true }] }, { name: "progress" }, { name: "quota" }],
       by_agent: {},
     };
+    // hidden at its first place, shown at its second, as herdr tests each place on its own
     expect(paneTokenValues(layout, null, { quota: "unknown", progress: "40% 12m" })).toEqual(["40% 12m", "unknown"]);
     expect(paneTokenValues(layout, null, { quota: "5h 95%", progress: "40% 12m" })).toEqual(["5h 95%", "40% 12m"]);
   });

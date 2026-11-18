@@ -12,15 +12,6 @@ import { openLens } from "./header-lens.ts";
 
 // Real client and demo transport. Only receipts and demo-turn completion are held, then released
 // explicitly: no provider, live herdr, sleeps or deadline-dependent assertions.
-//
-// A terminal command sent from Chat opens a peek (src/lib/terminalPeek.ts): the pane's own grid over
-// its still-mounted chat, the lens and the address still Chat. The demo's Claude pane records
-// "Config dialog dismissed" when Escape closes /config's panel (site/demo/transport.ts), so /config
-// comes back by itself; /doctor records nothing and stays until the reader leaves it.
-// The other agents come back from their screens (src/lib/inputRow.ts): the demo's omp pane draws its
-// editor's empty row, and /settings a panel in its place until Escape (site/demo/agentScreens.ts),
-// so /settings comes back by itself; /copy is not on omp's list and stays. Claude's /btw answer,
-// left open when its peek is ended by hand, holds the next message behind the still-open notice.
 const app = mkdtempSync(join(tmpdir(), "terminal-autoswitch-"));
 const evidence = join(process.env.UI_EVIDENCE_DIR || "/tmp/terminal-autoswitch-shots", "edges");
 mkdirSync(evidence, { recursive: true });
@@ -112,11 +103,8 @@ const owner = panes.flaky;
 const AUTO_NOTE = "Chat may come back when you close it";
 type Frame = { type: string; pane_id?: string; text?: string };
 type PeekWindow = Window & { sentFrames: Frame[]; chatLog?: Element | null; promptReads: number };
-/** the pane's stack, whichever lens it shows */
 const stack = (page: Page) => page.locator(`.terminal-stack[data-pane-owner="${owner}"]`);
-/** the chat is mounted: the Chat lens, a peek over it included */
 const chat = (page: Page) => page.locator(`.terminal-stack.is-chat[data-pane-owner="${owner}"]`);
-/** a terminal command's peek: the grid shown over the still-mounted chat */
 const peek = (page: Page) => page.locator(`.terminal-stack.is-chat.is-peek[data-pane-owner="${owner}"]`);
 const box = (page: Page) => chat(page).locator(".composer-text");
 const hint = (page: Page) => page.locator(".terminal-banner-command");
@@ -130,17 +118,13 @@ const ready = async (page: Page) => {
   await chat(page).locator(".composer-status[data-status='done'], .composer-status[data-status='idle']").waitFor();
 };
 const frames = (page: Page): Promise<Frame[]> => page.evaluate(() => (window as unknown as PeekWindow).sentFrames);
-/** attach and detach frames: a peek reuses the attached grid, so it adds none */
 const attachments = async (page: Page) => (await frames(page)).filter((frame) => frame.type === "attach" || frame.type === "detach").length;
-/** what reached the pane's pty as typing */
 const typed = async (page: Page) => (await frames(page)).filter((frame) => frame.type === "input" && frame.pane_id === owner).map((frame) => frame.text ?? "");
-/** where the lens is kept: this browser's storage, the address and the header's pressed button */
 const lens = (page: Page) => page.evaluate((pane) => ({
   stored: localStorage.getItem(`ovis:view:${pane}`),
   address: new URL(location.href).searchParams.get("view"),
   chatPressed: document.querySelector('.view-switch .is-chat')?.getAttribute("aria-pressed") ?? null,
 }), owner);
-/** the chat's log as it is now, to tell it from a new one after a peek */
 const noteLog = (page: Page) => page.evaluate((pane) => {
   (window as unknown as PeekWindow).chatLog = document.querySelector(`.terminal-stack[data-pane-owner="${pane}"] [role="log"]`);
 }, owner);
@@ -166,32 +150,26 @@ try {
       await chat(page).locator(".composer").waitFor();
       await appFaces(page);
       page.on("console", (message) => { if (message.type() === "error") console.error(message.text()); });
-      // The exact menu row proves that the shared command catalog has loaded.
       await box(page).fill("/conf");
       await page.locator('.menu-item[data-terminal]').first().waitFor();
       await box(page).fill("");
-      // a prompt read has listed the pane's outcomes: a send can tell its own from the ones before it
       await page.waitForFunction(() => (window as unknown as PeekWindow).promptReads > 0);
       const tag = `${width}-${theme}`;
       const chatLens = await lens(page);
-      // a phone has no track: its one button names the other lens (components/LensToggle.tsx)
       assert.deepEqual({ stored: chatLens.stored, chatPressed: chatLens.chatPressed }, { stored: "chat", chatPressed: touch ? null : "true" });
       const phoneButton = () => page.locator(".app-header .lens-toggle").evaluate((node) => ({ view: node.getAttribute("data-view"), label: node.getAttribute("aria-label") }));
       if (touch) assert.deepEqual(await phoneButton(), { view: "chat", label: "Switch to terminal" });
 
-      /** The peek is up: the grid over the mounted chat, nothing written about the lens, the composer out of the way. */
       const expectPeek = async (auto: boolean, command: string) => {
         await peek(page).waitFor();
         await hint(page).getByText(`${command} ran`, { exact: true }).waitFor();
         assert.equal(await hint(page).getByText(AUTO_NOTE, { exact: true }).count(), auto ? 1 : 0, `${command}: the head says whether the chat comes back by itself`);
         assert.deepEqual(await lens(page), chatLens, "a peek writes no lens or address, and the header keeps Chat pressed");
-        // a phone's button takes the peek for the terminal shown: a press goes back to the chat
         if (touch) assert.deepEqual(await phoneButton(), { view: "terminal", label: "Switch to chat" }, "the phone's lens button reflects the peek");
         assert.deepEqual(await logState(page), { same: true, visibility: "hidden" }, "the chat stays mounted under the grid, hidden");
         // shown, not only laid out: under the chat the grid keeps its box with content-visibility hidden
         assert.ok(await stack(page).locator(".xterm-screen").isVisible(), "the grid shows");
         if (touch) {
-          // the key bar takes the composer's place; the composer stays mounted, with its draft
           assert.equal(await chat(page).locator(".composer").evaluate((node) => getComputedStyle(node).display), "none");
           await stack(page).locator(".key-bar").waitFor();
           assert.equal(await gridFocused(page), false, "a touch screen's keyboard is not raised by the peek");
@@ -202,7 +180,6 @@ try {
           await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
         }
       };
-      /** The chat is back, where it was; the grid has let go of the keyboard, so typing reaches no pty. */
       const expectReturned = async (options: { focus?: boolean } = {}) => {
         await peek(page).waitFor({ state: "detached" });
         await chat(page).waitFor();
@@ -221,13 +198,11 @@ try {
           await box(page).fill(draft);
         }
       };
-      /** Escape from the keyboard or the key bar: it reaches the pane's pty, as any key in the grid does. */
       const pressEscape = async () => {
         const escapes = (await typed(page)).filter((text) => text === "\x1b").length;
         if (touch) {
           await page.waitForFunction((pane) => document.querySelector<HTMLButtonElement>(`.terminal-stack[data-pane-owner="${pane}"] .key-bar .key[data-key="Escape"]`)?.disabled === false, owner);
           await stack(page).locator('.key-bar .key[data-key="Escape"]').click();
-          // a key-bar tap sends its key without taking the focus: the keyboard stays down
           assert.equal(await gridFocused(page), false, "a key-bar tap in the peek leaves a phone's keyboard down");
         } else await page.keyboard.press("Escape");
         await page.waitForFunction(([pane, before]) => (window as unknown as PeekWindow).sentFrames
@@ -258,7 +233,6 @@ try {
       await page.evaluate("window.receiptMode = 'hold'");
       await send(page, "/config");
       await page.waitForFunction("window.releaseReceipt !== null");
-      // Scroll while the receipt is held, so the saved place cannot be a guessed end offset.
       await box(page).press("PageUp");
       await box(page).press("PageUp");
       await page.waitForFunction(() => {
@@ -296,8 +270,7 @@ try {
       console.log(`PASS ${tag}: delayed acceptance opens a peek over the same chat; Back to Chat keeps the reading position`);
 
       // Claude Code records the closed panel: Escape in the grid (or the key bar) reaches the pty,
-      // and the chat comes back by itself once the note of it is read. The reader follows the end,
-      // where the note lands
+      // and the chat comes back by itself once the note of it is read.
       await page.evaluate("window.receiptMode = 'normal'");
       const latest = chat(page).getByRole("button", { name: "Jump to latest", exact: true });
       if (await latest.count() > 0) {
@@ -308,7 +281,6 @@ try {
       await expectPeek(true, "/config");
       await capture(page, `${tag}-peek-auto`);
       if (!touch) {
-        // a press on the dimmed composer keeps the keyboard in the grid, so Escape still reaches the agent
         const dimmed = await chat(page).locator(".composer").boundingBox();
         assert.ok(dimmed);
         await page.mouse.click(dimmed.x + dimmed.width / 2, dimmed.y + dimmed.height / 2);
@@ -325,7 +297,6 @@ try {
       await send(page, "/doctor");
       await expectPeek(false, "/doctor");
       await pressEscape();
-      // two prompt reads after the key: the send's outcome and the transcript have been read since
       const reads = await page.evaluate(() => (window as unknown as PeekWindow).promptReads);
       await page.waitForFunction((reads) => (window as unknown as PeekWindow).promptReads >= reads + 2, reads);
       assert.equal(await peek(page).count(), 1, "a command Claude does not record closing stays until the reader leaves it");
@@ -350,9 +321,6 @@ try {
         assert.equal(new URL(page.url()).searchParams.get("pane"), owner, "Back stays on the pane");
         console.log(`PASS ${tag}: a phone's Back ends the peek`);
 
-        // a sheet over the peek (the header's More) takes the peek's entry and closes back onto it,
-        // by its Cancel (the entry is handed back, with no step) or by Back (which goes onto the entry
-        // again): the entry is the peek's own again, and only the next Back is the peek's
         await send(page, "/doctor");
         await expectPeek(false, "/doctor");
         const entrySheet = (): unknown => (history.state as Record<string, unknown> | null)?.["ovis:sheet"];
@@ -373,9 +341,6 @@ try {
         await expectReturned();
         console.log(`PASS ${tag}: a sheet over the peek closes back onto it`);
 
-        // Settings over the peek takes the peek's entry, and a page of it is one entry more. Back goes
-        // from the page to the list with the peek still under Settings, then closes Settings, which
-        // gives the peek its entry back, and only then ends the peek: one thing each, on the same pane
         await send(page, "/doctor");
         await expectPeek(false, "/doctor");
         const sheetEntry = (): boolean => typeof (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === "string";
@@ -403,7 +368,6 @@ try {
 
       const keepWays: [string, () => Promise<void>][] = [
         ["Keep Terminal", () => hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click()],
-        // a phone's one button names the chat over a peek: there the hint's Keep Terminal keeps it
         ...(touch ? [] : [["the header's Terminal", () => openLens(page, "terminal")] as [string, () => Promise<void>]]),
       ];
       for (const [way, keep] of keepWays) {
@@ -433,7 +397,6 @@ try {
         await openLens(page, "chat");
         await chat(page).locator(".composer").waitFor();
         await noteLog(page);
-        // the composer is a dictation target in the chat (the mic shows), and none under a peek
         assert.equal(await chat(page).locator(".composer .voice-mic").count(), 1);
         await send(page, "/doctor");
         await expectPeek(false, "/doctor");
@@ -450,8 +413,6 @@ try {
         await expectReturned();
         console.log(`PASS ${tag}: a peek leaves the terminal lens's find bar behind, and its inert composer takes no dictation`);
 
-        // find in a peek searches its terminal: the peek, the lens and the address stay, and with the
-        // find bar open Claude's closed panel leaves the return to the reader
         await send(page, "/config");
         await expectPeek(true, "/config");
         await page.keyboard.press("Control+Shift+F");
@@ -462,7 +423,6 @@ try {
         await pressEscape();
         await hint(page).getByText(AUTO_NOTE, { exact: true }).waitFor({ state: "detached" });
         assert.equal(await peek(page).count(), 1, "the find bar leaves the return to the reader");
-        // the bar is the composer's sibling under a peek: re-renders leave one bar, not copies of it
         assert.equal(await stack(page).locator(".find-bar").count(), 1, "one find bar");
         await stack(page).locator(".find-bar input").press("Escape");
         await stack(page).locator(".find-bar").waitFor({ state: "detached" });
@@ -471,7 +431,6 @@ try {
         console.log(`PASS ${tag}: find in a peek keeps it, and an open find bar leaves the return manual`);
       }
 
-      // the quiet row's Open Terminal: a peek the reader ends by hand
       await chat(page).getByRole("log").locator(".chat-terminal-command", { hasText: "/doctor" }).last().getByRole("button", { name: "Open Terminal", exact: true }).click();
       await expectPeek(false, "/doctor");
       await capture(page, `${tag}-peek-row`);
@@ -522,14 +481,15 @@ try {
       console.log(`PASS ${tag}: concurrent discard plus successful action ACK never opens a peek`);
 
       if (!touch) {
-        // another pane: the peek was this one's, and picking this pane again shows its chat
         await send(page, "/doctor");
         await expectPeek(false, "/doctor");
         await page.locator(`.pane-select[data-pane="${panes.api}"]`).click();
+        await page.waitForURL((url) => url.searchParams.get("pane") === panes.api);
         await page.locator(`.terminal-stack[data-pane-owner="${panes.api}"]`).waitFor();
         assert.equal(await page.locator(".terminal-stack.is-peek").count(), 0, "a peek never follows to another pane");
         assert.equal(await hint(page).count(), 0);
         await page.locator(`.pane-select[data-pane="${owner}"]`).click();
+        await page.waitForURL((url) => url.searchParams.get("pane") === owner);
         await chat(page).locator(".composer").waitFor();
         assert.equal(await peek(page).count(), 0);
         console.log(`PASS ${tag}: choosing another pane ends the peek`);
@@ -559,7 +519,6 @@ try {
         console.log(`PASS ${tag}: a composition in the input line leaves the return manual`);
       }
 
-      // a peek is this page's alone: a reload lands on Chat
       await send(page, "/doctor");
       await expectPeek(false, "/doctor");
       await page.reload();
@@ -584,8 +543,6 @@ try {
     } finally { await context.close(); }
   }
 
-  // Screens: omp comes back by itself after /settings and stays after /copy; Claude's /btw answer left
-  // open by a peek ended by hand holds the next message until it closes, or Send anyway sends it once
   for (const width of [1280, 390]) {
     const touch = width === 390;
     const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: touch, hasTouch: touch, locale: "en-US" });
@@ -609,7 +566,6 @@ try {
       const open = async (pane: string, probe: string) => {
         await page.goto(`${server.url}?pane=${encodeURIComponent(pane)}`);
         await of(pane).chat.locator(".composer").waitFor();
-        // the catalog has loaded: its terminal command is in the menu
         await of(pane).box.fill(probe);
         await page.locator(".menu-item[data-terminal]").first().waitFor();
         await of(pane).box.fill("");
@@ -658,8 +614,6 @@ try {
       assert.equal(await hint(page).getByText(AUTO_NOTE, { exact: true }).count(), 0, "/copy comes back by hand");
       await screen(panes.omp, "Nothing to copy yet.").waitFor();
       await escapeIn(panes.omp);
-      // the frame Escape drew (the printed line gone, the row still there) has been parsed: a row that
-      // never went arms nothing (the allow list itself is the head's note above and terminalPeek.test.ts)
       await screen(panes.omp, "Nothing to copy yet.").waitFor({ state: "detached" });
       assert.equal(await of(panes.omp).peek.count(), 1, "a row that was never hidden keeps the peek");
       await backToChat(panes.omp);
@@ -678,14 +632,12 @@ try {
       await notice.waitFor();
       await notice.getByRole("button", { name: "Show terminal", exact: true }).waitFor();
       await capture(page, `${tag}-still-open`);
-      // Send keeps the message and says why; nothing is typed
       const held = "Did the retry test pass?";
       await sendIn(owner, held);
       await of(owner).chat.locator(".composer-note", { hasText: "Not sent: /btw is still open in the terminal." }).waitFor();
       assert.equal(await of(owner).box.inputValue(), held, "the message stays in the box");
       assert.equal(await submits(owner, held), 0, "nothing is sent while the screen is open");
       await capture(page, `${tag}-still-open-held`);
-      // Send anyway sends it once, as an ordinary send
       await of(owner).chat.getByRole("button", { name: "Send anyway", exact: true }).click();
       await page.waitForFunction(([pane, text]) => (window as unknown as PeekWindow).sentFrames.some((frame) => frame.type === "submit" && frame.pane_id === pane && frame.text === text), [owner, held] as const);
       await page.waitForFunction((pane) => document.querySelector<HTMLTextAreaElement>(`.terminal-stack[data-pane-owner="${pane}"] .composer-text`)?.value === "", owner);
@@ -694,7 +646,6 @@ try {
         "Send anyway past the notice is no send over a box the server showed");
       await finish(page);
       await of(owner).chat.locator(".composer-status[data-status='done'], .composer-status[data-status='idle']").waitFor();
-      // the screen is still open: the notice stays, and Show terminal opens a peek the reader ends
       await notice.waitFor();
       await notice.getByRole("button", { name: "Show terminal", exact: true }).click();
       await of(owner).peek.waitFor();
@@ -702,7 +653,6 @@ try {
       assert.equal(await hint(page).getByText(AUTO_NOTE, { exact: true }).count(), 0, "Show terminal opens a peek that only ends by hand");
       await backToChat(owner);
       await notice.waitFor();
-      // the answer closed in the terminal: the first frame with Claude's empty box clears the notice
       await page.evaluate((pane) => (window as unknown as { demoSocket: WebSocket }).demoSocket.send(JSON.stringify({ type: "input", pane_id: pane, text: "\x1b" })), owner);
       await notice.waitFor({ state: "detached" });
       const after = "And the flaky one?";
@@ -730,7 +680,6 @@ try {
       const anyOpen = of(owner).chat.locator(".composer-notice", { hasText: ANY_OPEN });
       await anyOpen.waitFor();
       await capture(page, `${tag}-left-open-held`);
-      // the screen closed in the terminal: the first frame with Claude's empty box clears the notice
       await page.evaluate((pane) => (window as unknown as { demoSocket: WebSocket }).demoSocket.send(JSON.stringify({ type: "input", pane_id: pane, text: "\x1b" })), owner);
       await anyOpen.waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -743,10 +692,6 @@ try {
     } finally { await context.close(); }
   }
 
-  // The catalog race (#1591). The chat, its message box and the terminal share one read of the pane's
-  // commands. "later": it answers before the message leaves, any other read would wait; the receipt
-  // reads the shared answer. "all": it has not answered when the message leaves, and answers before its
-  // receipt (40f64932).
   for (const hold of ["later", "all"] as const) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 844 }, locale: "en-US" });
     try {
@@ -765,7 +710,6 @@ try {
       type HoldWindow = PeekWindow & { heldCommandReads: unknown[]; commandsParsed: number; releaseReceipt: (() => void) | null };
       if (hold === "later") {
         await page.waitForFunction(() => (window as unknown as HoldWindow).commandsParsed === 1);
-        // the box has the list: its terminal row is in the menu
         await box(page).fill("/conf");
         await page.locator('.menu-item[data-terminal]').first().waitFor();
         await send(page, "/doctor");
@@ -789,8 +733,6 @@ try {
     } finally { await context.close(); }
   }
 
-  // a split half's own lens button: during a peek it says the chat and takes it back, as the
-  // palette's toggle and Mod+Shift+J do, and saves no terminal lens
   const context = await browser.newContext({ viewport: { width: 1280, height: 844 }, locale: "en-US" });
   try {
     await context.addInitScript(({ pane, other }) => {

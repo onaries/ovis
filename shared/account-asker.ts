@@ -1,3 +1,9 @@
+/**
+ * Who is asking (docs/account.md, "Who is asking"): what an approval shows of a device the person
+ * cannot see, against a phished device code (RFC 8628 section 5.4). The system the device says it
+ * runs, and the approximate place the account service saw its request come from (Cloudflare's
+ * country and city, never the address).
+ */
 import { ACCOUNT_LABEL_MAX } from "./account-records.ts";
 
 export const ACCOUNT_OSES = ["ios", "android", "macos", "windows", "linux", "chromeos"] as const;
@@ -27,8 +33,14 @@ export function placeName(language: string, place: AccountPlace): string | null 
   return place.city === null ? country : `${place.city}, ${country}`;
 }
 
+/** Unicode's bidirectional formatting controls: in a name they could reorder what is shown after it. */
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
+/**
+ * A device's name as one plain line, the form a signed `add` takes (shared/account-records.ts): no
+ * control or bidi characters, single spaces, trimmed, at most 48 UTF-16 units of whole characters.
+ * Used for names this device sends and for names it shows or signs.
+ */
 export function accountLabel(text: string): string {
   let label = "";
   for (const char of text.replace(/[\p{Cc}\p{Cs}]/gu, " ").replace(BIDI_CONTROLS, "").replace(/\s+/g, " ").trim()) {

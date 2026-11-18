@@ -7,24 +7,19 @@ import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import "./FirstStartHints.css";
 
-/** How many looks (one a frame the page changed in) the hints spend on their anchor at first, and after a click or key. */
 const WATCH_AT_FIRST = 600;
 const WATCH_AFTER_INPUT = 60;
 
-/** Each hint's anchor: the pane's Chat | Terminal switch, the sidebar's Agents section, its New workspace row. */
 const ANCHORS = [".view-switch", ".agents-sidebar > .agent-section-toggle", ".machine-new-row"] as const;
 
 const visible = (selector: string): HTMLElement | null => {
   const node = document.querySelector<HTMLElement>(selector);
   const box = node?.getBoundingClientRect();
-  // drawn and in the window: a sidebar put away as a drawer keeps its size off-screen
   return node && box && box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 && box.left < window.innerWidth && box.top < window.innerHeight ? node : null;
 };
 
-/** where the card goes, and how far along its edge the arrow sits to point at the anchor's centre */
 interface Place { top: number; left: number; side: "right" | "below"; arrow: number }
 
-/** Beside an anchor in the left third of the window (the sidebar), under any other, kept inside the window. */
 function placeBy(anchor: HTMLElement, width: number, height: number): Place {
   const box = anchor.getBoundingClientRect();
   const gap = 12;
@@ -37,14 +32,6 @@ function placeBy(anchor: HTMLElement, width: number, height: number): Place {
   return { side: "below", top: box.bottom + gap, left, arrow: box.left + box.width / 2 - left };
 }
 
-/**
- * The three first-start hints, one small popover at a time, after the setup guide's first run started an agent
- * (lib/firstHints.ts): what Chat and Terminal are, where a waiting agent shows, how to start another. They wait
- * for the workspace's Chat | Terminal switch, skip an anchor this layout does not draw, and are done for good once
- * closed or seen through. Only where the sidebar is drawn (wider than 768px): up to there it is a closed drawer. Nothing takes the keyboard from
- * the pane, and nothing is announced: a hint is there to be seen, and Next and the close button come after the
- * pane in the Tab order (the hint is drawn at the end of the page).
- */
 export function FirstStartHints({ active }: { active: boolean }) {
   const t = useT();
   const [pending, setPending] = useState(() => { const store = storage(); return store !== null && hintsPending(store); });
@@ -52,7 +39,6 @@ export function FirstStartHints({ active }: { active: boolean }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [place, setPlace] = useState<Place | null>(null);
   const [card, setCard] = useState<HTMLElement | null>(null);
-  // Next pressed from the keyboard: the next hint's Next takes the focus, as the old card goes with its anchor
   const refocus = useRef(false);
   const hints = [
     { title: t("Chat or Terminal"), text: t("Same agent, two views.") },
@@ -68,19 +54,15 @@ export function FirstStartHints({ active }: { active: boolean }) {
     setPending(false);
   };
   usePhoneSheetBack(finish, shown && anchor !== null);
-  // closed or seen through in another tab of this browser: gone here too (#3907 review)
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => { if (event.key === FIRST_HINTS_KEY || event.key === null) { const store = storage(); setPending(store !== null && hintsPending(store)); } };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // the hint at `step` or the next one this layout draws, once the workspace's switch is up; none left is the end.
-  // Looked for again when its anchor went (re-rendered, or the layout changed)
   useEffect(() => {
     if (!shown || anchor !== null) return;
     const locate = (): boolean => {
-      // the first hint waits for the workspace's switch; the later ones need only their own anchor (#3907 review)
       if (step === 0 && visible(ANCHORS[0]) === null) return false;
       for (let index = step; index < ANCHORS.length; index++) {
         const node = visible(ANCHORS[index]!);
@@ -90,9 +72,6 @@ export function FirstStartHints({ active }: { active: boolean }) {
       return true;
     };
     if (locate()) return;
-    // one look a frame, however much the page changes meanwhile (a terminal's output, a chat's stream), and only for so
-    // many looks: where the switch does not come (an inbox, a shell's pane) the page is watched again after each click
-    // or key, the way to another pane, rather than on every change for the rest of the session (#3907 review)
     let frame = 0;
     let looks = 0;
     const observer = new MutationObserver(() => {
@@ -150,7 +129,6 @@ export function FirstStartHints({ active }: { active: boolean }) {
     refocus.current = card?.contains(document.activeElement) === true;
     setAnchor(null); setPlace(null); setStep(step + 1);
   };
-  // at the end of the page, so its Next and close come after the pane in the Tab order
   return createPortal(
     <section ref={setCard} className={`first-hint is-${place?.side ?? "below"}`} role="dialog" aria-modal="false" aria-labelledby="first-hint-title"
       style={place === null ? { visibility: "hidden" } : { top: place.top, left: place.left, "--first-hint-arrow": `${Math.round(place.arrow)}px` } as CSSProperties}

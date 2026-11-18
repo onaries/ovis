@@ -1,3 +1,10 @@
+/**
+ * Exactly one exchange per call: a call is one tap on Pair, and nothing here
+ * tries again with the code it was given, so a relay acting as the PC gets one guess per tap.
+ * The offer is then checked as a scanned link's is (its key must give its PC id) and must carry a
+ * pairing code; the hosted shell, or Settings → Remote PCs on a PC that adds another, shows the
+ * PC's ID to compare before it pairs with it.
+ */
 import type { RelaySocket } from "./relay-channel.ts";
 import { importPublicKey } from "./relay-e2ee.ts";
 import { GLOBAL_RELAY } from "./relay-regions.ts";
@@ -62,11 +69,13 @@ export function offerFromCode(input: string, options: TypedCodeOptions = {}): Pr
       settle(checkedOffer(text));
     };
     socket.onclose = (event) => {
+      // once the PC had its answer, only its drop (a plain close) means it turned the guess away
       settle(new TypedCodeError(answered ? (event.code === DROPPED ? "wrong" : "unreachable") : event.code === NO_HOST ? "no-pc" : event.code === BUSY ? "busy" : "unreachable"));
     };
   });
 }
 
+/** The offer as a scanned link's is taken: its key must give its PC id, and it must carry a pairing code. */
 function checkedOffer(text: string): RelayOffer | TypedCodeError {
   let offer: RelayOffer;
   try { offer = validateOffer(JSON.parse(text)); } catch { return new TypedCodeError("forged"); }

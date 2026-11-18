@@ -17,10 +17,9 @@ Everything a PR is checked against is in this repository: this file, the
 [review rules](.github/REVIEW.md), the [development guide](docs/development.md),
 [DESIGN.md](DESIGN.md) and the `AGENTS.md` files ([root](AGENTS.md), [server](server/AGENTS.md),
 [src](src/AGENTS.md)), which hold the invariants that people and coding agents both follow.
-Contributions are licensed under the repository's [MIT license](LICENSE). Say in the PR when code is
-adapted from another project, with its license. Before your first PR is merged, sign the
-[Contributor License Agreement](CLA.md): the CLA Assistant bot asks on the PR, and you sign once by
-commenting the sentence it gives.
+Contributions are accepted under the repository's [MIT license](LICENSE): opening a PR licenses
+your changes under it, and there is nothing else to sign. Say in the PR when code is adapted from
+another project, with its license.
 
 ## Set up
 
@@ -28,7 +27,7 @@ commenting the sentence it gives.
 - Bun 1.4 or newer, and herdr 0.9.0 or newer for the integration tests. Terminals in a checkout run on
   the Rust PTY host (`cargo build --release --manifest-path crates/pty-sidecar/Cargo.toml`, or
   `bun scripts/pty-sidecar.ts install` on a release tag); Node 18 or newer is the fallback, and the PTY
-  tests run on both. CI runs Bun 1.4.2, Node 22 and herdr 0.9.3, all pinned in
+  tests run on both. CI runs Bun 1.4.4, Node 22 and herdr 0.9.3, all pinned in
   [.github/actions/setup-ci/action.yml](.github/actions/setup-ci/action.yml).
 
 ```bash

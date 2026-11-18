@@ -1,15 +1,10 @@
 /**
- * The kit a machine joins the trial from, and the one line to paste there (scripts/join/README.md):
- *
- *   bun scripts/join/kit.ts make --server <ovis-server> --pty <ovis-pty-sidecar> --out <dir> --url <address>
- *     --relay <wss://...> --account <https://...> --app <https://...>
- *   bun scripts/join/kit.ts line --kit <dir> --url <address> --relay <wss://...> --account <https://...> --app <https://...>
- *
  * `make` writes the folder `<dir>`: the compiled server, the Rust terminal host beside it in bin/bin/ with the record the
  * server checks it by (its SHA-256 and the server's version), join.sh, and SHA256SUMS listing exactly those four files.
  * `line` prints the line again for a kit folder that exists, from the folder's own files, after checking them against
  * its SHA256SUMS: the same line `make` printed for the same address and origins. The line carries the SHA-256 of join.sh
- * and of SHA256SUMS, so nothing fetched from the address runs or is installed before it matches. It holds no secret.
+ * and of SHA256SUMS, so nothing fetched from the address runs or is installed before it matches. It adds no secret, but
+ * holds the addresses as given: one with a password in it (`user:password@`) prints that password too.
  */
 /// <reference path="../sh-text.d.ts" />
 import { createHash } from "node:crypto";
@@ -32,7 +27,6 @@ export class KitError extends Error {
   }
 }
 
-/** Where the machine fetches the kit from, and the three test services the trial server talks to. */
 export interface Origins {
   readonly url: string;
   readonly relay: string;
@@ -41,9 +35,7 @@ export interface Origins {
 }
 
 export interface KitOptions extends Origins {
-  /** the compiled server (scripts/build-server.ts linux-x64), built from this checkout: its version is package.json's */
   readonly server: string;
-  /** the Rust terminal host (crates/pty-sidecar) for linux-x64 */
   readonly pty: string;
   readonly out: string;
   /** a kit for the join's container tests only: it carries TEST-KIT, listed in SHA256SUMS, without which join.sh ignores its
@@ -65,7 +57,6 @@ export const KIT_FILES = ["bin/bin/ovis-pty-sidecar", "bin/bin/ovis-pty-sidecar.
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
-/** A program that, run with no argument, exits 2 with `usage` at the start of its error output. */
 function answersUsage(path: string, flag: string, usage: string): void {
   if (!existsSync(path) || !statSync(path).isFile()) throw new KitError(`${flag} ${path} is not a file`);
   const child = Bun.spawnSync([path], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -76,6 +67,8 @@ function origin(value: string, schemes: readonly string[], flag: string): string
   let url: URL;
   try { url = new URL(value); } catch { throw new KitError(`${flag} ${value} is not an address`); }
   if (!schemes.includes(url.protocol) || (url.protocol !== "file:" && url.host === "")) throw new KitError(`${flag} takes a ${schemes.join(" or ")} address`);
+  // the join line is printed and pasted on another machine: a user name or password in it would travel with it
+  if (url.username !== "" || url.password !== "") throw new KitError(`${flag} takes an address without a user name or password`);
   // the line quotes it in single quotes: it can hold none
   if (value.includes("'")) throw new KitError(`${flag} ${value} holds a quote`);
   return value.replace(/\/+$/, "");
@@ -109,7 +102,6 @@ export function joinLine(origins: Origins, joinSha: string, sumsSha: string): st
   return `sh -c '${program}' ovis-join '${origins.url}' ${joinSha} ${sumsSha} '${origins.relay}' '${origins.account}' '${origins.app}'`;
 }
 
-/** Every file below `dir`, as a path relative to it. */
 function filesIn(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true }).filter((entry) => !entry.isDirectory()).map((entry) => relative(dir, join(entry.parentPath, entry.name))).sort();
 }
@@ -169,7 +161,6 @@ function option(args: string[], name: string): string {
   return value;
 }
 
-/** The command: the line on stdout (the only thing there), what to do with the kit on stderr; exit 2 on a refusal. */
 export function kitCommand(argv: readonly string[], out: (text: string) => void, err: (text: string) => void): number {
   const [verb, ...rest] = argv;
   const args = [...rest];

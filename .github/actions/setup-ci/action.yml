@@ -4,7 +4,7 @@ inputs:
   bun-version:
     description: Bun version for ci.yml, pages.yml and release.yml; the one place it is set.
     required: false
-    default: '1.4.2'
+    default: '1.4.4'
   node:
     description: "'true' installs Node 22 (the PTY sidecar runs on it)."
     required: false
@@ -33,8 +33,6 @@ runs:
       env:
         BROWSER_CACHE_DIR: ${{ github.workspace }}/.ci-cache/playwright
       run: printf 'PLAYWRIGHT_BROWSERS_PATH=%s\n' "$BROWSER_CACHE_DIR" >> "$GITHUB_ENV"
-    # Only the self-hosted Linux runners use the prepared image; the self-hosted Mac (ci.yml's CI_MAC_LABELS)
-    # downloads Bun for the job, below.
     - name: Verify prepared self-hosted tools
       if: runner.environment == 'self-hosted' && runner.os == 'Linux'
       shell: bash
@@ -63,7 +61,7 @@ runs:
       with:
         bun-version: ${{ inputs.bun-version }}
         no-cache: ${{ inputs.cache == 'none' }}
-    - if: inputs.node == 'true' && runner.environment != 'self-hosted'
+    - if: inputs.node == 'true' && (runner.environment != 'self-hosted' || runner.os != 'Linux')
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '22'

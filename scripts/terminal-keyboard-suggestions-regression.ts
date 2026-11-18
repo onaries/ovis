@@ -1,8 +1,7 @@
 /**
  * The terminal's inputs ask a phone keyboard for no word suggestions: the input line and xterm's
  * helper textarea say autocomplete="off" (with autocorrect, autocapitalize and spellcheck off), the
- * attribute Chrome on Android turns into TYPE_TEXT_FLAG_NO_SUGGESTIONS. The chat composer, where
- * suggestions help prose, does not. On the isolated test herdr.
+ * attribute Chrome on Android turns into TYPE_TEXT_FLAG_NO_SUGGESTIONS.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";

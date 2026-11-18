@@ -8,13 +8,11 @@ import { alertsHere, type AlertsHere } from "./setupGuideFlow.ts";
 import { useNotificationState, useNotificationSwitch } from "./useNotifications.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 
-// The real hooks over a fake browser: a push manager, the Notification permission, and the PC's push routes.
 describe("what Turn on alerts leaves this device", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   const key = Buffer.from(new Uint8Array(65).fill(4)).toString("base64url");
   let renderer: ReactTestRenderer | undefined;
   let testPushStatus = 204;
-  // what the fake PC recorded for the subscription, and how its status route answers
   let lastSuccess: string | null = null;
   let lastFailure: string | null = null;
   let statusRoute: "record" | "error" | "no-device" = "record";
@@ -102,7 +100,6 @@ describe("what Turn on alerts leaves this device", () => {
     await act(async () => { renderer = create(createElement(Probe)); });
   }
 
-  /** Resolves once the guide's rule gives an answer other than Checking, within a bound. */
   async function settled(): Promise<AlertsHere> {
     await act(async () => {
       await new Promise<void>((resolve, reject) => {
@@ -170,7 +167,6 @@ describe("what Turn on alerts leaves this device", () => {
     expect(hook.notifications).toBe("denied");
   });
 
-  // the guide's rule (lib/setupGuideFlow.ts alertsHere) over the real hooks: what the PC recorded decides
   it("reads on once the PC recorded the confirmation push, without a reload", async () => {
     await mount();
     expect(await enable()).toBe("sent");

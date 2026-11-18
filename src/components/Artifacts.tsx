@@ -13,11 +13,8 @@ import type { AgentStatus, ClaudeArtifact } from "../../shared/protocol.ts";
 /**
  * The status line's chip for the pages a Claude Code session published with its Artifact tool
  * (GET /api/pane/artifacts), beside the background tasks chip, whose look it takes
- * (BackgroundTasks.css). Each row opens its page on claude.ai in a new tab. A page is published
- * during a turn, so the list is read when the pane is shown, when its status changes and when the
- * list opens; the chip shows only once there is a page. A PC from before the route answers 404,
- * which reads as none. The chip is off until this device turns it on (Settings > Chat > Composer,
- * Artifacts chip), so the composer's row stays minimal; while off, nothing is asked.
+ * (BackgroundTasks.css). A page is published during a turn, so the list is read when the pane is
+ * shown, when its status changes and when the list opens; the chip shows only once there is a page.
  */
 export function Artifacts(props: { paneId: string; status: AgentStatus | undefined }) {
   const { settings } = useSettings();
@@ -35,7 +32,6 @@ function ArtifactsChip({ paneId, status }: { paneId: string; status: AgentStatus
   const menu = useRef<HTMLDivElement>(null);
   const id = useId();
   usePhoneSheetBack(() => setOpen(false), open);
-  // another pane or PC: its own pages, never these
   useEffect(() => { setArtifacts([]); setOpen(false); }, [paneId, machineId]);
   useEffect(() => {
     let alive = true;
@@ -60,7 +56,6 @@ function ArtifactsChip({ paneId, status }: { paneId: string; status: AgentStatus
     window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("pointerdown", outside); window.removeEventListener("keydown", escape); };
   }, [open]);
-  // Match BackgroundTasks: bound the upward-opening list to the room above the input card.
   useLayoutEffect(() => {
     const list = menu.current;
     const anchor = list?.offsetParent;
@@ -79,7 +74,6 @@ function ArtifactsChip({ paneId, status }: { paneId: string; status: AgentStatus
   if (artifacts.length === 0) return null;
   const name = t(artifacts.length === 1 ? "{n} artifact" : "{n} artifacts", { n: artifacts.length });
   const now = Date.now();
-  // a phone's status line keeps the icon and the number (BackgroundTasks.css), the button's name has the words
   return <span className="bg-tasks" ref={root}>
     <button type="button" className="bg-tasks-toggle is-idle" aria-label={name} title={name} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
       <AppWindow aria-hidden="true" /><span className="bg-tasks-label">{name}</span><span className="bg-tasks-count" aria-hidden="true">{artifacts.length}</span>

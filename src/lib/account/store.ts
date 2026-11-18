@@ -18,7 +18,6 @@ export const ACCOUNT_PROVIDERS = ["github", "google", "apple"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
 export interface AccountSession {
-  /** the account service's origin this sign-in is with */
   readonly service: string;
   readonly account: string;
   readonly provider: AccountProvider;
@@ -58,7 +57,6 @@ interface Records {
    * checked (account/join.ts, keepRemovals), kept verbatim to relay to a PC it brings into the account
    */
   removals: Readonly<Record<string, RemoveRecord>>;
-  /** by server_id: a PC this device brought into the account, and the records whose outcome it read there */
   enrolls: Readonly<Record<string, PlannedEnroll>>;
   /**
    * By leave id: the account key a leave of this device started for (account/leave.ts). It outlives
@@ -71,21 +69,15 @@ interface Records {
 
 export interface PlannedEnroll {
   readonly account: string;
-  /** ids of the records the PC answered with a final outcome */
   readonly done: readonly string[];
   /** keys an earlier, unfinished attempt let in, to be introduced once the enrollment ends */
   readonly admitted?: readonly string[];
-  /**
-   * Once enrolled: the devices it let in, the new PC as this device checked it, and the other PCs
-   * (by server_id) still to tell those devices about it (account/join.ts, introductions)
-   */
   readonly introduce?: { readonly keys: readonly string[]; readonly pc: { readonly server_id: string; readonly server_public_key: string; readonly relay: string; readonly name: string }; readonly to: readonly string[] };
 }
 
 export interface QueuedAdd {
   readonly account: string;
   readonly record: AddRecord;
-  /** the PCs whose mailbox it has not reached */
   readonly to: readonly string[];
 }
 type Name = keyof Records;
@@ -98,7 +90,6 @@ export interface AccountStore {
   set<N extends Exclude<Name, "key">>(name: N, value: Records[N] | undefined): Promise<void>;
   /** Reads and writes `name` in one transaction; `change` runs synchronously inside it. */
   update<N extends Exclude<Name, "key">>(name: N, change: (current: Records[N] | undefined) => Records[N] | undefined): Promise<void>;
-  /** Reads and writes several `names` in one transaction; a name `change` leaves out, or sets undefined, is deleted. */
   updateMany<N extends Exclude<Name, "key">>(names: readonly N[], change: (current: Many<N>) => Many<N>): Promise<void>;
   /**
    * Forgets the key, the sign-in and every record but `leaving`, in one transaction: a new key is made
@@ -155,7 +146,6 @@ export const accountLock: AccountLock = (work) => {
   return locks ? locks.request("ovis-account-session", work) : work();
 };
 
-/** One lock for every AccountService that shares a memory store, as tabs share the browser's. */
 export function memoryLock(): AccountLock {
   let tail: Promise<unknown> = Promise.resolve();
   return (work) => {

@@ -6,11 +6,11 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { serveDemo } from "./demo-server.ts";
 
-// The sidebar's resize grip (SidebarResizer) and a list's scrollbar under it, on the demo roster in a
-// window short enough that the PCs list scrolls. Chromium runs with its scrollbars drawn (Playwright's
-// headless default hides them), as a desktop browser draws them: a press on the list's scrollbar drags
-// that scrollbar, a press on the strip beside it resizes the sidebar, and nothing moves meanwhile.
+// Chromium runs with its scrollbars drawn (Playwright's headless default hides them), as a desktop
+// browser draws them: a press on the list's scrollbar drags that scrollbar, a press on the strip
+// beside it resizes the sidebar, and nothing moves meanwhile.
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-scrollbar-grip-"));
 const evidence = process.env["UI_EVIDENCE_DIR"] || null;
 
@@ -35,15 +35,7 @@ try {
   await buildDemoApp(app);
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, '<script src="./demo-transport.js"></script><script type="module"'));
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    let file: string;
-    try { file = decodeURIComponent(path.slice(1)); } catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return await body.exists() ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix: "/" });
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try {
@@ -66,7 +58,6 @@ try {
           assert.ok(start.bar > 0, `${theme}: the PCs list draws a scrollbar (${start.bar}px)`);
           assert.ok(start.grip.left < start.list.right - start.bar, `${theme}: the grip's box reaches over the scrollbar (grip from ${start.grip.left}px, scrollbar ${start.list.right - start.bar}-${start.list.right}px)`);
 
-          // the scrollbar's thumb, under its top arrow: the pointer over it lands on the list, and a drag scrolls it
           const barX = start.list.right - start.bar / 2;
           const barY = start.list.top + start.bar + 10;
           await page.mouse.move(barX - 60, barY);
@@ -84,7 +75,6 @@ try {
             await page.screenshot({ path: join(evidence, `sidebar-scrollbar-grip-${theme}.png`), clip: { x: start.list.right - 160, y: 0, width: 240, height: 380 } });
           }
 
-          // the strip beside it, over the pane's edge: a press there resizes
           const stripX = start.list.right + (start.grip.right - start.list.right) / 2;
           await page.mouse.move(stripX, barY, { steps: 3 });
           await waitForHit(page, stripX, barY, "grip");
@@ -95,7 +85,6 @@ try {
           const resized = await edge(page);
           assert.equal(resized.sidebar, start.sidebar + 30, `${theme}: the strip beside the scrollbar resizes`);
 
-          // below the list, where no scrollbar is, the grip keeps its whole box
           const below = start.list.top + start.list.height + 40;
           assert.equal(await hit(page, resized.grip.left + 2, below), "grip", `${theme}: away from a scrollbar the grip takes its sidebar side too`);
           assert.deepEqual(errors, []);

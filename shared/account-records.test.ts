@@ -42,6 +42,7 @@ describe("account records", () => {
       const fields = Object.keys(record).filter((name) => name !== "signature" && name !== "v" && name !== "kind");
       for (const name of fields) {
         const changed = { ...record, [name]: alternatives[name] } as AccountRecord;
+        // a link's signer is its key; moving one without the other is refused before the signature
         if (kind === "link" && (name === "key" || name === "signer")) {
           expect(() => parseAccountRecord(changed)).toThrow(AccountRecordError);
           continue;
@@ -82,6 +83,7 @@ describe("account records", () => {
   test("record and AUTH signatures cannot stand in for each other", async () => {
     const serverId = "0123456789abcdef0123456789abcdef";
     const nonce = crypto.getRandomValues(new Uint8Array(32));
+    // AUTH as server/devices.ts matchRelay verifies it: `ovis-relay-auth/1 || nonce || server_id`
     const auth = new Uint8Array([...new TextEncoder().encode("ovis-relay-auth/1"), ...nonce, ...new TextEncoder().encode(serverId)]);
     const authSignature = new Uint8Array(await crypto.subtle.sign(SIGN, signer.pair.privateKey, auth));
     for (const kind of ["add", "remove", "link"] as const) {

@@ -14,13 +14,11 @@ const origins = { url: "https://kit.join.test:7443/kit", relay: "wss://relay.joi
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-/** two programs that answer as the server and the terminal host do when run with no argument */
 function programs(): { server: string; pty: string; at: string } {
   const at = mkdtempSync(join(process.env["TMPDIR"] ?? tmpdir(), "join-kit-"));
   dirs.push(at);
   const server = join(at, "ovis-server");
   const pty = join(at, "ovis-pty-sidecar");
-  // the version string a server built from this checkout carries
   writeFileSync(server, `#!/bin/sh\n# version ${JSON.stringify(packageVersion)}\necho 'usage: ovis-server <serve|plugin>' >&2\nexit 2\n`);
   writeFileSync(pty, "#!/bin/sh\necho 'pty-sidecar: usage: ovis-pty-sidecar <cols> <rows> <command>' >&2\nexit 2\n");
   chmodSync(server, 0o755);
@@ -33,7 +31,6 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")("kit lin
     const { server, pty, at } = programs();
     const made = makeKit({ server, pty, out: join(at, "kit"), ...origins });
     expect(kitLine(join(at, "kit"), origins).line).toBe(made.line);
-    // the trial kit's join.sh refuses to join without --trial: the line hands it over
     expect(made.line).toContain(' --trial "$@"');
   });
 
@@ -59,10 +56,6 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")("kit lin
     expect(line).toContain('trap "rm -rf \\"\\$d\\"; exit 130" INT TERM HUP; curl -q -fsSL --max-time 120 --proto "=https,file" ');
   });
 
-  /**
-   * The line for a kit folder at `dir` holding `script` as its join.sh, run as pasted with TMPDIR `tmp` and `path` first
-   * on PATH, in a process group of its own, so that a signal can reach all of it.
-   */
   function pasted(dir: string, script: string, tmp: string, path = "") {
     mkdirSync(dir, { recursive: true });
     if (!existsSync(join(dir, "join.sh"))) writeFileSync(join(dir, "join.sh"), script);
@@ -114,13 +107,11 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")("kit lin
 
   test("join.sh runs with no trap of the line's: an INT to it does not remove the folder it runs from", async () => {
     const { at, tmp } = scratch();
-    // prints the traps it has (none) and whether its own file is there, then ends by an INT to itself
     const script = '#!/bin/sh\necho "traps:[$(trap)]"\n[ -f "$0" ] && echo "its file is there"\nkill -INT $$\necho "not reached"\n';
     const { ended } = pasted(join(at, "kit"), script, tmp);
     const result = await ended;
     expect(result.out).toBe("traps:[]\nits file is there\n");
     expect(result.signal ?? result.code).not.toBe(0);
-    // the line's folder is still there: its trap did not run
     expect(readdirSync(tmp)).toHaveLength(1);
     expect(readdirSync(join(tmp, readdirSync(tmp)[0]!))).toEqual(["join.sh"]);
   });
@@ -143,7 +134,6 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")("kit lin
 
   test("the terminal host's record names the SHA-256 of the host copied into the kit, even when its source changes after the copy", () => {
     const { server, pty, at } = programs();
-    // another build replaces the source right after it was copied
     const copy = fs.copyFileSync;
     const spy = spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
       copy(from, to, mode);
@@ -214,11 +204,17 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")("kit lin
     const before = readdirSync(repo).sort();
     expect(() => makeKit({ server, pty, out: repo, ...origins })).toThrow(KitError);
     expect(readdirSync(repo).sort()).toEqual(before);
-    // an empty folder inside the checkout: only the checkout's own guard can refuse it
     const inside = mkdtempSync(join(repo, ".kit-test-"));
     dirs.push(inside);
     expect(() => makeKit({ server, pty, out: inside, ...origins })).toThrow(KitError);
     expect(readdirSync(inside)).toEqual([]);
+  });
+
+  test("an address with a user name or password gets no kit: the line would print it", () => {
+    const { server, pty, at } = programs();
+    for (const changed of [{ url: "https://user:secret@kit.join.test:7443/kit" }, { relay: "wss://relay:secret@relay.join.test:8443" }, { account: "https://user@account.join.test:9443" }]) {
+      expect(() => makeKit({ server, pty, out: join(at, "kit"), ...origins, ...changed })).toThrow(/without a user name or password/);
+    }
   });
 
   test("a kit folder whose file differs from SHA256SUMS, or that holds another file, gets no line", () => {

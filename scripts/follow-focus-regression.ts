@@ -1,24 +1,12 @@
-/**
- * Settings → Terminal → Follow herdr's focus (#311) against a real herdr: a tab herdr opens and
- * brings to the front by itself (`herdr tab create --focus`, as a script does) is opened here only
- * once this device asked for it, and herdr's focus moving back brings this device back too. It
- * never takes the view while this window is in front and someone types into it or has a dialog
- * open, and a split this device opens itself stays its own pick when herdr's frame for it comes
- * first (#1470). Imported by ui-regression.ts, with Settings closed, on a page with its
- * rewriteMachinesFrames init script; it ends on the pane selected when it began and with the
- * setting off, also when it fails.
- */
 import assert from "node:assert/strict";
 import type { Page } from "playwright-core";
 import { herdrRpc, tabClose } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
 export interface FollowFocusFixture {
-  /** a workspace to open the check's tabs in: they are closed again, its own panes are left alone */
   workspaceId: string;
 }
 
-/** how long a focus change that must not move the selection gets to move it */
 const NO_FOLLOW_WAIT_MS = 600;
 
 export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixture): Promise<void> {
@@ -32,10 +20,8 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   const selectedPaneId = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "null")?.pane_id as string | undefined);
   const shownTab = () => page.locator(".tab-strip").getByRole("tab", { selected: true }).textContent();
   const follow = async (on: boolean): Promise<void> => {
-    // Settings may still be open when a check that stopped partway turns the setting back off
     if (!(await page.locator(".settings-dialog").isVisible())) await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await openSettingsPage(page, "Terminal");
-    // "herdr window": Follow its focus, or Separate to leave herdr's focus alone
     const choice = page.getByRole("group", { name: "herdr window", exact: true }).getByRole("button", { name: on ? "Follow its focus" : "Separate", exact: true });
     if ((await choice.getAttribute("aria-pressed")) !== "true") await choice.click();
     assert.equal(await choice.getAttribute("aria-pressed"), "true");
@@ -49,8 +35,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   assert.ok(before, "a pane is selected before the check");
   // herdr sends its focus on a connection of its own, apart from its tab and pane events
   // (server/collector.ts), so a tab listed here says nothing of the focus frame for it, which may
-  // come later. The pane-focused frames the page's roster reads are recorded as it reads them
-  // (ui-regression.ts rewriteMachinesFrames), and it decides on each one in that same call.
+  // come later.
   await page.evaluate(() => {
     const read: string[] = [];
     (window as unknown as { __focusFramesRead?: string[] }).__focusFramesRead = read;
@@ -72,7 +57,6 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   let following = false;
   let releaseSplit = (): void => undefined;
   try {
-    // off, as it starts: herdr's focus is herdr's, and this device stays where it is
     const ignored = await focusedTab("follow focus off");
     tabs.push(ignored.tab.tab_id);
     await focusRead(ignored.root_pane.pane_id, "herdr's focus frame for the tab opened while off is read");
@@ -81,20 +65,15 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await page.waitForTimeout(NO_FOLLOW_WAIT_MS);
     assert.equal(await selectedPaneId(), before, "a device that did not ask to follow herdr's focus keeps its pane");
 
-    // the cleanup below owns the setting from here on, even if turning it on stops halfway
     following = true;
     await follow(true);
-    // nobody types here: Settings handed the keyboard back to the terminal, and a terminal with the
-    // keyboard in a window in front is someone at it (#1470)
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     const followed = await focusedTab("follow focus on");
     tabs.push(followed.tab.tab_id);
     await until(async () => await selectedPaneId() === followed.root_pane.pane_id, "the tab herdr brought to the front opens here");
-    // a pane the roster had not listed yet stays open once it does, its tab the one shown
     await until(async () => (await shownTab())?.includes("follow focus on") === true, "the new tab is the one shown");
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "the followed pane stays selected once the roster lists it");
 
-    // typing here: herdr's focus moving elsewhere leaves this device's pane, keyboard and all
     await page.bringToFront();
     await page.locator(".xterm-helper-textarea").first().focus();
     assert.ok(await page.evaluate(() => document.hasFocus()), "this window is in front while typing");
@@ -104,7 +83,6 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "herdr's focus does not take the view while this device types");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-    // a dialog open here: the same
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await page.locator('[aria-modal="true"]').first().waitFor();
     const dialog = await focusedTab("follow focus dialog");
@@ -114,14 +92,10 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-    // a split this device opens itself: herdr's frame for the new pane comes before the split's
-    // answer, held here until that frame has been handled. The pane is still this device's own pick,
-    // with the keyboard in it and a Back entry to the pane it was split from
     const splitFrom = followed.root_pane.pane_id;
     let made: string | undefined;
     const answerHeld = new Promise<void>((resolve) => { releaseSplit = () => resolve(); });
     await page.route("**/api/pane/split", async (route) => {
-      // nobody types here and no dialog is open when herdr's frame comes
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       const response = await route.fetch();
       made = ((await response.json()) as { pane: { pane_id: string } }).pane.pane_id;
@@ -144,7 +118,6 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await until(async () => await selectedPaneId() === splitFrom && await keyboardIn(splitFrom), "Back opens the pane it was split from");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-    // herdr's focus goes back where this device was: so does this device
     await herdrRpc("pane.focus", { pane_id: before });
     await until(async () => await selectedPaneId() === before, "herdr's focus moving back brings this device back");
     await follow(false);
@@ -155,7 +128,6 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     releaseSplit();
     await page.unroute("**/api/pane/split").catch(() => undefined);
     for (const tab of tabs) await tabClose(tab).catch(() => undefined);
-    // a check that stopped partway leaves the setting as it found it, for the checks after it
     if (following) await follow(false).catch(() => undefined);
   }
 }

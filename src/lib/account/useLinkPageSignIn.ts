@@ -32,7 +32,6 @@ export function useLinkPageSignIn(service: string, onSignedIn: (session: Account
   useEffect(() => {
     let live = true;
     setOffer(null);
-    // Discover before the click: a desktop-only offer opens Settings without opening a blank tab.
     void offeredProviders(service, ["github"]).then((next) => { if (live) setOffer(next); });
     return () => { live = false; };
   }, [service]);
@@ -68,13 +67,10 @@ export function useLinkPageSignIn(service: string, onSignedIn: (session: Account
       sent = true;
       setState({ kind: "waiting", started, opened: tab !== null });
       const session = await started.finish(controller.signal);
-      // finish owns cancellation under the store lock. A returned session is already committed.
-      // The account re-read may unmount us inside the callback; a finished page stays open.
       running.current = null;
       setState({ kind: "signed-in", session });
       signedIn.current(session);
     })().catch((error: unknown) => {
-      // cancelled, or the sheet closed: it already moved on
       if (controller.signal.aborted) return;
       if (!sent) tab?.close();
       console.warn("Ovis: the sign-in did not finish", error instanceof Error ? error.name : error);

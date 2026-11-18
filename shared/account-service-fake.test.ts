@@ -137,6 +137,28 @@ describe("the fake account service", () => {
     expect(((await pull(service, machine, null)).body as { admissions?: unknown[] }).admissions).toEqual([]);
   });
 
+  test("a quiet admission is kept apart from the ordinary ones and reaches the PC in a field of its own while the account lists it", async () => {
+    const service = new FakeAccountService();
+    const [mine, phone] = [service.issueToken("acct_1"), service.issueToken("acct_1")];
+    await service.fetch(new Request(`${BASE}/v1/push`, { method: "PUT", body: JSON.stringify({ endpoint: "https://push.test/1", keys: { p256dh: "B".repeat(87), auth: "A".repeat(22) } }), headers: { authorization: `Bearer ${phone}` } }));
+    const machine = pc();
+    await service.fetch(new Request(`${BASE}/v1/pcs/${machine.serverId}`, { method: "PUT", body: JSON.stringify({ label: "pc", public_key: machine.publicKey, relay: "wss://relay.ovis.sh" }), headers: { authorization: `Bearer ${mine}` } }));
+    const rings = service.rings().length;
+    const [quiet, ordinary] = [await client(), await client()];
+    expect((await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Mac", key: quiet.spki, quiet: "yes" }, mine))).status).toBe(400);
+    expect((await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Mac", key: quiet.spki, quiet: true }, mine))).status).toBe(200);
+    expect(service.rings().length).toBe(rings);
+    await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Mac", key: ordinary.spki }, mine));
+    expect(service.rings().length).toBe(rings + 1);
+    const listed = await (await service.fetch(new Request(`${BASE}/v1/admissions`, { headers: { authorization: `Bearer ${mine}` } }))).json() as { admissions: { key: string }[] };
+    expect(listed.admissions.map(({ key }) => key)).toEqual([ordinary.spki]);
+    const read = async () => (await pull(service, machine, null)).body as { admissions: { key: string }[]; quiet_admissions: { key: string }[] };
+    const first = await read();
+    expect([first.admissions.map(({ key }) => key), first.quiet_admissions.map(({ key }) => key)]).toEqual([[ordinary.spki], [quiet.spki]]);
+    await service.fetch(new Request(`${BASE}/v1/pcs/${machine.serverId}`, { method: "DELETE", headers: { authorization: `Bearer ${mine}` } }));
+    expect((await read()).quiet_admissions).toEqual([]);
+  });
+
   test("an admission lists the system the device sent and the place its request came from; an unknown system is kept as unknown", async () => {
     const service = new FakeAccountService(() => Date.parse("2026-11-05T00:00:00.000Z"));
     service.requestPlace = { country: "KR", city: "Seoul" };
@@ -208,6 +230,7 @@ describe("signing in to the fake account service", () => {
     const flow = await signIn(service);
     expect(flow.answer.status).toBe(302);
     expect(flow.back.origin + flow.back.pathname).toBe(flow.redirect);
+    // on the web the code comes back in the fragment, which never reaches app.ovis.sh
     expect(flow.back.search).toBe("");
     expect(flow.params.get("state")).toBe("s1");
     const wrong = await token(service, { grant_type: "authorization_code", code: flow.code, code_verifier: (await pkce()).verifier, redirect_uri: flow.redirect });
@@ -311,6 +334,7 @@ describe("signing in to the fake account service", () => {
     const poll = async (code_verifier?: string) => (await (await token(service, { grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: started.device_code, ...(code_verifier ? { code_verifier } : {}) })).json()) as { error?: { code: string }; account?: string };
     expect((await poll()).error?.code).toBe("invalid_grant");
     expect((await poll((await pkce()).verifier)).error?.code).toBe("invalid_grant");
+    // the refused polls did not move the interval: the right verifier gets the tokens at once
     expect((await poll(verifier)).account).toBe("acct_page");
   });
 

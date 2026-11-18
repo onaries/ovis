@@ -2,14 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { posix } from "node:path";
 import { fail, files, lineOf, read, stripComments } from "../scripts/source-scan.ts";
 
-// Server rules from AGENTS.md and server/AGENTS.md that used to be prose only. Each failure says
-// what to change; client rules are in src/conventions.test.ts, repo-wide ones in
-// scripts/conventions.test.ts.
-
-/** Server code that ships: not tests, not test stand-ins. */
 const serverCode = (): string[] => files("server/**/*.{ts,mjs,js}").filter((file) => !/\.test\.ts$|\.fake\.ts$/.test(file));
 
-/** Every match of `pattern` in each file's code (comments removed), as `file:line: text`. */
 function matches(fileList: string[], pattern: RegExp): { file: string; at: string; index: number; code: string }[] {
   return fileList.flatMap((file) => {
     const code = stripComments(read(file));
@@ -27,7 +21,6 @@ describe("PTY sidecar boundary", () => {
   const LOAD = /\bfrom\s*["'](?:@lydell\/)?node-pty[^"']*["']|\bimport\s*\(?\s*["'](?:@lydell\/)?node-pty[^"']*["']|\b(?:require|createRequire\s*\([^()]*(?:\([^()]*\))?[^()]*\))\s*\(\s*["'](?:@lydell\/)?node-pty[^"']*["']/;
 
   it("loads node-pty only in the Node sidecar", () => {
-    // this file names the package in its own examples
     const code = [...files("{server,src,shared,scripts,site,telemetry}/**/*.{ts,tsx,mjs,cjs,js}"), "vite.config.ts"].filter((file) => file !== "server/conventions.test.ts");
     const loads = matches(code, LOAD);
     fail(loads.filter((load) => !NODE_SIDE.has(load.file)).map((load) => load.at),
@@ -52,7 +45,6 @@ describe("web push", () => {
   });
 });
 
-/** The text of the `{ … }` that opens at `open`, strings respected. */
 function braces(code: string, open: number): string {
   let depth = 0;
   for (let i = open; i < code.length; i++) {
@@ -68,17 +60,12 @@ function braces(code: string, open: number): string {
 }
 
 describe("error bodies", () => {
-  // Every error body is `{ error: { code, message } }` (AGENTS.md, Changing a contract): the
-  // client reads `code` to decide and shows `message`. JSON answers go through jsonResponse or
-  // its wrappers in server/http.ts, so the content type and the envelope stay one shape.
   it("builds JSON answers only through server/http.ts", () => {
     fail(matches(serverCode().filter((file) => file !== "server/http.ts"), /\bResponse\.json\s*\(|new Response\s*\(\s*JSON\.stringify/).map((match) => match.at),
       "Answer JSON with jsonResponse, errorResponse, badRequest or conflictResponse from server/http.ts, not Response.json or new Response(JSON.stringify(…)).");
   });
 
-  /** An answer built from an object literal: jsonResponse or a local wrapper around it (`reply`, `fail`). */
   const ANSWER = /\b(?:jsonResponse|reply|fail)\s*\(\s*\{/;
-  /** The value of the object's own top-level `error` key (strings blanked), or null when it has none. */
   const errorValue = (object: string): string | null => {
     for (let i = 1, depth = 0; i < object.length; i++) {
       const ch = object[i]!;
@@ -90,7 +77,6 @@ describe("error bodies", () => {
     }
     return null;
   };
-  /** Whether the answer at `at` has an error body other than `{ error: { code, message } }`. */
   const malformed = (code: string, at: number): boolean => {
     const blank = stripComments(code.slice(at), { strings: true });
     const object = braces(blank, blank.indexOf("{"));
@@ -119,14 +105,8 @@ describe("error bodies", () => {
   });
 });
 
-/**
- * Unix-socket connections opened in `code` (comments removed): Bun.connect with `unix:` or with
- * options it cannot read, and node:net's connect or createConnection (named, default or namespace
- * import, or require) called with `path:` or with a single path-like argument.
- */
 function unixConnects(file: string, code: string): { file: string; at: string; bun: boolean }[] {
   const at = (index: number) => `${file}:${lineOf(code, index)}: ${code.split("\n")[lineOf(code, index) - 1]!.trim().slice(0, 160)}`;
-  /** The first argument of the call whose `(` ends at `open`. */
   const argument = (open: number): string => {
     const rest = code.slice(open).trimStart();
     return rest.startsWith("{") ? braces(rest, 0) : /^[^,)]*/.exec(rest)![0].trim();
@@ -147,7 +127,6 @@ function unixConnects(file: string, code: string): { file: string; at: string; b
   if (!names.length) return found;
   for (const match of code.matchAll(new RegExp(`(?<![\\w.])(?:${names.map((name) => name.replace(".", "\\.")).join("|")})\\s*\\(`, "g"))) {
     const arg = argument(match.index + match[0].length);
-    // TCP is `{ host, port }` or `(port, host)`; a path, an options object with `path:` or anything unreadable is a unix socket
     if (arg.startsWith("{") ? /\bpath\s*:/.test(arg) : !/^\d|port/i.test(arg)) found.push({ file, at: at(match.index), bun: false });
   }
   return found;
@@ -186,12 +165,6 @@ describe("herdr socket", () => {
     expect(found("import { connect as tcpConnect, createServer } from \"node:net\";\ntcpConnect({ host, port });\ntcpConnect(port, host);")).toBe(0);
   });
 
-  // Server code calls herdr through the typed wrappers in server/herdr/client.ts (paneProcessInfo,
-  // agentGet, paneSendText, paneSendKeys, …), never through herdrRpc itself: the wrapper is where a
-  // method's params are typed (server/herdr/methods.ts), so `{ target }` to pane.process_info does
-  // not compile there. herdrRpc's untyped fallback still takes any params given an explicit result
-  // type, so this guard is what keeps server code off it. These files still call herdrRpc because
-  // open PRs change them; a follow-up PR moves them to the wrappers once those PRs land.
   const HERDR_RPC_ALLOWED: Record<string, string> = {
     "server/conversation.ts": "open PRs #869 #912 #923 change it",
     "server/gjc-runtime.ts": "open PR #912 changes it",
@@ -199,9 +172,6 @@ describe("herdr socket", () => {
     "server/omo.ts": "open PR #923 changes it",
     "server/shell-agent.ts": "open PRs #885 #923 change it",
   };
-  // Files that do not call herdrRpc on main yet but whose open PR adds a `pane.process_info` call.
-  // They are exempt from the "no longer calls" check below. Remove an entry when its PR switches to
-  // paneProcessInfo(paneId) (the better outcome), merges, or closes.
   const HERDR_RPC_PENDING: Record<string, string> = {
     "server/gjc-status.ts": "open PR #928 adds a call",
     "server/index.ts": "open PR #859 adds a call",
@@ -218,11 +188,6 @@ describe("herdr socket", () => {
 
   it("subscribes to status only in server/collector.ts", () => {
     const subscribers = matches(serverCode(), /\bsubscribeEvents\b/).filter((match) => match.file !== "server/herdr/client.ts" && match.file !== "server/collector.ts");
-    // server/herdr-core/adapter.ts is the other end: it answers herdr's events.subscribe (the
-    // collector's own, reaching it through HERDR_SOCKET) from hc's event stream of the same name;
-    // hc's generated types, their generator and the hc connection only name that hc method as a type
-    // server/herdr-core/pin-label.ts reads hc's own `labels` events for pins, never a pane's status;
-    // server/herdr-core/machine-scope.ts only narrows hc's stream to one machine's events for that adapter
     const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts", "server/herdr-core/pin-label.ts", "server/herdr-core/machine-scope.ts"];
     const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts" && !HC_STREAM_TYPES.includes(match.file));
     fail([...subscribers, ...raw].map((match) => match.at),
@@ -231,15 +196,8 @@ describe("herdr socket", () => {
 });
 
 describe("runtime gates", () => {
-  /**
-   * A gate on the runtime's name: a comparison with `"herdr-core"` or a `case` on it, any read of the
-   * served runtime's name (`capabilities().runtime`), or a comparison of the chosen one (`runtime()`).
-   * `"herdr"` alone names other things too (a turn's source, a query parameter), so it counts only
-   * beside one of those reads.
-   */
   const NAMED = /[!=]== ?"herdr-core"|\bcase "herdr-core"\s*:|\bcapabilities\(\)\.runtime\b|\bruntime\(\)\s*[!=]==/;
 
-  // which runtime is served or named, not what it can do
   const RUNTIME_NAMED: Record<string, string> = {
     "server/runtime-move.ts": "the move goes from herdr to herdr-core",
     "server/runtime-move-run.ts": "the move goes from herdr to herdr-core",
@@ -271,14 +229,11 @@ describe("runtime gates", () => {
       'switch (capabilities().runtime) { case "herdr": return 1; default: return 2; }',
     ]) expect(NAMED.test(gate)).toBe(true);
     for (const other of [
-      // the runtime told, not asked: /api/health's answer
       "return jsonResponse({ ok: true, runtime: runtime() });",
-      // another herdr: a query parameter, a turn's source, a program started
       'const discover = url.searchParams.get("discover") === "herdr";',
       'if (source === "herdr" && tracked) return;',
       'switch (signal.source) { case "herdr": return turns.chat; default: return turns.herdr; }',
       'const command = process.env["OVIS_HERDR_BIN"] || "herdr";',
-      // an ability read, which is what a gate should do
       'if (capabilities().attach === "pty-cli") watch();',
     ]) expect(NAMED.test(other)).toBe(false);
   });
@@ -288,7 +243,6 @@ describe("remote PC bundle boundary", () => {
   // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/ or relay/: code
   // there that imports either loads from a checkout, where every check runs, and not on a remote PC (#2220)
   const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:\.\.\/)+(?:src|relay)\/[^"']*)["']/;
-  // server/relay/ is in the bundle: only a path that resolves to the checkout's own src/ or relay/ counts
   const leavesBundle = (file: string, spec: string) => /^(?:src|relay)\//.test(posix.normalize(posix.join(posix.dirname(file), spec)));
 
   it("never imports src/ or relay/ from code the remote bundle carries", () => {
@@ -311,8 +265,7 @@ describe("remote PC bundle boundary", () => {
 
 describe("server entries", () => {
   // The compiled binary (scripts/build-server.ts) has no .ts files: a child started by a source file's
-  // path works only from a checkout. server/entries.ts starts each entry, by file from source and by
-  // name in the binary (entryCommand).
+  // path works only from a checkout.
   const START_BY_PATH = /\bprocess\.execPath\s*,\s*\[?\s*(?:join\s*\(|resolve\s*\(|["'`][^"'`\n]*\.(?:ts|tsx|js|mjs)["'`])/;
   const ALLOWED: Record<string, string> = {
     "server/supervisor.ts": "installs the Rust PTY host with the script of a release checked out from source, which only the source updater makes",

@@ -6,9 +6,6 @@ import { stripVTControlCharacters } from "node:util";
 import { HerdrError } from "../herdr/client.ts";
 import { createSubmitText } from "./composer.ts";
 
-// An immediate chat send to an agent whose input box is recorded (shared/input-row.ts typedDraft), against the
-// real RPC client on a unix socket this test owns; only herdr's answers are synthetic. The screens are real
-// `pane.read --format ansi` recordings (src/lib/fixtures-input-rows/README.md).
 const FIXTURES = join(import.meta.dir, "../../src/lib/fixtures-input-rows");
 const recorded = (path: string): string => readFileSync(join(FIXTURES, path), "utf8");
 
@@ -16,9 +13,7 @@ let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
 let pane: { agent: string; argv: string[] };
-/** `live`: the detection read, the viewport's text (`visible`) unless set */
 let screens: { visible: string; live?: string };
-/** what the pane shows from the second read on: a screen that opened after the first */
 let next: typeof screens | undefined;
 let reads: number;
 let calls: { method: string; params: Record<string, unknown> }[];
@@ -103,14 +98,12 @@ it.each([
   ...["gjc", "muse", "qwen", "cline", "dsh-tui", "letta", "maki", "kimi", "gemini", "kilo", "omp"].map((agent): [string, string[], string] => [agent, [agent], `${agent}/draft-empty-119.ansi`]),
   // omp 18.8.7's framed editor was recorded only empty: its box reports no typed cells, so it is sent to as before
   ["omp", ["omp"], "omp/settings-idle-119.ansi"],
-  // an agent without a recorded box is not read at all
   ["an-unrecorded-agent", ["an-unrecorded-agent"], "pi/draft-typed-119.ansi"],
 ])("sends to %s when its box shows no typed text (%s)", async (agent, argv, screen) => {
   pane = { agent, argv };
   screens.visible = recorded(screen);
   await submit();
   expect(prompted()).toBeTrue();
-  // the box check reads the viewport in colour first: never for an agent with no recorded box
   if (agent === "an-unrecorded-agent") expect(calls.some((call) => call.method === "pane.read" && call.params["source"] === "visible")).toBeFalse();
 });
 
@@ -125,13 +118,10 @@ it("judges Codex's own screens and its composer on the same last read: a dialog 
 
 it("takes no colours from a viewport that is not the live screen: a draft shown there, over an empty live composer, is no draft", async () => {
   pane = { agent: "codex", argv: ["codex"] };
-  // the viewport, in colour, shows a composer holding typed text (another client's scroll, or a screen since redrawn);
-  // the live composer is empty
   screens.visible = recorded("codex-0.167.0/composer-ultra-draft-100.ansi");
   screens.live = readFileSync(join(FIXTURES, "codex-0.167.0/composer-empty-100.txt"), "utf8");
   await submit();
   expect(prompted()).toBeTrue();
-  // read again while they disagree, a bounded number of times, then sent as before
   expect(new Set(calls.filter((call) => call.method === "pane.read").map((call) => call.params["source"]))).toEqual(new Set(["visible", "detection"]));
 });
 

@@ -193,6 +193,7 @@ describe("the signers", () => {
     if (member === null) throw new Error("entry 0 does not hold");
     const names = ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"];
     for (const name of names) expect([name, signerPower(member.state, name)]).toEqual([name, null]);
+    // An entry that holds never names such a key (a key has its form); a held entry made by hand shows that only a row of the state's own decides.
     const { held } = last(took);
     for (const name of names) {
       const naming: HeldEntry = { ...held, body: { ...held.body, seq: held.body.seq + 1, signer: owner.key, adds: { key: name, power: "bound" } } };
@@ -1064,6 +1065,7 @@ describe("going back", () => {
 
 describe("what a caller hands in is read as its type names it, whatever carries its fields", () => {
   const getters = (data: object) => Object.fromEntries(Object.keys(data).map((name) => [name, { get: (): unknown => Reflect.get(data, name) }]));
+  /** The same data as an object whose fields are getters: inherited from its prototype, or its own and not enumerable. A spread finds no field of either. */
   const carried: readonly (readonly [string, <T extends object>(data: T) => T])[] = [
     ["inherited", (data) => Object.create(Object.create(Object.prototype, getters(data)))],
     ["its own, not enumerable", (data) => Object.create(Object.prototype, getters(data))],
@@ -1096,6 +1098,7 @@ describe("what a caller hands in is read as its type names it, whatever carries 
   test("a row that a state's rows hold as a property of their own that is not enumerable is a row: for an answer, for judgeEntry and for a saved state", async () => {
     const member = await memberOf(root);
     const { state } = member;
+    /** The phone's row is of the rows' own and not enumerable: signerPower finds it, Object.entries and a spread do not. */
     const hidden = { ...state, signers: Object.defineProperty({ ...state.signers }, phone.key, { enumerable: false }) };
     expect([Object.keys(hidden.signers).length, signerPower(hidden, phone.key)]).toEqual([1, "full"]);
     const next = await on(addPhone, phone, { kind: "device", adds: [watch, "bound"] });
@@ -1445,6 +1448,7 @@ describe("a member of a higher level, and a key that a later kind lets in on a p
       const shown = await shownEntries(saved, answer(enters, [other]), proof);
       expect([shown.stopped, shown.stuck, shown.member, signerPower(shown.member.state, watch.key)]).toEqual([{ seq: 3, code: "chain_broken" }, true, saved, "full"]);
       expect([(await replayEntries(saved.entries, 2, { saved: saved.state, proof })).member, (await replayEntries(saved.entries, 3, { saved: saved.state, proof })).member?.state.footing]).toEqual([saved, place(adds)]);
+      // Told null, which only a first replay of a member that has no saved state is, level 1 gives the member of the shorter history: null is the caller's word.
       const careless = await replayEntries(saved.entries, 1, { saved: null, proof });
       expect([careless.member?.state.footing, careless.member?.entries.length]).toEqual([place(rises), 2]);
     });
@@ -1737,6 +1741,7 @@ describe("a saved state", () => {
       withRow(phone, { seq: -1 }), withRow(phone, { seq: 1.5 }), withRow(phone, { seq: "1" }), withRow(phone, { seq: 6 }),
       withRow(phone, { by: "x" }), withRow(phone, { by: undefined }), withRow(phone, { by: 7 }), withRow(phone, { by: "constructor" }), withRow(phone, { by: "__proto__" }),
       withRow(phone, { by: stranger.key }),
+      // A row's by is the signer of the entry that made its key a signer: a key that was a signer of power full then. At level 1 it is never null.
       withRow(phone, { by: null }), withRow(phone, { by: watch.key }), withRow(invite, { by: watch.key }), withRow(invite, { by: invite.key }),
       { ...state, signers: { ...state.signers, [phone.key]: { ...state.signers[phone.key], ended: 2 }, [invite.key]: { ...state.signers[invite.key], by: phone.key } } },
       withRow(phone, { ended: -1 }), withRow(phone, { ended: "2" }), withRow(phone, { ended: undefined }), withRow(phone, { ended: 0 }), withRow(phone, { ended: 6 }),
@@ -2481,11 +2486,17 @@ describe("the vectors of signers/ and unreadable/", () => {
         }
         return found;
       };
+      /** The keys that these entries ended: each entry that names one in `ends` and is not passed over. They are out for good. */
       const endedBy = (took: readonly TakenEntry[]) => took.flatMap(({ held, outcome }) => (held.body.ends !== undefined && outcome.outcome !== "passed_over" ? [held.body.ends] : []));
       const whole = await upToDate(list);
       if (whole.took.some(({ outcome }) => outcome.outcome === "reads" && outcome.power === null)) counts.letIn++;
       counts.keysEnded += new Set(endedBy(whole.took)).size;
 
+      /**
+       * A member, after any step, beside the member that reads everything and holds the same entries: the same rows, the same footing, the same need. Its state, saved and read again, is as
+       * it was. No reader answers a power for a key that its copy has ended, for neither of the two. One that has not stopped signs where the other signs; one that has stopped answers for
+       * no key at all, is behind, and places nothing.
+       */
       const beside = async (member: ListMember, where: string) => {
         counts.members++;
         const { state } = member;
@@ -2546,6 +2557,11 @@ describe("the vectors of signers/ and unreadable/", () => {
         expect([where, caught.stopped, caught.asks_after, caught.member]).toEqual([where, null, null, whole.member]);
       };
 
+      /**
+       * A member that is not stopped, saved by its level and read back by every lower build, as the app of an older build does at start: stopped at its footing, with the same rows, so
+       * that build acts on nothing through it. Its replay by that level, told the state it read: no member, where that level cannot reach the footing, or the member of the same history,
+       * with the same rows and the same footing; never a shorter one. A replay by the member's own level, told the state that the lower build read, gives the member back.
+       */
       const lowered = async (member: ListMember, from: number, where: string) => {
         const text = JSON.stringify(member.state);
         for (let lower = 1; lower < from; lower++) {

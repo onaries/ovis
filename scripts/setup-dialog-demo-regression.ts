@@ -1,23 +1,4 @@
-/**
- * The first-run setup guide as a dialog (components/SetupGuide.tsx), on the unmodified app over the demo's
- * fixture transport (no herdr), at 1920x1080, 1280x720 and 390x844, dark and light:
- *
- * - A fresh run's guide is a modal dialog named "Set up Ovis" over the app, not a page in the main area: at
- *   1920x1080 it is the 1200x675 16:9 card in the middle of the window, at 1280x720 the same card with no
- *   scroll, and at 390 the app's bottom sheet. It opens on the agent step, the keyboard on its title, Tab stays inside it,
- *   and its close button is named.
- * - The fast path is Continue three times, then Start on Done, which
- *   opens a new workspace with the agent picked for you (one more in the sidebar) and closes the guide.
- * - The full path: Continue leads to the theme step, whose cards are a radio group (an arrow picks the next
- *   theme and the whole app takes it at once, the side panel naming it), then to Done, whose Start opens the workspace with
- *   <agent> is the step's one primary button and whose list names the theme picked. Between the theme and Done,
- *   Phone and alerts: Settings' Alert me when chips with their defaults, Send test showing one alert on this
- *   computer at once (notifications recorded, none reach the desktop), the phone beside them; Done lists the
- *   alerts chosen and offers the phone left for later. The head lists the
- *   steps, the current one marked. Back returns to the theme, then to the agents, and Escape closes the guide and records it closed (a reload shows no guide).
- *
- * With UI_EVIDENCE_DIR, each state is captured under setup-dialog/.
- */
+/** With UI_EVIDENCE_DIR, each state is captured under setup-dialog/. */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +14,6 @@ if (evidence) mkdirSync(evidence, { recursive: true });
 const DIALOG = "Set up Ovis";
 const WELCOME = JSON.stringify({ status: "open", state: { step: "welcome" } });
 const settled = (page: Page) => page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime ?? Infinity)).map((animation) => animation.finished.catch(() => undefined))).then(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))));
-/** the name of the element that has the keyboard: its aria-label, else its text */
 const focusedName = (page: Page) => page.evaluate(() => {
   const active = document.activeElement as HTMLElement | null;
   return active === null ? "" : (active.getAttribute("aria-label") ?? active.innerText ?? "").replace(/\s+/g, " ").trim();
@@ -72,7 +52,6 @@ try {
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n    ${PUSH_STAND_IN}\n    <script type="module"`));
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
-    // the app's mark is addressed from the root, where a real server keeps it
     if (path.startsWith("/icons/")) { const icon = Bun.file(join(app, path)); return (await icon.exists()) ? new Response(icon) : new Response("not found", { status: 404 }); }
     if (!path.startsWith("/herdr-web-ui/demo/app/")) return new Response("not found", { status: 404 });
     let file: string;
@@ -99,7 +78,6 @@ try {
         : { viewport: { width: size.width, height: size.height }, locale: "en-US", colorScheme: theme });
       await context.addInitScript(([value, guide]) => {
         localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value, palette: "codex", darkTheme: "codex", lightTheme: "codex" }));
-        // a fresh run's guide, once: a reload keeps what the page wrote since
         if (sessionStorage.getItem("seeded") === null) { localStorage.setItem("ovis:setup-guide", guide); sessionStorage.setItem("seeded", "1"); }
       }, [theme, WELCOME] as const);
       // notifications allowed, and every one shown is recorded instead of reaching the desktop
@@ -133,8 +111,6 @@ try {
         } else {
           assert.ok(Math.abs(box.y + box.height - size.height) <= 1 && Math.round(box.width) === size.width, `a bottom sheet at 390 ${at}: ${JSON.stringify(box)}`);
         }
-        // the keyboard starts on the first choice and Tab stays in the dialog
-        // the first real choice opens: the agent step, its title with the keyboard, Tab inside the dialog
         const title = dialog.getByRole("heading", { name: "Pick an agent", exact: true });
         await title.waitFor();
         await dialog.locator(".setup-found .setup-tile").first().waitFor();
@@ -161,7 +137,6 @@ try {
         const steps = dialog.getByRole("list", { name: "Steps", exact: true });
         assert.equal((await steps.locator('[aria-current="step"]').textContent())?.replace(/\s+/g, ""), "Agent", `the head marks Agent as the current step ${at}`);
 
-        // Continue: the theme step. Its cards are a radio group; an arrow picks the next card and the app takes it at once
         await footer.getByRole("button", { name: "Continue", exact: true }).click();
         const look = dialog.getByRole("heading", { name: "Pick a look", exact: true });
         await look.waitFor();
@@ -181,7 +156,6 @@ try {
         assert.ok(await dialog.locator(".setup-side").getByText(picked).count() > 0, `the side panel names the theme picked ${at}`);
         await shot("3-theme");
 
-        // Continue: phone and alerts. This computer's chips are Settings' own, and Send test shows one alert here at once
         await footer.getByRole("button", { name: "Continue", exact: true }).click();
         const touch = dialog.getByRole("heading", { name: "Stay in touch", exact: true });
         await touch.waitFor();
@@ -203,7 +177,6 @@ try {
         await chips.getByRole("button", { name: "Any turn finished", exact: true }).click();
         await shot("4-phone-alerts");
 
-        // Continue: Done, its Start the one primary, the choices made listed; Back returns to each step in turn
         await footer.getByRole("button", { name: "Continue", exact: true }).click();
         await dialog.getByRole("heading", { name: "Ovis is ready", exact: true }).waitFor();
         await settled(page);
@@ -225,26 +198,21 @@ try {
         await title.waitFor();
 
         if (size.width === 1920) {
-          // the fast path from a fresh first run: Continue three times and Start (four presses) open a workspace and close the guide
           await page.evaluate((guide) => localStorage.setItem("ovis:setup-guide", guide), WELCOME);
           await page.reload();
           await title.waitFor();
           const workspaces = page.locator(".workspace-group[data-workspace]");
           const before = await workspaces.count();
-          // the fast path: Continue through theme and phone and alerts with nothing chosen, then Start (four presses)
           for (let press = 0; press < 3; press++) await dialog.locator(".setup-foot").getByRole("button", { name: "Continue", exact: true }).click();
           await dialog.getByRole("heading", { name: "Ovis is ready", exact: true }).waitFor();
           await dialog.locator(".setup-foot").getByRole("button", { name: "Start", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
           await page.waitForFunction((count) => document.querySelectorAll(".workspace-group[data-workspace]").length > count, before);
           assert.equal(JSON.parse((await page.evaluate(() => localStorage.getItem("ovis:setup-guide"))) ?? "{}").status, "closed", `the fast path closes the guide ${at}`);
-          // a first run whose agent started: the first-start hints wait for its workspace, and the sidebar's setup row may show
           assert.deepEqual(await page.evaluate(() => [localStorage.getItem("ovis:first-hints"), localStorage.getItem("ovis:setup-row")]), ["pending", "on"], `the fast path arms the hints and the setup row ${at}`);
           await shot("6-started");
           console.log(`PASS the guide is a 1200x675 dialog, keyboard inside it, and the fast path opens the first workspace in four presses (${at})`);
 
-          // stepped aside (a pane picked from the palette over it) the guide is no modal: the app's own check for one
-          // (modalOpen: the terminal's focus, the drawer, Escape) finds nothing, and Back to setup brings it back
           await page.evaluate((guide) => localStorage.setItem("ovis:setup-guide", guide), WELCOME);
           await page.reload();
           await title.waitFor();
@@ -260,9 +228,6 @@ try {
           console.log(`PASS a stepped-aside guide is no modal dialog, and Back to setup makes it one again (${at})`);
 
           if (theme === "dark") {
-            // the theme step's keys and links: Home and End pick the first and last card, Show all themes reveals the
-            // rest with the keyboard on the first revealed, a theme saved beyond the first six keeps its card after an
-            // arrow moves off it, and the mode switch draws the other side's cards (#3885 review)
             await page.evaluate((guide) => localStorage.setItem("ovis:setup-guide", guide), WELCOME);
             await page.reload();
             await title.waitFor();
@@ -281,7 +246,6 @@ try {
             const firstSix = (await radios.allInnerTexts()).slice(0, six);
             assert.ok(!firstSix.includes(await focusedName(page)), `Show all themes puts the keyboard on the first theme it revealed ${at}`);
             await grid.locator("[data-theme-card='nord']").click();
-            // back and on again: the grid is six again, with Nord kept as the saved one
             await dialog.locator(".setup-foot").getByRole("button", { name: "Back", exact: true }).click();
             await title.waitFor();
             await dialog.locator(".setup-foot").getByRole("button", { name: "Continue", exact: true }).click();
@@ -292,17 +256,13 @@ try {
             await page.keyboard.press("ArrowRight");
             await page.waitForFunction(() => document.querySelector("[data-theme-card='nord']")?.getAttribute("aria-checked") === "false");
             assert.equal(await nord.count(), 1, `a saved theme beyond the first six keeps its card after an arrow moves off it ${at}`);
-            // the mode switch draws the light side's cards, and back
             const mode = dialog.getByRole("group", { name: "Theme", exact: true });
             await mode.getByRole("button", { name: "Light", exact: true }).click();
             await dialog.getByRole("radiogroup", { name: "Light theme", exact: true }).waitFor();
-            // Nord, kept on the dark side, is no stray card in the light list (#3894 review)
             assert.equal(await dialog.getByRole("radiogroup", { name: "Light theme", exact: true }).locator("[data-theme-card='nord']").count(), 0, `a theme kept on the dark side is not in the light list ${at}`);
             await mode.getByRole("button", { name: "Dark", exact: true }).click();
             await grid.waitFor();
-            // on System, the computer turning light under a focused dark card: the keyboard goes to the light side's cards
             await mode.getByRole("button", { name: "System", exact: true }).click();
-            // Black is drawn on the dark side only, so it is gone once the computer turns light
             await grid.locator("[data-theme-card='black']").click();
             await grid.locator("[data-theme-card='black']").focus();
             assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-theme-card")), "black", `Black has the keyboard ${at}`);
@@ -315,8 +275,6 @@ try {
             await grid.waitFor();
             console.log(`PASS the theme step's Home and End, Show all themes, a saved theme beyond the first six, the mode switch, and the keyboard kept when the computer turns light (${at})`);
 
-            // push refused by the push service: Turn on alerts says why in Settings' words, stays to try again, and Done
-            // does not list alerts as on (#3894 review)
             await page.evaluate((guide) => { localStorage.setItem("ovis:setup-guide", guide); (window as unknown as { pushStandIn: { fails: boolean } }).pushStandIn.fails = true; }, WELCOME);
             await page.reload();
             await page.evaluate(() => { (window as unknown as { pushStandIn: { fails: boolean } }).pushStandIn.fails = true; });
@@ -336,8 +294,6 @@ try {
             console.log(`PASS a refused push subscription is said, keeps Turn on alerts, and Done does not count alerts (${at})`);
           }
 
-          // a device paired before the guide (the demo's list) is the phone: the step and Done name it. That this
-          // browser alone is no phone is a unit test (setupGuideFlow.test.ts otherDevice)
           const other = await context.newPage();
           try {
             await other.goto(`${root}?demo_devices=list`);
@@ -356,7 +312,6 @@ try {
           }
           console.log(`PASS the phone counts as paired only when another device is listed (${at})`);
         } else {
-          // Set up later closes it without starting an agent; the way back is in view: the sidebar's Setup: N left row
           await dialog.locator(".setup-foot").getByRole("button", { name: "Set up later", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
           if (phone) {
@@ -369,12 +324,10 @@ try {
           await page.evaluate((guide) => localStorage.setItem("ovis:setup-guide", guide), WELCOME);
           await page.reload();
           await dialog.waitFor();
-          // Escape closes it and records it closed: a reload shows no guide
           await page.keyboard.press("Escape");
           await dialog.waitFor({ state: "detached" });
           assert.equal(JSON.parse((await page.evaluate(() => localStorage.getItem("ovis:setup-guide"))) ?? "{}").status, "closed", `Escape records the guide closed ${at}`);
           await page.reload();
-          // the app is up again and connected, where a guide still open would show (a phone keeps the sidebar in a closed drawer)
           await page.locator(".conn-live").waitFor({ state: "attached" });
           await settled(page);
           assert.equal(await page.getByRole("dialog", { name: DIALOG, exact: true }).count(), 0, `no guide after a reload once closed ${at}`);
@@ -401,7 +354,6 @@ try {
         active: { event: "active", day: "2026-11-15", install_id: "demo", version: "0.0.0", os: "linux", arch: "x64", install_method: "source", harnesses: [], usage: {}, runtime: "herdr" } }), { headers: { "content-type": "application/json" } });
       const native = window.fetch.bind(window);
       let inner: typeof window.fetch = native;
-      // the demo's transport puts its own fetch in place as it loads: it goes behind this one, which answers only /api/telemetry
       const recorder = ((input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
         if (!url.pathname.startsWith("/api/")) return native(input, init);
@@ -410,7 +362,6 @@ try {
         const body = JSON.parse(String(init?.body ?? "{}")) as { notice_seen?: boolean; enabled?: boolean; settings?: unknown };
         if (body.enabled === false) counts.on = false;
         else if (!counts.on && body.settings !== undefined) counts.snapshotsAfterOff += 1;
-        // the first acknowledgement fails, as a dropped request would
         if (body.notice_seen === true && counts.failNext > 0) { counts.failNext -= 1; counts.failed += 1; return Promise.resolve(new Response("{}", { status: 500 })); }
         if (body.notice_seen === true) counts.seen.push(body);
         return Promise.resolve(status(counts.seen.length > 0));
@@ -426,10 +377,17 @@ try {
       await page.goto(root);
       const dialog = page.getByRole("dialog", { name: DIALOG, exact: true });
       const line = dialog.locator(".setup-note-usage");
-      // the guide opens on the agent step: its line is drawn again once the PC's agents arrive, so the case starts there
-      await dialog.getByRole("heading", { name: "Pick an agent", exact: true }).waitFor();
-      await line.waitFor({ state: "attached" });
-      // a short window: the line is below the fold of the guide's scrolling body
+      const heading = dialog.getByRole("heading", { name: "Pick an agent", exact: true });
+      await heading.focus();
+      await line.evaluate((node) => {
+        const observer = new IntersectionObserver(([entry]) => {
+          if (entry) node.setAttribute("data-fixture-in-view", String(entry.isIntersecting && entry.intersectionRatio >= 0.99));
+        }, { threshold: [0, 1] });
+        observer.observe(node);
+      });
+      const lineClipped = line.and(page.locator('[data-fixture-in-view="false"]'));
+      const lineInView = line.and(page.locator('[data-fixture-in-view="true"]'));
+      await lineClipped.waitFor({ state: "attached" });
       const below = await line.evaluate((node) => {
         const body = node.closest(".modal-body")!.getBoundingClientRect();
         return node.getBoundingClientRect().bottom > body.bottom;
@@ -441,30 +399,32 @@ try {
       // a native showModal() dialog over the guide (as Add PC opens) covers the line too, though it has no aria-modal (#3882)
       await page.evaluate(() => { const native = document.createElement("dialog"); native.id = "native-over"; native.textContent = "native"; document.body.append(native); native.showModal(); });
       await line.evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+      await lineInView.waitFor({ state: "attached" });
       await frames(4);
       assert.equal(await page.evaluate(() => (window as unknown as { counts: { seen: unknown[]; failed: number } }).counts.seen.length + (window as unknown as { counts: { failed: number } }).counts.failed), 0, "a line under a native modal dialog is not recorded");
-      // put back as it was: the line below the fold again, the native dialog gone
       await line.evaluate((node) => { node.closest(".modal-body")!.scrollTop = 0; });
+      // Keep the native cover until the scroll reset reaches IntersectionObserver. Closing it restores focus,
+      // which schedules a record using the last intersection; the line must stay clipped until Settings owns focus.
+      await lineClipped.waitFor({ state: "attached" });
       await page.evaluate(() => { const native = document.getElementById("native-over") as HTMLDialogElement; native.close(); native.remove(); });
-      await frames(4);
-      // Settings over the guide, then the line scrolled into view under it: still not seen
       await page.keyboard.press("Control+Shift+Comma");
       const settings = page.getByRole("dialog", { name: "Settings", exact: true });
-      await settings.waitFor();
+      await settings.and(page.locator(":focus-within")).waitFor();
       await line.evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+      await lineInView.waitFor({ state: "attached" });
       await frames(4);
       assert.equal(await seen(), 0, "a line under Settings is not recorded as seen");
       // not even tried: a covered line makes no acknowledgement attempt, failed or not (#3894 CodeRabbit)
       assert.equal(await page.evaluate(() => (window as unknown as { counts: { failed: number } }).counts.failed), 0, "no acknowledgement is attempted while Settings covers the line");
-      // Settings closed: the line is in view and uncovered, and is recorded
-      await page.keyboard.press("Escape");
+      await Promise.all([
+        page.waitForEvent("console", { predicate: (message) => message.type() === "error" && message.text().startsWith("telemetry notice ") }),
+        page.keyboard.press("Escape"),
+      ]);
       await settings.waitFor({ state: "detached" });
-      // its first record fails, and the same line tries again on the next focus move rather than never (#3882)
       await page.waitForFunction(() => (window as unknown as { counts: { failed: number } }).counts.failed === 1);
       assert.equal(await seen(), 0, "a failed record is not counted");
       await page.keyboard.press("Tab");
       await page.waitForFunction(() => (window as unknown as { counts: { seen: unknown[] } }).counts.seen.length === 1);
-      // recorded once, the line stays with its one-tap Turn off
       await dialog.locator(".setup-note-usage").getByRole("button", { name: "Turn off", exact: true }).waitFor({ state: "attached" });
       assert.equal(await seen(), 1, "the next step's copy does not record it again");
       // Turn off in the guide's copy is every copy's: the guide closed, the page's own line does not come back and
@@ -487,9 +447,6 @@ try {
     }
   }
 
-  // The phone and alerts step: at both desktop sizes its body never scrolls, in every state (start, the QR code of each
-  // way, the other ways, Tailscale's command or absence, the Wi-Fi line, each store's QR code, a connection that does not
-  // turn on), and the dialog keeps its 16:9 size
   for (const size of [{ width: 1920, height: 1080 }, { width: 1280, height: 720 }] as const) {
     const at = `${size.width}x${size.height}`;
     const open = async (query: string) => {
@@ -520,7 +477,6 @@ try {
     const tab = (side: ReturnType<Page["locator"]>, name: RegExp) => side.getByRole("tab", { name }).click();
     {
       const { context, page, side } = await open("");
-      // step 3 is a heading of its own, whatever way is picked
       assert.equal(await side.locator(".setup-path-head").nth(2).textContent(), "3Scan with your phone", `${at}: step 3 names what to do`);
       await fits(page, "start");
       await side.getByRole("button", { name: "Turn on" }).click();
@@ -570,7 +526,6 @@ try {
         localStorage.setItem("ovis:setup-guide", guide);
         sessionStorage.setItem("seeded", "1");
       }
-      // every request the page makes to the PC, in order, through whatever fetch the demo puts in place
       const sent: string[] = [];
       (window as unknown as { sent: string[] }).sent = sent;
       let inner = window.fetch.bind(window);
@@ -587,7 +542,6 @@ try {
     await dialog.getByRole("heading", { name: "Pick an agent", exact: true }).waitFor();
     await dialog.locator(".setup-found .setup-tile").first().waitFor();
     const settingsBefore = await page.evaluate(() => localStorage.getItem("ovis:settings"));
-    // the sign-ins are not known before the usage read: nothing is said about them
     assert.equal(await dialog.getByText(/needs a sign-in/).count(), 0, "no sign-in line while the sign-ins are unknown");
     await dialog.locator(".setup-foot").getByRole("button", { name: "Set up later", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
@@ -595,8 +549,6 @@ try {
     const sent = await page.evaluate(() => (window as unknown as { sent: string[] }).sent);
     assert.deepEqual(sent.filter((request) => request === "GET /api/usage" || request.startsWith("PUT /api/preferences") || request.startsWith("POST /api/preferences")), [], `opening the guide and Set up later read no usage and write no shared setting: ${sent.join(", ")}`);
     assert.equal(await page.evaluate(() => localStorage.getItem("ovis:settings")), settingsBefore, "Set up later leaves this browser's settings byte for byte as they were");
-    // reopened from Setup: N left without Continue ever pressed (it opens at a later step), and after a reload there:
-    // still no usage read
     await page.locator(".setup-row .setup-row-open").click();
     await dialog.waitFor();
     await settled(page);
@@ -606,7 +558,6 @@ try {
     await settled(page);
     const reopened = await page.evaluate(() => (window as unknown as { sent: string[] }).sent);
     assert.equal(reopened.includes("GET /api/usage"), false, `a guide reopened without Continue reads no usage, nor after a reload: ${reopened.join(", ")}`);
-    // the user's own press on the agent step: Continue reads the plan usage
     await page.evaluate((guide) => { localStorage.setItem("ovis:setup-guide", guide); (window as unknown as { sent: string[] }).sent.length = 0; }, WELCOME);
     await page.reload();
     await dialog.getByRole("heading", { name: "Pick an agent", exact: true }).waitFor();
@@ -620,8 +571,7 @@ try {
   }
 
   // Anywhere's QR code, then Tailscale (a new pairing code: the PC keeps one), then Anywhere again: the relay asks for a
-  // fresh offer carrying the PC's current code, never shows the old one. And plan usage turned off forgets the guide's
-  // remembered Continue
+  // fresh offer carrying the PC's current code, never shows the old one.
   {
     const context = await browser!.newContext({ viewport: { width: 1920, height: 1080 }, locale: "en-US", colorScheme: "dark" });
     await context.addInitScript(([guide]) => {
@@ -658,7 +608,6 @@ try {
     await side.getByRole("tab", { name: /^Anywhere/ }).click();
     await page.waitForFunction((count) => (window as unknown as { sent: string[] }).sent.filter((request) => request === "POST /api/relay/offer").length > count, first);
     await side.locator(".setup-relay-tight .qr").waitFor();
-    // plan usage off: the remembered Continue goes
     assert.equal(await page.evaluate(() => localStorage.getItem("ovis:setup-usage-armed")), "1", "Continue on the agent step is remembered");
     await page.evaluate(() => localStorage.setItem("ovis:settings", JSON.stringify({ ...JSON.parse(localStorage.getItem("ovis:settings") ?? "{}"), showUsage: true })));
     await page.reload();
@@ -695,11 +644,9 @@ try {
     const tailscale = side.getByRole("tab", { name: /Tailscale/ });
     await side.getByRole("button", { name: "Turn on", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#setup-path-tab-tailscale")?.getAttribute("aria-disabled") === "true");
-    // a held tab is still pressable (aria-disabled): the click reaches the guide, which picks nothing
     await tailscale.click({ force: true });
     await page.keyboard.press("ArrowRight");
     assert.equal(await side.getByRole("tab", { name: /^Anywhere/ }).getAttribute("aria-selected"), "true", "no other way is picked while the relay starts");
-    // the start answers
     await page.waitForFunction(() => typeof (globalThis as { releaseDemoRelayStart?: () => void }).releaseDemoRelayStart === "function");
     await page.evaluate(() => (globalThis as { releaseDemoRelayStart?: () => void }).releaseDemoRelayStart?.());
     await side.locator(".setup-relay-tight .qr").waitFor();
@@ -710,8 +657,6 @@ try {
     console.log("PASS while the relay starts, the other ways wait, and are free once it is on (1920x1080)");
   }
 
-  // On a phone, with the answer a browser on the PC itself gets (via local): the step opens at its top, and a tab's press brings
-  // its panel into view; Tailscale shows its QR code and Same Wi-Fi its line
   {
     const context = await browser!.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, locale: "en-US", colorScheme: "dark" });
     await context.addInitScript(([guide]) => {
@@ -735,7 +680,6 @@ try {
     const side = dialog.locator(".setup-side-phone");
     await side.getByRole("tab", { name: /Tailscale/ }).click();
     await side.locator(".setup-qr-panel:visible .qr").waitFor();
-    // the sheet scrolls to it (smoothly): wait for the scroll to end with the QR code whole in the window
     const inView = await page.waitForFunction(() => {
       const qr = [...document.querySelectorAll(".setup-qr-panel .qr")].find((node) => node.getClientRects().length > 0);
       const rect = qr?.getBoundingClientRect();

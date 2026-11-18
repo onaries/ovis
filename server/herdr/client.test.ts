@@ -15,11 +15,6 @@ import {
   workspaceCreate,
 } from "./client.ts";
 
-/**
- * Exercised against the REAL running herdr server: this client exists to speak a
- * live socket protocol, so a mocked socket would prove nothing about it.
- * Only the polling regression creates/writes a pane, in its own workspace.
- */
 
 describe("ping", () => {
   it("reaches the live herdr server and reports its protocol", async () => {
@@ -136,7 +131,6 @@ describe("paneRead", () => {
     const error = caught as HerdrError;
     expect(typeof error.code).toBe("string");
     expect(error.code.length).toBeGreaterThan(0);
-    // a timeout would mean the client hung rather than parsed the server's refusal
     expect(error.code).not.toBe("timeout");
   });
 });
@@ -191,7 +185,6 @@ describe("subscribeEvents", () => {
 });
 
 describe("a failed herdr call", () => {
-  /** A herdr at a socket of its own that answers every request the way `answer` says: raw bytes, nothing, or closing. */
   function standIn(answer: (client: { write(text: string): void; end(): void }, id: string) => void) {
     const root = mkdtempSync(join(tmpdir(), "herdr-failed-call-"));
     const socket = join(root, "herdr.sock");
@@ -218,7 +211,6 @@ describe("a failed herdr call", () => {
   it("is not a refusal the bridge words itself", () => {
     const refusal = new HerdrError("read_only", "this device can only watch");
     expect([refusal.failedCall, refusal.fromReply]).toEqual([undefined, false]);
-    // neither mark is among an error's own fields, so its printed and encoded forms keep their fields
     expect(Object.keys(refusal)).toEqual(["code", "name"]);
   });
 

@@ -8,7 +8,6 @@ import { ompComposerPromptRow } from "./dialogs/omp.ts";
 interface Cell { char: string; fg: string | null; dim: boolean; inverse: boolean; blink: boolean; bold: boolean }
 
 /**
- * A row's characters with the attributes they are drawn in. Only SGR changes them; other escapes are dropped.
  * An extended color is read in both forms: `38;2;r;g;b` and `38;5;n` take the parameters after it, `38:2::r:g:b`
  * (its color space slot optional) and `38:5:n` carry theirs as subparameters, so no channel is read as a code.
  */
@@ -107,7 +106,6 @@ const styleOf = (cell: Cell): string => `${cell.fg ?? ""}|${cell.dim}`;
  * with `steadyCursor` such a `▏` is the cursor too, where a typed one takes omp's text color and a ghost's own `▏`
  * its dim. A steady `|` reads the same as a typed one in a theme that leaves typed text to the terminal: no
  * prediction is read past it. An inverse blank is omp's cursor in Vim's normal mode.
- * `from` and `to` are where it lies in the row's cells, `start` where the cursor before it lies, if any.
  */
 function ghostFrom(cells: readonly Cell[], start: number, drawn: (cell: Cell) => boolean, steadyCursor: boolean): { text: string; start: number; from: number; to: number } | null {
   let from = start;
@@ -128,7 +126,6 @@ function ghostFrom(cells: readonly Cell[], start: number, drawn: (cell: Cell) =>
   return { text: cells.slice(from, to).map((cell) => cell.char).join(""), start, from, to };
 }
 
-/** A row's text with the cells of a ghost and the cursor before it blanked out: what the empty row shows. */
 const withoutGhost = (cells: readonly Cell[], ghost: { start: number; to: number }): string =>
   cells.map((cell, index) => index >= ghost.start && index < ghost.to ? " " : cell.char).join("");
 
@@ -142,16 +139,13 @@ function suggestionWords(text: string): string | null {
   return words === "" || words.endsWith("…") || !/[\p{L}\p{N}]/u.test(words) ? null : words;
 }
 
-/** The screen's rows as cells, and as plain text untrimmed. */
 function screenRows(ansi: string): { cells: Cell[][]; raw: string[] } {
   const cells = ansi.split("\n").map((row) => rowCells(row.replace(/\r$/, "")));
   return { cells, raw: cells.map((row) => row.map((cell) => cell.char).join("")) };
 }
 
-/** Where the rows show text, by index: the last one is the screen's bottom-most. */
 const filledRows = (raw: readonly string[]): number[] => raw.flatMap((row, index) => row.trim() === "" ? [] : [index]);
 
-/** How many blank cells a row starts with. */
 const leadingBlanks = (cells: readonly Cell[]): number => {
   const first = cells.findIndex((cell) => !blank(cell));
   return first < 0 ? cells.length : first;
@@ -161,7 +155,6 @@ const leadingBlanks = (cells: readonly Cell[]): number => {
 const GJC_PROMPT_RE = /^[│|] > /u;
 const GJC_BOX_TOP_RE = /^(?:╭─+╮|\+-+\+)$/u;
 const GJC_BOX_BOTTOM_RE = /^(?:╰─+╯|\+-+\+)$/u;
-/** the prompt row with nothing typed */
 const GJC_EMPTY_PROMPT_RE = /^[│|] > *[│|]$/u;
 /** gjc's placeholder in the empty box (`buildComposerPlaceholder`), drawn in the same dim color as a suggestion */
 const GJC_PLACEHOLDER_RE = /^Type your message/;
@@ -197,10 +190,7 @@ const OMP_QUEUE_HEADER_RE = /^Queueing\b/u;
 
 /**
  * The prompt omp predicts next (its `composer.predictions` setting): ghost text in the empty composer that ends
- * the screen, in any built-in `composer.shape`, drawn in a built-in theme's `dim` (OMP_DIM_TRUECOLOR). With the
- * prediction taken out, the row must read as the empty prompt row of that shape (dialogs/omp.ts). None while
- * anything is typed (a prediction then shows only after what was typed), for a queue draft's header, for the
- * right-aligned hint of an empty composer, and for a prediction omp cut short at the row's edge.
+ * the screen, in any built-in `composer.shape`, drawn in a built-in theme's `dim` (OMP_DIM_TRUECOLOR).
  * Known limit: the theme on screen is not known, so a custom theme whose `text` is exactly one of the built-in
  * `dim` colors draws typed text that reads as a prediction. Telling it apart would take omp's resolved theme
  * (its config, a project's, its flags) and its list of built-in names, for a collision on an exact color.

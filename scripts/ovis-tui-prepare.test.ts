@@ -18,10 +18,6 @@ function git(cwd: string, ...args: string[]): string {
   return run.stdout.toString().trim();
 }
 
-/**
- * A crate folder holding prepare.sh, an hc-tui.pin that pins a local stand-in for hc-tui (with a
- * stand-in Ghostty submodule at vendor/ghostty), and `patches` patch files made against it.
- */
 function crate(patches = 0): { dir: string; upstream: string } {
   const ghostty = join(scratch, "ghostty");
   mkdirSync(ghostty);
@@ -46,7 +42,6 @@ function crate(patches = 0): { dir: string; upstream: string } {
   return { dir, upstream: join(dir, "upstream") };
 }
 
-/** patch number `n`: a new file patch-n.txt, made against the pin */
 function addPatch(dir: string, n: number): void {
   const work = join(scratch, `patch-${n}`);
   git(scratch, "clone", "--quiet", join(scratch, "hc-tui"), work);
@@ -56,7 +51,6 @@ function addPatch(dir: string, n: number): void {
   writeFileSync(join(dir, "patches", `000${n}-patch.patch`), git(work, "format-patch", "-1", "--stdout") + "\n");
 }
 
-/** a new hc-tui commit whose vendor/ghostty is a new Ghostty commit, and hc-tui.pin moved to both */
 function bumpPin(dir: string): { ghostty: string } {
   const ghostty = join(scratch, "ghostty");
   writeFileSync(join(ghostty, "next.zig"), "// next\n");
@@ -86,8 +80,6 @@ function wrapper(): string {
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), "ovis-tui-prepare-"));
-  // git, which when it fetches first does what the test asks: writes WORK_DURING_FETCH's file (work done
-  // while the script runs), hands the lock to LOCK_HOLDER_DURING_FETCH, or signals the script
   mkdirSync(join(scratch, "bin"));
   writeFileSync(join(scratch, "bin", "git"), wrapper(), { mode: 0o755 });
 });

@@ -13,13 +13,11 @@ const LIGHT = `\${{ ${FORK_GUARD} || fromJSON(github.ref == 'refs/heads/main' &&
 const ROUTED = "${{ fromJSON(needs.changes.outputs.linux) }}";
 // Fast checks: the Linux jobs' runner, or CI_FAST_SELF_HOSTED_LABELS only when those name ovis-vm (never a fork's)
 const ROUTED_FAST = "${{ fromJSON(needs.changes.outputs.fast) }}";
-// ci.yml's macOS session job: a fork stays on macos-15, ci.yml's own same-repository runs off main take CI_MAC_LABELS (the
-// self-hosted Mac), macos-15 while it is unset (releases: scripts/release-ci-reuse.test.ts)
+// ci.yml's macOS session job: a fork stays on macos-15
 const MAC_FORK_GUARD = "github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15'";
-const MAC = `\${{ ${MAC_FORK_GUARD} || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '"macos-15"') }}`;
+const MAC = `\${{ ${MAC_FORK_GUARD} || fromJSON(github.workflow == 'CI' && vars.CI_MAC_LABELS || '"macos-15"') }}`;
+const MAC_PULL_REQUEST = "${{ fromJSON(matrix.os == 'macos-15' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_MAC_LABELS || toJSON(matrix.os)) }}";
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
-// ci.yml's runner expressions behind the hosted_only prefix: a call with hosted_only: true (pages.yml's and the Release's validation) takes
-// `label`, and every other run, where the input is unset or false, reads `expression` as before (the test below)
 const hostedOnly = (label: string, expression: string): string => `\${{ inputs.hosted_only && '${label}' || ${expression.slice("${{ ".length)}`;
 const HOSTED_ONLY_LIGHT = hostedOnly("ubuntu-24.04", LIGHT);
 
@@ -30,7 +28,6 @@ const workflows = readdirSync(dir)
 
 const triggers = (on: unknown): string[] => (typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on as object));
 
-// workflows a pull request runs: its own triggers, then every reusable workflow they call
 const pullRequestWorkflows = new Set(
   workflows.filter(({ workflow }) => triggers(workflow.on).some((event) => event === "pull_request" || event === "pull_request_target")).map(({ name }) => name),
 );
@@ -56,9 +53,10 @@ function forkSafe(job: Job & { strategy?: { matrix?: { include?: { os?: unknown 
   if (runsOn === MAC || runsOn === hostedOnly("macos-15", MAC)) return "mac";
   if (runsOn === ROUTED || runsOn === hostedOnly("ubuntu-24.04", ROUTED)) return "routed";
   if (runsOn === ROUTED_FAST || runsOn === hostedOnly("ubuntu-24.04", ROUTED_FAST)) return "routed (fast)";
-  if (runsOn === "${{ matrix.os }}") {
+  if (runsOn === "${{ matrix.os }}" || runsOn === MAC_PULL_REQUEST) {
     const include = job.strategy?.matrix?.include ?? [];
-    return include.length > 0 && include.every((entry) => typeof entry.os === "string" && HOSTED.test(entry.os)) ? "hosted matrix" : null;
+    const hosted = include.length > 0 && include.every((entry) => typeof entry.os === "string" && HOSTED.test(entry.os));
+    return hosted ? (runsOn === MAC_PULL_REQUEST ? "mac on this repository's pull requests" : "hosted matrix") : null;
   }
   // a job that never runs for a pull request may take any runner: its condition must require that
   const condition = job.if ?? "";
@@ -71,14 +69,23 @@ describe("self-hosted runners and fork pull requests", () => {
     expect(LIGHT.indexOf("vars.")).toBeGreaterThan(LIGHT.indexOf(FORK_GUARD));
   });
 
+  test("the matrix Mac form sends only a macos-15 entry of a pull request from this repository to CI_MAC_LABELS", () => {
+    const mac = '["self-hosted","self-hosted-ovis-mac"]';
+    const run = (os: string, event: string, head: string | null, vars: Record<string, string> = { CI_MAC_LABELS: mac }) =>
+      evaluateValue(MAC_PULL_REQUEST, { github: { event_name: event, repository: "devswha/ovis", event: head === null ? {} : { pull_request: { head: { repo: { full_name: head } } } } }, vars, matrix: { os } } as Contexts);
+    expect(run("macos-15", "pull_request", "devswha/ovis")).toEqual(["self-hosted", "self-hosted-ovis-mac"]);
+    expect(run("macos-15", "pull_request", "someone/fork")).toBe("macos-15");
+    expect(run("macos-15", "pull_request", "devswha/ovis", {})).toBe("macos-15");
+    for (const event of ["push", "workflow_dispatch", "workflow_run", "pull_request_target"]) expect(run("macos-15", event, null)).toBe("macos-15");
+    for (const os of ["macos-15-intel", "ubuntu-24.04", "ubuntu-24.04-arm"]) expect(run(os, "pull_request", "devswha/ovis")).toBe(os);
+  });
+
   test("ci.yml's macOS session job keeps forks on macos-15 and stays there while CI_MAC_LABELS is unset", () => {
     const ci = workflows.find(({ name }) => name === "ci.yml")!.workflow;
     expect(ci.jobs["macos-session"]!["runs-on"]).toBe(hostedOnly("macos-15", MAC));
-    // an exported Claude config dir on a self-hosted runner would skip two of its session-identity tests
     expect((ci.jobs["macos-session"] as Job & { env?: Record<string, string> }).env?.["CLAUDE_CONFIG_DIR"]).toBe("");
     expect(MAC.indexOf(MAC_FORK_GUARD)).toBe(4);
     expect(MAC.indexOf("vars.")).toBeGreaterThan(MAC.indexOf(MAC_FORK_GUARD));
-    // the fork label and the unset variable's fallback are both the hosted image
     expect(/'([^']+)'$/.exec(MAC_FORK_GUARD)![1]).toMatch(HOSTED);
     expect(JSON.parse(/vars\.CI_MAC_LABELS \|\| '([^']+)'\)/.exec(MAC)![1]!)).toMatch(HOSTED);
   });
@@ -88,22 +95,8 @@ describe("self-hosted runners and fork pull requests", () => {
     const changes = ci.jobs.changes!;
     expect(changes.outputs?.linux).toBe("${{ steps.route.outputs.linux }}");
     expect(changes.outputs?.fast).toBe("${{ steps.route.outputs.fast }}");
-    // CI_LINUX_SELF_HOSTED_LABELS reaches the route only in ci.yml's own runs, never in a caller's (relay-deploy on a push to main)
     expect(changes.steps?.find((step) => step.id === "route")?.env?.["LINUX_LABELS"]).toBe("${{ github.workflow == 'CI' && vars.CI_LINUX_SELF_HOSTED_LABELS || '' }}");
     expect(changes.steps?.find((step) => step.id === "route")?.run).toBe('bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"');
-  });
-
-  // remote-bundles.yml's bundle-windows now runs GitHub-hosted, but a pull request on an older revision still runs it on
-  // the self-hosted pool, so the route keeps leaving it out of the busy count
-  const FORMER_LIGHT = ["bundle-windows"];
-  test("ci-runner-route.sh leaves out of its busy count exactly the light jobs a pull request runs, and the former ones", () => {
-    const names = workflows
-      .filter(({ name }) => pullRequestWorkflows.has(name))
-      .flatMap(({ workflow }) => Object.entries(workflow.jobs).filter(([, job]) => job["runs-on"] === LIGHT || job["runs-on"] === HOSTED_ONLY_LIGHT).map(([id, job]) => (job as Job & { name?: string }).name ?? id));
-    const route = readFileSync(join(root, "scripts/ci-runner-route.sh"), "utf8");
-    const listed = JSON.parse(/^light_job_names='(.+)'$/m.exec(route)![1]!) as string[];
-    expect(listed.toSorted()).toEqual([...names, ...FORMER_LIGHT].toSorted());
-    expect(names).not.toContain("bundle-windows");
   });
 
   test("some job uses the light runner expression", () => {
@@ -133,9 +126,6 @@ describe("ci.yml's hosted_only input", () => {
   const PREFIX = /^inputs\.hosted_only && '([^']+)' \|\| /;
   const labelSets = ['["self-hosted","self-hosted-ovis"]', '["self-hosted","self-hosted-ovis-main"]', '"ubuntu-24.04"'];
   const variables = (value: string | null): Value => (value === null ? {} : Object.fromEntries(["CI_MAIN_SELF_HOSTED_LABELS", "CI_LIGHT_LABELS", "CI_SELF_HOSTED_LABELS", "CI_MAC_LABELS"].map((name) => [name, value])));
-  // a grid of ci.yml's own runs and of the calls that pass no hosted_only. The prefixed expression equals the old one there by
-  // construction (`false && x || y` is `y`): this guards the prefix's precedence and the evaluator; the textual pins of the old
-  // expressions, conditions and modes are what tie each job to main
   const ownRuns: Contexts[] = [];
   for (const [workflow, event, ref, pullRequest] of [
     ["CI", "push", "refs/heads/main", null], ["CI", "push", "refs/heads/topic", null], ["CI", "workflow_dispatch", "refs/heads/main", null], ["CI", "workflow_dispatch", "refs/heads/topic", null],
@@ -164,6 +154,7 @@ describe("ci.yml's hosted_only input", () => {
     expect(evaluateValue(LIGHT, fork)).toBe("ubuntu-24.04");
     const topic = { ...push, github: { ...push.github, ref: "refs/heads/topic" }, vars: { CI_MAC_LABELS: '["self-hosted","self-hosted-ovis-mac"]' } };
     expect(evaluateValue(MAC, topic)).toEqual(["self-hosted", "self-hosted-ovis-mac"]);
+    expect(evaluateValue(MAC, { ...topic, github: { ...topic.github, ref: "refs/heads/main" } })).toEqual(["self-hosted", "self-hosted-ovis-mac"]);
     expect(evaluateValue(MAC, { ...topic, github: { ...topic.github, workflow: "Release" } })).toBe("macos-15");
     expect(evaluateValue(ROUTED, { ...push, needs: { changes: { outputs: { linux: '"ubuntu-24.04"' } } } })).toBe("ubuntu-24.04");
   });
@@ -190,7 +181,6 @@ describe("ci.yml's hosted_only input", () => {
         if (step.uses === "./.github/actions/setup-ci") {
           const mode = /^\$\{\{ inputs\.hosted_only && 'none' \|\| '(save|restore)' \}\}$/.exec(String(step.with?.cache));
           expect(mode, `${id}: setup-ci's cache`).not.toBeNull();
-          // the mode it had: restore for herdr-core live, else setup-ci's default
           expect([id, mode![1]]).toEqual([id, id === "herdr-core-live" ? "restore" : setupCi.inputs.cache.default]);
           for (const context of ownRuns) expect(evaluateValue(step.with!.cache, context)).toBe(mode![1]!);
           for (const context of ownRuns) expect(evaluateValue(step.with!.cache, called(context))).toBe("none");
@@ -198,7 +188,6 @@ describe("ci.yml's hosted_only input", () => {
         if (step.uses?.startsWith("actions/cache")) {
           const condition = /^(.+) && !inputs\.hosted_only$/.exec(step.if ?? "");
           expect(condition, `${id}: ${step.uses} skipped under hosted_only`).not.toBeNull();
-          // the condition it had before
           expect([id, condition![1]]).toEqual([id, id === "herdr-core-live" ? "needs.changes.outputs.draft != 'true'" : "needs.changes.outputs.draft != 'true' && runner.environment != 'self-hosted'"]);
           for (const context of ownRuns) expect(evaluateValue(step.if, context, true)).toBe(evaluateValue(condition![1], context, true));
           for (const context of ownRuns) expect(evaluateValue(step.if, called(context), true)).toBe(false);

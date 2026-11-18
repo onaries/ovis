@@ -151,7 +151,6 @@ describe("Oh My Pi's record of Claude's limits", () => {
 
   it("gives an account by its other key when the latest report under the key read last holds no limit the meters show", () => {
     store([
-      // read last, under the account's second sign-in: extra usage only
       { at: NOW - 2 * MINUTE, limit: "anthropic:extra", label: "Claude Extra Usage", used: 0.5, key: `oauth|account:${ACCOUNT}|org:org-2` },
       { at: NOW - 9 * MINUTE, limit: "anthropic:5h", used: 0.4 },
     ]);
@@ -172,7 +171,6 @@ describe("Oh My Pi's record of Claude's limits", () => {
   it("skips a row whose values are not what Oh My Pi writes", () => {
     store([
       latest("anthropic:5h", 0.4, { account: OTHER, key: `oauth|account:${OTHER}` }),
-      // epoch seconds, a time still to come, no account, a number that is text, a name past any real one
       { at: Math.floor(NOW / 1000), limit: "anthropic:5h" },
       { at: NOW + 2 * MINUTE, limit: "anthropic:5h" },
       latest("anthropic:5h", 0.4, { account: null }),

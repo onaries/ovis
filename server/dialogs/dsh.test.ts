@@ -11,9 +11,7 @@ import { dshFreeTextRow } from "./dsh.ts";
 const screen = (name: string) => readFileSync(join(import.meta.dir, "..", "fixtures", `dsh-question-0.20.0-${name}.txt`), "utf8");
 const MIXED = "用WDA方案先在真机上跑通，然后把预发环境的接口当作夜间任务的后备，手机离线时自动切换，两条路径都记日志，这样两周后可以比较哪条更稳定一些。";
 const CHINESE = "先在真机上跑通方案然后把预发环境的接口当作夜间任务的后备手机离线时自动切换两条路径都记日志这样两周后可以比较哪条更稳定一些";
-/** The q1 panel as a pane wide enough for its hint on one line draws it. */
 const oneLineHint = (panel: string) => panel.replace("Esc cancel ·\n    Ctrl+K", "Esc cancel · Ctrl+K");
-/** The panel with the cursor moved down to its free-text row, as dsh-tui draws it there (the q1-custom fixture). */
 const onFreeText = (panel: string) => panel.replace(/❯([○◉])/, " $1").replace(" ✎ Custom answer： Type directly…", "❯✎ Custom answer：")
   .replace(/↑\/↓ select[^]*?click the header/, "Type answer · Ctrl+V paste · Enter submit · ↑ back to options · Esc cancel · ←/→ at the text edge switches question · Ctrl+K to fold\n    / click the header");
 
@@ -68,7 +66,6 @@ describe("DeepSeek Harness ask_user_question panel", () => {
   it("has no card with the cursor on the free-text row and nothing ticked: a multiple choice draws there as a single choice does", () => {
     expect(parseInteractivePrompt("dsh-tui", screen("q1-custom"))).toBeNull();
     expect(parseInteractivePrompt("dsh-tui", onFreeText(screen("multi-q1")))).toBeNull();
-    // a tick says it is a multiple choice
     expect(parseInteractivePrompt("dsh-tui", onFreeText(screen("multi-q1-checked")))).toMatchObject({ multi_select: true, default_option_indices: [0, 2] });
   });
 
@@ -87,20 +84,15 @@ describe("DeepSeek Harness ask_user_question panel", () => {
     const card = parsedByPublicPrompt.get(parseInteractivePrompt("dsh-tui", screen("q1"))!)!;
     const typed = "Use the device with WebDriverAgent first, then keep the staging API as a fallback for nightly runs when the phone is offline, and log both paths so we can compare flakiness over two weeks";
     expect(dshFreeTextRow(screen("q1-typed-wrapped"), card, typed)).toBe("typed");
-    // more than the answer typed: someone else's words
     expect(dshFreeTextRow(screen("q1-typed-wrapped"), card, typed.slice(0, 50))).toBeNull();
-    // the answer not all drawn yet
     expect(dshFreeTextRow(screen("q1-typed-wrapped"), card, `${typed} too`)).toBe("typing");
   });
 
   it("reads a wrap back as dsh draws it: one space, or none or one under a line that reaches the row's end (recorded at 118 columns)", () => {
     const card = parsedByPublicPrompt.get(parseInteractivePrompt("dsh-tui", screen("q1"))!)!;
     const typed = "Use the device with WebDriverAgent first, then keep the staging API as a fallback for nightly runs when the phone is offline, and log both paths so we can compare flakiness over two weeks";
-    // a space at the wrap that the answer does not have: someone else's
     expect(dshFreeTextRow(screen("q1-typed-wrapped"), card, typed.replace("nightly runs", "nightlyruns"))).toBeNull();
-    // a word longer than the row, broken inside it
     expect(dshFreeTextRow(screen("q1-typed-url"), card, `see https://example.com/${"a".repeat(140)} ok`)).toBe("typed");
-    // a word that ends right at the row's end, the space after it dropped by the wrap
     expect(dshFreeTextRow(screen("q1-typed-edge"), card, typed.replace("nightly runs", "nightlyy runs"))).toBe("typed");
   });
 
@@ -141,7 +133,6 @@ describe("DeepSeek Harness ask_user_question panel", () => {
     const ticked = parseInteractivePrompt("dsh-tui", screen("multi-q1-checked"))!;
     expect(ticked.default_option_indices).toEqual([0, 2]);
     expect(answerKeys(ticked, { option_indices: [0, 2] })).toEqual([{ keys: ["enter"] }]);
-    // the cursor is on Web: iOS unticked, Android ticked, Web unticked, in row order
     expect(answerKeys(ticked, { option_indices: [1] })).toEqual([
       { keys: ["up"] }, { keys: ["up"] }, { keys: ["space"] }, { keys: ["down"] }, { keys: ["space"] },
       { keys: ["down"] }, { keys: ["space"] }, { keys: ["enter"] },

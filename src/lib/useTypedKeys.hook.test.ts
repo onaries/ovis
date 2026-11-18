@@ -4,8 +4,6 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { DOUBLE_ESCAPE_GAP_MS } from "./hermesStop.ts";
 import { useTypedKeys, type TypedKeysDeps } from "./useTypedKeys.ts";
 
-// The real hook over a fake terminal and socket: the second Escape of a two-Escape Stop (Devin, Kilo,
-// maki) is sent by a timer, and belongs to the pane and the connection the first one went to.
 function mount(agent: string) {
   const sent: string[] = [];
   let pane: string | null = "p1";

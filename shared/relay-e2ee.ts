@@ -23,6 +23,7 @@ export const MAX_PRE_OPEN_SEND_BYTES = 1 << 20;
 export const MAX_HANDSHAKE_INBOUND_MESSAGES = 256;
 export const MAX_HANDSHAKE_INBOUND_BYTES = 2 << 20;
 export const MAX_HANDSHAKE_INBOUND_BYTES_TOTAL = 16 << 20;
+/** Charged per queued message on top of its data, so empty messages cannot escape the byte budgets. */
 export const HANDSHAKE_MESSAGE_OVERHEAD_BYTES = 64;
 const DAEMON_RECORD_FAILURE_CLOSE_CODE = 1011;
 
@@ -30,6 +31,12 @@ let handshakeInboundBytes = 0;
 
 const BINDING_DOMAIN = utf8ToBytes("ovis-relay-channel-binding/1");
 
+/**
+ * The two Noise handshake messages one end of a channel sent and accepted, as the carrier saw them.
+ * Both ends of one handshake hold the same pair; a relay that runs a handshake of its own with each
+ * end (with its own key toward the phone) leaves each end a different pair, since it cannot make
+ * the PC's first message's DH with the PC's secret key.
+ */
 interface HandshakeRecord {
   hello?: string;
   ready?: string;
@@ -40,6 +47,7 @@ const bindings = new WeakMap<Channel, { record: HandshakeRecord; serverPublicKey
 
 const carrierText = (data: string | ArrayBuffer): string => typeof data === "string" ? data : new TextDecoder().decode(data);
 
+/** The protected Noise message of a hello or ready envelope (shared/vendor/paseo-e2ee/secure-channel.ts). */
 function handshakeMessage(text: string | undefined): Uint8Array | undefined {
   if (text === undefined) return;
   try {
@@ -58,6 +66,11 @@ const lengthPrefixed = (bytes: Uint8Array): Uint8Array => {
   return out;
 };
 
+/**
+ * 32 bytes both ends of one protected handshake agree on and nobody else can make them share:
+ * SHA-256 over a domain, the PC's static key and the two handshake messages. The pairing by
+ * comparing digits (shared/relay-pair-sas.ts) is bound to it.
+ */
 export function channelBinding(channel: Channel): Uint8Array | undefined {
   const entry = bindings.get(channel);
   if (!entry || !channel.isOpen() || channel.securityMode() !== "protected") return;
@@ -76,6 +89,8 @@ interface CarrierGuard {
 /**
  * Sits between the carrier and the vendored channel, which decodes and allocates a whole
  * message before any mux limit applies: an oversized message closes the carrier undecoded.
+ * With `budget`, messages that arrive before the handshake completes count against the
+ * per-connection and process-wide handshake limits, and the carrier closes past them.
  */
 function guardCarrier(real: Transport, closeCode: () => number, budget: boolean,
   record: (direction: "in" | "out", data: string | ArrayBuffer) => void): CarrierGuard {
@@ -101,6 +116,7 @@ function guardCarrier(real: Transport, closeCode: () => number, budget: boolean,
     real.close(code, reason);
   };
   const transport: Transport = {
+    // Only a handshake send needs the race; afterwards each send would keep a reaction until close.
     send: (data) => { record("out", data); return sendGuarded(data); },
     close: (code, reason) => {
       markClosed();

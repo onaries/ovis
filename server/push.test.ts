@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import webpush from "web-push";
@@ -18,8 +18,7 @@ import { parseInteractivePrompt } from "./prompt.ts";
 
 /**
  * The server half of web push, end to end against a fake push service that decrypts
- * and verifies like a real device would. No herdr needed: panes are handed in the way
- * the collector hands them (seed) and status changes the way it reports them.
+ * and verifies like a real device would.
  */
 
 function pane(paneId: string, status: AgentStatus, title: string): HerdrPane {
@@ -54,12 +53,10 @@ function deferred() {
   return { promise, resolve };
 }
 
-/** The phone app's subscription: the endpoint the push relay hands it (push-relay POST /v1/push/<id>), on the fake. */
 function relaySubscription() {
   return { ...fake.subscription, endpoint: fake.subscription.endpoint.replace(/\/push\/[^/]+$/, `/v1/push/${crypto.randomUUID()}`) };
 }
 
-/** Alerts go out at once, and each status change is awaited until its alert went out. */
 function subscribed(options: Partial<Parameters<typeof createPushService>[0]> = {}, subscription = fake.subscription): PushService {
   const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 }, ...options });
   push.subscribe(subscription);
@@ -110,6 +107,18 @@ describe("push state", () => {
     expect(Buffer.from(key, "base64url").length).toBe(65);
     expect(createPushService({ loopbackHttp: true, stateDir }).publicKey()).toBe(key);
     expect(statSync(join(stateDir, "vapid.json")).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === "win32")("regression: takes others' write access away from the key pair before it is read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "push-untrusted-"));
+    try {
+      chmodSync(dir, 0o777);
+      const key = createPushService({ loopbackHttp: true, stateDir: dir }).publicKey();
+      expect(statSync(dir).mode & 0o777).toBe(0o755);
+      chmodSync(join(dir, "vapid.json"), 0o666);
+      expect(createPushService({ loopbackHttp: true, stateDir: dir }).publicKey()).toBe(key);
+      expect(statSync(join(dir, "vapid.json")).mode & 0o777).toBe(0o644);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("refuses a malformed key file instead of rotating the key under every device", () => {
@@ -197,7 +206,6 @@ describe("push delivery", () => {
     for (let turn = 0; turn < 2; turn++) {
       expect(await report("working", "codex")).toBe("working");
       expect(await report("unknown", "codex")).toBe("done");
-      // Repeated raw unknown events must not repeat the completion alert.
       expect(await report("unknown", "codex")).toBe("done");
       expect(fake.received).toHaveLength(turn + 1);
     }
@@ -247,10 +255,8 @@ describe("push delivery", () => {
 
   it("measures the first change after a restart against the seeded baseline", async () => {
     const push = subscribed();
-    // never seeded: the first report is a first sighting, not news (same rule as the tab)
     await push.onStatus("w1:p9", "blocked");
     expect(fake.received).toHaveLength(0);
-    // seeded from the collector's snapshot: the very first event is already a transition
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "done");
     expect(fake.received.map((received) => received.payload.pane_id)).toEqual(["w1:p1"]);
@@ -261,7 +267,6 @@ describe("push delivery", () => {
     const push = subscribed();
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
-    // a reconcile that raced the event still says working; blocked -> blocked is not news
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
     expect(fake.received).toHaveLength(1);
@@ -296,7 +301,6 @@ describe("push delivery", () => {
     const push = subscribed();
     push.seed([pane("w1:p1", "working", "vim notes.md")]);
     await push.onEnded("w1:p1");
-    // the pane is gone from herdr by now: the workspace it was seen in is named, for the tap to open
     expect(fake.received[0]!.payload).toEqual({
       pane_id: "w1:p1",
       workspace_id: "w1",
@@ -314,7 +318,6 @@ describe("push delivery", () => {
     push.seed([pane("w1:p1", "working", "claude: fix the build")]);
     await push.onStatus("w1:p1", "blocked");
     expect(fake.received[0]!.payload).toMatchObject({ pane_id: "w1:p1", endpoint: app.endpoint, server_id: serverId });
-    // the test push is about no pane: nothing to open, so it names no PC
     fake.received.length = 0;
     await push.sendTest(app.endpoint);
     expect(fake.received[0]!.payload).not.toHaveProperty("endpoint");
@@ -405,13 +408,11 @@ describe("push delivery", () => {
     const tested = (await post("/api/push/test", { endpoint: fake.subscription.endpoint }))!;
     expect(tested.status).toBe(410);
     expect(((await tested.json()) as { error: { code: string } }).error.code).toBe("subscription_gone");
-    // control: an endpoint this server never knew is still just not found
     const unknown = (await post("/api/push/test", { endpoint: "https://push.example/never-known" }))!;
     expect(unknown.status).toBe(404);
     expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe("subscription_not_found");
   });
 
-  // regression (fails on the merged #1060): a restart between the retirement and "Turn alerts on again" re-registered the dead endpoint
   it("still refuses a retired endpoint after a server restart", async () => {
     const push = subscribed();
     fake.answerWith(410);
@@ -427,7 +428,6 @@ describe("push delivery", () => {
     const again = (await post("/api/push/subscribe", { subscription: fake.subscription }))!;
     expect(again.status).toBe(410);
     expect(((await again.json()) as { error: { code: string } }).error.code).toBe("subscription_gone");
-    // control: an endpoint this server never retired registers after a restart as before
     const other = { ...fake.subscription, endpoint: `${fake.subscription.endpoint}-other` };
     expect((await post("/api/push/subscribe", { subscription: other }))?.status).toBe(204);
   });
@@ -440,7 +440,6 @@ describe("push delivery", () => {
     fake.answerWith(410);
     expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
     clock += 31 * 24 * 60 * 60 * 1000;
-    // the watch device holds the endpoint and keys of its own
     const theirs = { endpoint: fake.subscription.endpoint, keys: { p256dh: Buffer.alloc(65, 4).toString("base64url"), auth: Buffer.alloc(16, 7).toString("base64url") } };
     const subscribeAs = (service: PushService) => handlePushRequest(new Request("http://localhost/api/push/subscribe", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: theirs }),
@@ -452,7 +451,6 @@ describe("push delivery", () => {
     }
     expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
     expect(readFileSync(join(stateDir, "push-retired.json"), "utf8")).toContain("owner");
-    // a malformed file is ignored, never fatal
     writeFileSync(join(stateDir, "push-retired.json"), "not json");
     expect(createPushService({ loopbackHttp: true, stateDir }).retired(fake.subscription.endpoint)).toBe(false);
   });
@@ -474,11 +472,10 @@ describe("push delivery", () => {
     expect(JSON.parse(readFileSync(join(stateDir, "push-delivery.json"), "utf8"))).toEqual([]);
   });
 
-  // regression: a subscription file that cannot be written kept the retired subscription, and the next push went to it again
   it("stops pushing to a retired subscription when the subscription file cannot be written", async () => {
     const push = createPushService({ loopbackHttp: true, stateDir });
     push.subscribe(fake.subscription, undefined, null);
-    push.publicKey(); // the key pair is on disk before the disk fills
+    push.publicKey();
     fake.answerWith(410);
     const rename = spyOn(privateStateFs, "renameSync").mockImplementation(() => { throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }); });
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
@@ -488,14 +485,11 @@ describe("push delivery", () => {
       expect(fake.received).toHaveLength(0);
       expect(quiet.mock.calls.some(([line]) => String(line).includes("push-subscriptions.json"))).toBe(true);
     } finally { rename.mockRestore(); quiet.mockRestore(); }
-    // a restart, with the file still listing it, does not bring it back: it is retired
     expect(await createPushService({ loopbackHttp: true, stateDir }).sendTest(fake.subscription.endpoint)).toBeNull();
     expect(fake.received).toHaveLength(0);
-    // the device's goodbye, though nothing of it is left in memory, writes the file without it
     push.unsubscribe(fake.subscription.endpoint);
     expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
     expect(await createPushService({ loopbackHttp: true, stateDir }).sendTest(fake.subscription.endpoint)).toBeNull();
-    // the next write that succeeds leaves it off disk too
     push.subscribe({ ...fake.subscription, endpoint: `${fake.subscription.endpoint}-other` }, undefined, null);
     expect((JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8")) as { endpoint: string }[]).map((entry) => entry.endpoint)).toEqual([`${fake.subscription.endpoint}-other`]);
   });
@@ -504,7 +498,6 @@ describe("push delivery", () => {
   it("keeps a subscription and the key pair it was made for under the spelling it was handed over", async () => {
     const { endpoint, keys } = fake.subscription;
     expect(parseSubscription({ endpoint: `${endpoint}#x`, keys }, { loopbackHttp: true })?.endpoint).toBe(`${endpoint}#x`);
-    // a foreign key pair left for an old spelling of this endpoint, no longer subscribed
     const stale = webpush.generateVAPIDKeys();
     writeFileSync(join(stateDir, "push-keys.json"), JSON.stringify({ keys: [{ ...stale, endpoints: [`${endpoint}#old-import`] }] }));
     const push = subscribed();
@@ -549,7 +542,6 @@ describe("push delivery", () => {
 describe("alert timing and each device's choice", () => {
   const SHORT = 40;
   const LONG = 80;
-  /** real timers, short enough for a test; the clock that measures turns is ours to move */
   function timed(alerts?: AlertPrefs) {
     let clock = 0;
     const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: SHORT, long: LONG, longTurn: 1_000 }, now: () => clock });
@@ -565,7 +557,6 @@ describe("alert timing and each device's choice", () => {
     await report("working");
     await report("unknown");
     expect(completions.seen("w1:p1")).toBe(true);
-    // This is the same onFocus status the server passes to PushService.
     await push.onStatus("w1:p1", "idle");
     await push.settled();
     expect(fake.received).toHaveLength(0);
@@ -580,11 +571,6 @@ describe("alert timing and each device's choice", () => {
     expect(fake.received.map((message) => message.payload.body)).toEqual(["work finished"]);
   });
 
-  /**
-   * Holds the alert timers (the delays `timed()` sets) until the test fires them, so whether a
-   * status change lands before or after an alert never depends on how loaded the machine is.
-   * Every other timer runs for real.
-   */
   function holdAlertTimers() {
     const realSet = globalThis.setTimeout;
     const realClear = globalThis.clearTimeout;
@@ -641,7 +627,6 @@ describe("alert timing and each device's choice", () => {
       advance(2_000);
       await push.onStatus("w1:p1", "done");
       expect(timers.pending()).toBe(1);
-      // the next prompt went in before the alert: the user is there
       await push.onStatus("w1:p1", "working");
       expect(timers.pending()).toBe(0);
       await push.settled();
@@ -688,7 +673,6 @@ describe("alert timing and each device's choice", () => {
     expect(await ask({ input: false, done: "off" })).toEqual([]);
     expect(await ask({ input: true, done: "off" })).toEqual(["permission"]);
     expect(await ask({ input: true, done: "off", permission: false })).toEqual([]);
-    // an agent that does not say what it waits for asks a question
     agentKind = undefined;
     expect(await ask({ input: true, done: "off", permission: false })).toEqual(["input"]);
     expect(await ask({ input: false, done: "off", permission: true })).toEqual([]);
@@ -709,14 +693,12 @@ describe("alert timing and each device's choice", () => {
     await on.push.settled();
     expect(fake.received.map((r) => [r.payload.kind, r.payload.body])).toEqual([["error", "stopped on an error"]]);
     fake.received.length = 0;
-    // retried at the desk before the alert went out: no longer news
     await on.push.onStatus("w1:p1", "working");
     await on.push.onStatus("w1:p1", "idle");
     await on.push.onFailed("w1:p1");
     await on.push.onStatus("w1:p1", "working");
     await on.push.settled();
     expect(fake.received).toHaveLength(0);
-    // taken for working (its background work still runs): it did not stop, and no later change would call the alert off
     await on.push.onFailed("w1:p1");
     await on.push.settled();
     expect(fake.received).toHaveLength(0);
@@ -726,7 +708,6 @@ describe("alert timing and each device's choice", () => {
     const { push } = timed({ input: true, done: "off" });
     await push.onStatus("w1:p1", "working");
     await push.onStatus("w1:p1", "blocked");
-    // the device turned this PC off while the question waited
     push.subscribe(fake.subscription, { input: true, done: "off", pcs_off: [hostname()] });
     await push.settled();
     expect(fake.received).toHaveLength(0);
@@ -754,7 +735,6 @@ describe("alert timing and each device's choice", () => {
 
   it("tells nothing of a PC the device turned off by its relay ID, whatever the roster it was turned off in calls it (#2876)", async () => {
     const own = "ab".repeat(16), other = "cd".repeat(16);
-    // created as server/core/status.ts creates it: this PC knows itself by its hostname and its relay ID
     const push = createPushService({ loopbackHttp: true, stateDir, serverId: () => own, timing: { short: 0, long: 0, longTurn: 0 } });
     push.subscribe(fake.subscription, { input: true, done: "always", pcs_off: [own, other] });
     push.seed([pane("w1:p1", "working", "alpha")]);
@@ -813,7 +793,6 @@ it("settles only after a delivery already under way, when a later group is calle
     await push.onStatus("w1:p1", "done");
     await titleAsked;
     await push.onStatus("w1:p1", "working");
-    // what had arrived when settled() resolved: the delivery held at its title lookup must be in it
     const settling = push.settled().then(() => fake.received.length);
     release();
     expect(await settling).toBe(1);
@@ -911,7 +890,6 @@ it("tells every other subscriber of a durable enrollment at once, and never the 
     expect(fake.received.map((push) => push.payload.body)).toEqual(["New device paired: Tablet", "New device paired: Phone"]);
     expect(other.received.map((push) => push.payload.body)).toEqual(["New device paired: Phone"]);
     expect(fake.received[1]!.payload.tag).not.toBe(fake.received[0]!.payload.tag);
-    // the phone's later requests, a rename and a last-seen write, announce nothing more
     devices.match(phone.token, Date.now() + 120_000);
     devices.update(phone.device.id, { label: "Pixel" });
     expect(deliveries).toHaveLength(2);
@@ -932,14 +910,11 @@ it("never pushes a browser's own pairing to it, before or after it paired, while
     const subscribe = (subscription: unknown, owner: string | null, keys: string[]) => handlePushRequest(new Request("http://localhost/api/push/subscribe", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription }),
     }), "/api/push/subscribe", push, owner, keys);
-    // three browsers on the same access token (owner null): this one, another with a key of its own, one with none
     expect((await subscribe(fake.subscription, null, [self]))?.status).toBe(204);
     expect((await subscribe(sibling.subscription, null, ["b".repeat(32)]))?.status).toBe(204);
     expect((await subscribe(keyless.subscription, null, []))?.status).toBe(204);
     expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))[0]).toMatchObject({ device_id: null, browser_keys: [self] });
-    // a restart reads the keys back
     push = createPushService({ loopbackHttp: true, stateDir, inUse: () => true, canDeliver: (id) => id === null || (id === undefined ? !devices.gated : devices.has(id)) });
-    // this browser pairs itself, carrying the key it subscribed with and one a racing tab added
     const own = devices.pair(devices.startPairing().code, "Self", "drive", Date.now(), [raced, self])!;
     await Promise.all(deliveries);
     expect(fake.received).toHaveLength(0);
@@ -951,12 +926,10 @@ it("never pushes a browser's own pairing to it, before or after it paired, while
     const reissued = "e".repeat(32);
     expect((await subscribe(fake.subscription, own.device.id, [reissued]))?.status).toBe(204);
     expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))[0]).toMatchObject({ device_id: own.device.id, browser_keys: [self, reissued] });
-    // it pairs again: still its own pairing
     devices.pair(devices.startPairing().code, "Again", "drive", Date.now(), [self]);
     await Promise.all(deliveries);
     expect(fake.received).toHaveLength(0);
     expect(sibling.received.map((push) => push.payload.body)).toEqual(["New device paired: Self", "New device paired: Again"]);
-    // and another browser's pairing reaches it
     devices.pair(devices.startPairing().code, "Elsewhere", "drive", Date.now(), ["d".repeat(32)]);
     await Promise.all(deliveries);
     expect(fake.received.map((push) => push.payload.body)).toEqual(["New device paired: Elsewhere"]);
@@ -1014,7 +987,6 @@ describe("push delivery health (#1039)", () => {
     expect(await response.json()).toEqual(expected);
     // forgotten after its time to live (the retired mark is not: #2012)
     expect(createPushService({ loopbackHttp: true, stateDir, now: () => clock + 31 * 24 * 60 * 60 * 1000 }).status(fake.subscription, null)).toBeNull();
-    // an explicit unsubscribe removes it
     restarted.unsubscribe(fake.subscription.endpoint);
     expect(restarted.status(fake.subscription, null)).toBeNull();
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual([]);
@@ -1043,7 +1015,6 @@ describe("push delivery health (#1039)", () => {
     push.unsubscribe(endpoint);
     expect(push.status(fake.subscription, null)).toBeNull();
     expect(push.retired(endpoint)).toBe(true);
-    // the owner's revocation
     await retire("device-a");
     push.revokeDevice("device-a");
     expect(push.status(fake.subscription, "device-a")).toBeNull();
@@ -1077,7 +1048,6 @@ describe("push delivery health (#1039)", () => {
     fake.answerWith(410);
     expect(await push.sendTest(endpoint)).toEqual({ ok: false, status: 410, gone: true });
     expect(push.retired(endpoint)).toBe(true);
-    // 999 later deliveries for device B stand on disk behind A's record; one more, delivered for real, evicts A's
     const path = join(stateDir, "push-delivery.json");
     const [owned] = JSON.parse(readFileSync(path, "utf8")) as { keys: string }[];
     const later = Array.from({ length: 999 }, (_, index) => ({ hash: `later-${index}`, owner: "device-b", keys: owned!.keys, success_at: clock + index + 1, failure_at: null, failure: null, at: clock + index + 1 }));
@@ -1121,13 +1091,11 @@ describe("push delivery health (#1039)", () => {
     expect(createPushService({ loopbackHttp: true, stateDir }).retired(endpoint)).toBe(true);
   });
 
-  // regression: a mark a revocation removed in memory only came back at a restart and dropped the endpoint subscribed again
   it("writes the marks a revocation removed before the endpoint is subscribed again", async () => {
     const push = createPushService({ loopbackHttp: true, stateDir });
     push.subscribe(fake.subscription, undefined, "device-a");
     fake.answerWith(410);
     expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
-    // the list cannot be replaced for a while: a directory stands at its temporary path
     const blocker = join(stateDir, `push-retired.json.${process.pid}.tmp`);
     mkdirSync(blocker);
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
@@ -1146,7 +1114,6 @@ describe("push delivery health (#1039)", () => {
     push.subscribe(fake.subscription, undefined, "device-a");
     fake.answerWith(410);
     expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
-    // the list cannot be replaced any more: a directory stands at its path
     rmSync(join(stateDir, "push-retired.json"));
     mkdirSync(join(stateDir, "push-retired.json"));
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
@@ -1200,7 +1167,6 @@ describe("push delivery health (#1039)", () => {
   });
 
   it("late delivery cannot retire replacement", async () => {
-    // a push service that answers only when told, so a re-registration can land while the push is out
     let arrived!: () => void;
     const requested = new Promise<void>((resolve) => { arrived = resolve; });
     let release!: () => void;
@@ -1213,7 +1179,6 @@ describe("push delivery health (#1039)", () => {
       push.subscribe(first, undefined, null);
       const delivery = push.sendTest(endpoint);
       await requested;
-      // the same endpoint, registered again by a paired device with keys of its own
       const replacement = { endpoint, keys: { ...fake.subscription.keys, auth: Buffer.alloc(16, 7).toString("base64url") } };
       push.subscribe(replacement, undefined, "device-b");
       release();
@@ -1231,13 +1196,11 @@ describe("push delivery health (#1039)", () => {
     const hashOf = (endpoint: string) => createHash("sha256").update(endpoint).digest("base64url");
     const keysOf = (keys: { p256dh: string; auth: string }) => createHash("sha256").update(`${keys.p256dh}.${keys.auth}`).digest("base64url");
     const endpointAt = (index: number) => `${fake.subscription.endpoint}-${index}`;
-    // 1,200 records on disk, oldest first: only the newest 1,000 are read back
     const records = Array.from({ length: 1200 }, (_, index) => ({ hash: hashOf(endpointAt(index)), owner: null, keys: keysOf(fake.subscription.keys), success_at: now + index, failure_at: null, failure: null, at: now + index }));
     writeFileSync(join(stateDir, "push-delivery.json"), JSON.stringify(records));
     const push = createPushService({ loopbackHttp: true, stateDir, now: () => now + 2000 });
     for (const index of [0, 199]) expect(push.status({ ...fake.subscription, endpoint: endpointAt(index) }, null)).toBeNull();
     for (const index of [200, 1199]) expect(push.status({ ...fake.subscription, endpoint: endpointAt(index) }, null)?.registered).toBe(false);
-    // one more written in memory pushes the oldest kept one out
     push.subscribe(fake.subscription, undefined, null);
     expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: true });
     expect(push.status({ ...fake.subscription, endpoint: endpointAt(200) }, null)).toBeNull();
@@ -1256,7 +1219,6 @@ describe("push delivery health (#1039)", () => {
       expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status, gone: false });
       expect(push.status(fake.subscription, null)).toEqual({ registered: true, last_success_at: new Date(1_700_000_000_000).toISOString(), last_failure_at: new Date(clock).toISOString(), last_failure: failure });
     }
-    // no answer at all
     const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });
     const unreachable = `http://127.0.0.1:${closed.port}/push/none`;
     closed.stop(true);
@@ -1269,10 +1231,8 @@ describe("push delivery health (#1039)", () => {
     clock += 1000;
     expect(await gated.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: null, gone: false });
     expect(gated.status(fake.subscription, null)?.last_failure_at).toBe(new Date(clock - 2000).toISOString());
-    // a malformed record file is ignored, never fatal
     writeFileSync(join(stateDir, "push-delivery.json"), "not json");
     expect(createPushService({ loopbackHttp: true, stateDir }).status(fake.subscription, null)).toEqual({ registered: true, last_success_at: null, last_failure_at: null, last_failure: null });
-    // so is a record whose times no date can hold: it is dropped, and the status is still told
     const hash = createHash("sha256").update(fake.subscription.endpoint).digest("base64url");
     const keys = createHash("sha256").update(`${fake.subscription.keys.p256dh}.${fake.subscription.keys.auth}`).digest("base64url");
     for (const times of [{ success_at: 1e100 }, { failure_at: -1e100, failure: "gone" }, { at: 1e100 }]) {
@@ -1296,9 +1256,7 @@ describe("push delivery health (#1039)", () => {
     expect(hashes("push-retired.json")).toEqual(["h-new"]);
   });
 
-  // regression (fails on main): the failed write threw before the subscription was removed, and the next push went to it again (#2013)
   it("forgets a retired subscription when the retired list cannot be written, and keeps the mark in memory", async () => {
-    // the list cannot be written: a directory stands at its path
     mkdirSync(join(stateDir, "push-retired.json"));
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
     try {
@@ -1319,7 +1277,6 @@ describe("push delivery health (#1039)", () => {
   });
 
   it("counts a push's outcome, a retirement included, when its record cannot be written", async () => {
-    // the record file cannot be replaced: a directory stands at its path
     mkdirSync(join(stateDir, "push-delivery.json"));
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
     try {
@@ -1357,7 +1314,6 @@ describe("a window of the app in use (#751)", () => {
     await push.onStatus("w1:p1", "blocked");
     await push.onEnded("w1:p1");
     expect(fake.received).toHaveLength(0);
-    // the confirmation a device asked for is not an alert: it still goes out
     expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: true });
     expect(fake.received.map((r) => r.payload.tag)).toEqual(["herdr-test"]);
     inUse = false;
@@ -1372,7 +1328,6 @@ describe("a window of the app in use (#751)", () => {
     push.subscribe(fake.subscription);
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
-    // the window came forward while the alert waited for its timer
     inUse = true;
     await push.settled();
     expect(fake.received).toHaveLength(0);
@@ -1394,7 +1349,6 @@ describe("push resync after lost status events", () => {
     push.seed([pane("w1:p1", "working", "gone"), pane("w1:p2", "working", "kept"), pane("w1:p3", "working", "new")]);
     await push.onStatus("w1:p1", "blocked");
     await push.onStatus("w1:p3", "blocked");
-    // p1 is gone; p3 is missing from the snapshot too, but was heard of since it was asked for
     push.resync([pane("w1:p2", "working", "kept")], new Set(["w1:p3"]));
     await push.settled();
     expect(fake.received.map((r) => r.payload.title)).toEqual(["new"]);
@@ -1403,11 +1357,9 @@ describe("push resync after lost status events", () => {
   it("takes a clean pane's snapshot status as its baseline and announces nothing", async () => {
     const push = subscribed();
     push.seed([pane("w1:p1", "working", "claude")]);
-    // it finished and started over while events were lost
     push.resync([pane("w1:p1", "blocked", "claude")], new Set());
     await push.settled();
     expect(fake.received).toHaveLength(0);
-    // measured against the resynced baseline: blocked -> blocked is no change
     await push.onStatus("w1:p1", "blocked");
     expect(fake.received).toHaveLength(0);
     await push.onStatus("w1:p1", "done");
@@ -1430,10 +1382,8 @@ describe("push resync after lost status events", () => {
     await push.onStatus("w1:p2", "done");
     const sent = fake.received.length;
     push.resync([pane("w1:p1", "idle", "a"), pane("w1:p2", "idle", "b")], new Set(["w1:p1"]));
-    // p1 was not clean: still working, so its finish is news
     await push.onStatus("w1:p1", "done");
     expect(fake.received.length).toBe(sent + 1);
-    // p2 stayed done (at rest either way): a new turn and its finish are still heard
     await push.onStatus("w1:p2", "working");
     await push.onStatus("w1:p2", "done");
     expect(fake.received.length).toBe(sent + 2);
@@ -1441,7 +1391,6 @@ describe("push resync after lost status events", () => {
 });
 
 describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
-  /** the persisted list as the server composition hands it over: read each time, as the store's document is */
   function mutable(timing = { short: 0, long: 0, longTurn: 0 }) {
     const list: string[] = [];
     const push = createPushService({ loopbackHttp: true, stateDir, timing, muted: (machineId, paneId) => paneAlertsMuted(list, machineId, paneId) });
@@ -1453,17 +1402,14 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     const { push, list } = mutable({ short: 10_000, long: 10_000, longTurn: 0 });
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
-    // the list changed while the alert waited: the server composition tells push, and the alert is called off
     list.push(paneStorageId("local", "w1:p1"));
     push.mutesChanged();
     await push.settled();
     expect(fake.received).toHaveLength(0);
-    // an unmute resurrects nothing: the question is still unanswered, and still untold
     list.length = 0;
     push.mutesChanged();
     await push.settled();
     expect(fake.received).toHaveLength(0);
-    // only a transition after the unmute is told
     const prompt = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 }, muted: (machineId, paneId) => paneAlertsMuted(list, machineId, paneId) });
     prompt.seed([pane("w1:p1", "blocked", "claude")]);
     await prompt.onStatus("w1:p1", "working");
@@ -1473,7 +1419,6 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
   });
 
   it("a persisted mute and unmute while the title is looked up sends nothing", async () => {
-    // wired as the server composition wires it (server/core/status.ts): the store's list, and its changes told to push
     const store = new PreferenceStore(stateDir);
     let release!: () => void;
     let asked!: () => void;
@@ -1489,14 +1434,12 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
       push.subscribe(fake.subscription, { input: true, done: "always" });
       push.seed([pane("w1:p1", "working", "claude")]);
       await push.onStatus("w1:p1", "done");
-      // its timer fired: the finish waits for its title, past every check made before the lookup
       await titleAsked;
       expect((await put([paneStorageId("local", "w1:p1")])).status).toBe(200);
       expect((await put([])).status).toBe(200);
       expect(store.get().revision).toBe(2);
       release();
       await push.settled();
-      // the mute called it off for good: the unmute after it resurrects nothing
       expect(fake.received).toHaveLength(0);
     } finally {
       stop();
@@ -1505,8 +1448,6 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
   });
 
   it("holds back the phone app's native push as the browser's", async () => {
-    // the app subscribes through its OvisPush plugin and posts the relay endpoint it got (push-relay
-    // POST /v1/push/<id>) to the same route, so it is one more subscription on the same list
     const { push, list } = mutable();
     const app = { ...fake.subscription, endpoint: fake.subscription.endpoint.replace(/\/push\/[^/]+$/, `/v1/push/${crypto.randomUUID()}`) };
     push.subscribe(app, { input: true, done: "always" });
@@ -1516,7 +1457,6 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     await push.onEnded("w1:p1");
     await push.settled();
     expect(fake.received).toHaveLength(0);
-    // the pane next to it still reaches the browser and the app
     await push.onStatus("w1:p2", "blocked");
     await push.settled();
     expect(fake.received.map((r) => r.payload.title)).toEqual(["other", "other"]);
@@ -1526,7 +1466,6 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     const { push, list } = mutable({ short: 20, long: 20, longTurn: 0 });
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
-    // the list changed while the alert waited, and nobody told push: the alert still reads it before it goes out
     list.push(paneStorageId("local", "w1:p1"));
     await push.settled();
     expect(fake.received).toHaveLength(0);
@@ -1537,13 +1476,11 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     list.push(paneStorageId("local", "w1:p1"));
     push.seed([pane("w1:p1", "working", "mine"), pane("w1:p2", "working", "other")]);
     push.seed([pane("w1:p1", "working", "theirs")], "pc-2", "Laptop");
-    // the muted pane: its status is tracked (an unmute tells only what changes after it), its alerts are not told
     await push.onStatus("w1:p1", "blocked");
     await push.onStatus("w1:p1", "done");
     await push.onEnded("w1:p1");
     await push.settled();
     expect(fake.received).toHaveLength(0);
-    // the same pane id on another PC, and another pane here, are told as before
     await push.onStatus("w1:p1", "blocked", "pc-2");
     await push.settled();
     await push.onStatus("w1:p2", "blocked");
@@ -1553,7 +1490,6 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     expect(fake.received.map((r) => [r.payload.title, r.payload.body])).toEqual([
       ["Laptop · theirs", "waiting for your input"], ["other", "waiting for your input"], ["Laptop · theirs", "terminal ended"],
     ]);
-    // tracked while muted (it was last seen done): unmuted, done -> done is no change, and the next change is told
     list.length = 0;
     await push.onStatus("w1:p1", "done");
     await push.settled();
@@ -1571,7 +1507,6 @@ describe("answer buttons on a question's alert (#2916)", () => {
     options: [{ label: "Allow once", description: null }, { label: "Deny", description: null }],
     multi_select: false, custom_option_index: null, ...overrides,
   });
-  /** `shown` as a reader got it off a screen that shows it whole: a Claude panel under its rule */
   const onScreen = (shown: InteractivePrompt) => ({ prompt: shown, screen: drawn(shown) });
   const drawn = (shown: InteractivePrompt, between: string[] = []) => [
     "─".repeat(40), ...(shown.title === shown.question ? [] : [` ${shown.title}`]), ...(shown.body ?? "").split("\n").filter(Boolean).map((line) => `   ${line}`),
@@ -1617,7 +1552,6 @@ describe("answer buttons on a question's alert (#2916)", () => {
     const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
       lookupPrompt: async () => {
         const id = `prompt-${++read}`;
-        // the first read is slow: it ends only after the second asking was told
         if (read === 1) { started.resolve(); await slow.promise; }
         return onScreen(prompt({ id }));
       } });
@@ -1672,7 +1606,6 @@ describe("answer buttons on a question's alert (#2916)", () => {
   it("gives no buttons for the screens Claude's reader takes only part of (#2916 review)", async () => {
     const none = { prompt_id: undefined, actions: undefined };
     const real = (screen: string) => alertFor(null, { lookupPrompt: async () => ({ prompt: parseInteractivePrompt("claude", screen)!, screen }) });
-    // the newer panel, whole: buttons
     const whole = ["─".repeat(40), " Bash command", "", "   echo safe", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"];
     expect((await real(whole.join("\n"))).actions).toHaveLength(2);
     // its `Tip:` filter dropping a line of the command

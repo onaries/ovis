@@ -8,7 +8,6 @@ const script = fileURLToPath(new URL("./typecheck.ts", import.meta.url));
 let cwd: string;
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), "ovis-typecheck-"));
-  // A compiler stand-in at Bun's command boundary records each child's actual environment.
   writeFileSync(join(cwd, "package.json"), JSON.stringify({ scripts: { tsc: "bun compiler.ts" } }));
   writeFileSync(join(cwd, "compiler.ts"), `
     const project = process.argv.includes("-p") ? "tools" : "main";

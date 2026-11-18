@@ -4,15 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { herdrRpc, herdrRpcCountRequested, herdrRpcCounts, herdrRpcCountingForTests, subscribeEvents } from "./herdr/client.ts";
 
-// A path no herdr is listening on: herdrRpc still counts the attempt on entry, which is the
-// whole reason the counter is taken there. So none of these cases needs a live herdr, which is
-// why they live here rather than in server/herdr/, where the unit lane does not look.
 const dir = mkdtempSync(join(tmpdir(), "herdr-rpc-count-"));
 const DEAD_SOCKET = join(dir, "no-such-herdr.sock");
 const call = (method: string, socket = DEAD_SOCKET, guard?: () => boolean) => herdrRpc(method, {}, socket, 2000, guard);
 const callDead = (method: string) => call(method).catch(() => undefined);
 
-/** client.ts loaded in a process of its own with `env`, as the server loads it: `calls` calls, then process.exit as the server's shutdown does. */
 async function loadAlone(env: Record<string, string | undefined>, calls = 1) {
   const script = `const before = process.listenerCount("exit");
 const client = await import(${JSON.stringify(join(import.meta.dir, "herdr", "client.ts"))});

@@ -14,7 +14,6 @@ const workspace = (id: string, tabs: number): WorkspaceInfo =>
   ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, tab_count: tabs, pane_count: 1, focused: false, agent_status: "idle", worktree: null });
 const pane = (id: string, workspaceId: string, tab: string, extra: Partial<PaneInfo> = {}): PaneInfo =>
   ({ pane_id: id, workspace_id: workspaceId, tab_id: `${workspaceId}:${tab}`, terminal_id: `${id}:term`, revision: 1, focused: false, agent_status: "idle", ...extra });
-// api: a Claude and a shell in its first tab, a Codex named "review" in its second; web: one pi
 const snapshot: SessionSnapshot = {
   protocol: 22, version: "test", layouts: [], agents: [],
   workspaces: [workspace("api", 2), workspace("web", 1)],
@@ -57,7 +56,6 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     define("getComputedStyle", () => ({ getPropertyValue: () => "" }));
     pinsBefore = currentSidebarPins();
     setSidebarPins([]);
-    // an online roster asks git whether each workspace is a checkout: these are not
     fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ error: "not a repository" }, { status: 404 }), { preconnect: globalThis.fetch.preconnect }));
   });
 
@@ -78,7 +76,6 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
         createElement(Sidebar, { snapshot: shown, online, selectedPaneId, actions }))));
     });
   }
-  /** each workspace drawn and the agents listed under it, as [workspace, ...agent panes] */
   const tree = () => renderer!.root.findAll((node) => node.type === "li" && typeof node.props["data-workspace"] === "string").map((row) =>
     [row.props["data-workspace"] as string, ...row.findAll((node) => node.type === "li" && typeof node.props["data-agent-pane"] === "string").map((agent) => agent.props["data-agent-pane"] as string)]);
   const agentButton = (paneId: string): ReactTestInstance => renderer!.root.find((node) => node.type === "li" && node.props["data-agent-pane"] === paneId).findByType("button");
@@ -99,9 +96,7 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     expect(text(agentButton("api:claude"))).toContain("fix login");
     expect(agentButton("api:claude").findAll((node) => node.props.className === "workspace-agent-place").map(text)).toEqual(["Tab 1"]);
     expect(agentButton("api:codex").findAll((node) => node.props.className === "workspace-agent-title").map(text)).toEqual(["review"]);
-    // its state in the trailing cell, as the workspace row's
     expect(agentButton("api:codex").findAll((node) => node.props["data-status"] !== undefined).map((node) => node.props["data-status"])).toEqual(["blocked"]);
-    // the lone tab of web is not named
     expect(agentButton("web:pi").findAll((node) => node.props.className === "workspace-agent-place")).toEqual([]);
     await act(async () => agentButton("api:codex").props.onClick());
     expect(selected).toEqual(["api:codex"]);
@@ -146,7 +141,6 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     expect(api.props.className).toContain("has-selected-agent");
     expect(agentButton("api:codex").props["aria-current"]).toBe("true");
     expect(agentButton("api:claude").props["aria-current"]).toBeUndefined();
-    // a shell selected is the workspace row's own: no agent row takes the fill
     await act(async () => renderer!.unmount());
     await draw({ selectedPaneId: "api:shell" });
     expect(renderer!.root.find((node) => node.type === "li" && node.props["data-workspace"] === "api").props.className).not.toContain("has-selected-agent");
@@ -173,12 +167,10 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     expect(selected).toEqual([]);
     expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
     expect(selectOf("api").props["aria-expanded"]).toBe(false);
-    // folded, the row keeps the selected agent's place, the waiting agent's state and a count of what is put away
     expect(rowOf("api").props.className).toContain("has-selected-agent");
     expect(selectOf("api").findAll((node) => node.props["data-status"] !== undefined).map((node) => node.props["data-status"])).toEqual(["blocked"]);
     expect(rowOf("api").findAll((node) => node.props.className === "workspace-fold-count").map(text)).toEqual(["+2"]);
     expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!)).toEqual(["api"]);
-    // drawn again (a reload), it stays folded; Enter, Space and the arrows fold and unfold, and open nothing
     await act(async () => renderer!.unmount());
     await draw({ selectedPaneId: "api:codex" });
     expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
@@ -219,7 +211,6 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     await draw();
     expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
     await act(async () => selectOf("web").props.onClick());
-    // a change of the user's prunes the list to the roster
     expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!).sort()).toEqual(["api", "web"]);
   });
 

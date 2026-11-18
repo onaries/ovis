@@ -60,13 +60,11 @@ describe("a pane moved under a new ID (#1503)", () => {
   });
 });
 
-/** A drawn tree of the DOM's shape: text nodes, and elements by name. */
 interface Drawn { nodeType: number; nodeName: string; nodeValue: string | null; childNodes: Drawn[] }
 const text = (value: string): Drawn => ({ nodeType: 3, nodeName: "#text", nodeValue: value, childNodes: [] });
 const element = (name: string, ...childNodes: Drawn[]): Drawn => ({ nodeType: 1, nodeName: name, nodeValue: null, childNodes });
 
 describe("a search match in the drawn message", () => {
-  // the search found "deploy service" (squashed, as the server's contract gives it) in each of these
   test.each<[string, () => { root: Drawn; span: DrawnSpan<Drawn> }]>([
     ["one text node (control)", () => { const words = text("we deploy service now"); return { root: element("P", words), span: { start: words, startOffset: 3, end: words, endOffset: 17 } }; }],
     ["deploy **service**", () => { const lead = text("deploy "), bold = text("service"); return { root: element("P", lead, element("STRONG", bold)), span: { start: lead, startOffset: 0, end: bold, endOffset: 7 } }; }],

@@ -85,7 +85,6 @@ describe("deleting the account", () => {
     fake.signInAs("github", "acct_2");
     const next = await signIn(fake, "github", elsewhere);
     const key = await store.key();
-    // another tab signs in to acct_2 in this store while the service answers the delete
     const fetch: typeof fake.fetch = async (input, init) => {
       const answer = await fake.fetch(input, init);
       if (new Request(input, init).method === "DELETE") await store.set("session", next);

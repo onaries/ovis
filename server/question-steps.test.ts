@@ -15,19 +15,15 @@ import * as conversation from "./conversation.ts";
 import { ConversationUnavailable } from "./conversation-shared.ts";
 
 // The card moves between a form's questions without answering, as the agent's own keys do: OmO's
-// Tab and Shift+Tab, Codex's ←/→, Hermes's Tab and Shift+Tab. Each key is sent alone and the
-// screen must show the question it moves to before the next one.
+// Tab and Shift+Tab, Codex's ←/→, Hermes's Tab and Shift+Tab.
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", `question-steps-${name}`), "utf8");
 // omo 5.1.51 and Codex 0.166 as captured in a 120x40 herdr pane (fixtures/question-steps-captures.md)
 const OMO_SCREENS = ["q1", "q2", "q3", "review"].map((state) => fixture(`omo-5.1.51-${state}.txt`));
-/** omo's form of three questions: `at` 3 is its Submit tab. */
 const omo = (at: number): string => OMO_SCREENS[at]!;
 const OMO_TYPING = fixture("omo-5.1.51-q1-typing.txt");
-/** the session's record of the ask_user_question call behind those screens */
 const OMO_SESSION_CALL = fixture("omo-5.1.51.jsonl").split("\n")[0]!;
 const CODEX_SCREENS = ["q1", "q2"].map((state) => fixture(`codex-0.166.0-${state}.txt`));
-/** Codex's request_user_input with two questions. */
 const codex = (at: number): string => CODEX_SCREENS[at]!;
 
 const HERMES_HINT = "answered · ↑/↓ select · Enter confirm and continue · Tab/Shift+Tab switch question · Esc/Ctrl+C cancel";
@@ -47,7 +43,6 @@ function hermes(at: number, answered: number[] = [], questions = HERMES, typing 
 
 const navigable = (prompt: InteractivePrompt | null) => prompt?.steps?.map((step) => step.can_navigate === true);
 
-/** The session's ask_user_question call behind omo(): the card moves only on a form it can name by its questions. */
 const OMO_CALL: OmoAsk = omoAskOf({ id: "session.jsonl\0toolu_qs", wait: true, args: (JSON.parse(OMO_SESSION_CALL) as { message: { content: { arguments: unknown }[] } }).message.content[0]!.arguments })!;
 const omoCard = (screen: string, ask: OmoAsk | null = OMO_CALL) => parseInteractivePrompt("pi", screen, ask, true, ask ? [ask] : []);
 
@@ -123,7 +118,6 @@ describe("OmO's form: the card goes to another question as Tab and Shift+Tab do"
     expect(unnamed?.steps?.map((step) => step.label)).toEqual(["Color", "Size", "Shape"]);
     expect(navigable(unnamed)).toEqual([false, false, false]);
     expect(unnamed?.can_step_next ?? false).toBe(false);
-    // another call whose questions differ is another form: its identity says so
     const other: OmoAsk = { ...OMO_CALL, questions: OMO_CALL.questions.map((question, at) => at === 2 ? { ...question, options: [{ label: "Circle", description: null }, { label: "Triangle", description: null }] } : question) };
     const ids = [omoCard(omo(1)), omoCard(omo(1), other)].map((prompt) => parsedByPublicPrompt.get(prompt!)?.nativeSteps?.identity);
     expect(ids[0]).toBeDefined();
@@ -181,7 +175,6 @@ describe("Hermes's clarify batch: the card goes to another open question as Tab 
     const identity = (screen: string) => parsedByPublicPrompt.get(parseInteractivePrompt("hermes", screen)!)?.nativeSteps?.identity;
     const open = identity(hermes(1));
     expect(open).toBeDefined();
-    // the same three questions: the first answered, or answered otherwise, is another batch
     expect(identity(hermes(1, [0]))).not.toBe(open);
     expect(identity(hermes(1, [0]).replace("   Red\n", "   Blue\n"))).not.toBe(identity(hermes(1, [0])));
   });
@@ -241,7 +234,6 @@ async function withPane(agent: string, screen: string, run: (pane: Pane) => Prom
       input += chunk.toString();
       if (!input.includes("\n")) return;
       const request = JSON.parse(input.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string; format?: string } };
-      // a herdr that holds its reply this long (ms)
       const stall = pane.onRpc?.(request.method);
       const answer = (result: unknown) => {
         const reply = () => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
@@ -298,7 +290,6 @@ async function withOmoPane(screen: string, run: (pane: Pane) => Promise<void>, r
   });
 }
 
-/** A prompt watch's reader of p_1, with the state a server keeps for its watches (server/core/server-core.ts). */
 function watchReader(): () => Promise<string | null | undefined> {
   const state = { openCodeState: new OpenCodePromptState(), ompLookups: new Map() as OmpLookups };
   return async () => {
@@ -334,7 +325,6 @@ async function move(promptId: string, action: Omit<PromptAnswer, "pane_id" | "pr
   return { status: response.status, code: body.error?.code };
 }
 
-/** A pane whose form moves as the agent's keys move it, wrapping as they do. */
 function follows(pane: Pane, draw: (at: number) => string, count: number, next: string, previous: string, start = 0): void {
   let at = start;
   pane.onSent = (key) => {
@@ -386,7 +376,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test("omp: a card read under one call answers no other call drawn the same", async () => {
     await withPane("omp", omp(0), async pane => {
       const stale = await card();
-      // omp asks again with the same questions: the screen draws them alike
       pane.ompCall?.("asked-again");
       expect((await card()).id).not.toBe(stale.id);
       expect(await move(stale.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
@@ -441,7 +430,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test.each(["answer", "move"] as const)("omp: a call that changes after the last read takes no key (%s)", async kind => {
     await withPane("omp", omp(0), async pane => {
       follows(pane, omp, 4, "tab", "shift+tab");
-      // the look right before the key, after every read: omp has asked again by then
       const beforeKey = async (): Promise<void> => { pane.ompCall?.("asked-again"); };
       const action = kind === "answer" ? { option_index: 0 } : { step_next: true };
       expect(await move((await card()).id, action, { beforeKey })).toEqual({ status: 409, code: "prompt_changed" });
@@ -462,7 +450,6 @@ describe("the answer route moves between questions, one key at a time, each seen
     const alike = [["First", "Proceed?", ["Yes", "No"]], ["Second", "Proceed?", ["Yes", "No"]], ["Shape", "Which shape?", ["Circle", "Square"]]] as const;
     await withPane("omp", omp(0, false, alike), async pane => {
       const first = await card();
-      // the terminal moves on to the second question, drawn as the first was
       pane.screen = omp(1, false, alike);
       expect((await card()).id).not.toBe(first.id);
       expect(await move(first.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
@@ -474,7 +461,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test("omp: where the strip cannot say which of two questions drawn alike is shown, no key is sent", async () => {
     const alike = [["First", "Proceed?", ["Yes", "No"]], ["Second", "Proceed?", ["Yes", "No"]], ["Shape", "Which shape?", ["Circle", "Square"]]] as const;
     await withPane("omp", omp(0, false, alike), async pane => {
-      // the colours read prove no tab
       pane.visible = omp(1, false, alike).replace(/\x1b\[[0-9;]*m/g, "");
       expect(await move((await card()).id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual([]);
@@ -483,7 +469,6 @@ describe("the answer route moves between questions, one key at a time, each seen
 
   test("omp: a screen that leaves the question while the look before Tab runs takes no Tab", async () => {
     await withPane("omp", omp(0), async pane => {
-      // the review comes up between the move's last read and its key
       const beforeKey = async (): Promise<void> => { pane.screen = omp(3); };
       expect(await move((await card()).id, { step_next: true }, { beforeKey })).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual([]);
@@ -519,7 +504,6 @@ describe("the answer route moves between questions, one key at a time, each seen
     test.each([["Next", { step_next: true }], ["an answer", { option_index: 0 }]] as const)("omp: the review, drawn while the read before %s is still being checked, takes no key", async (_, action) => {
       await withPane("omp", omp(0), async pane => {
         const first = await card();
-        // after the look before the key, the terminal leaves the question while the read's own checks run
         let looked = false;
         const beforeKey = async (): Promise<void> => { looked = true; };
         pane.onRpc = (method) => { if (looked && method === "pane.process_info") { looked = false; pane.screen = omp(3); } };
@@ -574,7 +558,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test("omp: a different strip after the first key stops the move", async () => {
     await withPane("omp", omp(0), async pane => {
       pane.onSent = () => { pane.screen = omp(1).replace(" Shape ", " Changed "); };
-      // stopped by what it reads, not by the deadline: one far past the test's own time limit
       expect(await move((await card()).id, { step_index: 2 }, { answerDeadlineMs: 60_000 })).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual(["tab"]);
     });
@@ -652,13 +635,11 @@ describe("the answer route moves between questions, one key at a time, each seen
       pane.onSent = (key) => {
         if (key === "tab") at += 1;
         pane.screen = omo(at);
-        // the card's own poll, read while the step is still under way
         poll ??= card();
       };
       expect(await move((await card()).id, { step_next: true })).toEqual({ status: 200, code: undefined });
       const polled = await poll!;
       expect(polled.question).toBe("Which size do you prefer?");
-      // the next tap comes from the card that poll drew: the same asking, not a stale one
       expect(await move(polled.id, { step_next: true })).toEqual({ status: 200, code: undefined });
       expect(pane.sent).toEqual(["tab", "tab"]);
     });
@@ -666,15 +647,11 @@ describe("the answer route moves between questions, one key at a time, each seen
 
   test.skipIf(process.platform !== "linux")("OmO: an answer whose look ends after the request's deadline still sends, as before", async () => {
     await withOmoPane(omo(0), async (pane) => {
-      // pi's look before a key answers once the request's deadline has passed, as a slow look can: the clock is moved
-      // past the deadline from inside the look, so nothing before it depends on how fast this machine is
       let looks = 0;
       const beforeKey = async (): Promise<void> => {
         looks += 1;
-        // only while the look runs: what the answer records after it is at the real time
         setSystemTime(new Date(Date.now() + 120_000));
         try {
-          // the look answers after the route's own timers have had their turn
           await new Promise((resolve) => setImmediate(resolve));
         } finally { setSystemTime(); }
       };
@@ -689,7 +666,6 @@ describe("the answer route moves between questions, one key at a time, each seen
       const first = await card();
       expect(await move(first.id, { step_index: 2 }, SHORT)).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual(["tab"]);
-      // the Tab went out: the same drawing is asked anew, and the card it left takes no further move
       expect((await card()).id).not.toBe(first.id);
       expect(await move(first.id, { step_index: 1 }, SHORT)).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual(["tab"]);
@@ -699,7 +675,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test.skipIf(process.platform !== "linux")("OmO: a move's keys pass the answer's own guard, which may refuse the next one", async () => {
     await withOmoPane(omo(0), async (pane) => {
       follows(pane, omo, 4, "tab", "shift+tab");
-      // the look before each key (a pi-ask form, an omp behind its shell): the second one says no
       const looked: string[] = [];
       const beforeKey = async (paneId: string, agent: string): Promise<void> => {
         looked.push(`${paneId} ${agent}`);
@@ -712,7 +687,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   });
 
   test.skipIf(process.platform !== "linux")("OmO: a new call asked under the move gets no second key, its tabs alike", async () => {
-    // the same headers, its last question asked with other options and another call id: another form, though the tabs read alike
     const CALL_ID = (JSON.parse(OMO_SESSION_CALL) as { message: { content: { id: string }[] } }).message.content[0]!.id;
     const changed = OMO_SESSION_CALL.replace('"label":"Square"', '"label":"Triangle"').replace(CALL_ID, `${CALL_ID}_again`);
     expect(changed).not.toBe(OMO_SESSION_CALL);
@@ -727,7 +701,6 @@ describe("the answer route moves between questions, one key at a time, each seen
       expect(await move((await card()).id, { step_index: 2 })).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual(["tab"]);
     });
-    // and a screen that changed between the card and the move: no key at all
     await withOmoPane(omo(0), async (pane) => {
       const first = await card();
       pane.screen = omo(1);
@@ -792,7 +765,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   });
 
   test("Hermes: another batch with the same questions drawn after a Tab gets no second one", async () => {
-    // the same three questions, asked with other choices
     const OTHER: readonly (readonly [string, readonly string[]])[] = HERMES.map(([question], index) => [question, index === 1 ? ["Tiny", "Huge"] : ["Red", "Blue"]]);
     await withPane("hermes", hermes(0), async (pane) => {
       let at = 0;
@@ -802,7 +774,6 @@ describe("the answer route moves between questions, one key at a time, each seen
       };
       expect((await move((await card()).id, { step_index: 2 })).status).toBe(400);
       expect(pane.sent).toEqual([]);
-      // a single Next lands; the next move is asked against the card it shows
       expect(await move((await card()).id, { step_next: true })).toEqual({ status: 200, code: undefined });
       expect(pane.sent).toEqual(["tab"]);
       expect((await card()).options.map((option) => option.label)).toEqual(["Tiny", "Huge"]);
@@ -812,7 +783,6 @@ describe("the answer route moves between questions, one key at a time, each seen
   test("an answer whose first read outlasts the deadline sends nothing", async () => {
     await withPane("hermes", hermes(0), async (pane) => {
       const first = await card();
-      // herdr answers every read after the deadline
       pane.onRpc = (method) => method === "pane.read" ? 600 : undefined;
       expect(await move(first.id, { option_index: 1 }, SHORT)).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual([]);
@@ -823,7 +793,6 @@ describe("the answer route moves between questions, one key at a time, each seen
     await withOmoPane(omo(0), async (pane) => {
       follows(pane, omo, 4, "tab", "shift+tab");
       const first = await card();
-      // herdr writes the key and holds its reply past any test's budget
       pane.onRpc = (method) => method === "pane.send_keys" ? 60_000 : undefined;
       expect(await move(first.id, { step_index: 2 }, SHORT)).toEqual({ status: 409, code: "prompt_changed" });
       expect(pane.sent).toEqual(["tab"]);

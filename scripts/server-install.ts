@@ -1,6 +1,5 @@
 /**
- * The release's server, installed for one platform: what scripts/plugin-launch.ts runs before it hands a command to
- * the binary (install.sh and install.ps1 do the same in shell and PowerShell). Nothing in the install changes until the
+ * Nothing in the install changes until the
  * manifest's signature by the committed key (RELEASE_PUBLIC_KEY), its version, and the size and SHA-256 of every file
  * it names have been checked; then one rename makes the new release the one that runs:
  *
@@ -8,15 +7,6 @@
  *                                           signature as they were checked, and bin/ovis-pty-sidecar(.json): the
  *                                           Rust PTY host the signed manifest names, when it runs here
  *   <home>/releases/.stage-<id>             a download in progress; one an interrupted run left is removed first
- *
- * On Windows, where a link needs rights a user may not have, bin is the release folder itself, moved in by two
- * renames (the old one aside, the new one in); a run cut off between them finds the old one and moves it back.
- *
- * One install at a time: <home>/.install.lock, made with an atomic mkdir and holding the holder's pid. Another install
- * waits for it (at most LOCK_WAIT_MS), then finds that version installed and has nothing to do, or installs its own; a
- * lock whose holder is gone is broken, one breaker at a time (with three or more installs started at the same instant a
- * narrow race remains, a follow-up). Only the lock holder makes
- * a stage, so what the holder removes of releases/ belongs to no other run.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -30,14 +20,12 @@ const MANIFEST_LIMIT = 64 * 1024;
 const SIGNATURE_LIMIT = 1024;
 const WINDOWS = process.platform === "win32";
 
-/** Where releases come from: OVIS_RELEASES_URL when set (https://, or a file:// folder for tests), else GitHub's. */
 export function releasesBase(value: string | undefined): string {
   const base = (value === undefined || value === "" ? DEFAULT_RELEASES : value).replace(/\/+$/, "");
   if (/^https:\/\/[^/]/.test(base) || base.startsWith("file:///")) return base;
   throw new Error(`OVIS_RELEASES_URL must be an https:// address or a file:// folder (file:///path); ${base} is neither`);
 }
 
-/** The release platform this process runs on, or null where no release has a binary. */
 export function hostPlatform(): ServerPlatform | null {
   const platform = `${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`;
   return (SERVER_PLATFORMS as readonly string[]).includes(platform) ? platform as ServerPlatform : null;
@@ -87,11 +75,10 @@ export async function download(url: string, limit: number, name: string, fetchFi
   return Buffer.concat(chunks);
 }
 
-/** `asset` from the release at `at`, only when its size and SHA-256 are what the checked manifest names. */
 /**
  * The Rust PTY host the signed manifest names for `platform`, into `bin` with the record server/pty/host.ts checks, and
  * only after its size and SHA-256 match the manifest and it runs here: no other file's word for a host is taken. Any
- * failure leaves no host, and terminals mirrored; it never fails the install. What it did, in a few words.
+ * failure leaves no host, and terminals mirrored; it never fails the install.
  */
 async function ptyHost(at: string, hosts: Record<string, ReleaseAsset>, platform: ServerPlatform, version: string, bin: string, options: InstallServerOptions): Promise<string> {
   const build = ptyAssetFor(platform);
@@ -111,6 +98,7 @@ async function ptyHost(at: string, hosts: Record<string, ReleaseAsset>, platform
   return "the Rust PTY host checked against ovis-server.json";
 }
 
+/** `asset` from the release at `at`, only when its size and SHA-256 are what the checked manifest names. */
 async function checked(at: string, asset: ReleaseAsset, fetchFile?: typeof fetch): Promise<Uint8Array> {
   const bytes = await download(`${at}/${asset.file}`, asset.size, asset.file, fetchFile);
   if (!bytes) throw new Error(`${at}/${asset.file} does not exist; nothing was changed`);
@@ -152,10 +140,11 @@ function recover(home: string): void {
   if (aside.length > 0) renameSync(join(home, aside.at(-1)!), current);
 }
 
-/** Makes releases/`name` the release that runs, in one rename (two on Windows). */
 function swap(home: string, name: string): void {
   const current = join(home, "bin");
   const release = join(home, "releases", name);
+  // On Windows, where a link needs rights a user may not have, bin is the release folder itself, moved in by two
+  // renames (the old one aside, the new one in); a run cut off between them finds the old one and moves it back.
   if (WINDOWS) {
     const aside = `${current}.old-${randomBytes(4).toString("hex")}`;
     if (existsSync(current)) renameSync(current, aside);
@@ -182,7 +171,6 @@ function swap(home: string, name: string): void {
 }
 
 export const LOCK_WAIT_MS = 600_000;
-/** a lock or break mutex without a pid this long is one whose maker died between mkdir and writing it */
 const UNCLAIMED_MS = 60_000;
 
 const alive = (pid: number): boolean => {
@@ -201,7 +189,6 @@ const holderOf = (lock: string): number | null => {
     return null;
   }
 };
-/** Whether `lock`'s holder is gone: its pid does not run, or it never wrote one and that was long ago. */
 function stale(lock: string): boolean {
   const pid = holderOf(lock);
   if (pid !== null) return !alive(pid);
@@ -209,7 +196,7 @@ function stale(lock: string): boolean {
 }
 
 /**
- * Runs `run` holding `<home>/.install.lock`. A lock found stale is broken under `.install.lock.break`, so two waiters
+ * A lock found stale is broken under `.install.lock.break`, so two waiters
  * that both saw it stale cannot both remove it, and the one that comes second sees the new holder's pid and waits.
  */
 export async function withInstallLock<T>(home: string, run: () => Promise<T>, waitMs = LOCK_WAIT_MS, onWait?: () => void): Promise<T> {
@@ -235,11 +222,11 @@ export async function withInstallLock<T>(home: string, run: () => Promise<T>, wa
           broke = true;
         }
       } finally {
-        try { rmdirSync(breaker); } catch { /* another waiter cleared it as unclaimed */ }
+        try { rmdirSync(breaker); } catch {}
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try { if (Date.now() - statSync(breaker).mtimeMs > UNCLAIMED_MS) rmdirSync(breaker); } catch { /* gone meanwhile */ }
+      try { if (Date.now() - statSync(breaker).mtimeMs > UNCLAIMED_MS) rmdirSync(breaker); } catch {}
     }
     if (broke) continue;
     onWait?.();
@@ -255,11 +242,6 @@ export async function withInstallLock<T>(home: string, run: () => Promise<T>, wa
 }
 
 /**
- * The binary of the release installed in `home`, when it is `version`'s and still what its manifest vouches for: the
- * manifest kept beside it is signed by `publicKey` and names `version`, and the binary has its SHA-256. A folder that
- * fails any of these is never run.
- */
-/**
  * Whether `binary` has the SHA-256 `digest`. Hashing a whole binary costs about 100 ms, on every plugin command, so a
  * match is remembered in <home>/.verified.json with the file's size, mtime and inode: the hash is taken again whenever
  * any of them, or the digest asked for, differs.
@@ -268,59 +250,50 @@ function binaryMatches(home: string, binary: string, digest: string): boolean {
   const { size, mtimeMs, ino } = statSync(binary);
   const seen = join(home, ".verified.json");
   const stamp = JSON.stringify({ digest, size, mtimeMs, ino });
-  try { if (readFileSync(seen, "utf8") === stamp) return true; } catch { /* none remembered */ }
+  try { if (readFileSync(seen, "utf8") === stamp) return true; } catch {}
   if (sha256(readFileSync(binary)) !== digest) return false;
   remember(home, binary, digest);
   return true;
 }
 
-/** Notes that `binary`, as it is now, has the SHA-256 `digest` (binaryMatches); a failure only costs a hash later. */
 function remember(home: string, binary: string, digest: string): void {
   try {
     const { size, mtimeMs, ino } = statSync(binary);
     writeFileSync(join(home, ".verified.json"), JSON.stringify({ digest, size, mtimeMs, ino }));
-  } catch { /* hashed again next time */ }
+  } catch {}
 }
 
+/**
+ * The binary of the release installed in `home`, when it is `version`'s and still what its manifest vouches for: the
+ * manifest kept beside it is signed by `publicKey` and names `version`, and the binary has its SHA-256. A folder that
+ * fails any of these is never run.
+ */
 export function verifiedInstall(home: string, version: string, platform: ServerPlatform, publicKey = RELEASE_PUBLIC_KEY): string | null {
   const current = join(home, "bin");
   try {
     const manifest = checkManifest(readFileSync(join(current, MANIFEST)), readFileSync(join(current, SIGNATURE), "utf8"), publicKey, { version });
     const binary = join(current, binaryName(platform));
-    // the client it serves too: a release whose dist/ went missing is installed again
     if (typeof manifest !== "string" && binaryMatches(home, binary, manifest.assets[platform].sha256) && existsSync(join(current, "dist", "index.html"))) return binary;
-  } catch { /* nothing installed there, or not whole */ }
+  } catch {}
   return null;
 }
 
 export interface InstallServerOptions {
-  /** the install's folder: bin/ and releases/ live in it */
   home: string;
-  /** the version to install; a manifest for another one is refused */
   version: string;
   platform?: ServerPlatform;
-  /** where releases come from; OVIS_RELEASES_URL, else GitHub's */
   releases?: string;
   /** a test's own key; the launcher passes none, so only RELEASE_PUBLIC_KEY is trusted */
   publicKey?: string;
-  /** whether a downloaded Rust PTY host runs on this PC (scripts/pty-sidecar.ts runsHere), and a call made once every
-   * file is checked and before anything moves: tests */
   ptyRuns?: (path: string) => boolean;
   inWindow?: () => Promise<void>;
   /** the git trees of the checkout that asks (scripts/plugin-launch.ts): its binary only when the manifest names them */
   sources?: { server: string; shared: string } | { error: string };
-  /** how long to wait for another install's lock, how a file is fetched, and a call made when the lock is found held: tests */
   lockWaitMs?: number;
   onLockWait?: () => void;
   fetchFile?: typeof fetch;
 }
 
-/**
- * Installs the server of `version` into `home` unless that release already runs there, verified. Throws, with one line
- * that says why and nothing in `home` changed, on any check that fails; throws NoBinaryRelease, before anything is
- * written, when the release of `version` has no ovis-server.json at all, and without asking it when `sources` says why
- * none can be tied to it.
- */
 export async function installServer(options: InstallServerOptions): Promise<{ installed: boolean; message: string; binary: string }> {
   const platform = options.platform ?? hostPlatform();
   if (!platform) throw new Error(`no release has a server binary for ${process.platform}-${process.arch}`);
@@ -338,11 +311,9 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
   const releases = join(home, "releases");
   mkdirSync(releases, { recursive: true });
   recover(home);
-  // only the lock holder makes a stage: one found now was left by a run that died
   for (const leftover of readdirSync(releases).filter((name) => name.startsWith(".stage-"))) rmSync(join(releases, leftover), { recursive: true, force: true });
   const current = join(home, "bin");
   const binary = join(current, binaryName(platform));
-  // the install this one waited for may have put this very version in place
   if (verifiedInstall(home, version, platform, publicKey)) return { installed: false, message: `Ovis ${version} is installed already in ${current}; nothing to do`, binary };
   // sources nothing ties to a release (no git, no checkout, changes not committed) take no binary whatever the release
   // holds: it is not asked, so one out of reach does not stop them
@@ -361,7 +332,6 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
     }
     throw new Error(`${manifest}; nothing was changed`);
   }
-  // a checkout of another commit with the same version (a branch, main between releases) runs its own sources
   if (sources && (sources.server !== manifest.sources.server || sources.shared !== manifest.sources.shared)) {
     throw new NoBinaryRelease(`this checkout's server/ and shared/ are not the ones v${version} was built from (other git trees)`);
   }
@@ -385,7 +355,6 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
     renameSync(stage, join(releases, name));
     try {
       swap(home, name);
-      // just checked: the next command need not hash it again
       remember(home, join(home, "bin", binaryName(platform)), manifest.assets[platform].sha256);
     } catch (error) {
       rmSync(join(releases, name), { recursive: true, force: true });
@@ -397,7 +366,7 @@ async function installLocked(options: InstallServerOptions, platform: ServerPlat
   // the releases that no longer run, never the one bin names; on Linux and macOS a server still running from one keeps
   // its open files
   for (const old of readdirSync(releases).filter((entry) => entry !== name && entry !== previous && !entry.startsWith("."))) {
-    try { rmSync(join(releases, old), { recursive: true, force: true }); } catch { /* still in use: the next install removes it */ }
+    try { rmSync(join(releases, old), { recursive: true, force: true }); } catch {}
   }
   return { installed: true, message: `installed Ovis ${version} (${releaseFile(platform)}, sha256 ${manifest.assets[platform].sha256}) in ${current}${host}`, binary };
 }

@@ -1,9 +1,3 @@
-/**
- * The words the app's main process shows itself (the tray, the menu bar, the notification of a
- * downloaded update and its line on the connection screen), in the languages the
- * Ovis pages have (src/lib/i18n.ts), chosen from the app's locale (`app.getLocale()`, the system's
- * language or `--lang`). English is the key, as in the pages.
- */
 const ENGLISH = [
   "Open Ovis",
   "Open in Browser",

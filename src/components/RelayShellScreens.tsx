@@ -74,7 +74,6 @@ export function KeyIds({ mismatch, named }: { readonly mismatch: KeyMismatch; re
   );
 }
 
-/** How a PC whose Ovis does not update itself is brought up to date: the installer, or herdr's plugin. */
 export const INSTALLER_COMMAND = "curl -fsSL https://ovis.sh/install.sh | sh";
 export const PLUGIN_COMMANDS = "herdr plugin install devswha/ovis\nherdr plugin action invoke devswha.ovis.stop\nherdr plugin action invoke devswha.ovis.start";
 
@@ -104,8 +103,8 @@ export interface RelayShellCardContentProps {
 }
 
 /**
- * Asks before pairing with the PC a link names. While the sign-in is read nothing is claimed and the button is held;
- * while a press is checked, the wording it was made on stays up (`pressed`), so the question does not change under it.
+ * While the sign-in is read nothing is claimed and the button is held; while a press is checked, the wording it was
+ * made on stays up (`pressed`), so the question does not change under it.
  */
 function PairConfirm({ state, pc, onPair, onCancel }: { state: Extract<RelayShellProps["state"], { kind: "confirm" }>; pc: string; onPair: () => void; onCancel: () => void }) {
   const t = useT();

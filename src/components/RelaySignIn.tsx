@@ -7,7 +7,6 @@ import { useLinkPageSignIn } from "../lib/account/useLinkPageSignIn.ts";
 import { PROVIDER_NAMES } from "./AccountPcs.tsx";
 import { linkAddress } from "./AccountSection.tsx";
 
-/** what a sign-in that ended without a session says, as Settings' does; the link page named no provider */
 function failureText(t: ReturnType<typeof useT>, error: unknown): string {
   if (!(error instanceof SignInError)) return t("The sign-in did not finish. Try again.");
   switch (error.code) {
@@ -19,12 +18,6 @@ function failureText(t: ReturnType<typeof useT>, error: unknown): string {
   }
 }
 
-/**
- * The relay tab's sign-in, signed out: Sign in opens the Ovis link page in a new tab and this sheet
- * waits for it, showing the code the page carries, and says it is signed in once the person
- * confirmed there; `onSignedIn` then lets the page read the account again (the tab moves on to how
- * this PC joins). A blocked tab leaves the page's link and code here, as Settings shows them.
- */
 export function RelaySignIn({ service, onSignedIn, onOpenAccount }: { service: string; onSignedIn: (session: AccountSession) => void; onOpenAccount: () => void }) {
   const t = useT();
   const { state, ready, start, cancel } = useLinkPageSignIn(service, onSignedIn, onOpenAccount);

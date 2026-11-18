@@ -3,8 +3,6 @@ import { createElement, useRef, useState } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSelectPane } from "./useSelection.ts";
 
-// The real hook: a pane the user picks (the next/previous pane keys, a palette action) is a pick the
-// setup guide steps aside for, as selectTarget's are; the app's own fallback selection is not.
 describe("selectPane", () => {
   let saved: PropertyDescriptor | undefined;
   let renderer: ReactTestRenderer | undefined;

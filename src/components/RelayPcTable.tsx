@@ -36,7 +36,6 @@ export interface RelayPcTableProps {
   readonly mode?: "account" | "local";
   readonly narrow?: boolean;
   readonly showToolbar?: boolean;
-  /** false drops the Last seen column, so the rows keep one line beside an open Details pane (it stays in Details) */
   readonly showLastSeen?: boolean;
   readonly now?: number;
 }
@@ -82,16 +81,13 @@ export function RelayPcTable({
     }
     return null;
   };
-  /** Account enrollment in progress or failed: its own line under the state, so the PC's state and next action stay. */
   const enrollmentLine = (row: DashboardRow): string | null => {
     if (mode !== "account") return null;
     if (row.enrollment === "pending") return t("Adding it to your account…");
-    // Open retries account setup; listing may already have succeeded before a later step failed.
     if (row.enrollment === "failed") return row.displayState === "paired" || row.displayState === "unchecked"
       ? t("Account setup is incomplete. Open it to try again.") : t("Account setup is incomplete.");
     return null;
   };
-  /** The state word beside the dot; on a Join row whose 10-minute window closed, the title adds why (the Attention caption and Details say it in full, while the table cell stays one line). */
   const stateWord = (row: DashboardRow, updating: boolean): ReactNode => {
     const word = stateHeadline(row, updating);
     const reason = !updating && row.state === "needs-approval" && !freshIds.has(row.server_id) ? askToJoinReason(row, t) : null;
@@ -123,7 +119,6 @@ export function RelayPcTable({
 
   const renderSeen = (row: DashboardRow): ReactNode =>
     !row.listed || row.last_seen_at === null ? "—" : <time dateTime={row.last_seen_at} title={formatAbsoluteTime(row.last_seen_at)}>{lastSeen(row.last_seen_at, now)}</time>;
-  /** The Relay cell: how this device reaches a PC it is paired with (its route and round trip, no answer, or Not checked); a PC it cannot check keeps the relay the directory assigns it. */
   const renderRelay = (row: DashboardRow): ReactNode => {
     if (row.paired) return routeNode(row.check ?? statusMap.get(row.server_id) ?? null, t);
     return row.relay !== null ? <code className="relay-pc-relay-chip">{relayHost(row.relay)}</code> : "—";

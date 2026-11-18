@@ -19,8 +19,13 @@ const guideSection = (source: string) => {
 const controls = withoutComments(read("src/components/TelemetryControls.tsx"));
 const row = (source: string, start: string) => html(source).split("\n").find((line) => line.startsWith(start)) ?? "";
 
+// The button counts may be on only in a tree whose every disclosure says they are sent: the notice line the app
+// shows, the Settings description of the switch, the guide's section, both privacy pages and both store forms. A build that turns
+// them on without those words fails here, and so does one that says so while they are off.
 describe("button counts and the words that disclose them", () => {
   test("COUNTS_ON only where the notice, Settings, the guide, both privacy pages and both store forms say buttons are counted", () => {
+    // each says, beside the buttons, the two other things the message holds: for a few actions which way (button, menu,
+    // shortcut, palette) they were done, and which controls were shown that day
     const has = (text: string, ...phrases: string[]) => phrases.every((phrase) => text.includes(phrase));
     const clause = (text: string, from: string, to: string) => {
       const start = text.indexOf(from);

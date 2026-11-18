@@ -202,7 +202,6 @@ function withoutAbortSignalStatics(...names: ("any" | "timeout")[]): void {
   for (const name of names) Object.defineProperty(AbortSignal, name, { value: undefined, configurable: true });
 }
 
-/** a fetch that answers only when told, and fails as a browser does once its signal ends */
 function heldFetch() {
   const requests: { url: string; signal: AbortSignal; answer: (response: Response) => void }[] = [];
   globalThis.fetch = ((url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
@@ -225,7 +224,6 @@ it("proves a PC's source boot on a browser without AbortSignal.any, and lets go 
   requests[0]!.answer(Response.json({ machines: [], verified_source_boot: { machine_id: "pc 2", boot_id: "boot-b" } }));
   expect(await proof).toEqual({ machines: [], boot_id: "boot-b" });
 
-  // the coordinator aborts a check it replaced; one that already answered must not be ended by it
   caller.abort();
   expect(requests[0]!.signal.aborted).toBe(false);
 });

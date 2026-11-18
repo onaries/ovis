@@ -6,7 +6,6 @@ import { CONTRAST_PAIRS, INDICATOR_FLOOR, LIGHT_ANSI_PAIRS, TEXT_FLOOR } from ".
 import { BASE16_KEYS, deriveTheme, fit, INDICATORS, type Base16 } from "./themeDerive.ts";
 import { INDICATOR_ROLES, LIGHT_ANSI_ROLES, ROLES } from "./themeRoles.ts";
 
-/** Under this a hovered or selected row cannot be told from the ground (themeDerive.ts TELLS). */
 const TELLS = 1.05;
 /**
  * The two tests that derive hundreds of themes take a few seconds of plain arithmetic: more than a
@@ -14,10 +13,6 @@ const TELLS = 1.05;
  */
 const HEAVY = 30_000;
 
-/**
- * What a derived theme is under: the pairs of themeContrast.ts, the way themes.contrast.test.ts reads a
- * built-in theme, the state colours on the surfaces a row can take, and a row that tells from the ground.
- */
 function below({ mode, vars }: ReturnType<typeof deriveTheme>): string[] {
   const roles = vars as Record<string, string>;
   const states = INDICATOR_ROLES.flatMap((fg) => ["bg", "bg-elevated", "bg-hover"].map((bg) => ({ fg, bg, floor: INDICATOR_FLOOR })));
@@ -25,14 +20,12 @@ function below({ mode, vars }: ReturnType<typeof deriveTheme>): string[] {
     const ratio = contrast(roles[fg]!, roles[bg]!);
     return ratio < floor ? [`${fg} on ${bg}: ${ratio.toFixed(2)}:1 < ${floor}:1 (${roles[fg]} / ${roles[bg]})`] : [];
   });
-  // the filled button's text under the pointer: not a pair the built-in themes are held to, and one a derived theme keeps
   const pressed = contrast(roles["primary-text"]!, roles["primary-hover"]!);
   if (pressed < TEXT_FLOOR) under.push(`primary-text on primary-hover: ${pressed.toFixed(2)}:1 (${roles["primary-text"]} / ${roles["primary-hover"]})`);
   const row = contrast(roles["bg-hover"]!, roles["bg"]!);
   return row < TELLS ? [...under, `a row on the ground: ${row.toFixed(3)}:1 (${roles["bg-hover"]} / ${roles["bg"]})`] : under;
 }
 
-/** A seeded generator, so a failing palette can be found again. */
 function palettes(count: number, seed: number, grey = false): Base16[] {
   let state = seed;
   const next = (): number => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 2 ** 32;
@@ -43,7 +36,6 @@ function palettes(count: number, seed: number, grey = false): Base16[] {
 
 const seeds = (colors: Partial<Base16>, rest = "#808080"): Base16 => Object.fromEntries(BASE16_KEYS.map((key) => [key, colors[key] ?? rest])) as unknown as Base16;
 
-// a readable dark scheme and a readable light one, in the app's own amber colours
 const DARK = seeds({
   base00: "#181613", base01: "#211e1a", base02: "#2a2621", base03: "#3e3830", base04: "#9b9183", base05: "#d8d0c3", base06: "#f2ebdf", base07: "#fff8ec",
   base08: "#ff7b70", base09: "#f0a830", base0A: "#e8c55c", base0B: "#93c36b", base0C: "#6cc5b0", base0D: "#6cb8d6", base0E: "#c39bd3", base0F: "#b07a4a",
@@ -67,7 +59,6 @@ describe("deriveTheme", () => {
     for (const all of ["#808080", "#777777", "#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff", "#757575", "#767676", "#959595"]) {
       expect(below(deriveTheme(seeds({}, all))), all).toEqual([]);
     }
-    // a surface on the other side of the text, a text at its floor on a ground with no room beyond it, and the pairs between
     const edges = ["#000000", "#ffffff", "#757575", "#202020", "#e8e8e8", "#ff0000"];
     for (const base00 of edges) for (const base01 of edges) for (const base02 of edges) for (const base05 of ["#757575", "#000000", "#ffffff", "#606060"]) {
       expect(below(deriveTheme(seeds({ base00, base01, base02, base05 }))), `${base00} ${base01} ${base02} ${base05}`).toEqual([]);
@@ -95,7 +86,6 @@ describe("deriveTheme", () => {
   test("the side is what the colours are: light text on a darker ground is dark", () => {
     expect(deriveTheme(seeds({ base00: "#ffffff", base05: "#202020" })).mode).toBe("light");
     expect(deriveTheme(seeds({ base00: "#101010", base05: "#e0e0e0" })).mode).toBe("dark");
-    // a text that has to cross its ground to be read is told by where it ends
     const crossed = deriveTheme(seeds({ base00: "#808080", base05: "#909090" }));
     expect(crossed.mode).toBe(contrast(crossed.vars.text, "#000000") < contrast(crossed.vars.text, "#ffffff") ? "light" : "dark");
   });
@@ -114,52 +104,43 @@ describe("deriveTheme", () => {
   });
 
   test("a surface the text cannot be read on gives way, and the text keeps its colour", () => {
-    // Base16 Solarized Dark: base02 is a mid tone the text does not read on
     const { vars } = deriveTheme(seeds({ base00: "#002b36", base01: "#073642", base02: "#586e75", base05: "#93a1a1" }));
     expect(vars.text).toBe("#93a1a1");
     expect(vars["bg-hover"]).not.toBe("#586e75");
     expect(contrast(vars.text, vars["bg-hover"])).toBeGreaterThanOrEqual(4.5);
     expect(contrast(vars["bg-hover"], vars.bg)).toBeGreaterThanOrEqual(TELLS);
-    // the border is no surface: it keeps the scheme's colour
     expect(vars.border).toBe("#586e75");
   });
 
   test("the text takes a small step to keep the scheme's surfaces, as the built-in themes were repaired", () => {
-    // Base16 Solarized Light: the text is just under 4.5:1 on the raised surface
     const { vars } = deriveTheme(seeds({ base00: "#fdf6e3", base01: "#eee8d5", base02: "#93a1a1", base05: "#586e75" }));
     expect(vars["bg-elevated"]).toBe("#eee8d5");
     expect(vars.text).not.toBe("#586e75");
     expect(contrast(vars.text, "#eee8d5")).toBeGreaterThanOrEqual(4.5);
     expect(contrast(vars.text, "#586e75")).toBeLessThan(1.15);
-    // the mid tone it could only be read on as near-black gives way instead
     expect(vars["bg-hover"]).not.toBe("#93a1a1");
   });
 
   test("a row always shows: on a faint scheme, where the scheme gave it the ground's colour, and on a ground with no room", () => {
-    // 2.6:1 as written: the text moves, and no surface ends on the ground
     const faint = deriveTheme(seeds({ base00: "#202020", base01: "#282828", base02: "#383838", base05: "#606060" }));
     expect(contrast(faint.vars["bg-hover"], "#202020")).toBeGreaterThanOrEqual(TELLS);
     expect(contrast(faint.vars["bg-elevated"], "#202020")).toBeGreaterThanOrEqual(TELLS);
     expect(faint.vars["term-selection"]).toBe(faint.vars["bg-hover"]);
     expect(below(faint)).toEqual([]);
-    // a row the scheme gave the ground's own colour is told from it all the same; a raised surface it made flat stays flat
     const flat = deriveTheme(seeds({ base00: "#e8e8e8", base01: "#e8e8e8", base02: "#e8e8e8", base05: "#8a8a8a" }));
     expect(contrast(flat.vars["bg-hover"], flat.vars.bg)).toBeGreaterThanOrEqual(TELLS);
     expect(flat.vars["bg-elevated"]).toBe("#e8e8e8");
     expect(below(flat)).toEqual([]);
-    // the ground is as dark as colours go and the text sat at its floor: the text moves off it, and the row lies between
     const pit = deriveTheme(seeds({ base00: "#000000", base01: "#000000", base02: "#ffffff", base05: "#757575" }));
     expect(pit.vars.text).not.toBe("#757575");
     expect(below(pit)).toEqual([]);
   });
 
   test("the filled button's text reads on its fill and on the fill under the pointer", () => {
-    // 4.60:1 at rest and 3.45:1 under the pointer when the text was fitted to the resting fill alone
     const { vars } = deriveTheme(seeds({ base00: "#d419b4", base01: "#d419b4", base02: "#d419b4", base05: "#6bdb67", base0D: "#dfa7ef" }));
     expect(contrast(vars["primary-text"], vars.primary)).toBeGreaterThanOrEqual(TEXT_FLOOR);
     expect(contrast(vars["primary-text"], vars["primary-hover"])).toBeGreaterThanOrEqual(TEXT_FLOOR);
     expect(vars["primary-hover"]).not.toBe(vars.primary);
-    // a readable scheme keeps the hover it had: a tenth of the way to the text
     expect(deriveTheme(DARK).vars["primary-hover"]).not.toBe(DARK.base0D);
     expect(contrast(deriveTheme(DARK).vars["primary-text"], deriveTheme(DARK).vars["primary-hover"])).toBeGreaterThanOrEqual(TEXT_FLOOR);
   });
@@ -169,10 +150,8 @@ describe("deriveTheme", () => {
     for (const mode of ["dark", "light"] as const) {
       for (const role of INDICATOR_ROLES) expect(INDICATORS[mode][role], `${mode} ${role}`).toBe(blocks[`amber/${mode}`]!.declared[`--${role}`]!);
     }
-    // on Catppuccin Mocha's own ground they are drawn as written
     const mocha = deriveTheme(seeds({ base00: "#1e1e2e", base01: "#181825", base02: "#313244", base05: "#cdd6f4" }));
     expect(mocha.vars).toMatchObject({ "indicator-working": "#f9e2af", "indicator-blocked": "#f38ba8", "indicator-done": "#94e2d5", "indicator-idle": "#a6e3a1" });
-    // on a pale ground the light ones are darkened until they show
     const pale = deriveTheme(seeds({ base00: "#c8c8c8", base01: "#d0d0d0", base02: "#b8b8b8", base05: "#101010" }));
     expect(pale.mode).toBe("light");
     for (const role of INDICATOR_ROLES) expect(contrast(pale.vars[role], "#c8c8c8"), role).toBeGreaterThanOrEqual(INDICATOR_FLOOR);
@@ -182,11 +161,9 @@ describe("deriveTheme", () => {
     const moved = fit("#bf616a", [{ color: "#2e3440", floor: 4.5 }]);
     expect(contrast(moved, "#2e3440")).toBeGreaterThanOrEqual(4.5);
     expect(contrast(moved, "#2e3440")).toBeLessThan(4.9);
-    // still a red: its red channel leads as before
     const [r, g, b] = [1, 3, 5].map((at) => parseInt(moved.slice(at, at + 2), 16));
     expect(r!).toBeGreaterThan(g!);
     expect(r!).toBeGreaterThan(b!);
-    // a colour that reads is returned as it is
     expect(fit("#eceff4", [{ color: "#2e3440", floor: 4.5 }])).toBe("#eceff4");
   });
 

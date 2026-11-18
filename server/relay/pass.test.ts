@@ -10,7 +10,6 @@ import { bounded, deferred, TestClock } from "./test-helpers.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-/** A keeper over an account service that answers the pass request with `answer` (the challenge always works). */
 async function keeper(answer: () => Response | Promise<Response>) {
   const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-pass-keeper-"));
   dirs.push(stateDir);
@@ -163,7 +162,6 @@ test("a refresh asked for while a request is out is asked again once it ends", a
   k.made.start();
   const first = k.made.refresh();
   await entered.promise;
-  // the owner names an account while the old request is out
   void k.made.refresh();
   gate.resolve();
   await first;
@@ -218,7 +216,6 @@ test("a refusal held back by the keeper's own limit never delays the ask a newly
   };
   const made = new RelayPassKeeper({ stateDir, identity: () => identity, account: () => account, service: "https://account.test", fetch, clock, onPass: () => {} });
   made.start();
-  // the global and the regional relay refuse this PC at once, before it names any account
   await made.rejected();
   await made.rejected();
   expect(made.state).toBe("no_account");
@@ -242,13 +239,11 @@ test("neither a local limit nor a queued refresh shortens the service's Retry-Af
   k.made.start();
   const first = k.made.refresh();
   await entered.promise;
-  // the account changes while the request is out: queued
   void k.made.refresh();
   gate.resolve();
   await first;
   await Promise.resolve();
   expect(asked).toBe(1);
-  // the global and the regional relay refuse within the minute
   await k.made.rejected();
   await k.made.rejected();
   expect(asked).toBe(1);

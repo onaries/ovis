@@ -1,3 +1,7 @@
+// A character cluster holding an East Asian Wide or Fullwidth character (Hangul, CJK, kana,
+// fullwidth forms) or an emoji shown as emoji by default (Emoji_Presentation) counts two terminal
+// columns; one that only U+FE0F makes an emoji (U+2600 U+FE0F, a sun) counts one. One of only
+// combining marks and zero-width characters takes none.
 const WIDE = /[\u1100-\u115f\u2329\u232a\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{2fffd}\u{30000}-\u{3fffd}\p{Emoji_Presentation}]/u;
 const ZERO_WIDTH = /^[\p{Mn}\p{Me}\u200b-\u200f\ufe00-\ufe0f]+$/u;
 let graphemes: Intl.Segmenter | undefined;
@@ -42,6 +46,11 @@ const SECRET_PROMPT = new RegExp(`^(?:(?:doas )?\\([^\\s()]+@[^\\s()]+\\) )?(?:$
   /(?:verifying - )?enter (?:pem )?pass phrase(?: for [^:]+)?/,
 ].map((prompt) => prompt.source).join("|")})[:：]$`, "i");
 
+// a yes/no choice is no secret: `y/n` in brackets, or after a space or a mark and before anything that does not
+// go on as a name (` y/n:`, `,y/n:`, `-y/n:`, ` y/n/a:`, `'y/n'`). Not inside a name: the letters around a path's
+// slash (`/home/andy/notes/key`), two of its folders (`/home/y/n/key`), a repository (`team-y/n-tools.git`), a
+// path that goes on (`team-y/n/repo.git`: more than one letter after the next slash is no third option), or the
+// start of a wrapped row, which is tested before the rows above it are joined (`…/compan` then `y/n-prod:`)
 const ASKS_CHOICE = /\?|[([]\s*y\s*\/\s*n|[^a-z0-9/]y\s*\/\s*n(?![a-z0-9_.-]|\/[a-z0-9_.-]{2})/i;
 
 /** Whose reading of a prompt: 3 this one's, 2 a server's that lists `secret-prompts-2` and no more, 1 any server's before that. */
@@ -72,6 +81,10 @@ const SHIPPED: Record<1 | 2, { prompt: RegExp; choice: RegExp }> = {
   },
 };
 
+/**
+ * Deliberately narrow: prose mentioning passwords must not become an input prompt. `set`: as a server already
+ * released reads it (SHIPPED), for what a page may send that server.
+ */
 export function secretPrompt(screen: string, columns = Infinity, set: PromptSet = 3): string | null {
   const { prompt: asks, choice } = set === 3 ? { prompt: SECRET_PROMPT, choice: ASKS_CHOICE } : SHIPPED[set];
   const lines = screen.split(/\r?\n/);
@@ -107,6 +120,13 @@ const KEY_SHAPES = [
 const AWS_SECRET_KEY_LENGTH = 40;
 const DIGITLESS_KEY_LENGTH = 40;
 
+/**
+ * Whether text holds what looks like an API key or token (#2523): a vendor's shape, or a long run
+ * mixing upper and lower case letters (and `_`) with digits, or 40 characters long without them. A `/` is
+ * taken as part of a key only in a run of exactly 40 (an AWS secret key's length): anything else
+ * with one is a path or a URL. A run holding a word (eight lower case letters in a row) is a name,
+ * and hex alone is no key: commit hashes and image digests are kept as typed.
+ */
 export function looksLikeKey(text: string): boolean {
   if (KEY_SHAPES.some((shape) => shape.test(text))) return true;
   return (text.match(/[A-Za-z0-9/+_]{24,}/g) ?? []).some((run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && !/[a-z]{8}/.test(run)
@@ -119,6 +139,10 @@ export function promptSet(prompt: string): PromptSet {
 }
 
 /**
+ * A program that has read its answer prints a line break and works on (git signing in, ssh-add reading its key,
+ * sudo running a quiet command) with its prompt still the last text: it asks no more then, and an answer sent
+ * again would wait in the terminal for whatever reads next, a shell for instance.
+ *
  * Nearly every prompt ends in a space after its colon. When the colon fills the row's last column that space
  * wraps, and the cursor is past it on the next row. herdr's attach stream draws each row at its own place, so the
  * page has no wrapped row to join there: the space's row is a line of its own, blank. That is still the prompt
@@ -139,6 +163,7 @@ export function promptHasCursor(lines: readonly string[], starts: readonly numbe
   return cursorRow === below && below - starts[last]! === 1 && cursorX > 0 && displayWidth(lines[last]!.trimEnd()) >= columns - 1;
 }
 
+// where no passphrase is an answer: ssh-keygen says so when it asks for a new one, and asks for the same again
 const TAKES_NONE = /\(empty for no passphrase\):$|^enter same passphrase again:$/i;
 
 /**

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import { evaluate, evaluateValue } from "./workflow-expression.ts";
 
 describe("workflow expressions, as GitHub evaluates them", () => {
@@ -34,4 +36,10 @@ describe("workflow expressions, as GitHub evaluates them", () => {
     expect(evaluateValue("a-${{ 'b' }}-${{ 1 }}", {})).toBe("a-b-1");
     expect(evaluateValue("inputs.missing == false", { inputs: {} }, true)).toBe(true);
   });
+});
+
+test("only the light-runner job test uses this helper, never a security rule", () => {
+  const users = spawnSync("git", ["grep", "-l", "workflow-expression", "--", "*.ts", "*.tsx"], { cwd: join(import.meta.dir, ".."), encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+  expect(users, "This helper evaluates both sides of && and || and skips format()'s {{ }} escapes, so it is not GitHub's evaluator: keep security rules such as scripts/privileged-jobs-workflow.test.ts off it.")
+    .toEqual(["scripts/light-runner-workflow.test.ts", "scripts/workflow-expression.test.ts"]);
 });

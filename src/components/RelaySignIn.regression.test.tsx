@@ -32,7 +32,7 @@ const mount = async (child: ReactNode) => {
   await act(async () => { renderer = create(<SettingsProvider>{child}</SettingsProvider>); });
 };
 const online = { phase: "online", relay: "wss://relay.ovis.example", app: "https://app.ovis.example", sessions: 0, blocked: null, error: null } as const;
-const relay = { status: online, unsupported: false, pending: false, request: async () => online };
+const relay = { status: online, unsupported: false, pending: false, request: async () => online, reread: () => {} };
 const relayView = () => <RelayTab relay={relay} closesGate={false} signedIn={false} joinBySignIn={false} phone={false}
   account={{ service: SERVICE, onOpen: openAccount, onSignedIn() {} }} />;
 

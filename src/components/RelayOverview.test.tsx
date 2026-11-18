@@ -32,7 +32,6 @@ function makePc(server_id: string, name: string, state: DashboardPc["state"], ex
   };
 }
 
-// the Join reason as the code words it (askToJoinReason), compared with what each marked element shows
 const joinReason = askToJoinReason({ added_at: new Date(0).toISOString(), join: { server_public_key: "k", relay: "wss://relay.ovis.sh" } }, (key, vars) => translate("en", key, vars))!;
 
 function f4Pcs(): DashboardPc[] {
@@ -239,7 +238,6 @@ describe("RelayOverview", () => {
       expect(html).not.toContain('data-strip-cell="offline"');
       expect(html).not.toContain("relay-dash-notice");
     }
-    // nothing offline: no line under Needs you
     const none = renderMarkup({ pcs: [makePc("id_a", "A", "paired"), makePc("id_b", "B", "needs-approval")], mode: "account", defaultRelay: GLOBAL, now: NOW });
     expect(none).not.toContain("relay-overview-strip-note");
     expect(renderMarkup({ pcs: f4Pcs(), mode: "account", defaultRelay: GLOBAL, now: NOW }, "ko")).toContain("오프라인 1대 포함");
@@ -254,7 +252,6 @@ describe("RelayOverview", () => {
       expect(html).toContain("Paired with this device");
       expect(html).not.toContain(">Ready<");
       expect(html).not.toContain("Offline");
-      // PF-6: no second list of the same PCs under the strip
       expect(html).not.toContain("relay-overview-local");
       expect(html).not.toContain("This device:");
       expect(html).not.toContain("Studio desktop");
@@ -294,7 +291,6 @@ describe("RelayOverview", () => {
     const line = /<p class="relay-overview-reach"[^>]*>([^<]*)<\/p>/.exec(html);
     expect(line?.[1]).toBe("Reachable now: 2 direct · 1 via relay · 1 no answer");
     expect(html).toContain('data-reachable-direct="2" data-reachable-relay="1" data-reachable-none="1"');
-    // a check under way and a PC never checked count nowhere, so the line waits for the first finished check
     expect(renderMarkup({ pcs, mode: "account", defaultRelay: GLOBAL, now: NOW })).not.toContain("relay-overview-reach");
     expect(renderMarkup({ pcs, mode: "account", defaultRelay: GLOBAL, pcStatus: new Map([["id_studio", { kind: "checking" }]]), now: NOW })).not.toContain("relay-overview-reach");
     const partial = renderMarkup({ pcs, mode: "account", defaultRelay: GLOBAL, pcStatus: new Map<string, PcStatus>([["id_studio", { kind: "checking" }], ["id_work", { kind: "answered", route: "tailscale", rttMs: 18 }]]), now: NOW });
@@ -321,13 +317,11 @@ describe("RelayOverview", () => {
   });
 
   it("renders each strip label whole in its own span under the strip, the local strip marked for its two-line labels, and every major section as a direct child of the overview in reading order", () => {
-    // the rendered hooks the stylesheet's wrap and spacing rules attach to; the browser QA measures the result (overview-section-spacing: 24px between these children; the capture matrix: no clipped label at 390)
     const local = renderMarkup({ pcs: localPcs(), mode: "local", defaultRelay: GLOBAL, now: NOW });
     expect(local).toContain('<section class="relay-overview-strip" data-local="" aria-label="Summary">');
     expect([...local.matchAll(/<span class="relay-overview-strip-label"><svg[\s\S]*?<\/svg><span>([^<]+)<\/span><\/span>/g)].map(([, label]) => label)).toEqual(["Paired with this device", "Relays"]);
     expect(local).not.toMatch(/relay-overview-strip-label[^>]*title=/);
     const account = renderMarkup({ pcs: f20Pcs(), mode: "account", defaultRelay: GLOBAL, now: NOW, children: createElement("section", { id: "relay-dash-pcs" }) });
-    // a cut attention name keeps its full name to hand; a strip label never needs one
     expect(account).toMatch(/<span class="relay-overview-attention-name" title="Backup NAS">Backup NAS<\/span>/);
     const overview = /<div class="relay-overview" data-overview-mode="account">([\s\S]*)<\/div>$/.exec(account)?.[1] ?? "";
     // the overview's direct children, by class or id: a wrapper around any section would break the spacing rule that keys on them
@@ -343,21 +337,16 @@ describe("RelayOverview", () => {
 
 
   it("says a reason shared by every shown attention row once, as the list caption, keeps those rows to name and relay or last seen, and draws them on the plain surface", () => {
-    // every row can be joined: one without a route reads "Needs approval" and the reason is no longer shared
     const html = renderMarkup({ pcs: f4Pcs().map((pc) => pc.server_id === "id_old" ? { ...pc, join: { server_public_key: "k3", relay: AP } } : pc), mode: "account", defaultRelay: GLOBAL, now: NOW });
     const section = /<section class="relay-overview-attention-section"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
-    // the Join reason is drawn once, as the caption, and no row repeats it
     expect(section.match(/data-reason="join"/g)).toHaveLength(1);
     expect(/<p class="relay-overview-attention-caption" data-reason="join">([^<]*)<\/p>/.exec(section)?.[1]).toBe(joinReason);
-    // PF-1: the shared reason and View all share one head row above the list, so the head costs the table no second line
     expect(section).toMatch(/<div class="relay-overview-attention-head"><p class="relay-overview-attention-caption"[^>]*>[^<]+<\/p><button[^>]*data-action="view-all-attention"[^>]*>[^<]+<\/button><\/div><ol class="relay-overview-attention">/);
     const rows = [...section.matchAll(/<span class="relay-overview-attention-name"[^>]*>([^<]+)<\/span><span class="relay-overview-attention-why">([^<]+)<\/span>/g)].map(([, name, why]) => [name, why]);
     expect(rows).toEqual([["Old MacBook", "relay-ap.ovis.sh"], ["Studio desktop", "relay.ovis.sh"], ["Work laptop", "relay-ap.ovis.sh"]]);
-    // rows with different reasons keep each reason on its row, with no caption
     const mixed = renderMarkup({ pcs: freadyPcs(), mode: "account", defaultRelay: GLOBAL, now: NOW });
     expect(mixed).not.toContain("relay-overview-attention-caption");
     expect(mixed).toContain('<span class="relay-overview-attention-why">new · 8 min left</span>');
-    // the state is the dot's alone: every row renders as the plain row with its glyph, no state class or tint hook on the row itself
     const mixedRows = [...mixed.matchAll(/<li class="([^"]+)" data-pc-state="([^"]+)"><svg class="status-dot" data-state="([^"]+)"/g)].map(([, className, state, dot]) => [className, state, dot]);
     expect(mixedRows).toEqual([
       ["relay-overview-attention-row", "needs-approval", "needs-you"],
@@ -416,7 +405,6 @@ describe("RelayOverview", () => {
     expect(/<span class="relay-overview-attention-why" data-reason="join">([^<]*)<\/span>/.exec(html)?.[1]).toBe(joinReason);
     expect(html).toContain("update to 1.9");
 
-    // a listed PC whose directory row gives no route to join by has no Join button, so its reason names none
     const { join: _join, ...noRoute } = expiredPc;
     const routeless = renderMarkup({ pcs: [noRoute], mode: "account", defaultRelay: GLOBAL, now: NOW });
     expect(routeless).toContain("Needs approval");
@@ -539,7 +527,6 @@ describe("RelayOverview", () => {
     await act(async () => { check().props.onClick(); });
     expect(refreshed).toBe(1);
     expect(busyState()).toEqual([undefined, true, true, "Checking…"]);
-    // a click that still lands while it is busy asks nothing
     await act(async () => { check().props.onClick(); });
     expect(refreshed).toBe(1);
     const busy = [...scheduledTimers.values()].filter((timer) => timer.ms === CHECK_AGAIN_BUSY_MS);
@@ -553,7 +540,6 @@ describe("RelayOverview", () => {
     await act(async () => { copy.props.onClick(); });
     expect(copiedText).toEqual([INSTALLER_COMMAND]);
     expect(textOf(copy)).toBe("Copied");
-    // a second copy starts the wait over: the first copy's timer is gone, so it cannot turn the label back early
     const copiedTimers = () => [...scheduledTimers.values()].filter((timer) => timer.ms === COPIED_MS);
     const first = copiedTimers();
     expect(first).toHaveLength(1);
@@ -566,7 +552,6 @@ describe("RelayOverview", () => {
     await act(async () => { windows.props.onClick(); });
     expect(copiedText).toEqual([INSTALLER_COMMAND, INSTALLER_COMMAND, WINDOWS_INSTALLER_COMMAND]);
     expect(copiedTimers()).toHaveLength(2);
-    // leaving the screen takes the waiting timers with it
     await act(async () => { renderer?.unmount(); });
     renderer = undefined;
     expect(copiedTimers()).toHaveLength(0);
@@ -577,7 +562,6 @@ describe("RelayOverview", () => {
     const root = await mount({ pcs: [], mode: "account", provider: "github", defaultRelay: GLOBAL, now: NOW, onRefreshAccount: () => { const read = Promise.withResolvers<void>(); reads.push(read); return read.promise; } });
     const check = () => root.find((node) => node.type === "button" && node.props["data-action"] === "check-again");
     const busyTimer = () => [...scheduledTimers.values()].filter((timer) => timer.ms === CHECK_AGAIN_BUSY_MS);
-    // the read is slower than the least time: the button stays busy and a press asks nothing more
     await act(async () => { check().props.onClick(); });
     await act(async () => { busyTimer()[0]?.fn(); });
     expect([check().props["aria-disabled"], textOf(check())]).toEqual([true, "Checking…"]);
@@ -585,12 +569,10 @@ describe("RelayOverview", () => {
     expect(reads).toHaveLength(1);
     await act(async () => { reads[0]?.resolve(); });
     expect([check().props["aria-disabled"], textOf(check())]).toEqual([undefined, "Check again"]);
-    // the read is faster than the least time, and fails: still busy until the time is up, then free again
     await act(async () => { check().props.onClick(); });
     expect(reads).toHaveLength(2);
     await act(async () => { reads[1]?.reject(new Error("the read failed")); });
     expect(check().props["aria-disabled"]).toBe(true);
-    // the harness keeps a timer that ran: the second press's is the last one
     await act(async () => { busyTimer().at(-1)?.fn(); });
     expect(check().props["aria-disabled"]).toBeUndefined();
   });
@@ -601,7 +583,6 @@ describe("RelayOverview", () => {
     const root = await mount({ pcs: [], mode: "account", provider: "github", defaultRelay: GLOBAL, now: NOW, error: failed, onRefreshAccount: () => { refreshed += 1; }, onAddPc: () => {}, onPairByQr: () => {} });
     expect(textOf(root.find((node) => node.props["data-directory-error"] === ""))).toBe(`${failed}Try again`);
     const empty = root.find((node) => node.props["data-dashboard-empty"] === "");
-    // the list was not read, so it is not known to be empty: nobody is told to install Ovis and add their PCs again
     expect(textOf(empty)).toBe("No PCs yetAdd a PCPair with a QR or code");
     expect(empty.findAll((node) => node.type === "ol" || node.type === "pre" || node.props["data-empty-provider"] === "")).toHaveLength(0);
     expect(root.findAll((node) => node.type === "button").map(textOf)).toEqual(["Try again", "Add a PC", "Pair with a QR or code"]);

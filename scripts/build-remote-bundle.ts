@@ -74,8 +74,6 @@ function verifyMachO(path: string): void {
 }
 
 try {
-  // the Rust PTY host built for this platform (scripts/pty-sidecar.ts build), where server/pty/host.ts looks beside the
-  // server; the bundle's Node sidecar stays its fallback
   const ptySidecar = windows ? undefined : process.env["HERDR_BUNDLE_PTY_SIDECAR"];
   if (ptySidecar) {
     const want = `${mac ? "macho" : "elf"}-${platform.endsWith("arm64") ? "aarch64" : "x86_64"}`;
@@ -85,8 +83,6 @@ try {
   }
   // nothing native on Windows: without Node and node-pty the server finds no PTY sidecar and mirrors panes (server/pty/sidecar.ts)
   await stageServerArtifact({ platform: serverPlatform, dir: stage, nodePty: !windows, downloads, ...(ptySidecar ? { ptySidecar: { binary: ptySidecar } } : {}) });
-  // the bundle number: the bridge protocol reads it from the binary (shared/machines.ts), this file only records it;
-  // /api/health's version is the app's, compiled into the binary
   const bundle = { version: REMOTE_BUNDLE_VERSION, platform, server: (JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string }).version, bun: Bun.version };
   if (windows) {
     writeFileSync(join(stage, "bundle.json"), JSON.stringify({ ...bundle, herdr: null, node: null, native_smoke_tested: false }));

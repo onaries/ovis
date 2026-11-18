@@ -37,7 +37,7 @@ async function discoveryScope(host: HerdrDiscoveryHost): Promise<DiscoveryScope>
   const allowRoot = (root: string | undefined) => {
     if (!root?.startsWith("/")) return;
     // Canonicalize the trusted directory, never a candidate socket or a session symlink.
-    try { scope.dirs.add(realpathSync(join(root, "herdr"))); } catch { /* a missing root holds no sockets */ }
+    try { scope.dirs.add(realpathSync(join(root, "herdr"))); } catch {}
   };
   allowRoot(join(host.home, ".config")); allowRoot(host.xdg);
   const server = (args: string[], home: string | undefined, xdg?: string) => {
@@ -83,13 +83,12 @@ async function discoveryScope(host: HerdrDiscoveryHost): Promise<DiscoveryScope>
           if (entry.isDirectory()) add(join(dir, "sessions", entry.name, "herdr.sock"));
         }
       } finally { directory.closeSync(); }
-    } catch { /* a missing sessions directory is normal */ }
+    } catch {}
   }
   // Roots and their named sessions cover the contract; /proc/net/unix cannot authorize another directory.
   return scope;
 }
 
-/** Shared by discovery and the remote bridge immediately before using an explicitly selected socket. */
 export async function chosenHerdrSocketStatus(path: string, host: HerdrDiscoveryHost = currentHost(), scope?: DiscoveryScope): Promise<"usable" | "gone" | "refused"> {
   if (!validHerdrSocket(path)) return "refused";
   const allowed = scope ?? await discoveryScope(host);
@@ -150,7 +149,6 @@ export function profileGroups(own?: () => number | null): (gid: number, path: st
   return harmlessGroups("linux", own);
 }
 
-/** The nearest folder of `path` that exists, from its parent up, and its lstat; null when one on the way cannot be read. */
 function nearestFolder(path: string): { dir: string; folder: Stats } | null {
   for (let dir = dirname(path); ; dir = dirname(dir)) {
     try { return { dir, folder: lstatSync(dir) }; }

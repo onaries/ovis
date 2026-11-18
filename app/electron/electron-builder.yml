@@ -26,7 +26,6 @@ npmRebuild: false
 toolsets:
   # the static AppImage runtime, which needs no libfuse2 (gone from recent Ubuntu)
   appimage: '1.0.3'
-# notarize and staple the signed macOS app, then the dmg made from it (scripts/notarize-dmg.mjs)
 afterSign: ./scripts/notarize-app.mjs
 artifactBuildCompleted: ./scripts/notarize-dmg.mjs
 linux:
@@ -83,11 +82,9 @@ dmg:
   writeUpdateInfo: false
 win:
   target: nsis
-  # made by scripts/build.ts from ../assets/icon-only.png
   icon: .cache/icon.ico
 nsis:
   # per user, no administrator prompt: the core and the server run as the user anyway
   oneClick: true
   perMachine: false
-  # replaces the one-file Windows setup app (README.md)
   include: windows/installer.nsh

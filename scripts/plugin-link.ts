@@ -39,36 +39,27 @@ import { memoryAccountStore, memoryLock, type AccountProvider } from "../src/lib
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface LinkOptions {
-  /** the running server, as the plugin reaches it */
   readonly origin: string;
   /** its token, when it has one */
   readonly headers: Record<string, string>;
-  /** the account service the server's pages sign in to; null when the account is off */
   readonly accountService: string | null;
-  /** the app the server pairs with (OVIS_RELAY_APP_URL); unset, https://app.ovis.sh. Named only under the fleet preview (appHost) */
   readonly app?: string;
-  /** the fleet preview (server/preview.ts), as the plugin's settings set it (linkSettings); unset, off */
   readonly preview?: boolean;
-  /** OVIS_CLI_NAME: the command a wrapper runs the plugin under; named only under the fleet preview (cli) */
   readonly cliName?: string;
   readonly out: (text: string) => void;
-  /** the person's answers, a line at a time */
   readonly lines: AsyncIterator<string>;
   /**
    * `lines` is a terminal a person types at. Anything else (a pipe, a file, a closed stdin) answers nothing, whenever
    * its lines come: nobody compared the digits a line of `yes | ovis add` arrives under. Unset counts as not one.
    */
   readonly terminal?: boolean;
-  /** discards what the terminal holds unread (`AnswerInput.discard`); the command passes `discardTyped` */
   readonly discard?: () => boolean;
   /**
    * `out` is a terminal: the only place the QR code that adds this PC is drawn without `--print`, since whoever reads
    * it can pair with this PC. Unset counts as not one.
    */
   readonly isTty?: boolean;
-  /** the terminal's size, when `out` is one that tells it: the QR code is drawn again when it changes */
   readonly size?: () => { readonly rows: number; readonly columns: number } | null;
-  /** Ctrl+C */
   readonly signal: AbortSignal;
   readonly fetch?: Fetch;
   readonly serviceFetch?: Fetch;
@@ -76,7 +67,6 @@ export interface LinkOptions {
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
-/** How often the waiting screen looks for a device that asks to add this PC. */
 const POLL_MS = 2_000;
 /** The approve-here window lasts ten minutes; it is opened again a minute before it ends (AccountSection RELIST_MS). */
 const RELIST_MS = 9 * 60_000;
@@ -152,14 +142,48 @@ function qr(text: string): string {
 }
 
 class LocalError extends Error {
-  /** `code`: the refusal's own (`error.code`), empty when it named none */
   constructor(message: string, readonly status = 0, readonly code = "") { super(message); }
 }
 
-/** The PC's own server gave no answer at all (it is down, restarting, or hung): not a refusal, which is a LocalError. */
 class AwayError extends Error {}
 
-/** One call to the PC's own API; its error text when it refuses. */
+/**
+ * What `add` reads of a code it asked for for the account that signed in (`x-ovis-expect-account`; docs/account.md,
+ * "A code made for an account"): the account the PC made it for, and the code's id. An Ovis from before that answers
+ * neither field.
+ */
+interface ForAccount { readonly expect_account?: string; readonly pairing?: { readonly id: string } }
+
+/**
+ * The refusals of a code that start none and leave the code pending as it was: the relay is off or not online, this PC
+ * is in an account by now, or it did not take the account's id.
+ */
+const NO_CODE_STARTED: ReadonlySet<string> = new Set(["relay_off", "relay_offline", "in_account", "invalid_account"]);
+
+/** Why a code made for the account that signed in ended before it ran out (POST /api/relay/offer/keep, `ended.why`), as `add` says it. */
+const CODE_ENDED: Readonly<Record<string, string>> = {
+  replaced: "another pairing code was made on this PC, which replaced it.",
+  cancelled: "it was taken back on this PC.",
+  revoked: "a device that held it was revoked on this PC.",
+  overused: "five devices paired with it, and none of them joined your account.",
+  guessed: "a wrong code was typed for it five times.",
+};
+
+/** What `add` says of a code from an Ovis that makes its codes for no account: on its QR code's screen, or once with --print. */
+const OLDER_PC = "The Ovis on this PC is older than this command. Update it in Settings → Updates on this PC before you pair a new device.";
+
+/**
+ * What a run takes back of the code it made (endCode): the code's id (`pairing.id`) and the six digits its QR code
+ * carries, each that its answers gave. A code that neither names is not the run's to take back.
+ */
+interface Mine { readonly id?: string; readonly code?: string }
+
+const mineOf = (code: string | undefined, id: string | undefined): Mine | null =>
+  code === undefined && id === undefined ? null : { ...code !== undefined ? { code } : {}, ...id !== undefined ? { id } : {} };
+
+/** What a machine profile answers a code with: it takes devices through its account (`machine_profile`), not by a code. */
+const onMachine = (error: unknown): boolean => error instanceof LocalError && error.code === "machine_profile";
+
 function localApi(options: LinkOptions) {
   const fetchImpl = options.fetch ?? fetch;
   const control = { "content-type": "application/json", "x-herdr-machine": "1", "x-herdr-update": "1", origin: options.origin };
@@ -172,7 +196,6 @@ function localApi(options: LinkOptions) {
         signal: extra.signal ?? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]),
       });
     } catch (error) {
-      // Ctrl+C is the person's, not the server's
       if (options.signal.aborted) throw error;
       throw new AwayError(`${path}: the Ovis on this PC did not answer (${error instanceof Error ? error.message : String(error)})`);
     }
@@ -183,10 +206,9 @@ function localApi(options: LinkOptions) {
         const body = await response.json() as { error?: { code?: unknown; message?: unknown } };
         if (typeof body.error?.message === "string") message = body.error.message;
         if (typeof body.error?.code === "string") code = body.error.code;
-      } catch { /* a body that is not the app's JSON: the status alone */ }
+      } catch {}
       throw new LocalError(`${path}: ${message}`, response.status, code);
     }
-    // a revoked device is answered with no body
     if (response.status === 204) return undefined as T;
     return await response.json() as T;
   };
@@ -194,7 +216,6 @@ function localApi(options: LinkOptions) {
 
 type Api = ReturnType<typeof localApi>;
 
-/** How long a relay that is turned on, or reconnecting, gets to come online. */
 const ONLINE_MS = 30_000;
 
 /**
@@ -233,7 +254,6 @@ export const plainLabel = (label: string): string => label.replace(/[\u0000-\u00
 
 const SIX_DIGITS = /^[0-9]{6}$/;
 
-/** A device that asks to be let in, as the PC lists it (`GET /api/relay/pairings`). */
 export interface AskingDevice { readonly label: string; readonly digits: string; readonly intent?: string }
 
 /**
@@ -270,7 +290,6 @@ export function answerOf(line: string, digits: string, whole = false): "approve"
   return typed === digits || (!whole && typed === digits.slice(3)) ? "approve" : null;
 }
 
-/** The next answer, or the abort: Ctrl+C at a prompt stops at once rather than after the next line. */
 function answer(lines: AsyncIterator<string>, signal: AbortSignal): Promise<IteratorResult<string>> {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
@@ -280,15 +299,11 @@ function answer(lines: AsyncIterator<string>, signal: AbortSignal): Promise<Iter
   });
 }
 
-/** The lines of an input that is not a terminal: none. */
 const NO_LINES: AsyncIterator<string> = { next: () => Promise.resolve({ value: undefined, done: true }) };
 
-/** A line the terminal handed over. */
 interface Line {
   readonly text: string;
-  /** the request whose prompt was on the screen when the line came; null when none was */
   readonly under: object | null;
-  /** when it came */
   readonly at: number;
 }
 
@@ -315,22 +330,16 @@ function typing(lines: AsyncIterator<string>, signal: AbortSignal, under: () => 
   };
   next();
   return {
-    /** the lines that came since the last call */
     take: (): Line[] => got.splice(0),
-    /** nothing more comes: the input ended (a pipe, Ctrl+D) or its reading failed (`failed`, Ctrl+C among them) */
     get ended() { return ended; },
     get failed() { return failed; },
-    /** settles with the next line, or the end of the input */
     arrived: (): Promise<void> => new Promise((resolve) => { if (got.length > 0 || ended) resolve(); else wake = resolve; }),
   };
 }
 
-/** A request that waits for an answer, as the PC lists it (`GET /api/relay/pairings`). */
 export interface WaitingDevice extends AskingDevice { readonly id: string }
 
-/** The terminal a person answers at. */
 export interface AnswerInput {
-  /** the person's answers, a line at a time */
   readonly lines: AsyncIterator<string>;
   /**
    * `lines` is a terminal a person types at. Anything else (a pipe, a file, a closed stdin) answers nothing, whenever
@@ -344,7 +353,6 @@ export interface AnswerInput {
    */
   readonly discard?: () => boolean;
   readonly out: (text: string) => void;
-  /** Ctrl+C */
   readonly signal: AbortSignal;
   readonly now?: () => number;
 }
@@ -368,7 +376,7 @@ export function discardTyped(): boolean {
           const { symbols } = dlopen(library, { tcflush: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } });
           flush = () => symbols.tcflush(0, queue) === 0;
           break;
-        } catch { /* not this system's C library: the next one */ }
+        } catch {}
       }
     }
     return flush();
@@ -397,13 +405,9 @@ function asking(input: AnswerInput) {
   // the request asked about: one at a time. `shownAt`: when its prompt, with its digits, first was on the screen
   // `whole`: only all six of its digits approve it, from the start or since another request showed the same last three (`beside`)
   let open: { readonly id: string; readonly label: string; readonly digits: string; readonly device: WaitingDevice; whole: boolean; prompt: string; shownAt: number | null } | null = null;
-  // the digits of every request asked about in this run, by its id
   const seen = new Map<string, string>();
-  // what the request asked about is answered with: by a line that came after its prompt was shown
   let reply: "approve" | "decline" | null = null;
-  // that answer approves with the last three digits alone
   let three = false;
-  // the cursor stands after the prompt: what is said next starts on a line of its own
   let atPrompt = false;
   // A request left the screen unanswered. The terminal hands a line over only when Enter is pressed, and it is
   // marked then: what was typed at that request's prompt and not sent comes with the next Enter, under whatever
@@ -411,11 +415,9 @@ function asking(input: AnswerInput) {
   // The same after an answer the server did not take (`lost`), and after a prompt shown at a terminal whose input
   // could not be discarded (`show`). Its value: why that line is dropped
   let held: string | null = null;
-  // what the terminal holds was discarded: false where it cannot be, or could not
   const emptied = (): boolean => { try { return input.discard?.() === true; } catch { return false; } };
   // What is not a terminal is never read: it has ended, as far as answers go
   const keys = typing(terminal ? input.lines : NO_LINES, input.signal, () => open !== null && open.shownAt !== null ? open : null, now);
-  // said once: from then on every request is declined as it shows
   let endSaid = !terminal;
   if (endSaid) out("This is not run in a terminal, so no request can be answered here: each is declined as it shows. Run this in a terminal to approve one (over ssh, run ssh -t).\n");
   const say = (text: string): void => { out(atPrompt ? `\n${text}` : text); atPrompt = false; };
@@ -424,7 +426,6 @@ function asking(input: AnswerInput) {
   const sort = (): void => {
     let dropped: string | null = null;
     for (const line of keys.take()) {
-      // the Enter that sent the line ended the prompt's
       atPrompt = false;
       if (held !== null) {
         dropped = `${held}${open === null ? "" : " Answer again for the request shown now."}`;
@@ -433,7 +434,6 @@ function asking(input: AnswerInput) {
       }
       if (open !== null && line.under === open && open.shownAt !== null) {
         if (line.at - open.shownAt >= DWELL_MS) {
-          // a second line at one prompt: the first is the answer
           if (reply !== null) continue;
           reply = answerOf(line.text, open.digits, open.whole);
           three = reply === "approve" && answerOf(line.text, open.digits, true) === null;
@@ -449,7 +449,6 @@ function asking(input: AnswerInput) {
           }
           continue;
         }
-        // one that came too soon does not stand in the way of the answer typed after it
         if (reply === null) dropped = "it came as the request showed, too soon to have compared its digits. Compare them, then answer again.";
         continue;
       }
@@ -459,14 +458,8 @@ function asking(input: AnswerInput) {
     if (dropped !== null) say(`That line answered nothing: ${dropped}\n`);
   };
   return {
-    /** says a line of its own, under a prompt when one stands */
     say,
-    /** the request asked about, if one is */
     get open(): { readonly id: string; readonly label: string } | null { return open; },
-    /**
-     * Takes the lines that came. A reading that failed (Ctrl+C among them) ends the run when it does, not at the next
-     * request, and an input that ended is said to have, once.
-     */
     look(): void {
       sort();
       if (keys.failed !== undefined) throw keys.failed;
@@ -487,7 +480,6 @@ function asking(input: AnswerInput) {
       open = { id: device.id, label: plainLabel(device.label), digits: device.digits, device, whole, prompt: approvalPrompt(device, whole), shownAt: null };
       reply = null;
     },
-    /** the request asked about has an approval typed as its last three digits, not yet sent */
     get byThree(): boolean { return open !== null && !open.whole && reply === "approve" && three; },
     /**
      * `waiting`: the requests that wait now. A request asked about with its last three digits is asked about with
@@ -498,13 +490,11 @@ function asking(input: AnswerInput) {
       if (open === null || open.whole || !SIX_DIGITS.test(open.digits)) return;
       const shown = open;
       if (!waiting.some((other) => other.id !== shown.id && SIX_DIGITS.test(other.digits) && other.digits.slice(3) === shown.digits.slice(3))) return;
-      // what came until now came under the question as it stood
       sort();
       shown.whole = true;
       shown.prompt = approvalPrompt(shown.device, true);
       const taken = reply === "approve" && three;
       if (taken) reply = null;
-      // an answer that stands is sent: nothing is asked again. Nor said under a prompt not shown yet, which says it itself
       if (reply !== null || shown.shownAt === null) return;
       const why = `nother request's digits end in ${shown.digits.slice(3)} too`;
       say(taken ? `That line answered nothing: a${why}, so only all six digits approve ${shown.label} now.\n` : `A${why}: only all six digits approve ${shown.label} now.\n`);
@@ -516,7 +506,6 @@ function asking(input: AnswerInput) {
       say(`${shown.label} is no longer waiting.\n`);
       open = null;
       reply = null;
-      // what was handed over until now came while it was asked about, and answers nothing any more
       sort();
       // what was typed at its prompt and not sent is still in the terminal: the next line handed over is dropped
       if (shown.shownAt !== null) held = "a request went away while it may have been typed.";
@@ -529,11 +518,8 @@ function asking(input: AnswerInput) {
     lost(): void {
       held = "the answer before it may not have reached the Ovis on this PC, and it may have been typed meanwhile.";
     },
-    /** nothing more can be typed: the input ended, or is no terminal */
     get ended(): boolean { return keys.ended; },
-    /** The prompt of the request asked about: shown first, or again under what was said since (not under its own answer). */
     show(): void {
-      // what came before the prompt goes out: none of it was typed at a prompt not yet shown
       sort();
       if (open !== null && !atPrompt && reply === null) {
         if (open.shownAt === null) {
@@ -547,7 +533,6 @@ function asking(input: AnswerInput) {
         atPrompt = true;
       }
     },
-    /** the request asked about has its answer: a line typed at its prompt, or an input that ended */
     get answered(): boolean { return open !== null && open.shownAt !== null && (reply !== null || keys.ended); },
     /**
      * The answer to the request asked about, which is then asked about no more: what was typed at its prompt
@@ -559,18 +544,14 @@ function asking(input: AnswerInput) {
       const decision = reply ?? "decline";
       open = null;
       reply = null;
-      // what is said next follows the answer's Enter, or the prompt itself when the input ended
       atPrompt = false;
       return { id, label, decision };
     },
-    /** settles with the next line, or the end of the input */
     arrived: keys.arrived,
   };
 }
 
-/** `pair --approve`: what it asks the waiting requests with. */
 export interface ApproveOptions extends AnswerInput {
-  /** Sends an answer to the PC's server: `taken`, `gone` when the request no longer waits, `away` when the server gave no answer. */
   readonly decide: (id: string, decision: "approve" | "decline") => Promise<"taken" | "gone" | "away">;
   /**
    * The requests that wait now (`GET /api/relay/pairings`), read again before an approval typed as the last three
@@ -603,7 +584,7 @@ export async function approveWaiting(pairings: readonly WaitingDevice[], options
       // command read the list, so it is read once more before such an approval is sent (as `ovis add --approve` does)
       if (desk.byThree && options.list !== undefined) {
         let waiting: readonly WaitingDevice[] | null = null;
-        try { waiting = await options.list(); } catch { /* said below */ }
+        try { waiting = await options.list(); } catch {}
         if (waiting === null) {
           // not known whether another request shares them: the three digits approve nothing, and it is asked again
           out(`The waiting requests could not be read again just now, so the last three digits approved nothing. ${plainLabel(pairing.label)} is asked about again.\n`);
@@ -618,7 +599,6 @@ export async function approveWaiting(pairings: readonly WaitingDevice[], options
         if (sent === "taken") out(answer.decision === "approve" ? "Approved.\n" : "Declined.\n");
         else if (sent === "gone") out(`${answer.label} is no longer waiting.\n`);
         else {
-          // whether it was taken is not known. With nobody to answer again, the rest is left to a run made once the server answers
           if (desk.ended) { out("Your answer may not have reached the Ovis on this PC. Run this again once it answers.\n"); return 1; }
           // asked about again, never answered by itself, and not by a line typed meanwhile
           out(`Your answer may not have reached the Ovis on this PC. ${answer.label} is asked about again.\n`);
@@ -643,21 +623,12 @@ export async function approveWaiting(pairings: readonly WaitingDevice[], options
 
 const groups = (id: string): string => id.match(/.{1,4}/g)?.join(" ") ?? id;
 
-/**
- * What `link` reads from the plugin's settings (its environment, then its settings files: the values the server it
- * starts gets, scripts/plugin.ts): the fleet preview (server/preview.ts), the command's name and the app the server
- * pairs with.
- */
 export function linkSettings(env: Readonly<Record<string, string | undefined>>): Pick<LinkOptions, "preview" | "cliName" | "app"> {
   const cliName = env["OVIS_CLI_NAME"];
   const app = env["OVIS_RELAY_APP_URL"];
   return { preview: fleetPreview(env), ...cliName ? { cliName } : {}, ...app ? { app } : {} };
 }
 
-/**
- * The command a person types to run this script again, as printed in its instructions: under the fleet preview,
- * OVIS_CLI_NAME where a wrapper runs the plugin under another name or path; otherwise, and with it unset, `ovis`.
- */
 function cli(options: LinkOptions): string {
   return (options.preview === true && options.cliName) || "ovis";
 }
@@ -692,10 +663,6 @@ async function askLine(options: LinkOptions, prompt: string): Promise<string | n
 
 const PROVIDER_NAMES: Readonly<Record<AccountProvider, string>> = { github: "GitHub", google: "Google", apple: "Apple" };
 
-/**
- * The app's address as a person types it: under the fleet preview, the host of `url` (the app the server pairs with),
- * with the port when it has one; otherwise app.ovis.sh, whatever the server pairs with.
- */
 function appHost(options: LinkOptions, url: string): string {
   if (options.preview !== true) return "app.ovis.sh";
   try { return new URL(url.includes("://") ? url : `https://${url}`).host; } catch { return url; }
@@ -703,32 +670,45 @@ function appHost(options: LinkOptions, url: string): string {
 
 const remaining = (ms: number): string => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
 
-/** `--code`: the code and the QR code, as Connect a device shows them, until Ctrl+C. */
 async function linkWithCode(options: LinkOptions, api: Api): Promise<number> {
   const { out, signal } = options;
   const now = options.now ?? Date.now;
   const wait = options.wait ?? waitFor;
   await relayOnline(options, api);
-  let asked = false;
-  // the six-digit code the QR code last carried: only that pairing is taken back, not one started since
-  let shown: string | null = null;
+  // the code this run made, as its answers named it: only that one is taken back, not one started since. A refusal of
+  // both made nothing, and leaves whatever is pending alone
+  let mine: Mine | null = null;
   try {
     for (;;) {
-      asked = true;
-      // until this round's offer names its code, the pending pairing is the one this round asks for
-      shown = null;
       // the code first: it starts a new pairing, which the offer then carries (RelayPanel CompactRelay);
       // the offer comes whether the code did or not, since its QR code still pairs
-      let code: { code: string; expires_at: string; server_id: string } | null = null;
+      let code: ({ code: string; expires_at: string; server_id: string } & ForAccount) | null = null;
       let refused = "";
-      try { code = await api<{ code: string; expires_at: string; server_id: string }>("POST", "/api/relay/code"); } catch (error) {
-        if (!(error instanceof LocalError)) throw error;
-        refused = error.message;
+      let offer: { url: string; expires_at: string } & ForAccount;
+      try {
+        try {
+          code = await api<{ code: string; expires_at: string; server_id: string } & ForAccount>("POST", "/api/relay/code");
+          // this run's from here on, by its id. One from an Ovis that names none is told only by the QR code that carries it
+          mine = mineOf(undefined, code.pairing?.id);
+        } catch (error) {
+          if (!(error instanceof LocalError) || onMachine(error)) throw error;
+          refused = error.message;
+        }
+        // the QR code carries this round's code while it is pending, else one of its own: never one made elsewhere
+        offer = await api<{ url: string; expires_at: string } & ForAccount>("POST", "/api/relay/offer", { headers: { "x-ovis-pairing": code?.pairing?.id ?? "new" } });
+      } catch (error) {
+        if (!onMachine(error)) throw error;
+        out(`This PC runs the machine profile, which takes devices through its Ovis account, not with a code. Run ${cli(options)} add to add this machine to your Ovis account; every device of that account can then use it.\n`);
+        return 1;
       }
-      const offer = await api<{ url: string; expires_at: string }>("POST", "/api/relay/offer");
       const decoded = decodeOffer(offer.url);
       if (decoded === null) throw new LocalError("The relay's pairing link did not parse.");
-      shown = decoded.code ?? null;
+      mine = mineOf(decoded.code, offer.pairing?.id) ?? mine;
+      // a code to type that the QR code does not carry ended as the QR code was made: it is not shown
+      if (code !== null && offer.pairing !== undefined && code.pairing?.id !== offer.pairing.id) {
+        code = null;
+        refused = "it ended as the QR code was made";
+      }
       const until = Math.min(code === null ? Infinity : Date.parse(code.expires_at), Date.parse(offer.expires_at));
       const left = remaining(Math.max(0, until - now()));
       out([
@@ -747,41 +727,41 @@ async function linkWithCode(options: LinkOptions, api: Api): Promise<number> {
   } catch (error) {
     if (!signal.aborted) throw error;
   } finally {
-    if (asked) await takeBack(api, out, shown);
+    if (mine !== null) await takeBack(api, out, mine);
   }
   return 0;
 }
 
 /**
- * Takes back what --code showed, however it ends (Ctrl+C, an error): the six-digit code the QR code
+ * Takes back what --code made, however it ends (Ctrl+C, an error): the six-digit code the QR code
  * carries, and with it the typed code bound to it. With a signal of its own, since Ctrl+C aborted the
- * command's. `code` names the pairing it showed, so one started since (in Settings, on another device)
- * stays; null when no QR code came, and then whatever is pending ends, as the typed code it asked for
- * started it. An Ovis from before /api/devices/pair/cancel can take back the typed code only.
+ * command's. `mine` names the pairing it made, so one started since (in Settings, on another device)
+ * stays.
  */
-async function takeBack(api: Api, out: (text: string) => void, code: string | null): Promise<void> {
-  const ended = await endCode(api, code);
+async function takeBack(api: Api, out: (text: string) => void, mine: Mine): Promise<void> {
+  const ended = await endCode(api, mine);
   if (ended === "both") out("Stopped: the code and the QR code no longer work.\n");
+  else if (ended === "gone") out("Stopped: the code had already ended on this PC.\n");
   else if (ended === "typed") out("Stopped: the code no longer works. The QR code works until it runs out, as this Ovis cannot take it back.\n");
-  else out(`Stopped, but the code could not be taken back (${ended.failed}): it works until it runs out.\n`);
+  else out(`Stopped, but taking the code back was not confirmed (${ended.failed}): it may work until it runs out.\n`);
 }
 
-/** Ends the pairing `code` names (takeBack): `both` the code and its QR code, `typed` the typed code alone, or why neither. */
-async function endCode(api: Api, code: string | null): Promise<"both" | "typed" | { readonly failed: string }> {
+async function endCode(api: Api, mine: Mine): Promise<"both" | "gone" | "typed" | { readonly failed: string }> {
   const signal = AbortSignal.timeout(5_000);
   try {
-    await api("POST", "/api/devices/pair/cancel", { signal, ...code === null ? {} : { body: { code } } });
-    return "both";
+    const answer = await api<{ cancelled?: boolean }>("POST", "/api/devices/pair/cancel", { signal, body: mine });
+    return answer.cancelled === false ? "gone" : "both";
   } catch (error) {
-    if (error instanceof LocalError && error.status === 404) {
-      await api("POST", "/api/relay/code/cancel", { signal }).catch(() => undefined);
+    try {
+      if (!(error instanceof LocalError && error.status === 404)) throw error;
+      await api("POST", "/api/relay/code/cancel", { signal });
       return "typed";
+    } catch (failure) {
+      return { failed: failure instanceof Error ? failure.message : String(failure) };
     }
-    return { failed: error instanceof Error ? error.message : String(error) };
   }
 }
 
-/** This PC's entry in the account's directory. */
 interface Listing { readonly serverId: string; readonly entry: { label: string; public_key: string; relay: string } }
 
 /**
@@ -807,7 +787,6 @@ async function listThisPc(api: Api, service: AccountService, now: () => number, 
   return listing;
 }
 
-/** Asks this PC for its approve-here window, and reads the entry to list from the link it answers with. */
 async function openedListing(api: Api): Promise<Listing> {
   const { url } = await api<{ url: string }>("POST", "/api/relay/link", { headers: { "x-ovis-local-only": "1" } });
   const offer = decodeOffer(url);
@@ -826,15 +805,12 @@ async function nameRelayAccount(api: Api, service: AccountService): Promise<void
   if (session) await api("POST", "/api/account/relay-account", { body: { account: session.account } }).catch(() => undefined);
 }
 
-/** Puts the entry back; false when the service did not take it (it stays pending). */
 async function putListing(service: AccountService, listing: Listing): Promise<boolean> {
   try { await service.putPc(listing.serverId, listing.entry); return true; } catch { return false; }
 }
 
-/** The start of an account's id, enough to tell two accounts apart on a terminal line. */
 const shortId = (account: string): string => plainLabel(account).slice(0, 12);
 
-/** A device paired with this PC, as GET /api/devices lists it. */
 interface Device {
   readonly id: string; readonly label: string; readonly created_at: string; readonly via_relay?: true; readonly account?: string;
   /** on a member another member brought in: that member's id. A member without it linked itself */
@@ -859,7 +835,6 @@ const labels = (devices: readonly Device[]): string => devices.map((device) => p
 /** What became of a device whose removal was asked for: `joined` when the account that signed in vouches for it by now, so it stays. */
 interface Outcome { readonly device: Device; readonly result: "removed" | "gone" | "joined" | { readonly failed: string } }
 
-/** What is said of devices removed without a question; `unkept`: as a run ended with them unanswered for. */
 function removals(outcomes: readonly Outcome[], unkept: boolean): string {
   const removed = outcomes.filter(({ result }) => result === "removed").map(({ device }) => device);
   const one = removed.length === 1;
@@ -869,18 +844,14 @@ function removals(outcomes: readonly Outcome[], unkept: boolean): string {
   ].join("");
 }
 
-/** What `add` needs of the sign-in to end by a QR code. */
 interface Joining {
-  /** the account that signed in: the one this PC must end up in */
   readonly signedIn: string;
   readonly status: () => Promise<{ account: string | null; enrolling?: boolean }>;
   /** `--print`, or no terminal: the QR code is written as lines that stay, not on a screen of its own */
   readonly plain: boolean;
-  /** this PC stays in another account: its entry in the one that signed in, whose Add could not work, goes; false when it could not be taken off */
   readonly unlist: () => Promise<boolean>;
   /** names the account that signed in as the one this PC's relay pass is asked under, whatever was named since */
   readonly name: () => Promise<void>;
-  /** puts back a listing the account service did not take */
   readonly tend: () => Promise<void>;
 }
 
@@ -891,6 +862,14 @@ interface Joining {
  * one: on a screen of its own that goes when a device got in, when the run stops and on Ctrl+C; taken back however
  * the run ends; three codes at most; and never shown again once a device paired. It ends well only once this PC is
  * in the account that signed in, with that account's other devices in, and names the device that added it.
+ *
+ * The code is asked for for the account that signed in (`x-ovis-expect-account`; docs/account.md, "A code made for an
+ * account"), and is taken only when the PC's answer repeats that account. A device that pairs with such a code is in
+ * no list until it linked itself into that account (one of another account, or signed in to none, is turned away),
+ * and the PC ends the code itself once it is in the account: so a device that shows in the list did not come by that
+ * code, and ends nothing. The code's id tells, at every look, whether it is still the pending one; one that ended
+ * otherwise ends the run, which says why. With an older Ovis on this PC the command says so on each QR code's screen
+ * (once with --print), and keeps what follows.
  *
  * The code admits whoever holds it, through the relay or at this PC's own address, so every device that came since
  * the first code is one it let in. One whose row names the account that signed in here is taken as that account's:
@@ -920,20 +899,26 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   let known: ReadonlySet<string>;
   for (;;) {
     try { known = new Set((await devices()).map((device) => device.id)); break; } catch (error) {
-      // a server that is restarting answers again in a moment
       if (signal.aborted || !(error instanceof AwayError) || now() >= stopAt) throw error;
       await wait(POLL_MS, signal);
     }
   }
   let minted = 0;
-  // a code is out that was not taken back yet; `shown` is the six digits its QR code carries (linkWithCode)
-  let live = false;
-  let shown: string | null = null;
+  let mine: Mine | null = null;
+  // the last look read that code as live: a device that paired with it in time may still be linking, so it is neither
+  // renewed nor taken back for the 30 minutes until it is not
+  let linking = false;
+  // this PC makes its codes for the account that signed in (`ForAccount`), and the id of the one out; `lost`: the id of
+  // one this PC no longer knew, which was said. `older`: an Ovis from before that, said once with --print (each of
+  // its QR codes says it on its own screen otherwise)
+  let tied = false;
+  let pinned: string | null = null;
+  let lost: string | null = null;
+  let older = false;
+  const forAccount = { headers: { "x-ovis-expect-account": joining.signedIn } };
   let card: { readonly url: string; readonly typed: string | null; readonly refused: string; readonly serverId: string; readonly until: number } | null = null;
-  // on the terminal's other screen, and the size it was last drawn for
   let screen = false;
   let drawnFor = "";
-  // the cursor stands after the question: what is said next starts on a line of its own
   let atPrompt = false;
   const say = (text: string): void => { out(atPrompt ? `\n${text}` : text); atPrompt = false; };
   const sizeNow = () => joining.plain ? null : options.size?.() ?? null;
@@ -944,7 +929,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
     const left = remaining(Math.max(0, card.until - now()));
     const code = qr(card.url).replace(/\n+$/, "").split("\n");
     const width = Math.max(...code.map((row) => row.length));
-    const head = ["Scan this QR code with a device that is signed in to this Ovis account. It adds this PC to the account; there is no number to type.", ""];
+    const head = ["Scan this QR code with a device that is signed in to this Ovis account. It adds this PC to the account; there is no number to type.", ...!tied && !joining.plain ? [OLDER_PC] : [], ""];
     const tail = [
       ...card.typed !== null
         ? [`Code to type: ${card.typed}   (works once, expires in ${left})`, `Or, on that device, open ${appHost(options, card.url)}, choose Pair with a code and type it.`]
@@ -953,7 +938,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
       "Anyone who can read this screen can pair with this PC while the code is shown.",
       `${minted < MAX_CODES ? "A new one comes when this one runs out. " : ""}Press Ctrl+C to stop.`,
     ];
-    // a line longer than the window takes several of its rows
     const rows = (lines: readonly string[], columns: number): number => lines.reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / columns)), 0);
     // the other screen keeps nothing that scrolled off it: a code that does not fit is not drawn until the window grew
     const fits = size === null || (size.columns >= width && size.rows > rows(head, size.columns) + code.length + rows(tail, size.columns));
@@ -966,60 +950,87 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   // end the process on the spot (plugin.ts). So as a run ends, what it owes this PC comes before any word: the code is
   // taken back (`retract`) and the devices nobody kept are removed (`sweep`), and only then is the screen left
   // (`leave`) and anything said, by a write that may fail (`tell`)
-  const tell = (text: string): void => { try { say(text); } catch { /* nobody is there to read it */ } };
-  /** Takes the code back from the PC, and says nothing: `both`, `typed` or why not (endCode); null when none is out. */
+  const tell = (text: string): void => { try { say(text); } catch {} };
   const retract = async (): Promise<Awaited<ReturnType<typeof endCode>> | null> => {
     card = null;
-    if (!live) return null;
-    live = false;
-    return await endCode(api, shown);
+    if (mine === null) return null;
+    const owned = mine;
+    mine = null;
+    return await endCode(api, owned);
   };
-  /** Leaves the screen the code was drawn on, and says what became of the code; `used`: a device got in with it, so only a failure is said. */
   const leave = (ended: Awaited<ReturnType<typeof retract>>, used: boolean): void => {
     if (screen) {
       screen = false;
-      try { out(SCREEN_OFF); } catch { /* a terminal that went away */ }
+      try { out(SCREEN_OFF); } catch {}
     }
     if (ended === null) return;
     if (ended === "both") { if (!used) tell("The code and the QR code no longer work.\n"); }
+    else if (ended === "gone") { if (!used) tell("The code had already ended on this PC.\n"); }
     else if (ended === "typed") tell("The code no longer works. The QR code works until it runs out, as this Ovis cannot take it back.\n");
-    else tell(`The code could not be taken back (${ended.failed}): it works until it runs out.\n`);
+    else tell(`Taking the code back was not confirmed (${ended.failed}): it may work until it runs out.\n`);
   };
   /** The code back from the PC, then off the screen: once a device got in (`used`), or however the run ends. */
   const end = async (used: boolean): Promise<void> => leave(await retract(), used);
+  /** A refusal that started no code (NO_CODE_STARTED), in a sentence of its own when this command sent what was refused. */
+  const refusal = (error: LocalError): LocalError => error.code === "pairing_gone"
+    ? new LocalError(`Another pairing code was made on this PC (in Settings, by ${cli(options)} pair, or by another run) after this run's: it is left as it is, and no QR code is shown. Run ${cli(options)} add again.`, error.status, error.code)
+    : error.code !== "invalid_account" ? error
+    : new LocalError(`The Ovis on this PC did not take the id of the account you signed in to (${shortId(joining.signedIn)}) for its code (${error.message})`, error.status, error.code);
   const mint = async (): Promise<void> => {
     minted++;
-    live = true;
-    // until this round's offer names its code, the pending pairing is the one this round asks for
-    shown = null;
-    let typed: { code: string; expires_at: string; server_id: string } | null = null;
+    pinned = null;
+    let typed: ({ code: string; expires_at: string; server_id: string } & ForAccount) | null = null;
     let refused = "";
-    try { typed = await api<{ code: string; expires_at: string; server_id: string }>("POST", "/api/relay/code"); } catch (error) {
+    try { typed = await api<{ code: string; expires_at: string; server_id: string } & ForAccount>("POST", "/api/relay/code", forAccount); } catch (error) {
       if (!(error instanceof LocalError)) throw error;
+      // nothing was started, and the code pending stays as it was: neither taken back here nor counted as this round's
+      if (NO_CODE_STARTED.has(error.code)) throw refusal(error);
       refused = error.message;
-      // No typed code, so no new pairing either: the offer would carry whatever six digits are pending, which
-      // Settings or `ovis pair` showed as digits to type. That pairing ends first, so the QR code carries digits of
-      // its own. An Ovis from before this route keeps the pending one
-      await api("POST", "/api/devices/pair/cancel").catch((failure: unknown) => { if (!(failure instanceof LocalError)) throw failure; });
     }
-    const offer = await api<{ url: string; expires_at: string }>("POST", "/api/relay/offer");
+    // the typed code is this run's from here on, and is taken back by its id however the run ends, shown or not. One
+    // from an Ovis that names none is told only by the QR code that carries it
+    const made = typed?.pairing?.id;
+    if (made !== undefined) mine = { id: made };
+    // the QR code carries this round's typed code, named by its id, else a fresh one (`x-ovis-pairing`). An id no
+    // longer pending (another run, Settings or `ovis pair` made a code since) is refused, and nothing is started
+    let offer: { url: string; expires_at: string } & ForAccount;
+    try {
+      offer = await api<{ url: string; expires_at: string } & ForAccount>("POST", "/api/relay/offer", { headers: { ...forAccount.headers, "x-ovis-pairing": made ?? "new" } });
+    } catch (error) {
+      if (!(error instanceof LocalError)) throw error;
+      // the offer started nothing of its own: this round's typed code, or the code shown before, is what stays to take back
+      throw refusal(error);
+    }
     const decoded = decodeOffer(offer.url);
     if (decoded === null) throw new LocalError("The relay's pairing link did not parse.");
-    shown = decoded.code ?? null;
+    // The QR code's code is shown and taken back only when the PC's answer names it as the code asked for: this round's
+    // typed code, or with none a fresh one. Any other is left as it is. An older Ovis names none: its code is shown
+    // with OLDER_PC, and taken back by its six digits
+    const own = offer.pairing === undefined ? made === undefined : made === undefined || offer.pairing.id === made;
+    if (!own) throw new LocalError(`This PC's QR code carries a code made elsewhere (in Settings, by ${cli(options)} pair, or by another run): it is not shown, and is left as it is. Run ${cli(options)} add again.`);
+    mine = mineOf(decoded.code, offer.pairing?.id) ?? mine;
     offered = true;
+    // the QR code's code is the one the PC made for the account that signed in, or one from an older Ovis
+    tied = offer.expect_account !== undefined;
+    for (const answer of [offer, typed]) {
+      if (answer?.expect_account !== undefined && answer.expect_account !== joining.signedIn) {
+        throw new LocalError(`The Ovis on this PC made its code for another Ovis account (${shortId(answer.expect_account)}) than the one you signed in to (${shortId(joining.signedIn)}). Run ${cli(options)} add again.`);
+      }
+    }
+    pinned = offer.pairing?.id ?? null;
+    if (!tied && !older && joining.plain) {
+      older = true;
+      say(`${OLDER_PC}\n`);
+    }
     card = { url: offer.url, typed: typed?.code ?? null, refused, serverId: typed?.server_id ?? decoded.server_id, until: Math.min(typed === null ? Infinity : Date.parse(typed.expires_at), Date.parse(offer.expires_at)) };
     draw();
   };
   // a device got in, or this PC joined an account: from then on no code is shown again, whatever becomes of that device
   let over = false;
-  // a code was shown: from then on a device may have paired with it
   let offered = false;
-  // when each device that came since `known` was first seen
   const seen = new Map<string, number>();
-  // the ones the person answered for: kept, or removed (`unremoved`: one of those could not be)
   const settled = new Set<string>();
   let unremoved = false;
-  // the account this PC was in at the last look, and the devices that got in that nobody vouched for
   let account: string | null = null;
   let strays: Device[] = [];
   /**
@@ -1049,7 +1060,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
     }
     return outcomes;
   };
-  /** The devices, asked for again a few times when this PC does not answer (within `within`, as the run ends); else why not. */
   const listed = async (within?: AbortSignal): Promise<Device[] | { readonly unread: string }> => {
     for (let attempt = 1; ; attempt++) {
       try { return await devices(within); } catch (error) {
@@ -1099,19 +1109,14 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
     }
     return { outcomes, open };
   };
-  // the person is asked what becomes of those. `key`: which devices, and whether this PC is in an account; `alone`:
-  // each came through the relay and left this PC in no account. `shownAt`: when the question first was on the screen
   let asking = null as { readonly key: string; readonly devices: readonly Device[]; readonly prompt: string; readonly alone: boolean; shownAt: number | null } | null;
   let keys: ReturnType<typeof typing> | null = null;
   let reply = null as string | null;
   let added = false;
   let enrollingSaid = false;
-  // devices were removed on the person's answer with this PC in no account: what the run ends with once a look
-  // taken after that removal still finds it in none
   let parting: string | null = null;
-  // the PC's own server did not answer the last look, or gave no code
   let away = false;
-  let codeless = false;
+  let codeless: "relay" | "away" | null = null;
   // A question left the screen unanswered (other devices to ask about, this PC joined an account, or the device became
   // a member). The terminal hands a line over only when Enter is pressed: what was typed at that question and not
   // sent comes with the next Enter, under whatever is asked by then. So the next line handed over answers nothing,
@@ -1121,7 +1126,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   // it: the terminal is read from the first question on, and hands over then what was typed before it. Every other
   // line is dropped and said to be, and the question is asked again
   const sort = (): void => {
-    // not before the question is on the screen: what came by then is said under it, as too soon
     if (keys === null || asking === null || asking.shownAt === null) return;
     let dropped: string | null = null;
     for (const line of keys.take()) {
@@ -1131,9 +1135,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
         dropped = "the question changed while it may have been typed. Answer again for the question shown now.";
         continue;
       }
-      // a second line at one question: the first is the answer
       if (line.under === asking && line.at - asking.shownAt >= DWELL_MS) reply ??= line.text;
-      // one that came too soon does not stand in the way of the answer typed after it
       else if (reply === null) dropped = "it came before the question could be read. Answer again.";
     }
     if (dropped !== null) say(`That line answered nothing: ${dropped}\n`);
@@ -1145,7 +1147,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
    */
   const sweep = async (): Promise<string> => {
     const { outcomes, open } = await clear(null, AbortSignal.timeout(SWEEP_MS));
-    // before any code was shown nothing paired with one: a PC that does not answer then leaves nothing to warn of
     const left = open === null || !offered ? ""
       : `${open === "more" ? " More devices paired with this PC while these were removed" : ` The devices paired with this PC could not be read as the run ended (${open.unread})`}: one that paired since the code was shown may still be paired. Open Settings → Devices and PCs on this PC and revoke any device there that is not yours.`;
     return `${removals(outcomes, true)}${left}`;
@@ -1161,21 +1162,38 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
   try {
     for (;;) {
       away = false;
+      linking = false;
       try {
         sort();
         if (keys !== null && keys.failed !== undefined) throw keys.failed;
         const joined = await joining.status();
         await joining.tend();
         const list = await devices();
-        // Ctrl+C during those: the terminal's input ended with it, which is no answer
         signal.throwIfAborted();
         if (keys !== null && keys.failed !== undefined) throw keys.failed;
         account = joined.account;
         const fresh = list.filter((device) => !known.has(device.id));
-        // whoever came since the first code got in with it, through the relay or at this PC's own address
-        if (fresh.length > 0 || account !== null) {
+        // whoever came since the first code got in with it, through the relay or at this PC's own address. Not by a code
+        // made for the account that signed in: a device that pairs with it is in no list until this PC is in that account
+        if ((fresh.length > 0 && !tied) || account !== null) {
           over = true;
           await end(true);
+        }
+        // whether the code made for the account that signed in is still the pending one; it ends by itself as this PC
+        // joins an account, and runs out as the card says. Ended otherwise, no device may come by it any more
+        if (!over && mine !== null && pinned !== null) {
+          const id = pinned;
+          const read = await api<{ state: string; ended?: { why?: string } }>("POST", "/api/relay/offer/keep", { body: { id } });
+          const why = read.ended?.why ?? "";
+          linking = read.state === "live";
+          if (read.state === "ended" && why !== "joined" && why !== "expired") {
+            mine = null;
+            return await stop(`The code no longer works: ${CODE_ENDED[why] ?? "it ended on this PC."} Run ${cli(options)} add again.`);
+          }
+          if (read.state === "unknown" && lost !== id) {
+            lost = id;
+            say("The Ovis on this PC no longer knows the code shown (it restarted), so that code does not work. A new one comes when it would have run out.\n");
+          }
         }
         for (const device of fresh) {
           if (seen.has(device.id)) continue;
@@ -1209,8 +1227,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
             say(`${said} What is paired with this PC now could not be read (${unread}): devices of that account may still be paired. Open Settings → Devices and PCs on this PC and choose Revoke all if that account is not yours.\n`);
             return 1;
           }
-          // a device of the account that signed in, paired before, whose link the other account kept out: it got in
-          // as those went, and the next look finds this PC where it was meant to be
           if (left === joining.signedIn) {
             say(`${said}\n`);
             continue;
@@ -1232,7 +1248,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           say(`${said} This PC is still in that account${holders.length === 0 ? "" : `, by ${labels(holders)}, paired before this run`}. ${unlisted ? "It was taken off the list of the account you signed in to." : "It could not be taken off the list of the account you signed in to; remove it there."} If that account is not yours, open Settings → Devices and PCs on this PC and choose Revoke all.\n`);
           return 1;
         }
-        // the look after a removal that left this PC in no account: still in none, and nobody left to ask about
         if (parting !== null) {
           if (account !== null) parting = null;
           else if (strays.length === 0) {
@@ -1241,7 +1256,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           }
         }
         added = account !== null;
-        // in the account, while the device that added it still brings in the account's other devices
         if (added && joined.enrolling === true && !enrollingSaid) {
           enrollingSaid = true;
           say(`Added${label === null ? "" : ` by ${label}`}. Bringing in your account's other devices…\n`);
@@ -1260,13 +1274,11 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           asking = null;
           reply = null;
           if (sent) {
-            // the Enter that sent it ended the question's line
             atPrompt = false;
             say("That line answered nothing: its question is no longer asked.\n");
           }
           // what was typed at the old question and not sent is still in the terminal: the next line handed over is dropped
           if (was.shownAt !== null) held = true;
-          // the old question's line ends: the new one is shown on a line of its own
           if (atPrompt && key !== null) { out("\n"); atPrompt = false; }
         }
         if (asking === null && key !== null) {
@@ -1293,7 +1305,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           atPrompt = false;
           asking = null;
           reply = null;
-          // the ones that linked themselves as their removal was on its way: members by now, which the next look tells
           const joined = new Set<string>();
           if (keep) out("Kept.\n");
           else {
@@ -1326,7 +1337,6 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
             return 1;
           }
         }
-        // done only once every device the code let in is a member, or was answered for
         if (added && joined.enrolling !== true && strays.length === 0) {
           say(`This PC is in your account (${shortId(joining.signedIn)})${label === null ? "" : `, added by ${label}`}: every device of your account can use it.\n`);
           return unremoved ? 1 : 0;
@@ -1337,27 +1347,31 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
         if (signal.aborted || !(error instanceof AwayError)) throw error;
         away = true;
       }
-      if (now() >= stopAt) {
+      if (now() >= stopAt && !linking) {
         return await stop(added
           ? `Stopped waiting after 30 minutes: this PC is in your account, but its other devices are not in yet. Open the Ovis app on the device that added it, then run ${cli(options)} add again.`
           : `Stopped after 30 minutes. Run ${cli(options)} add again.`);
       }
       // A code only after a look that was answered and found no device and no account: none is made once a device got in,
-      // nor while that cannot be told
-      if (!over && !away && (card === null || now() >= card.until)) {
+      // nor while that cannot be told, nor while the code out still holds a device that paired with it in time
+      if (!over && !away && !linking && (card === null || now() >= card.until)) {
         if (minted >= MAX_CODES) return await stop(`Stopped after ${Math.max(1, Math.round((now() - startedAt) / 60_000))} minutes. Run ${cli(options)} add again.`);
         try {
           await mint();
-          codeless = false;
+          codeless = null;
         } catch (error) {
-          // a server that is restarting, or whose relay is not back online yet (409), gives a code in a moment: asked
-          // again with the next look, as one of the same three codes
-          if (signal.aborted || !(error instanceof AwayError || (error instanceof LocalError && error.status === 409))) throw error;
+          if (signal.aborted || !(error instanceof AwayError || (error instanceof LocalError && error.status === 409 && error.code !== "pairing_gone"))) throw error;
           minted--;
-          away = true;
-          if (!codeless) {
-            codeless = true;
-            say("The Ovis on this PC gave no code just now (is it restarting?). Asking again…\n");
+          // this PC joined an account meanwhile (`in_account`): the next look finds it there, and asks for no code
+          if (!(error instanceof LocalError && error.code === "in_account")) {
+            away = true;
+            const why = error instanceof LocalError && (error.code === "relay_off" || error.code === "relay_offline") ? "relay" : "away";
+            if (codeless !== why) {
+              codeless = why;
+              say(why === "relay"
+                ? "This PC's Ovis relay is off or not online just now, so it gave no code. Asking again…\n"
+                : "The Ovis on this PC gave no code just now (is it restarting?). Asking again…\n");
+            }
           }
         }
       }
@@ -1370,7 +1384,7 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
           // What was typed before this question and not sent would come with the Enter pressed at it: it is discarded
           // now, once for a question (as `asking` does for a request). Where it cannot be, such a line still keeps
           // nothing unless it is the word keep
-          if (options.terminal === true && keys !== null && !keys.ended) { try { options.discard?.(); } catch { /* the line is read as it comes */ } }
+          if (options.terminal === true && keys !== null && !keys.ended) { try { options.discard?.(); } catch {} }
           asking.shownAt = now();
         }
         out(asking.prompt);
@@ -1378,13 +1392,11 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
       }
       const answered = asking !== null && keys !== null && (reply !== null || keys.ended);
       if (asking !== null && keys !== null && !answered) {
-        // the poll's wait ends early when a line comes
         const early = new AbortController();
         const pause = wait(POLL_MS, AbortSignal.any([signal, early.signal]));
         const first = await Promise.race([pause.then(() => "waited" as const), keys.arrived().then(() => "typed" as const)]);
         if (first === "typed") { pause.catch(() => undefined); early.abort(); }
         signal.throwIfAborted();
-        // the answer is already there: it is acted on before any waiting (not while the PC's server is away, which would spin)
       } else if (!answered || away) await wait(POLL_MS, signal);
     }
   } catch (error) {
@@ -1397,16 +1409,10 @@ async function addByQr(options: LinkOptions, api: Api, joining: Joining): Promis
     if (swept !== "") tell(`${swept.trimStart()}\n`);
     throw error;
   } finally {
-    // however it ends (an error among them): the code is taken off the screen and back
     await end(false);
   }
 }
 
-/**
- * `link`: sign in, list this PC in the account, and show the QR code that a device of the account adds it with
- * (addByQr); with `approve`, approve here the account's device that adds it instead. It ends well only once this
- * PC is in the account that signed in and that account's other devices are in.
- */
 async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvider | undefined, mode: { readonly approve: boolean; readonly print: boolean }): Promise<number> {
   const { out, signal } = options;
   const now = options.now ?? Date.now;
@@ -1419,18 +1425,15 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     return 1;
   }
   if (first.account !== null) {
-    // whose account it is cannot be told before a sign-in
     if (first.enrolling !== true) {
       out(`This PC is already in an Ovis account (${shortId(first.account)}).\n`);
       return 0;
     }
-    // an earlier run added it and stopped before the account's other devices were in: that needs no sign-in to wait for
     out(`This PC is already in an Ovis account (${shortId(first.account)}), but its account's other devices are not in yet. Open the Ovis app on the phone that added it. Waiting for them; press Ctrl+C to stop.\n`);
     const stopAt = now() + WAITING_MS;
     for (;;) {
       await wait(POLL_MS, signal);
       let again: { account: string | null; enrolling?: boolean } | null = null;
-      // a server that is restarting answers again in a moment
       try { again = await status(); } catch (error) {
         if (!(error instanceof AwayError)) throw error;
       }
@@ -1463,14 +1466,11 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     out("The QR code is a key to this PC. Run this in a terminal, or pass --print to write it anyway.\n");
     return 1;
   }
-  // only on: online waits until the account is named, which a relay asking for a pass needs first
   await relayOn(options, api);
   const store = memoryAccountStore();
   const lock = memoryLock();
   const serviceFetch = options.serviceFetch ?? fetch;
-  // the Ovis link page where the service has it (one code, GitHub or Google picked there); a provider's own device page otherwise, or when named
   const offer = forced === undefined ? await offeredProviders(options.accountService, ["github"], { fetch: serviceFetch }) : null;
-  // the link page shows who is asking (docs/account.md, "Who is asking"): this PC's name and system
   const requester = { label: hostname(), os: accountOsOfPlatform(process.platform) };
   const startOptions = { service: options.accountService, store, lock, fetch: serviceFetch, now, wait, requester };
   const signIn = offer !== null && offer.page.length > 0 ? await startLinkPageSignIn(startOptions, offer.device[0] ?? "github") : await startDeviceSignIn({ ...startOptions, provider: forced ?? offer?.device[0] ?? "github" });
@@ -1493,10 +1493,8 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     ]).join("\n"));
   await signIn.finish(signal);
   const service = new AccountService({ store, lock, fetch: serviceFetch, now });
-  // the account that signed in: the one this PC must end up in
   const session = await service.session();
   const signedIn = session?.account ?? null;
-  // a listing a renewal took away and has not put back yet
   const pending: { listing: Listing | null } = { listing: null };
   const unlisted = "This PC could not be listed in your account again just now; it is tried again until it is.\n";
   try {
@@ -1535,9 +1533,7 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     // the window is asked for only while it would end by the time this run stops, so it never outlives the 30 minutes
     const mayOpen = () => now() <= stopAt - WINDOW_MS;
     let enrollingSaid = false;
-    // this PC is in the account that signed in: nothing is left to approve, so the window and the listing rest
     let added = false;
-    // the PC's own server stopped answering (a restart, an update): it is waited for rather than ending the sign-in
     let away = false;
     out([
       `Signed in. This PC is listed in your account as ${name}.`,
@@ -1549,27 +1545,21 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
     // Read from here on, before anything is asked: a line typed ahead (the terminal kept those of the sign-in) comes
     // now, under no request, and answers none. Not sooner: a run in the background is stopped by its first read of
     // the terminal, and by now the PC is listed and the person was told what to do.
-    // The request the terminal asks about is one at a time, and the waiting goes on while it is unanswered
     const desk = asking({ lines: options.lines, ...options.terminal === undefined ? {} : { terminal: options.terminal }, ...options.discard === undefined ? {} : { discard: options.discard }, out, signal, now });
     const { say } = desk;
-    // it is not this account's PC: its entry there, whose Add could not work, goes, and nothing puts it back
     const elsewhere = async (account: string): Promise<number> => {
       pending.listing = null;
       const unlistedThere = await service.deletePc(first.serverId).then(() => true, () => false);
-      // its relay pass is asked under the account it is in, not the one that signed in here
       await api("POST", "/api/account/relay-account", { body: { account } }).catch(() => undefined);
       say(`This PC joined another Ovis account (${shortId(account)}), not the one you signed in to (${shortId(signedIn)}). ${unlistedThere ? "It was taken off the list of the account you signed in to." : "It could not be taken off the list of the account you signed in to; remove it there."} If that was not you, open Settings → Devices and PCs on this PC and choose Revoke all.\n`);
       return 1;
     };
-    // the run's last listing was made
     let lastListed = false;
-    // the looks at the end of the time a window may be asked for (LAST_MS)
     const lastLooks = () => mayOpen() && now() >= stopAt - WINDOW_MS - LAST_MS;
     const asked = new Set<string>();
     for (;;) {
       try {
         if (away && !added && !mayOpen()) {
-          // one unanswered call is not a restart, and the PC may have been added meanwhile: that is looked at first
           let back: { account: string | null } | null = null;
           try { back = await status(); } catch (error) {
             if (!(error instanceof AwayError)) throw error;
@@ -1579,13 +1569,11 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
             say("The Ovis on this PC stopped answering, too close to this run's 30 minutes to open its approval window again. Run this again once it is back.\n");
             return 1;
           }
-          // in another account: said as such below, never counted as added to this one
           added = back.account === signedIn;
           if (!added) return await elsewhere(back.account);
         }
         desk.look();
         if (away) {
-          // the first call that is answered again: a server that restarted has no window, so it is asked for at once
           if (!added) await api("POST", "/api/relay/link", { headers: { "x-ovis-local-only": "1" } });
           else await status();
           openedAt = now();
@@ -1615,7 +1603,6 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
         }
         const { pairings } = await api<{ pairings: WaitingDevice[] }>("GET", "/api/relay/pairings");
         const shown = desk.open;
-        // it ran out, was answered elsewhere, or the server restarted
         if (shown !== null && !pairings.some((pairing) => pairing.id === shown.id)) desk.gone();
         // another request that ends in the same three digits waits beside the one asked about: that one asks for all six
         desk.beside(pairings);
@@ -1631,7 +1618,6 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
           return 0;
         }
         added = joined.account !== null;
-        // in the account, while the device that added it still brings in the account's other devices
         if (added && !enrollingSaid) {
           enrollingSaid = true;
           say("Added. Bringing in your account's other devices…\n");
@@ -1641,7 +1627,6 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
         if (!added && now() < stopAt) {
           const last = lastLooks();
           let opened = false;
-          // also once at the run's end: the card on the account's devices then shows as new until the run is all but over, as the window does
           if ((now() - listedAt >= RELIST_MS || (last && !lastListed)) && mayOpen()) {
             // a renewal that failed after its DELETE went out keeps waiting: the listing is put back above, as after a failed PUT.
             // None in the last ten minutes: it would show the PC as new for ten more, past the window's end
@@ -1657,7 +1642,6 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
           // every one of the last looks asks too, so the last window ends with the run, not up to 30 seconds before it,
           // whichever of them turns out to be the last in time
           if (!opened && mayOpen() && (now() - openedAt >= REOPEN_MS || last)) {
-            // the window alone, not the listing: a server that restarted meanwhile takes requests again
             await api("POST", "/api/relay/link", { headers: { "x-ovis-local-only": "1" } });
             openedAt = now();
           }
@@ -1678,13 +1662,10 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
       }
       desk.show();
       const answered = desk.answered;
-      // the answer is already there: it is sent before any waiting
-      // (not while the PC's server is away: nothing can be sent, and looking again at once would spin)
       if (!away && answered) continue;
       try {
         if (desk.open === null || answered) await wait(POLL_MS, signal);
         else {
-          // the poll's wait ends early when a line comes
           const early = new AbortController();
           const pause = wait(POLL_MS, AbortSignal.any([signal, early.signal]));
           const first = await Promise.race([pause.then(() => "waited" as const), desk.arrived().then(() => "typed" as const)]);
@@ -1697,14 +1678,12 @@ async function linkToAccount(options: LinkOptions, api: Api, forced: DeviceProvi
       }
     }
   } finally {
-    // a listing a renewal took away is put back before the sign-in that can put it ends
     if (pending.listing !== null && !await putListing(service, pending.listing)) out("This PC dropped out of your account's list; run link again to list it.\n");
     // the sign-in was only for this: it ends with it, and nothing of it stays on the PC
     await service.signOut().catch(() => out("The sign-in could not be ended at the account service; it ends by itself when it runs out.\n"));
   }
 }
 
-/** Runs `link [--code | --approve] [--print] [--github | --google]` (also `add` and `login`); the exit code. */
 export async function link(args: readonly string[], options: LinkOptions): Promise<number> {
   let host: string;
   try { host = new URL(options.origin).host; } catch { host = ""; }

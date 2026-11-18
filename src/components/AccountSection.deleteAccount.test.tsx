@@ -8,18 +8,14 @@ import { SettingsProvider } from "../lib/settings.ts";
 import { nativeTransport, setTransport } from "../lib/transport.ts";
 import { AccountSection } from "./AccountSection.tsx";
 
-// Settings → Account → Delete account (docs/account.md, "Deleting the account"). In the desktop app, which signs in
-// by redirect, the same button asks before it deletes, and the service's refusals are said in the person's words. On a
-// PC's own page in a browser, whose sign-in is a device code or the link page, the service refuses any delete
-// (web_sign_in_required): the section says where to delete instead.
+// In the desktop app, which signs in by redirect, the same button asks before it deletes, and the service's
+// refusals are said in the person's words. On a PC's own page in a browser, whose sign-in is a device code or the
+// link page, the service refuses any delete (web_sign_in_required): the section says where to delete instead.
 const SERVICE = "https://account.ovis.example";
 const ACCOUNT = "acct_one";
-/** who the next sign-in in this section turns out to be */
 let signsInAs = ACCOUNT;
-/** the desktop app around the page (its sign-in bridge); false: a PC's own page in a browser */
 let desktop = true;
 const SIGN_IN = "Continue with GitHub";
-/** runs as the service answers a delete, before this page sees the answer */
 let onDelete: (() => Promise<void>) | null = null;
 
 describe("deleting the account from Settings", () => {
@@ -27,7 +23,6 @@ describe("deleting the account from Settings", () => {
   let renderer: ReactTestRenderer | undefined;
   let fake: FakeAccountService;
   let userCode: string | null;
-  /** how far the account service's clock runs ahead of this one */
   let ahead: number;
 
   beforeEach(() => {
@@ -73,11 +68,9 @@ describe("deleting the account from Settings", () => {
       if (url.origin !== SERVICE) {
         if (url.pathname === "/api/relay") return Response.json({ phase: "online", relay: "wss://relay.ovis.example", app: "https://app.ovis.example", sessions: 0, blocked: null, error: null });
         if (url.pathname === "/api/health") return Response.json({ ok: true, bridge_protocol: 1, auth: { required: false, authenticated: true, via: "loopback", role: "drive" }, security: { pairing_gate: "closed", token_configured: false } });
-        // this PC is in the account already, so signing in adds nothing and the section shows the account alone
         if (url.pathname === "/api/account/status") return Response.json({ account: ACCOUNT, unlinked: [], removals: [], adds: [], blocked: [] });
         return Response.json({ error: { code: "not_found", message: "no such route" } }, { status: 404 });
       }
-      // the code is approved as this page's first poll comes in, on the link page and on a provider's own device page
       if (url.pathname === "/v1/token" && userCode !== null) { fake.approveOnLinkPage(userCode, signsInAs, "github"); fake.approveDevice(userCode, signsInAs); userCode = null; }
       const answer = await fake.fetch(input, init);
       if (url.pathname === "/v1/account" && onDelete !== null) await onDelete();
@@ -106,7 +99,6 @@ describe("deleting the account from Settings", () => {
   const text = (node: ReactTestInstance): string => node.children.map((child) => typeof child === "string" ? child : text(child)).join("");
   const shown = (): string => text(renderer!.root);
   const buttons = (): string[] => renderer!.root.findAll((node) => node.type === "button").map(text);
-  /** waits, in real time, until the screen shows what is asked for */
   const until = async (holds: () => boolean): Promise<void> => {
     for (let turn = 0; turn < 400 && !holds(); turn++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
     expect(holds()).toBe(true);
@@ -160,7 +152,6 @@ describe("deleting the account from Settings", () => {
     await indexedAccountStore.set("session", { ...mine, account: "acct_two", access_token: fake.issueToken("acct_two"), refresh_token: "rt-two", sign_in_id: "another-sign-in" });
     const before = fake.requests.length;
     await press("Delete account for good?");
-    // the next call this section makes: the delete itself, or the read of what is stored now
     await until(() => fake.requests.length > before);
     expect(fake.requests.slice(before)).not.toContain("DELETE /v1/account");
     expect(fake.deleted("acct_two")).toBe(false);
@@ -201,7 +192,6 @@ describe("deleting the account from Settings", () => {
     onDelete = () => indexedAccountStore.set("session", { ...mine, account: "acct_two", access_token: fake.issueToken("acct_two"), refresh_token: "rt-two", sign_in_id: "another-sign-in" });
     await press("Delete account");
     await press("Delete account for good?");
-    // settled: signed out, or the other sign-in read after the delete and shown
     await until(() => fake.deleted(ACCOUNT) && (buttons().includes(SIGN_IN) || (fake.requests.slice(fake.requests.indexOf("DELETE /v1/account") + 1).some((line) => line.startsWith("GET ")) && buttons().includes("Delete account"))));
     expect(buttons()).not.toContain(SIGN_IN);
     expect((await indexedAccountStore.get("session"))?.account).toBe("acct_two");
@@ -217,7 +207,6 @@ describe("deleting the account from Settings", () => {
     await indexedAccountStore.set("session", { ...mine, account: "acct_two", access_token: fake.issueToken("acct_two"), refresh_token: "rt-two", sign_in_id: "another-sign-in" });
     const before = fake.requests.length;
     await press("Sign in again");
-    // settled: the sign-in again answered, and the section read what is stored after it
     await until(() => fake.requests.slice(before).includes("POST /v1/token") && fake.requests.slice(fake.requests.lastIndexOf("POST /v1/token") + 1).some((line) => line.startsWith("GET ")));
     expect(fake.requests.slice(before)).not.toContain("DELETE /v1/account");
     expect(fake.deleted(ACCOUNT)).toBe(false);

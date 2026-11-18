@@ -11,6 +11,7 @@ import { accountDeviceId } from "../../shared/account-records.ts";
 import { SIGN_IN_WAIT_MS } from "../account/mailbox.ts";
 import { handleRequest } from "../dispatch.ts";
 import type { RequestServices, ServerContext } from "../dispatch.ts";
+import { jsonResponse } from "../http.ts";
 import type { EventStreamBudget } from "../machine-api.ts";
 import { VirtualSocket, type RelaySocketHandlers } from "./virtual-socket.ts";
 
@@ -36,6 +37,27 @@ export function relayHeaders(list: HeaderList): Headers {
   return headers;
 }
 
+/**
+ * The two calls a device may make while it waits to link (it paired with a code made for a PC in no account and
+ * has not linked; docs/account.md): reading its own account status, and sending its link. This is the whole list.
+ * Whatever is not one of the two is refused before any route runs, a path that exists nowhere included.
+ */
+function linkStep(request: Request): boolean {
+  const { pathname } = new URL(request.url);
+  return (request.method === "GET" && pathname === "/api/account/status") || (request.method === "POST" && pathname === "/api/account/link");
+}
+
+/**
+ * How long a session waits for the answers already on their way once its device went before it linked
+ * (RelaySession.leave); after that it ends without them.
+ */
+export const LEAVING_MS = 5_000;
+
+/** What a device that waits to link is answered for everything else. */
+function linkRequired(): Response {
+  return jsonResponse({ error: { code: "link_required", message: "This device paired with a code that adds this PC to an Ovis account. It gets nothing here until it has linked itself into an account: sign in on it, then scan the code again." } }, 403, { "cache-control": "no-store" });
+}
+
 export interface RelaySessionOptions {
   readonly channel: SecureChannel;
   readonly services: RequestServices;
@@ -53,11 +75,8 @@ export interface RelaySessionOptions {
   /** Owns the upgrade and socket lifecycle, including stream disposal. Absent adapters refuse WS_OPEN. */
   readonly onWs?: (stream: WsStream, exchange: RelayWebSocketRequest) => void;
   readonly onClose?: (code: SessionError) => void;
-  /** The client signed in or paired: from here on the carrier counts as a device's session. */
   readonly onAuthenticated?: (deviceId: string) => void;
-  /** The signed-in client opened its first stream: this carrier is the one it kept, not a racing one it drops (server/relay/admissions.ts). */
   readonly onChosen?: () => void;
-  /** The relays a phone that offered RELAY_HINTS is told in AUTH_OK, the preferred one first. */
   readonly relayHints?: () => readonly string[];
   /**
    * This PC's direct carriers (server/relay/direct.ts), told in AUTH_OK to a phone that offered DIRECT_CARRIER;
@@ -94,17 +113,11 @@ export class RelaySession {
   private readonly nonce = randomBytes(32);
   /** This session's channel binding, when the phone offered pairing by comparing digits and this PC selected it. */
   private sasBinding: Uint8Array | undefined;
-  /**
-   * What a comparison on this session asks for, as selected in WELCOME: `pc` unless the phone offered
-   * `pair-intent-account`, or another PC of the account's server offered `pair-intent-pc-vouched` (`vouched`).
-   */
   private intent: "pc" | "account" | "vouched" = "pc";
-  /** A WELCOME went out: the provisional one before HELLO, or the answer to it. */
   private welcomed = false;
-  /** A pairing by comparing digits under way; `ended` once it made a device or counted as a failure. */
   private sas: {
     label: string; publicKey: string; commitment: Uint8Array; pcNonce: Uint8Array; expiresAt: number;
-    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; localOnly: boolean; /** approvals.closes when it was taken */ closes: number; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
+    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; localOnly: boolean; closes: number; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
   } | undefined;
   private device: DeviceMatch | undefined;
   /** The key this session's device signed in or paired with: a `link` must start from it (docs/account.md). */
@@ -112,9 +125,7 @@ export class RelaySession {
   /** Whether the device signed in with AUTH, the only admission that proves it holds its key. */
   private keyProven = false;
   private hinting = false;
-  /** the phone offered DIRECT_CARRIER and this PC has carriers to name */
   private directing = false;
-  /** the phone also offered DIRECT_TAILNET: it can open a carrier on this PC's Tailscale address */
   private tailnet = false;
   /** the phone offered SERVER_TIME_HEADER: one that did not refuses the header */
   private serverTime = false;
@@ -124,6 +135,8 @@ export class RelaySession {
   private readonly activity = new Map<number, () => void>();
   private readonly sockets = new Map<WsStream, VirtualSocket | undefined>();
   private readonly requests = new Set<HttpStream>();
+  /** The row went before it linked (leave): set while the answers on their way go out, to what calls off their deadline; then the session ends. */
+  private leaving: (() => void) | undefined;
   private chosen = false;
 
   constructor(private readonly options: RelaySessionOptions) {
@@ -139,7 +152,6 @@ export class RelaySession {
       },
       outboundWireByteLength: (bytes) => options.channel.outboundWireByteLength(bytes.slice().buffer),
       routingOverhead: options.routingOverhead, maxWireMessageBytes: options.maxWireMessageBytes,
-      // The dispatcher sets the route's budget, including overrides selected from a request body.
       requestTimeoutMs: () => 0,
       filterRequestHeaders: true,
       close: (code) => options.channel.close(code),
@@ -160,6 +172,11 @@ export class RelaySession {
       onWs: (stream) => {
         const device = this.principal();
         if (!device) { stream.reset("refused"); return; }
+        // a device that waits to link opens no socket: refused here, where every stream of a device starts, on the relay and on a direct carrier alike
+        if (device.provisional) {
+          void this.refuseSocket(stream, linkRequired()).catch((error: unknown) => { if (stream.live) stream.reset(error instanceof MuxStreamError ? error.code : "internal_error"); });
+          return;
+        }
         this.choose();
         if (!options.onWs && !options.websocket) { stream.reset("refused"); return; }
         this.sockets.set(stream, undefined);
@@ -209,10 +226,8 @@ export class RelaySession {
     });
   }
 
-  /** A sign-in or pairing is being checked, or its AUTH_OK waits to be sent. */
   get verifying(): boolean { return this.state === "verifying"; }
 
-  /** Both ends are comparing digits: admission waits for people, up to PAIR_APPROVAL_MS. */
   get pairing(): boolean { return this.state === "pair-commit" || this.state === "pair-wait"; }
 
   get bufferedBytes(): number { return this.sourceBytes + this.mux.stats.bufferedBytes; }
@@ -235,6 +250,7 @@ export class RelaySession {
     this.endPairing(false);
     this.unwatch?.();
     this.unwatch = undefined;
+    this.leaving?.();
     if (code !== "auth_revoked" && code !== "auth_changed") { this.mux.fail(code, code); return; }
     // Stop application work now, but let the known WS policy close reach the peer before
     // SESSION_ERROR tears down the carrier. WsStream bounds both draining and the close exchange.
@@ -245,7 +261,6 @@ export class RelaySession {
       closing.push(socket.closed);
       socket.close(1008, "Device access revoked");
     }
-    // An aborting CLOSE notifies locally before its urgent frame is submitted.
     if (closing.length) void Promise.all(closing).then(() => this.mux.flush()).then(() => this.mux.fail(code, code));
     else this.mux.fail(code, code);
   }
@@ -268,11 +283,9 @@ export class RelaySession {
         if (!frame.payload.versions.includes(1)) { this.close("unsupported_version"); return; }
         // selected only where it can finish: a protected channel to bind the digits to
         if (frame.payload.features.includes(PAIR_SAS_FEATURE) && !this.options.signInOnly) this.sasBinding = channelBinding(this.options.channel);
-        // relay hints are answered in AUTH_OK, not WELCOME: a provisional WELCOME goes out before HELLO is read
         this.hinting = this.options.relayHints !== undefined && frame.payload.features.includes(RELAY_HINTS);
         this.directing = this.options.directCarriers !== undefined && frame.payload.features.includes(DIRECT_CARRIER);
         this.tailnet = this.directing && frame.payload.features.includes(DIRECT_TAILNET);
-        // a large session's snapshot goes in one message only to a phone that takes it (#2773)
         const large = frame.payload.features.includes(LARGE_WS_MESSAGES);
         if (large) this.mux.sendLargeMessages();
         this.serverTime = frame.payload.features.includes(SERVER_TIME_HEADER);
@@ -280,12 +293,10 @@ export class RelaySession {
         const intents = frame.payload.features.filter((f) => f === PAIR_INTENT_PC || f === PAIR_INTENT_ACCOUNT || f === PAIR_INTENT_VOUCHED);
         if (intents.length > 1) { this.close("protocol_error"); return; }
         const selected = [...this.sasBinding ? [PAIR_SAS_FEATURE, ...intents] : [], ...frame.payload.features.includes(ACCOUNT_FEATURE) ? [ACCOUNT_FEATURE] : []];
-        // a feature the phone requires has to be one this PC takes on this channel
         if (frame.payload.required_features.some((feature) => !selected.includes(feature) && !(feature === RELAY_HINTS && this.hinting) && !(feature === DIRECT_CARRIER && this.directing) && !(feature === DIRECT_TAILNET && this.tailnet) && !(feature === LARGE_WS_MESSAGES && large))) { this.close("unsupported_extension"); return; }
         this.state = "auth";
         if (this.sasBinding && intents[0] === PAIR_INTENT_ACCOUNT) this.intent = "account";
         if (this.sasBinding && intents[0] === PAIR_INTENT_VOUCHED) this.intent = "vouched";
-        // after a provisional WELCOME (nothing selected), another goes out only when this one selects something
         if (!this.welcomed || selected.length > 0) this.welcome(selected, false);
         return;
       case FrameType.AUTH: case FrameType.PAIR: {
@@ -328,8 +339,6 @@ export class RelaySession {
           label: frame.payload.label, publicKey: frame.payload.public_key, commitment: fromBase64Url(frame.payload.commitment),
           pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly, localOnly, closes: this.options.services.relay.approvals.closes,
         };
-        // past the comparison's deadline the session ends with `timeout` and its prompt goes at once;
-        // the mux's own setup deadline stays just behind it as the backstop
         this.sas.cancelDeadline = this.clock.setTimeout(() => { if (this.pairing) this.close("timeout"); }, PAIR_APPROVAL_MS);
         // revoking every device also ends a comparison under way, even one the owner already approved
         this.sas.stopRevokeAll = this.options.services.devices.onRevokeAll(() => { if (this.pairing) this.close("auth_failed"); });
@@ -377,9 +386,10 @@ export class RelaySession {
     }
   }
 
-  private hints(): { relays?: readonly string[]; direct?: readonly string[] } {
+  /** `provisional`: a row that waits to link is told no direct carrier of this PC. */
+  private hints(provisional: boolean): { relays?: readonly string[]; direct?: readonly string[] } {
     const relays = this.hinting ? this.options.relayHints?.() ?? [] : [];
-    const direct = this.directing ? this.options.directCarriers?.(this.tailnet) ?? [] : [];
+    const direct = this.directing && !provisional ? this.options.directCarriers?.(this.tailnet) ?? [] : [];
     return { ...relays.length ? { relays } : {}, ...direct.length ? { direct } : {} };
   }
 
@@ -401,13 +411,13 @@ export class RelaySession {
       if (error instanceof PairingRateLimitedError) { this.close("auth_failed"); return; }
       throw error;
     }
-    // pairRelayApproved counted a refused key itself
+    // pairRelayApproved counted a refused key itself; one admitNewDevice turned away is not counted
     this.endPairing(true);
     if (this.refused) return;
     this.enter(device);
   }
 
-  /** Once per comparison: one that made no device counts against relay pairing (server/devices.ts). */
+  /** Once per comparison: one that made no device counts against relay pairing (server/devices.ts), unless admitNewDevice refused it. */
   private endPairing(counted: boolean): void {
     const sas = this.sas;
     if (!sas || sas.ended) return;
@@ -429,7 +439,6 @@ export class RelaySession {
     const { devices, relay, accountMailbox } = this.options.services;
     const allowed = () => (this.intent === "account" || this.intent === "vouched") && devices.account() !== null && devices.hasAccountApprover();
     if (!allowed()) return false;
-    // a pull may take a while: the comparison's own deadline starts now
     this.mux.extendSetup(PAIR_APPROVAL_MS + 1_000);
     if (!await accountMailbox.admitted(key) || !allowed()) return false;
     // counted only once admitted, so refused strangers cannot spend the PC's joins
@@ -448,13 +457,11 @@ export class RelaySession {
     const { devices, accountMailbox } = this.options.services;
     if (devices.account() === null) return true;
     if (await devices.matchRelay(deviceId, this.nonce, signature, this.options.serverId) !== null) return this.mux.active;
-    // the pull may take a while: the session's own deadline starts after it
     this.mux.extendSetup(SIGN_IN_WAIT_MS + 10_000);
     await accountMailbox.pullForRefusedSignIn();
     return this.mux.active;
   }
 
-  /** Which failure count this session's comparison spends (server/devices.ts PairingPath). */
   private get path(): PairingPath { return this.intent === "account" ? "account" : this.intent === "vouched" ? "vouched" : "code"; }
 
   /** A verified AUTH, PAIR or approved comparison becomes this session's one principal. */
@@ -462,43 +469,75 @@ export class RelaySession {
     const devices = this.options.services.devices;
     if (!this.mux.active) return;
     if (!device) { this.close("auth_failed"); return; }
-    const unrevoke = devices.onRevoke(device.id, () => this.close(devices.has(device.id) ? "auth_changed" : "auth_revoked"));
+    const unrevoke = devices.onRevoke(device.id, (waiting) => {
+      if (waiting) this.leave();
+      else this.close(devices.has(device.id) ? "auth_changed" : "auth_revoked");
+    });
     // a link moves the row to another key: a session signed in with the one it had ends, all but the linking one
     const unlinked = devices.onLinked(device.id, (sessionId) => { if (sessionId !== this.sessionId) this.close("auth_changed"); });
     this.unwatch = () => { unrevoke(); unlinked(); };
-    if (!devices.has(device.id) || !this.mux.active) { this.unwatch(); return; }
-    if (devices.list(null).find((current) => current.id === device.id)?.role !== device.role) {
+    // the row as its own session sees it: a device, or one that waits to link. What a waiting row may do is decided
+    // anew for every stream (principal), never from the answer below
+    const row = devices.sessionRow(device.id);
+    if (!row || !this.mux.active) { this.unwatch(); return; }
+    if (row.role !== device.role) {
       this.close("auth_changed");
       return;
     }
     this.device = Object.freeze(device);
     // a key sent with a code or a comparison was never signed with: nothing account-side may rest on it
-    this.key = this.keyProven ? devices.relayKeyOf(device.id) ?? "" : "";
+    this.key = this.keyProven ? row.key ?? "" : "";
     // The commit callback runs before the sink: synchronous carriers can immediately OPEN.
     // Until then OPEN is still unauthenticated, even while AUTH_OK waits behind receipt credit.
     this.mux.enqueueControl({
       type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
-      payload: { session_id: this.sessionId, device_id: device.id, role: device.role, ...this.hints() },
+      payload: { session_id: this.sessionId, device_id: device.id, role: device.role, ...this.hints(row.provisional) },
     }, undefined, () => {
-      if (!devices.has(device.id)) { this.close("auth_revoked"); return; }
+      if (!devices.sessionRow(device.id)) { this.close("auth_revoked"); return; }
       this.mux.authenticate(device.id);
       this.state = "ready";
       this.options.onAuthenticated?.(device.id);
     });
   }
 
-  /** HTTP and WebSocket are every stream a signed-in client opens (SSE rides HTTP): the first of either marks this carrier as the one kept. */
+  /**
+   * The row went before it linked: its link was refused, its time ran out, its code ended. Nothing more starts on
+   * this session (principal finds no row), and the answers already on their way go out first, the refused link's own
+   * among them, so the device reads why. Then the session ends `auth_revoked`: at once when nothing is on its way,
+   * and after LEAVING_MS whatever still is, so a request the device never finishes keeps no session.
+   */
+  private leave(): void {
+    if (this.state === "closed" || this.leaving) return;
+    if (this.requests.size === 0) { this.close("auth_revoked"); return; }
+    this.leaving = this.clock.setTimeout(() => this.close("auth_revoked"), LEAVING_MS);
+  }
+
   private choose(): void {
     if (this.chosen || this.state !== "ready") return;
     this.chosen = true;
     this.options.onChosen?.();
   }
 
+  /**
+   * The device a stream is for, as its row stands now. One that waits to link is marked `provisional` for this one
+   * stream: it may make two calls (linkStep), and the routes that take them read the mark. A row that linked since
+   * is a device like any other from its next stream on, in the role its row has.
+   */
   private principal(): DeviceMatch | undefined {
     if (this.state === "closed") return;
     if (this.state !== "ready" || !this.device) { this.close("protocol_error"); return; }
-    if (!this.options.services.devices.has(this.device.id)) { this.close("auth_revoked"); return; }
-    return this.device;
+    const row = this.options.services.devices.sessionRow(this.device.id);
+    // while the last answers of a row that went are on their way, a new stream is refused and they still go out
+    if (!row) { if (!this.leaving) this.close("auth_revoked"); return; }
+    if (row.provisional) return { ...this.device, provisional: true };
+    return row.role === this.device.role ? this.device : { ...this.device, role: row.role };
+  }
+
+  /** A socket that is not opened: the answer goes out as an HTTP response on its stream. */
+  private async refuseSocket(stream: WsStream, response: Response): Promise<void> {
+    const rejection = stream.reject(response.status, this.responseHeaders(response.headers));
+    if (response.body) await rejection.sendBody(response.body);
+    else rejection.end();
   }
 
   private async websocket(stream: WsStream, exchange: RelayWebSocketRequest): Promise<void> {
@@ -517,17 +556,13 @@ export class RelaySession {
         return;
       }
       if (!response) { stream.reset("internal_error"); return; }
-      const rejection = stream.reject(response.status, this.responseHeaders(response.headers));
-      // Rejection transfers disposal to an HTTP stream; it still owns the request signal.
-      if (response.body) await rejection.sendBody(response.body);
-      else rejection.end();
+      await this.refuseSocket(stream, response);
     } catch (error) {
       exchange.upgrade?.data.relay?.close();
       if (stream.live) stream.reset(error instanceof MuxStreamError ? error.code : "internal_error");
     }
   }
 
-  /** The response headers this phone takes. */
   private responseHeaders(headers: Headers): [string, string][] {
     const allowed: readonly string[] = RESPONSE_HEADERS;
     return [...headers].filter(([name]) => allowed.includes(name) && (name !== "x-server-time" || this.serverTime));
@@ -576,6 +611,8 @@ export class RelaySession {
       if (id !== undefined) this.activity.delete(id);
       abort.abort();
       await reader?.cancel();
+      // the last answer of a row that went before it linked is out
+      if (this.leaving && this.requests.size === 0) void this.mux.flush().then(() => this.close("auth_revoked"));
     };
     touch();
     try {
@@ -585,8 +622,8 @@ export class RelaySession {
       });
       const context = this.context(device, timeout, () => false, budget);
       if (stream.request.body === "stream") stream.accept();
-      const response = await (this.options.dispatch ?? handleRequest)(request, context);
-      // The engine may have answered an unknown-length upload with 413 while dispatch was reading it.
+      // a device that waits to link gets its two calls and nothing else: refused here, before any route runs
+      const response = device.provisional && !linkStep(request) ? linkRequired() : await (this.options.dispatch ?? handleRequest)(request, context);
       if (!stream.live || stream.final) { await response?.body?.cancel(); return; }
       if (!response) { stream.reset("internal_error"); return; }
       reader = response.body?.getReader();

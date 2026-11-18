@@ -1,18 +1,6 @@
 /**
- * The hosted relay app's dashboard against the acceptance matrix (plan relay-console-polish todo 11): every state of
- * the matrix that a fixture fleet reaches, each judged by what the page computes (counts, routes, rectangles, focus,
- * animations), never by a picture. The shell is the real build served as Cloudflare Pages serves it, under its
- * enforced policy, on https://app.ovis.sh (routed here); the account service is the in-memory fake
- * (shared/account-service-fake.ts) with the directory answered from scripts/relay-dashboard-fixtures.ts. No relay,
- * PC or herdr takes part: every WebSocket the page opens is closed at once, so this device's own checks of its
- * pairings end unanswered. The states that need a real PC (pairing, approval, updates) are relay-shell-browser-qa's.
- *
  *   bun scripts/relay-dashboard-browser-qa.ts                     # builds the shell itself
  *   ONLY='^(table|overview)' UI_EVIDENCE_DIR=<dir> bun scripts/relay-dashboard-browser-qa.ts
- *
- * The browser lane (scripts/ci-browser.sh) runs it as an entry of its own, on a shell build, a shell host and a
- * browser it makes itself. Each check prints PASS or FAIL with what it measured; any FAIL fails the run after every
- * selected check ran, and a run with none ends by saying how many checks passed.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +22,6 @@ const LOAD_MS = 45_000;
 
 export interface DashboardQaOptions {
   readonly browser: Browser;
-  /** where the built shell is served (http://127.0.0.1:<port>); app.ovis.sh is routed there */
   readonly origin: string;
   readonly evidence: string | null;
 }
@@ -50,11 +37,8 @@ interface OpenOptions {
   readonly signedIn?: boolean;
   readonly reducedMotion?: boolean;
   readonly forcedColors?: boolean;
-  /** answers GET /v1/pcs instead of the fleet's directory (held, failed) once the dashboard is up */
   readonly directory?: (route: Route) => Promise<void> | void;
-  /** before the first load: routes of the check's own */
   readonly prepare?: (context: BrowserContext) => Promise<void>;
-  /** where the page is left: the dashboard (default), the sign-in's providers, or any shell screen */
   readonly entry?: "dashboard" | "providers" | "screen";
 }
 interface Opened { readonly context: BrowserContext; readonly page: Page; readonly fleet: Fleet; readonly sockets: string[]; readonly errors: string[]; readonly account: string[] }
@@ -116,7 +100,21 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       await route.fulfill({ status: answer.status, headers: { ...Object.fromEntries(answer.headers), ...cors }, body: Buffer.from(await answer.arrayBuffer()) });
     });
     await context.routeWebSocket(/.*/, (ws) => { sockets.push(ws.url()); ws.close(); });
-    await context.addInitScript(({ language, theme, density, scale }) => {
+    await context.addInitScript(({ app, language, theme, density, scale }) => {
+      if (location.origin === app) {
+        // The signed-in shell can render before its account key is committed. Watch the write
+        // in the OAuth return document, where the app will create the key.
+        const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (value, key) {
+          const request = put.call(this, value, key);
+          if (this.transaction.db.name === "ovis-account" && this.name === "account" && key === "key") {
+            this.transaction.addEventListener("complete", () => {
+              document.documentElement.setAttribute("data-qa-account-key-committed", "");
+            }, { once: true });
+          }
+          return request;
+        };
+      }
       if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language, theme, density }));
       if (scale !== 1) {
         const apply = (): void => {
@@ -126,7 +124,7 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
         };
         if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", apply, { once: true }); else apply();
       }
-    }, { language: locale, theme: options.theme ?? "dark", density: options.density ?? "comfortable", scale: textScale });
+    }, { app: APP, language: locale, theme: options.theme ?? "dark", density: options.density ?? "comfortable", scale: textScale });
     await options.prepare?.(context);
     const page = await context.newPage();
     page.setDefaultTimeout(20_000);
@@ -146,6 +144,7 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     if (options.signedIn ?? true) {
       await page.locator(".account-provider").first().click();
       await page.locator('.relay-dash[data-dashboard-mode="account"]').waitFor({ timeout: LOAD_MS });
+      await page.locator("[data-qa-account-key-committed]").waitFor({ state: "attached" });
       if (fleet.seeds.length > 0) {
         await seedPairings(page, fleet.seeds, ACCOUNT);
         await page.reload();
@@ -162,7 +161,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return made;
   };
 
-  /** Runs one check of the matrix: PASS with what it measured, or FAIL with why; the run goes on either way. */
   const check = async (name: string, run: () => Promise<string>): Promise<void> => {
     if (only && !only.test(name)) return;
     const started = Date.now();
@@ -192,10 +190,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     await page.evaluate((target) => { location.hash = target; }, hash);
     await page.locator(`.relay-dash[data-dashboard-view="${view}"]`).waitFor();
   };
-  /**
-   * The strip's cells as the user reads them: the numeral drawn in each cell and the number in its "incl. N offline"
-   * line (0 when no such line is drawn; null when what is drawn is no number), beside the data-strip-* the page keeps.
-   */
   const strip = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>(".relay-overview-strip [data-strip-cell]")]
     .map((cell) => {
       const drawn = (selector: string): string | null => {
@@ -213,9 +207,7 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       }];
     })));
   const listedRows = (page: Page) => page.locator("[data-pc-list] [data-pc-id]");
-  /** The height most rows of the PC table share (rows with a second line may grow). */
   const tableGeometry = (page: Page) => page.evaluate(() => {
-    // a row's height without the hairline that parts it from the next one
     const heights = [...document.querySelectorAll<HTMLElement>('[data-pc-list="table"] tbody tr')].map((row) => {
       const cell = row.querySelector("td");
       return Math.round(row.getBoundingClientRect().height - (cell ? parseFloat(getComputedStyle(cell).borderBottomWidth) : 0));
@@ -228,8 +220,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
   });
   const disclosureHeight = (page: Page) => page.locator('[data-action="open-connection-map"]').evaluate((element) => element.getBoundingClientRect().height);
 
-  // ---- sign-in (todo 4): an unboxed 368px column, 44px provider controls of one height ----
-
   for (const width of [1440, 390] as const) {
     await check(`signin-${width}`, async () => {
       const { page, account } = await open({ fleet: "F0", width, theme: "light", entry: "providers" });
@@ -241,7 +231,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       expect(width === 1440 ? Math.round(column.width) === 368 : column.width <= 368, `sign-in column ${column.width}px (368px at most, 368 on a desktop)`);
       expect(column.border === "0px" && column.background === "rgba(0, 0, 0, 0)", `sign-in column is unboxed (border ${column.border}, background ${column.background})`);
       expect(providers.length > 0 && providers.every((height) => height === providers[0]) && (providers[0] ?? 0) >= 44, `provider controls ${JSON.stringify(providers)}px: one height, at least 44`);
-      // V-071: the providers are the build's, known at first paint; nothing asked afterwards can add one under a finger
       expect(!account.includes("GET /v1/providers"), "the sign-in asks the service for no provider list after it painted");
       expect(await page.locator(".account-provider").count() === providers.length, "the provider stack did not change while measured");
       await shot(page, `signin-${width}-light`);
@@ -281,8 +270,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     expect(await page.locator(".account-provider").count() === 0, "no sign-in provider without an account service");
     return `screen ${await page.locator("main[data-relay-state]").first().getAttribute("data-relay-state")}, 0 providers`;
   });
-
-  // ---- truthful counts (todo 2) and the overview (todo 9) ----
 
   const counts: [FleetName, number, number, number][] = [["F4", 0, 4, 1], ["FREADY", 2, 3, 1], ["F20", 8, 12, 4]];
   for (const [fleet, ready, needs, offline] of counts) {
@@ -328,7 +315,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return "one Add a PC primary across the page, QR secondary, no strip";
   });
 
-  // the steps of an account without a PC: the command keeps its width on a narrow screen (Copy wraps under it), and Check again keeps the focus its press gave it
   for (const width of [195, 390, 1440] as const) {
     await check(`dashboard-F0-steps-${width}`, async () => {
       const { page, account } = await open({ fleet: "F0", width });
@@ -344,7 +330,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       }));
       expect(rows.length === 2, `two installer lines (${rows.length})`);
       for (const row of rows) {
-        // beside Copy the command has its 16rem basis at least; where the row is narrower than that, the whole row
         expect(row.command >= Math.min(row.row, 256) - 1, `the command keeps its width: ${JSON.stringify(row)}`);
         expect(row.under === (row.command >= row.row - 1), `Copy sits under a command that takes the row, beside one that does not: ${JSON.stringify(row)}`);
       }
@@ -413,13 +398,10 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     expect(JSON.stringify(keys) === JSON.stringify(["paired", "relays"]), `local strip ${JSON.stringify(keys)}: no account Ready/Needs you`);
     const labels = Object.values(await strip(page)).map((cell) => cell.label);
     expect(JSON.stringify(labels) === JSON.stringify(["Paired with this device", "Relays"]), `local strip reads ${JSON.stringify(labels)}: no account Ready/Needs you`);
-    // the PC table's state word carries this device's own check (u14 dropped the duplicate local check list above it)
     const words = await page.locator(".relay-pc-state-word").allInnerTexts();
     expect(words.length === fleet.seeds.length && words.every((word) => /^(Paired · not checked|No answer)$/.test(word)), `local rows report this device's checks only ${JSON.stringify(words)}`);
     return `strip ${JSON.stringify(keys)}, rows ${JSON.stringify([...new Set(words)])}`;
   });
-
-  // ---- filters (todos 2, 7): the Needs filter lists what the strip counts ----
 
   const filters: [string, FleetName, string, number][] = [["filter-needs", "FREADY", "needs", 3], ["filter-ready", "FREADY", "ready", 2], ["filter-offline", "FREADY", "offline", 1], ["filter-empty", "F4", "ready", 0]];
   for (const [name, fleet, filter, want] of filters) {
@@ -434,7 +416,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
         expect(await page.locator("[data-filter-empty]").count() === 1, "an empty filter says so");
         expect(await page.getByRole("button", { name: "Show all PCs" }).count() === 1, "and offers all PCs");
       }
-      // the status line gets its words the frame after it mounts (useAnnouncedText), so a newly shown list is announced
       const words = want === 0 ? "No PC matches this filter." : want === 1 ? "1 PC shown" : `${want} PCs shown`;
       const status = page.locator('.relay-pc-list-region [role="status"]');
       await page.waitForFunction(({ words }) => document.querySelector('.relay-pc-list-region [role="status"]')?.textContent === words, { words }).catch(() => undefined);
@@ -443,8 +424,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       return `${rows} rows, announced "${said}"`;
     });
   }
-
-  // ---- the PC table (todo 7): 44px rows, 40px compact, 36px header; Details in the page ----
 
   for (const [density, rowHeight] of [["comfortable", 44], ["compact", 40]] as const) {
     await check(`table-rows-${density}`, async () => {
@@ -478,8 +457,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     expect(!/Invalid Date|NaN|undefined|null/.test(text), `Details of a never-seen PC shows no broken value: ${JSON.stringify(text)}`);
     return "no Invalid Date, NaN, undefined or null";
   });
-
-  // ---- the frame (todo 6): five real destinations, Back, widths ----
 
   await check("routes", async () => {
     const { page } = await open({ fleet: "FREADY" });
@@ -521,8 +498,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `content 1280 at 1920, phone gutter 16px, last row ${JSON.stringify(clear)}`;
   });
 
-  // ---- the connection map (todo 8): a diagram for <= 8 PCs on a wide screen, a list otherwise; no particles ----
-
   for (const [fleet, width, diagram] of [["FREADY", 1440, true], ["FREADY", 390, false], ["F20", 1440, false]] as const) {
     await check(`tab-relay-${fleet}-${width}`, async () => {
       const { page } = await open({ fleet, width });
@@ -542,8 +517,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       return JSON.stringify(map);
     });
   }
-
-  // ---- feedback states (todo 9): loading holds its shape, a directory failure keeps what is known ----
 
   await check("dashboard-loading", async () => {
     const held: Route[] = [];
@@ -574,8 +547,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `alert + Try again, ${known.length} known rows kept; Ready 0 and empty Ready filter`;
   });
 
-  // ---- devices (todo 6) ----
-
   await check("device-remove-confirm", async () => {
     const { page, account } = await open({ fleet: "FREADY" });
     await go(page, "#devices", "devices");
@@ -587,7 +558,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return "asks first, Cancel reverts, nothing deleted";
   });
 
-  // the account's Delete account: the same button asks first and says what goes; the second press deletes at the service and signs out
   for (const width of [390, 1440] as const) {
     await check(`account-delete-${width}`, async () => {
       const { page, account } = await open({ fleet: "FREADY", width });
@@ -615,9 +585,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     });
   }
 
-  // ---- large fleets (todo 7) ----
-
-  // from 200 rows each row's box skips rendering off screen (content-visibility: auto); 50 rows stay fully rendered
   for (const [fleet, total] of [["FLEET50", 50], ["FLEET200", 200], ["FLEET1000", 1000]] as const) {
     for (const width of [1440, 390] as const) {
       await check(`fleet-${total}-${width}-content-visibility`, async () => {
@@ -654,8 +621,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       });
     }
   }
-
-  // ---- glyphs, motion, forced colours, focus (todo 1) ----
 
   await check("status-glyphs", async () => {
     const { page } = await open({ fleet: "FREADY" });
@@ -880,8 +845,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return "195px zoom and 320 +40% text in en/ja (F4 & FREADY): 0 mid-word splits, 0 clipped/off-viewport text, disclosure summary <=2 lines, 1-col strip at 195px, 5 reachable >=44px tabs";
   });
 
-  // ---- the Add a PC sheet (todo 5) ----
-
   for (const width of [1440, 390] as const) {
     await check(`sheet-add-${width}`, async () => {
       const { page } = await open({ fleet: "FREADY", width });
@@ -915,9 +878,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return "Enter opens, Tab stays inside, Escape closes, focus back on Add a PC";
   });
 
-  // ---- what the page computes for its headings, details and dialogs (final review F2 findings 2, 4 and 6) ----
-
-  /** What holds the focus: its tag, classes and first words, the ring it shows, the PC row it sits in, and whether it is on screen. */
   const focused = (page: Page) => page.evaluate(() => {
     const active = document.activeElement as HTMLElement | null;
     if (!active || active === document.body) return null;
@@ -930,7 +890,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     };
   });
 
-  // the view heading takes the focus after a keyboard route change and shows no ring (RelayDashboard.css .relay-dash-title:focus)
   await check("view-heading-focus", async () => {
     const { page } = await open({ fleet: "FREADY" });
     await page.locator('.relay-dash-nav a[href="#devices"]').focus();
@@ -942,10 +901,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `h1 "Devices" focused, outline-style none`;
   });
 
-  // IS-TABLE-08: below 1100px a selected PC's details replace the list as a full view with Back;
-  // the details heading takes the focus, ringless and on screen, and Back gives the focus to the row that opened it.
-  // From 1100px the side panel keeps the click's focus.
-  /** The list's visible rows, the details' placement and the scroll position, as the page lays them out. */
   const detailsLayout = (page: Page) => page.evaluate(() => {
     const visible = (element: Element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const list = document.querySelector("[data-pc-list]");
@@ -1042,8 +997,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `two columns, focus on the row, no scroll`;
   });
 
-  // Forget's confirmation is modal: the dashboard behind it is inert (no tab stop, no focus) while it is up, Cancel gives
-  // the focus back to Forget this PC, and a confirmed Forget leaves the focus on the page, never on <body>
   for (const width of [1440, 390] as const) {
     for (const theme of ["dark", "light"] as const) {
       await check(`details-forget-confirm-${width}-${theme}`, async () => {
@@ -1055,7 +1008,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
         await forget.focus();
         await page.keyboard.press("Enter");
         await dialog.waitFor();
-        // the phone sheet slides up: capture it docked, once its entrance is over
         await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
         await shot(page, `details-forget-confirm-${width}-${theme}`);
         const behind = await page.evaluate(() => {
@@ -1104,13 +1056,11 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
         await dialog.waitFor({ state: "detached" });
         await target.locator("[data-pc-details]").waitFor({ state: "detached" });
       };
-      // Lab NUC is an unlisted pairing before Studio desktop and Work laptop: forgetting it removes the row and focuses the next row (Studio desktop)
       await forgetRow(page, "Lab NUC");
       const afterMiddle = await focused(page);
       expect(await listedRows(page).filter({ hasText: "Lab NUC" }).count() === 0, "forgetting an unlisted pairing removes its row");
       expect(afterMiddle !== null && afterMiddle.className.includes("relay-pc-name-btn") && afterMiddle.text === "Studio desktop" && afterMiddle.inView,
         `after forgetting an unlisted pairing with a following row, focus lands on the next row Studio desktop (${JSON.stringify(afterMiddle)})`);
-      // Seed an unlisted pairing that sorts last in the table and forget it: focus falls back to the previous row (Work laptop)
       const [zed] = fleetOf("FUNKNOWN").seeds;
       if (!zed) throw new Error("missing FUNKNOWN seed");
       await seedPairings(page, [{ ...zed, name: "Zed laptop", listed: false }], ACCOUNT);
@@ -1122,7 +1072,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       expect(await listedRows(page).filter({ hasText: "Zed laptop" }).count() === 0, "forgetting the last unlisted pairing removes its row");
       expect(afterLastRow !== null && afterLastRow.className.includes("relay-pc-name-btn") && afterLastRow.text === "Work laptop" && afterLastRow.inView,
         `after forgetting an unlisted pairing that is the last row, focus lands on the previous row Work laptop (${JSON.stringify(afterLastRow)})`);
-      // Single unlisted pairing on an otherwise empty account: forgetting the only row removes the table and focuses the PCs view heading (h1, tabIndex -1)
       const { page: lone } = await open({ fleet: "F0", width });
       await seedPairings(lone, [{ ...zed, name: "Zed laptop", listed: false }], ACCOUNT);
       await lone.reload();
@@ -1136,7 +1085,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     });
   }
 
-  // the QR and code dialog is named by the heading of its current screen, sits over the visible scrimmed dashboard, and docks as a bottom sheet on phones
   for (const width of [1440, 390] as const) {
     await check(`pair-dialog-name-${width}`, async () => {
       const { page } = await open({ fleet: "FREADY", width });
@@ -1176,7 +1124,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
       const qr = await inspectDialog();
       const qrTree = (await dialog.ariaSnapshot()).split("\n")[0] ?? "";
       await shot(page, `pair-dialog-qr-${width}-dark`);
-      // an unkeyed footer reused the clicked button as the code form's submit button, so its activation submitted the empty form
       await page.evaluate(() => {
         const seen = document.documentElement.dataset;
         seen["qaInvalid"] = "0"; seen["qaSubmit"] = "0";
@@ -1214,7 +1161,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     });
   }
 
-  // Phone dialog and sheet footers stack primary above secondary and keep DOM/Tab order equal to top-to-bottom visual order (f2-delta finding 4).
   await check("sheet-footer-tab-order-390", async () => {
     const { page } = await open({ fleet: "FREADY", width: 390 });
     const tabFooter = async (label: string, expectedVisual: readonly string[]): Promise<string> => {
@@ -1286,7 +1232,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return measured.join("; ");
   });
 
-  // the sidebar foot's provider mark flows inline: AccountPcs.css positions a mark absolutely only inside .account-provider
   await check("provider-mark-inline", async () => {
     const { page } = await open({ fleet: "FREADY" });
     const placed = await page.locator(".relay-dash-foot .relay-dash-who .account-provider-mark").evaluate((element) => {
@@ -1301,7 +1246,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `static, ends at ${placed.right}px before the text at ${placed.textLeft}px`;
   });
 
-  // the phone map's rail: each route's link reaches up through the gap to the item above, and the last one ends inside its relay's mark
   await check("map-rail-390", async () => {
     const { page } = await open({ fleet: "FREADY", width: 390 });
     await go(page, "#relay", "relay");
@@ -1334,7 +1278,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     return `${routes.length} routes, each link meets the item above, the last ends inside its relay's mark`;
   });
 
-  // a custom relay's host wider than the phone wraps inside the route list instead of running off the dashboard
   await check("map-long-host-390", async () => {
     const host = "relay-eu-west-dedicated-instance-for-the-studio-team.customer-internal.example.com";
     // the fleet by name, not the one `open` returns: the directory is asked while `open` is still awaited, and its
@@ -1358,8 +1301,6 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     expect(fit.scroll <= fit.client + 1, `the host's text is cut: scrollWidth ${fit.scroll} > clientWidth ${fit.client}`);
     return `host ${Math.round(fit.left)}-${Math.round(fit.right)} inside the route list ${Math.round(fit.listLeft)}-${Math.round(fit.listRight)}, ${await noOverflow(page)}`;
   });
-
-  // ---- what every page above heard: no page error, no request off the two hosts, no policy violation ----
 
   await check("console-and-policy", async () => {
     assertCspClean(csp, "relay dashboard");

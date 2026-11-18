@@ -332,6 +332,7 @@ describe("a v1 account record (docs/account.md, Records) and an entry", () => {
     const text = entryToText(genesis);
     await expect(readAccountRecord(text)).rejects.toBeInstanceOf(AccountRecordError);
     await expect(readAccountRecord({ body: toBase64Url(genesis.body), signature: toBase64Url(genesis.signature) })).rejects.toBeInstanceOf(AccountRecordError);
+    // the entry's signature on a record of its signer: the record's bytes start with ovis-account/1, the entry's with ovis-list/1
     expect(await verifySignature(genesis.body, genesis.signature, owner.key)).toBe(true);
     expect(await readAccountRecord({ ...unsignedRecord, signature: toBase64Url(genesis.signature) })).toBeNull();
   });
@@ -429,6 +430,7 @@ describe("writing a body", () => {
   });
 
   test("a body above the limit is refused by its size, before anything of that size is allocated", () => {
+    // A value that says it is longer than any buffer can be: a body allocated for it is a RangeError, and no refusal.
     const value = Object.defineProperty(new Uint8Array(1), "length", { value: Number.MAX_SAFE_INTEGER });
     expect(refusal(() => writeFields([{ name: "zz", value }]))).toBe("entry_malformed");
     expect(refusal(() => writeBody({ ...genesisBody, own: [{ name: "zz", value }] }))).toBe("entry_malformed");
@@ -824,6 +826,7 @@ describe("when an entry holds", () => {
   });
 
   test("a body that says it is above the limit is refused by that size, before a byte of it is read", async () => {
+    // The bytes of an entry that holds, under a length of 64 MiB: only a check of the size, made first, refuses them.
     const body = Object.defineProperty(genesis.body.slice(), "length", { value: 64 * 1024 * 1024 });
     expect(await asyncRefusal(() => entryHolds({ body, signature: genesis.signature }, null))).toBe("entry_malformed");
   });

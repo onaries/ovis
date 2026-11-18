@@ -1,16 +1,11 @@
 /**
- * A second device of the account and a machine another device already put in the account (`ovis add` with a QR
- * code): the directory lists it as new, and it has pulled its mailbox, which it does only while it
- * belongs to an account. Every place that draws the choice (the overview's attention card, the PCs table row, the
- * details panel) offers Join at once, with the join sheet behind it. The sighting does not prove the machine is in the
+ * The sighting does not prove the machine is in the
  * account still (after Revoke all and a listing again its row keeps it), so the join sheet keeps Type the number, which
- * turns it into the typed-number sheet. A machine never seen keeps Add and the typed number, with Ask to join as the
- * sheet's second way. The shell is the real build on
+ * turns it into the typed-number sheet. The shell is the real build on
  * https://app.ovis.sh (routed here), the account service the in-memory fake with the directory answered here; no
  * relay or PC takes part (every WebSocket is closed at once), so nothing is paired.
  *
- * The shell is SHELL_DIR when set, else dist-shell/ (the browser lane builds it first, `bun run build:shell`), else a
- * build of its own when neither is there (a run by hand).
+ * The shell is SHELL_DIR when set, else dist-shell/, else a build of its own when neither is there.
  *
  *   UI_EVIDENCE_DIR=<dir> bun scripts/relay-second-device-join-regression.ts
  */
@@ -30,7 +25,6 @@ const evidence = process.env["UI_EVIDENCE_DIR"] || null;
 if (evidence) mkdirSync(evidence, { recursive: true });
 const root = join(import.meta.dir, "..");
 
-/** `seenAgo` null: never pulled its mailbox, so it is in no account yet and its own screen may wait with a number. */
 const machines = [{ label: "m1-box", seenAgo: 30_000 }, { label: "desk2", seenAgo: null }].map((spec) => {
   const { publicKey } = generateKeyPair();
   return { ...spec, server_id: deriveServerId(publicKey), public_key: Buffer.from(publicKey).toString("hex") };
@@ -107,14 +101,12 @@ try {
         await page.locator(".account-provider").first().click();
         await page.locator('.relay-dash[data-dashboard-mode="account"]').waitFor({ timeout: 45_000 });
 
-        // the attention card: Join at once for the machine in the account, Add for the one that never pulled
         const card = (label: string) => page.locator(".relay-overview-attention-row").filter({ hasText: label }).locator("[data-attention-action]");
         await card("desk2").waitFor();
         const cards = { m1: await card("m1-box").getAttribute("data-attention-action"), desk2: await card("desk2").getAttribute("data-attention-action") };
         await shot("overview");
         if (cards.m1 !== "join" || cards.desk2 !== "add") fail(`${name}: attention cards ${JSON.stringify(cards)}, want m1-box join and desk2 add`);
 
-        // the PCs table row
         await page.evaluate(() => { location.hash = "#pcs"; });
         await page.locator('.relay-dash[data-dashboard-view="pcs"]').waitFor();
         const row = (label: string) => page.locator("[data-pc-list] [data-pc-id]").filter({ visible: true }).filter({ hasText: label });
@@ -123,7 +115,6 @@ try {
         await shot("row");
         if (rows.m1 !== "join" || rows.desk2 !== "add") fail(`${name}: row actions ${JSON.stringify(rows)}, want m1-box join and desk2 add`);
 
-        // the details panel: one action with a reason line beside it, and that action opens the join sheet, not Add's
         await row("m1-box").locator(".relay-pc-name-btn").click();
         const details = page.locator(`[data-pc-details="${machines[0]!.server_id}"]`);
         await details.waitFor();
@@ -144,8 +135,6 @@ try {
         await typing.waitFor();
         if (!await typing.evaluate((element) => element.contains(document.activeElement))) fail(`${name}: focus left the sheet when it turned to Type the number`);
         await shot("sheet-join-type-number");
-        // on a phone a closed sheet steps off its history entry by itself, a moment after it goes: the details take
-        // their own Escape once that step landed (subscribed before the close, so it cannot be missed)
         if (phone) await page.evaluate(() => {
           document.documentElement.dataset["qaSteppedOff"] = "no";
           addEventListener("popstate", () => { document.documentElement.dataset["qaSteppedOff"] = "yes"; }, { once: true });
@@ -156,7 +145,6 @@ try {
         await page.keyboard.press("Escape");
         await details.waitFor({ state: "detached" });
 
-        // a machine never seen keeps Add and the typed number, with Ask to join as its second way
         await row("desk2").locator('[data-pc-action="add"]').click();
         const fresh = page.locator('[role=dialog][data-add-pc-mode="new"][data-add-pc-phase="start"]');
         await fresh.waitFor();

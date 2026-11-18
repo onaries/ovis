@@ -7,7 +7,6 @@ import { usePaneAttach, type PaneAttachDeps } from "./usePaneAttach.ts";
 import { useTerminalRefits, type TerminalRefitsDeps } from "./useTerminalRefits.ts";
 import { HerdrSocket } from "./ws.ts";
 
-/** A WebSocket the test opens, recording what the client sends. */
 class FakeSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -24,7 +23,6 @@ class FakeSocket {
 
 const BEFORE = "w1:p1";
 const AFTER = "w1:p2";
-/** one theme for every render, as the settings give it */
 const COLORS = {} as TerminalRefitsDeps["colors"];
 
 describe("usePaneAttach with the inbox mode's list over the pane", () => {
@@ -48,7 +46,6 @@ describe("usePaneAttach with the inbox mode's list over the pane", () => {
     client.connect();
     socket = FakeSocket.last;
     socket.open();
-    // shown before the list came, the slot's pane sized the pty: the slot holds the size
     client.attach(BEFORE, 100, 30);
   });
 
@@ -92,9 +89,7 @@ describe("usePaneAttach with the inbox mode's list over the pane", () => {
       else renderer = create(createElement(Probe, props));
     });
   };
-  /** the frames sent since `from` that attach or size a pane */
   const sizing = (from: number) => socket.sent.slice(from).filter((frame) => ["attach", "resize", "release-size"].includes(frame.type));
-  /** the terminal is laid out once the slot is drawn: the pane's attach reads its grid */
   const layOut = (): void => { termRef.current = { cols: 100, rows: 30, options: {}, reset: nothing } as unknown as Terminal; };
 
   it("attaches a pane that comes to the slot under the list keeping the pty's size, and asks for its grid once as it is shown", async () => {
@@ -102,7 +97,6 @@ describe("usePaneAttach with the inbox mode's list over the pane", () => {
     layOut();
     await draw({ paneId: BEFORE, covered: true });
     const from = socket.sent.length;
-    // the selected pane exited, or herdr zoomed another pane of the tab: the slot shows another pane under the list
     await draw({ paneId: AFTER, covered: true });
     expect(sizing(from)).toEqual([{ type: "attach", pane_id: AFTER, cols: 100, rows: 30, flow_control: "ack", receipt_resume_id: expect.any(String), keep_size: true }]);
     const shown = socket.sent.length;

@@ -10,7 +10,6 @@ describe("browser timings refresh", () => {
       workers: 6, seconds: 100, passed: 3, total: 4, flaky: ["scripts/flaky.ts"],
       scripts: [
         { script: "scripts/a.ts", seconds: 12.4, code: 0, log: "/ci/a.log" },
-        // both runs are in its seconds
         { script: "scripts/flaky.ts", seconds: 90, code: 0, log: "/ci/flaky.log", firstLog: "/ci/flaky.attempt-1.log" },
         { script: "scripts/failed.ts", seconds: 30, code: 1, log: "/ci/failed.log", firstLog: "/ci/failed.attempt-1.log" },
         { script: "scripts/timed-out.ts", seconds: 600, code: 124, log: "/ci/timed-out.log" },
@@ -22,7 +21,6 @@ describe("browser timings refresh", () => {
 
   it("refuses a file that is not the lane's summary", () => {
     for (const other of [null, [], "summary", { rows: [] }, { scripts: {} }]) expect(() => firstRunSeconds(other)).toThrow("not a browser-logs summary.json");
-    // an entry it cannot read times nothing; the others still do
     expect(firstRunSeconds({ scripts: [null, { script: "scripts/a.ts", code: 0 }, { script: "scripts/b.ts", seconds: "3", code: 0 }, { script: "scripts/c.ts", seconds: 3, code: 0 }] }))
       .toEqual({ "scripts/c.ts": 3 });
   });
@@ -33,7 +31,6 @@ describe("browser timings refresh", () => {
       "browser-main-42754144490-1", "browser-main-42754144490-2", "browser-other-1-42754144490-1",
       "check-fast-42754144490-1", "integration-logs-42754144490-1",
     ])).toEqual(["browser-main-42754144490-2", "browser-other-1-42754144490-1"]);
-    // a hosted run's four shards, one of them run three times
     expect(lastAttemptArtifacts(["browser-other-2-7-1", "browser-other-10-7-1", "browser-other-2-7-3", "browser-other-2-7-2", "browser-other-1-7-1"]))
       .toEqual(["browser-other-1-7-1", "browser-other-10-7-1", "browser-other-2-7-3"]);
     expect(lastAttemptArtifacts(["dist-shell", "browser-main-7", "browser-other-7-1-extra", "xbrowser-main-7-1"])).toEqual([]);
@@ -43,7 +40,6 @@ describe("browser timings refresh", () => {
     expect(median([7])).toBe(7);
     expect(median([30, 10, 20])).toBe(20);
     expect(median([40, 10, 30, 20])).toBe(25);
-    // one slow run does not move it
     expect(median([18, 300, 17, 19, 18])).toBe(18);
   });
 
@@ -62,11 +58,9 @@ describe("browser timings refresh", () => {
     const table = refreshTimings(
       ["scripts/kept.ts", "scripts/timed.ts", "scripts/new.ts"],
       { "scripts/kept.ts": 50, "scripts/timed.ts": 50, "scripts/renamed-away.ts": 200 },
-      // a summary still names the script that left the list
       [{ "scripts/timed.ts": 8.2, "scripts/renamed-away.ts": 201 }],
     );
     expect(table).toEqual({ "scripts/kept.ts": 50, "scripts/timed.ts": 8 });
-    // neither measured nor in the table: it gets no entry, and so starts first
     expect("scripts/new.ts" in table).toBe(false);
   });
 
@@ -85,8 +79,6 @@ describe("browser timings refresh", () => {
     expect(() => refreshRequest(["--run", "5"])).toThrow();
   });
 
-  // Hand-edited entries are fine; this only keeps the file in the one shape the tool writes, so a
-  // refresh shows the seconds that changed and nothing else.
   it("finds scripts/ci-browser-timings.json as it would write it", () => {
     const text = readFileSync(join(import.meta.dir, "ci-browser-timings.json"), "utf8");
     const rewritten = JSON.stringify(refreshTimings(serialBrowserScripts(), JSON.parse(text) as Record<string, number>, []), null, 2) + "\n";

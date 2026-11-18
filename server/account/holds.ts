@@ -59,6 +59,18 @@ export class AccountHolds {
     this.enrollingBy = by;
   }
 
+  /**
+   * The barrier of a link whose device waited to link (docs/account.md, "Who may admit a device"). Nothing of such a
+   * device is written before its link has passed, so its barrier goes to disk in the turn that writes its row, right
+   * before it. A barrier that stands and no link confirmed (another link's, on its way or refused) already holds
+   * the adds back, and is left as it is. Returns what takes this call's write back, should the row not be written.
+   */
+  startEnrollingBeforeRow(by: string): () => void {
+    if (this.enrollingBy !== null && !this.confirmed) return () => {};
+    this.startEnrolling(by, { stale: true });
+    return () => this.endEnrolling();
+  }
+
   /** The link of `by` succeeded: it ends the wait, unless an earlier successful link already holds it. */
   confirmEnrolling(by: string): void {
     this.assertReadable();

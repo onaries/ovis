@@ -1,14 +1,8 @@
-/* the alerts line shares .update-notice's layout with the update, telemetry, machine-action and
-   exposure notices (src/components/UpdateControls.css); the needs-attention tint and the glyph
-   that says so without the colour are its own */
 .update-notice.is-alerts {
   background: var(--status-blocked-tint);
   color: var(--text-strong);
 }
 
-/* a narrow phone at a large interface text size has no room for the button's label beside Close (a 320px screen in
-   Japanese at 20px, #3498): the sentence gives up its width first, then the label wraps inside its button, so Close
-   stays on the screen at the line's right end. Wherever the label fits, nothing shrinks and the line is as before */
 .update-notice.is-alerts:not(.is-failure) > span {
   flex-basis: 0;
 }
@@ -28,7 +22,6 @@
   }
 }
 
-/* why a repair failed is read in full (G-103): its sentence wraps; the repair button and Close keep the line's row */
 .update-notice.is-alerts.is-failure > span {
   white-space: normal;
   overflow: visible;
@@ -36,8 +29,6 @@
   overflow-wrap: anywhere;
 }
 
-/* on a phone that row leaves the sentence too little width: it takes the line beside the glyph with Close at the top
-   right, the repair button goes under it, and the notice keeps to half the screen, scrolling inside itself past that */
 @media (max-width: 640px) {
   .update-notice.is-alerts.is-failure {
     display: grid;

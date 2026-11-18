@@ -16,10 +16,6 @@ export interface InstallGjcIntegrationResult {
   path: string;
 }
 
-/**
- * Bundles one integrations/ entry into a standalone file, as the agent loads it. Beside a compiled server
- * (scripts/server-artifact.ts) there are no sources: the integration was built with it, as integrations/<name>.js.
- */
 export async function buildIntegration(name: string, target: "bun" | "node"): Promise<string> {
   const built = join(import.meta.dir, "..", "integrations", `${name}.js`);
   if (existsSync(built)) return readFileSync(built, "utf8");
@@ -81,7 +77,7 @@ function replaceAtomically(path: string, content: string, banner: string): void 
       linkSync(temporary, path);
     }
   } finally {
-    try { rmSync(temporary, { force: true }); } catch { /* best-effort removal of our temporary file */ }
+    try { rmSync(temporary, { force: true }); } catch {}
   }
 }
 

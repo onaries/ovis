@@ -1,12 +1,10 @@
 /**
  * The disconnected-input draft: while the socket is down, typed text is held for the
  * user to review and send after reconnect instead of being queued and fired blindly.
- * Pure logic, DOM-free, so the policy is unit-testable (see draft.test.ts).
  */
 
 export interface InputDraft {
   readonly text: string;
-  /** text was typed or pasted that the draft had no room for: what is held is not all of it */
   readonly truncated: boolean;
   /** an Enter or a line break was typed or pasted: it is never held, so it is not replayed by Send */
   readonly leftOut: boolean;
@@ -25,14 +23,11 @@ const MAX_DRAFT_CHARS = 1024;
  */
 export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** What a stored draft record holds: the draft, and when it was written. */
 interface StoredDraft extends InputDraft { at: number }
 
 /**
  * The draft a stored record restores, or the empty one: malformed and expired records read as
  * nothing held, so a hand-edited or stale entry cannot put text back on screen.
- * A record written by an earlier version counts the keys it left out instead of flagging them:
- * only its text is kept, and a record that held nothing but a count reads as empty.
  */
 export function restoreDraft(raw: string | null, now: number): InputDraft {
   if (raw === null) return EMPTY_DRAFT;
@@ -75,12 +70,10 @@ const LINE_BREAKS = /[\r\n]+/g;
  */
 export function applyToDraft(draft: InputDraft, data: string): InputDraft {
   const pasted = BRACKETED_PASTE.exec(data)?.[1];
-  // a typed Tab is completion, not text; one in pasted text is held as the space it shows as
   let text = pasted?.replace(/\t/g, " ") ?? data;
   let next = draft;
   const erase = pasted === undefined ? ERASE.exec(text)?.[0].length ?? 0 : 0;
   if (erase > 0) {
-    // after a loss the draft cannot tell which text a Backspace was meant for: it keeps what it holds
     // code points, not UTF-16 units: one Backspace never leaves half of an emoji behind
     if (!draft.truncated) {
       const points = Array.from(draft.text);
@@ -91,7 +84,6 @@ export function applyToDraft(draft: InputDraft, data: string): InputDraft {
         while (points.length > 0 && !/\s/u.test(points.at(-1)!)) points.pop();
       }
       const kept = points.join("");
-      // erased to nothing: a line break left out between text that is gone separates nothing either
       next = kept.length === 0 ? EMPTY_DRAFT : { ...draft, text: kept };
     }
     text = text.slice(erase);
@@ -102,27 +94,19 @@ export function applyToDraft(draft: InputDraft, data: string): InputDraft {
   if (/[\r\n]/.test(text)) {
     let joined = text.replace(LINE_BREAKS, " ");
     if (next.text.length === 0 || next.text.endsWith(" ")) joined = joined.replace(/^ /, "");
-    // Enter with nothing held separates nothing: there is nothing to tell
     if (joined.length === 0 && next.text.length === 0) return next;
     const flagged = next.leftOut ? next : { ...next, leftOut: true };
     if (joined.length === 0) return flagged;
-    // a line break among other controls is still something the user typed: told, and its text too
     if (!isPrintableChar(joined)) return flagged.truncated ? flagged : { ...flagged, truncated: true };
     return append(flagged, joined);
   }
   if (!isPrintableChar(text)) {
-    // a paste is text the user gave: one with controls in it is told as left out, never lost in silence
     if (pasted === undefined || text.length === 0 || next.truncated) return next;
     return { ...next, truncated: true };
   }
   return append(next, text);
 }
 
-/**
- * Typing a connection ended with before the server confirmed it (#2587), held ahead of `draft`, which
- * holds only what was typed after it: each chunk is folded as it was typed, so what is held reads in
- * the order it was typed.
- */
 export function holdBefore(chunks: readonly string[], draft: InputDraft): InputDraft {
   const lost = chunks.reduce((held, chunk) => applyToDraft(held, chunk), EMPTY_DRAFT);
   if (draftIsEmpty(lost)) return draft;
@@ -135,7 +119,6 @@ function append(draft: InputDraft, text: string): InputDraft {
   return { ...draft, text: draft.text + text };
 }
 
-/** Nothing held and nothing to tell. A draft that only lost text is not empty: its loss is still to be told. */
 export function draftIsEmpty(draft: InputDraft): boolean {
   return draft.text.length === 0 && !draft.truncated && !draft.leftOut;
 }

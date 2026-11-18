@@ -4,7 +4,7 @@
 # Usage: scripts/self-hosted-runner/run.sh [--repo OWNER/NAME] [--count N] [--labels self-hosted-ovis]
 #          [--reserved N] [--reserved-labels self-hosted-ovis-main] [--env-file FILE] [--build] [--once]
 #          [--cache-dir DIR [--cache-wait SECONDS] | --no-cache] [--build-cache DIR [--build-cache-mb N] [--build-cache-writer LOGIN]]
-#          [--cpuset-cpus LIST]
+#          [--cpuset-cpus LIST] [--cgroup-parent SLICE]
 #          [--work-tmpfs SIZE]
 set -euo pipefail
 
@@ -25,8 +25,8 @@ CACHE_WAIT=120
 BUILD_CACHE=""
 BUILD_CACHE_MB=2048
 BUILD_CACHE_WRITER=""
-# docker run's --cpuset-cpus for every container this launcher starts (README "Per-host limits")
-CPUSET_ARGS=()
+CPUSET=""
+CGROUP_PARENT=""
 WORK_TMPFS=""
 
 usage() {
@@ -49,7 +49,8 @@ while [ $# -gt 0 ]; do
     --build-cache) BUILD_CACHE="${2:?--build-cache needs a value}"; shift 2 ;;
     --build-cache-mb) BUILD_CACHE_MB="${2:?--build-cache-mb needs a value}"; shift 2 ;;
     --build-cache-writer) BUILD_CACHE_WRITER="${2:?--build-cache-writer needs a value}"; shift 2 ;;
-    --cpuset-cpus) CPUSET_ARGS=(--cpuset-cpus "${2:?--cpuset-cpus needs a value}"); shift 2 ;;
+    --cpuset-cpus) CPUSET="${2:?--cpuset-cpus needs a value}"; shift 2 ;;
+    --cgroup-parent) CGROUP_PARENT="${2:?--cgroup-parent needs a value}"; shift 2 ;;
     --work-tmpfs) WORK_TMPFS="${2:?--work-tmpfs needs a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -64,11 +65,12 @@ case "$COUNT" in ''|*[!0-9]*|0) echo "--count must be a positive integer" >&2; e
 case "$RESERVED" in ''|*[!0-9]*|?????*) echo "--reserved must be a whole number up to --count" >&2; exit 2 ;; esac
 if [ "$((10#$RESERVED))" -gt "$((10#$COUNT))" ]; then echo "--reserved must not exceed --count" >&2; exit 2; fi
 case "$CACHE_WAIT" in ''|*[!0-9]*|?????*) echo "--cache-wait must be a whole number of seconds" >&2; exit 2 ;; esac
-# 00 is zero too: past the digit check, as a number
 case "$BUILD_CACHE_MB" in ''|*[!0-9]*|??????*) echo "--build-cache-mb must be a positive whole number of MiB" >&2; exit 2 ;; esac
 if [ "$((10#$BUILD_CACHE_MB))" -eq 0 ]; then echo "--build-cache-mb must be a positive whole number of MiB" >&2; exit 2; fi
-# a GitHub login: letters, digits and single hyphens
 case "$BUILD_CACHE_WRITER" in *[!A-Za-z0-9-]*|-*|??????????????????????????????????????*) echo "--build-cache-writer must be a GitHub login" >&2; exit 2 ;; esac
+PLACE_ARGS=()
+if [ -n "$CPUSET" ]; then PLACE_ARGS+=(--cpuset-cpus "$CPUSET"); fi
+if [ -n "$CGROUP_PARENT" ]; then PLACE_ARGS+=(--cgroup-parent "$CGROUP_PARENT"); fi
 # The job's checkout (/w) and /tmp in RAM: a job's files die with its container anyway, and on disk
 # its browser profiles and installs are most of the host's writes. SIZE caps each mount; only what
 # a job writes takes memory.
@@ -86,13 +88,11 @@ NETWORK_BLOCK="${OVIS_CI_NETWORK_BLOCK:-10.213.0.0/16}"
 # docker's gateway (the first address), the runner container, and room to spare
 NETWORK_PREFIX=28
 NETWORK_SIZE=$(( 1 << (32 - NETWORK_PREFIX) ))
-# An a.b.c.d address as a number; fails on anything else, a part with a leading zero included.
 ip_number() {
   local part='(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])'
   [[ $1 =~ ^$part\.$part\.$part\.$part$ ]] || return 1
   echo "$(( BASH_REMATCH[1] << 24 | BASH_REMATCH[2] << 16 | BASH_REMATCH[3] << 8 | BASH_REMATCH[4] ))"
 }
-# "<first> <last>": the numbers of the first and last address of a.b.c.d/N (an address alone is a /32)
 cidr_range() {
   local bits=32 number size
   case "$1" in */*) bits="${1#*/}" ;; esac
@@ -101,7 +101,6 @@ cidr_range() {
   size=$(( 1 << (32 - bits) ))
   echo "$(( number - number % size )) $(( number - number % size + size - 1 ))"
 }
-# whether the range "$1" ("<first> <last>") lies inside a.b.c.d/N "$2"
 inside() {
   local outer
   outer="$(cidr_range "$2")" && [ "${1% *}" -ge "${outer% *}" ] && [ "${1#* }" -le "${outer#* }" ]
@@ -136,7 +135,7 @@ if [ -n "$ENV_FILE" ]; then
   case "$status" in
     0) echo "--env-file: $ENV_FILE may hold only CHECK_HOST_*=<number> lines; refused line(s): $(printf '%s\n' "$bad" | cut -d: -f1 | paste -sd, -)" >&2
        exit 2 ;;
-    1) ;; # every line is allowed
+    1) ;;
     *) echo "--env-file: could not read $ENV_FILE to check it" >&2; exit 2 ;;
   esac
   ENV_ARGS=(--env-file "$ENV_FILE")
@@ -170,18 +169,16 @@ PREFIX="herdr-ci-${HOST}-"
 # it: a run that finds none empties every file no run holds (holdFile in scripts/check.ts). A
 # container of the same name keeps the volume (start_slots).
 SLOTS="${PREFIX}check-slots"
-# The ports a run of check.ts would listen on, each a file: DEFAULT_LOCK_PORT, then the slots, the
-# admission port, the ticket desk and the tickets (MAX_RUNS_LIMIT + 2 + QUEUE_TICKETS in all).
 SLOT_FILES=()
 for port in $(seq 41737 41770); do SLOT_FILES+=("$port"); done
 
 if [ "$BUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  docker build -t "$IMAGE" "$SCRIPT_DIR"
+  docker build ${CGROUP_PARENT:+--cgroup-parent "$CGROUP_PARENT"} -t "$IMAGE" "$SCRIPT_DIR"
 fi
-# A CPU list docker cannot give fails every container, and every slot would then ask for a token every
-# few seconds: refuse it now, with one throwaway container, before anything starts.
-if [ "${#CPUSET_ARGS[@]}" -gt 0 ] && ! docker run --rm "${CPUSET_ARGS[@]}" --network none --entrypoint true "$IMAGE" >/dev/null 2>&1; then
-  echo "--cpuset-cpus ${CPUSET_ARGS[1]}: docker cannot run a container on those CPUs" >&2
+# A CPU list or cgroup parent docker cannot use fails every container, and every slot would then ask for
+# a token every few seconds: refuse it now, with one throwaway container, before anything starts.
+if [ "${#PLACE_ARGS[@]}" -gt 0 ] && ! docker run --rm "${PLACE_ARGS[@]}" --network none --entrypoint true "$IMAGE" >/dev/null 2>&1; then
+  echo "${PLACE_ARGS[*]}: docker cannot start a container there" >&2
   exit 2
 fi
 
@@ -195,9 +192,8 @@ fi
 start_slots() {
   local try
   if [ "$(docker container inspect -f '{{.State.Running}}' "$SLOTS" 2>/dev/null || true)" != true ]; then
-    # one that is not running holds the name; a missing one leaves nothing to remove
     docker rm "$SLOTS" >/dev/null 2>&1 || true
-    docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} -d --rm \
+    docker run ${PLACE_ARGS[@]+"${PLACE_ARGS[@]}"} -d --rm \
       --name "$SLOTS" \
       --network none \
       --security-opt no-new-privileges \
@@ -240,7 +236,6 @@ case "$REPO" in
   *) [ "$CACHE" = 1 ] && echo "[cache] $REPO is not an OWNER/NAME this launcher can keep caches for: running without them" >&2; CACHE=0 ;;
 esac
 if [ "$CACHE" = 1 ]; then
-  # an unusable cache directory costs downloads, never the runners
   if REPO_CACHE="$(umask 022 && mkdir -p "$CACHE_DIR/$REPO" && cd "$CACHE_DIR/$REPO" && pwd -P)"; then
     MIRROR="$REPO_CACHE/git/repo.git"
     BUN_CACHES="$REPO_CACHE/bun"
@@ -255,6 +250,7 @@ fi
 # under that run (entries/<run id>/<key>), where only that run's jobs read.
 BUILD_CACHE_ROOT=""
 BUILD_CACHE_OUTBOXES=""
+BUILD_CACHE_LABEL=""
 # which job of a run builds it: a volume of its own in RAM, capped, so a job filling it fills nothing else
 BUILD_CACHE_LOCKS="${PREFIX}build-cache-locks"
 if [ -n "$BUILD_CACHE" ]; then
@@ -267,7 +263,21 @@ if [ -n "$BUILD_CACHE" ]; then
       if BUILD_CACHE_ROOT="$(umask 022 && mkdir -p "$BUILD_CACHE/$REPO/entries" "$BUILD_CACHE/$REPO/used" && cd "$BUILD_CACHE/$REPO" && pwd -P)" &&
         BUILD_CACHE_OUTBOXES="$(umask 022 && mkdir -p "$outboxes" && cd "$outboxes" && pwd -P)" &&
         docker volume create --driver local --opt type=tmpfs --opt device=tmpfs --opt o=size=16m,mode=1777 "$BUILD_CACHE_LOCKS" >/dev/null; then
-        :
+        # Under SELinux a container reads and writes only what is labelled container_file_t, and a new file
+        # takes its directory's label: without this, no job could hand in a build or read the cache. The
+        # cache holds only this user's files; an outbox may hold an earlier job's, which this user may not
+        # relabel, so each slot's outbox is labelled once it is emptied (build_cache_args).
+        # Only directories this user owns are relabelled (a path through a link elsewhere is not), and at
+        # level s0, which every container may use: a level a `:Z` mount once gave stays one container's.
+        if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+          if [ -O "$BUILD_CACHE_ROOT" ] && [ -O "$BUILD_CACHE_OUTBOXES" ] &&
+            chcon -R -t container_file_t -l s0 "$BUILD_CACHE_ROOT" && chcon -t container_file_t -l s0 "$BUILD_CACHE_OUTBOXES"; then
+            BUILD_CACHE_LABEL=1
+          else
+            echo "[build-cache] cannot label $BUILD_CACHE_ROOT and its outboxes container_file_t for SELinux: running without it" >&2
+            BUILD_CACHE_ROOT=""
+          fi
+        fi
       else
         echo "[build-cache] cannot use $BUILD_CACHE/$REPO, its outboxes or the $BUILD_CACHE_LOCKS volume: running without it" >&2
         BUILD_CACHE_ROOT=""
@@ -287,10 +297,9 @@ build_cache_args() {
   # are that user's only, so a throwaway container of the image, as that user, empties what is left
   if [ -d "$outbox" ]; then
     find "$outbox" -mindepth 1 -maxdepth 1 ! -type d -delete 2>/dev/null || true
-    # the promoter's own verdicts (build-cache-promote.sh)
     find "$outbox" -mindepth 1 -maxdepth 1 -type d -name 'judged-*' -user "$(id -u)" -empty -delete 2>/dev/null || true
     if [ -n "$(find "$outbox" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-      docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} --rm --network none --security-opt no-new-privileges --cap-drop ALL --user 1001:1001 \
+      docker run ${PLACE_ARGS[@]+"${PLACE_ARGS[@]}"} --rm --network none --security-opt no-new-privileges --cap-drop ALL --user 1001:1001 \
         -v "$outbox:/outbox" --entrypoint sh "$IMAGE" -c 'chmod -R u+rwX /outbox 2>/dev/null; find /outbox -mindepth 1 -delete' </dev/null >/dev/null 2>&1 || true
     fi
     # A file that is still there would be read as this runner's own claim or build: the runner starts
@@ -302,6 +311,10 @@ build_cache_args() {
     fi
   fi
   mkdir -p "$outbox" && chmod 1777 "$outbox" || return 0
+  if [ -n "$BUILD_CACHE_LABEL" ] && ! chcon -t container_file_t -l s0 "$outbox"; then
+    echo "[$1] cannot label its build cache outbox container_file_t for SELinux: starting it without the build cache" >&2
+    return 0
+  fi
   BUILD_CACHE_ARGS=(-v "$BUILD_CACHE_ROOT/entries:/build-cache:ro" -v "$BUILD_CACHE_LOCKS:/build-cache-locks"
     -v "$outbox:/build-cache-outbox" -e OVIS_BUILD_CACHE_DIR=/build-cache -e OVIS_BUILD_CACHE_LOCKS=/build-cache-locks
     -e OVIS_BUILD_CACHE_OUTBOX=/build-cache-outbox ${BUILD_CACHE_WRITER:+-e "OVIS_BUILD_CACHE_WRITER=$BUILD_CACHE_WRITER"})
@@ -311,11 +324,10 @@ build_cache_args() {
 # throwaway container of the image, no network, allowed only past file permissions, removes it.
 clean_taken() {
   [ -n "$(find "$BUILD_CACHE_OUTBOXES/.taken" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] || return 0
-  docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} --rm --network none --security-opt no-new-privileges --cap-drop ALL --cap-add DAC_OVERRIDE --user 0:0 \
+  docker run ${PLACE_ARGS[@]+"${PLACE_ARGS[@]}"} --rm --network none --security-opt no-new-privileges --cap-drop ALL --cap-add DAC_OVERRIDE --user 0:0 \
     -v "$BUILD_CACHE_OUTBOXES/.taken:/taken" --entrypoint find "$IMAGE" /taken -mindepth 1 -delete </dev/null >/dev/null 2>&1 || true
 }
 
-# Every second: the trusted builds in the outboxes go into the cache. In its own process group, which cleanup stops.
 promote_loop() {
   trap 'exit 143' TERM
   local names=() slot
@@ -323,13 +335,10 @@ promote_loop() {
   while true; do
     bash "$SCRIPT_DIR/build-cache-promote.sh" "$REPO" "$BUILD_CACHE_ROOT" "$BUILD_CACHE_OUTBOXES" "$BUILD_CACHE_WRITER" "$((10#$BUILD_CACHE_MB))" "${names[@]}" || true
     clean_taken
-    # with --once too: until cleanup stops it, after the slots' containers end
     sleep 1
   done
 }
 
-# The cache loop runs in its own process: files here tell the launcher it warmed the caches, and it
-# that the launcher is stopping. Made with the EXIT trap that removes it.
 STATE_DIR=""
 # Git over a saturated or stalled link: give up on a transfer slower than 1 KB/s for a minute, and on
 # any command after its deadline, rather than hold every refresh (and, at start, every runner).
@@ -405,8 +414,6 @@ refresh_mirror() {
   DEFAULT_REF="$head"
 }
 
-# One directory per bun.lock (named after its blob), and `current` pointing at the default branch's
-# (DEFAULT_REF, which refresh_mirror has just confirmed).
 refresh_bun_cache() {
   local lock commit version tmp failed old dir status
   [ -n "$DEFAULT_REF" ] || return 1
@@ -427,7 +434,7 @@ refresh_bun_cache() {
     # the container a PID 1 that passes the deadline's SIGTERM on (a bare PID 1 ignores it), and -k
     # ends the client if it still waits. Whatever ended it, docker rm -f below ends the container.
     status=0
-    timeout --foreground -k 5 900 docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} --rm --init \
+    timeout --foreground -k 5 900 docker run ${PLACE_ARGS[@]+"${PLACE_ARGS[@]}"} --rm --init \
       --name "$CACHE_CONTAINER" \
       --security-opt no-new-privileges \
       --cap-drop ALL \
@@ -455,12 +462,10 @@ refresh_bun_cache() {
     rm -f "$failed"
     # mktemp's 0700, or a package's own modes, would keep the runner's own user out
     chmod -R a+rX "$tmp"
-    # another launcher may have finished the same lockfile first
     mv -T "$tmp" "$version" 2>/dev/null || rm -rf "$tmp"
   fi
   old="$(readlink "$BUN_CACHES/current" 2>/dev/null || true)"
   if [ "$old" != "$lock" ]; then
-    # its mtime now says when it was replaced
     if [ -n "$old" ] && [ -d "$BUN_CACHES/$old" ]; then touch "$BUN_CACHES/$old"; fi
     ln -sfn "$lock" "$BUN_CACHES/.current-new" && mv -T "$BUN_CACHES/.current-new" "$BUN_CACHES/current"
   fi
@@ -487,20 +492,17 @@ refresh_caches() (
   return 0
 )
 
-# The first refresh says when it is done, so runners can start with warm caches; then one a minute.
 cache_loop() {
   trap 'exit 143' TERM
   refresh_caches
   : > "$STATE_DIR/warm"
   [ "$ONCE" = 1 ] && return 0
   while true; do
-    # a schedule, not a wait: one small fetch a minute keeps the mirror near GitHub
     sleep 60
     refresh_caches
   done
 }
 
-# Set when each runner starts, so a cache that appeared since is used.
 cache_args() {
   CACHE_ARGS=()
   [ "$CACHE" = 1 ] || return 0
@@ -538,8 +540,6 @@ host_ranges() {
   done <<< "$addrs"
 }
 
-# Whether a range of this host overlaps "<first> <last>" ("$1"), with that range's last address in
-# OVERLAP_END.
 host_overlap() {
   local range
   for range in ${HOST_RANGES[@]+"${HOST_RANGES[@]}"}; do
@@ -666,13 +666,14 @@ slot_loop() {
       continue
     fi
     delay=30
-    # No docker socket, no host mount but the read-only caches, no privileges. tini is already the entrypoint.
+    # No docker socket, no host mount but the read-only caches and the slot's build cache outbox, no privileges.
+    # tini is already the entrypoint.
     # No core dumps: with the host's relative core_pattern ("core") a crash writes one into the
     # checkout, which scripts/check.ts then counts as a source change of the run.
     # The token goes in on stdin (entrypoint.sh), so it is never in the container's environment.
     cache_args
     build_cache_args "$name"
-    if printf '%s\n' "$token" | docker run ${CPUSET_ARGS[@]+"${CPUSET_ARGS[@]}"} --rm -i \
+    if printf '%s\n' "$token" | docker run ${PLACE_ARGS[@]+"${PLACE_ARGS[@]}"} --rm -i \
       --name "$name" \
       --network "$name-net" \
       --security-opt no-new-privileges \
@@ -709,7 +710,6 @@ cleanup() {
   cleaned=1
   trap '' INT TERM
   echo "stopping runner slots..." >&2
-  # the whole refresh, git and the Bun cache build included: none may outlive the launcher
   if [ -n "$STATE_DIR" ]; then : > "$STATE_DIR/stopping"; fi
   if [ -n "$CACHE_PID" ]; then kill -TERM -- "-$CACHE_PID" 2>/dev/null || true; fi
   if [ -n "$PROMOTE_PID" ]; then kill -TERM -- "-$PROMOTE_PID" 2>/dev/null || true; fi
@@ -720,19 +720,14 @@ cleanup() {
   for slot in $(seq 1 "$COUNT"); do
     docker stop -t 30 "${PREFIX}${slot}" >/dev/null 2>&1 || true
   done
-  # the runners, and the cache loop with every git and docker client it started
   wait 2>/dev/null || true
   # a build client killed while its container still ran left the container behind
   docker rm -f "$CACHE_CONTAINER" >/dev/null 2>&1 || true
-  # the slots' networks, with no container left on them, and the check slots' keeper last
   for slot in $(seq 1 "$COUNT"); do
     docker network rm "${PREFIX}${slot}-net" >/dev/null 2>&1 || true
   done
   docker stop -t 5 "$SLOTS" >/dev/null 2>&1 || true
-  # what a launcher from before the slots had networks of their own left when it was killed rather
-  # than stopped: the container whose network namespace all its runners shared
   docker stop -t 5 "${PREFIX}net" >/dev/null 2>&1 || true
-  # Remove any runner of this host that is still registered.
   ids="$(gh api "repos/$REPO/actions/runners" --paginate \
     --jq ".runners[] | select(.name | startswith(\"$PREFIX\")) | .id" 2>/dev/null || true)"
   for id in $ids; do
@@ -746,13 +741,10 @@ trap 'exit 143' TERM
 
 if [ "$CACHE" = 1 ]; then
   STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ovis-ci-runner.XXXXXX")"
-  # in a process group of its own (job control on for this one start), so cleanup stops it whole
   set -m
   cache_loop &
   CACHE_PID="$!"
   set +m
-  # The first runners wait for warm caches, up to --cache-wait: a refresh that hangs or fails costs
-  # downloads, never the runners. Short naps, so a stop signal is handled at once.
   deadline=$((SECONDS + 10#$CACHE_WAIT))
   while [ ! -e "$STATE_DIR/warm" ] && kill -0 "$CACHE_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.1
@@ -763,7 +755,6 @@ if [ "$CACHE" = 1 ]; then
 fi
 
 if [ -n "$BUILD_CACHE_ROOT" ]; then
-  # what an earlier launcher's promoter left
   clean_taken
   set -m
   promote_loop &
@@ -784,5 +775,4 @@ if [ "$ONCE" = 1 ]; then
   exit "$rc"
 fi
 
-# Slot loops run until a signal arrives; `wait` is interrupted by the traps.
 wait

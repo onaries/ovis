@@ -10,11 +10,9 @@ import { SettingsProvider } from "../lib/settings.ts";
 import type { RelayState } from "../lib/useRelay.ts";
 import { RelayTab } from "./ConnectPhoneDialog.tsx";
 
-// The relay tab's Sign in starts the sign-in on the Ovis link page in a new tab, never Settings, and
-// this tab comes back signed in once the person confirms there.
 const SERVICE = "https://account.ovis.example";
 const ONLINE: RelayStatus = { phase: "online", relay: "wss://relay.ovis.example", app: "https://app.ovis.example", sessions: 0, blocked: null, error: null };
-const relay: RelayState = { status: ONLINE, unsupported: false, pending: false, request: async () => ONLINE };
+const relay: RelayState = { status: ONLINE, unsupported: false, pending: false, request: async () => ONLINE, reread: () => {} };
 
 interface FakeTab { opener: unknown; closed: boolean; location: { href: string }; close(): void }
 
@@ -26,9 +24,7 @@ describe("the relay tab's Sign in", () => {
   let popupBlocked: boolean;
   let opened: string[];
   let tab: FakeTab | null;
-  /** settles with the address the new tab is sent to */
   let navigated: Promise<string>;
-  /** the link page's code, approved there as the first poll comes in */
   let approveOnPoll: boolean;
   let userCode: string | null;
   let polls: AbortSignal[];
@@ -102,7 +98,6 @@ describe("the relay tab's Sign in", () => {
       if (!url.pathname.startsWith("/v1/signin/") || !answer.ok) return answer;
       const started = await answer.json() as Record<string, unknown>;
       userCode = String(started["user_code"]);
-      // the first poll comes at once rather than after the service's five seconds
       return Response.json({ ...started, interval: 0.001 });
     };
     spyOn(globalThis, "fetch").mockImplementation(Object.assign(fetch, { preconnect: globalThis.fetch.preconnect }));
@@ -248,8 +243,6 @@ describe("the relay tab's Sign in", () => {
     await mount();
     await signIn();
     await act(async () => { await firstPoll; });
-    // the service's interval is 1 ms here, so a later poll may have begun by now: every poll carries the sign-in's
-    // one signal, which closing the sheet aborts
     expect(polls.length).toBeGreaterThan(0);
     expect(polls.every((signal) => !signal.aborted)).toBe(true);
     await act(async () => { renderer!.unmount(); });

@@ -1,4 +1,3 @@
-/** Simplified Chinese for dashboard feature strings. */
 export const DASHBOARD_ZH: Record<string, string> = {
   "Add a PC": "添加电脑",
   "A PC joins through your account, or pairs with this device alone.": "电脑可以通过你的账户加入，或只与此设备配对。",

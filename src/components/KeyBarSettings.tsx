@@ -15,7 +15,6 @@ const MODIFIERS: readonly (keyof StickyModifiers)[] = ["ctrl", "alt", "shift"];
 const MODIFIER_CAPS: Record<keyof StickyModifiers, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift" };
 const CHARACTER_KEY = "character";
 
-/** A phone in miniature: the terminal, the key bar under it (folded to a line, or not) and the keyboard, up or down. */
 function PhonePreview({ keyboard, bar }: { keyboard: boolean; bar: "keys" | "folded" }) {
   return (
     <span className="key-bar-phone" data-keyboard={keyboard ? "up" : "down"} data-bar={bar}>
@@ -26,21 +25,14 @@ function PhonePreview({ keyboard, bar }: { keyboard: boolean; bar: "keys" | "fol
   );
 }
 
-/**
- * How the key bar behaves on a touch screen: the keyboard only from its key, the bar folded in Input
- * line mode, its Attach files key. Drawn atop the key bar editor, and on Settings > Terminal while a
- * search looks for them.
- */
 export function KeyBarToggles() {
   const t = useT();
   const { settings, update } = useSettings();
-  // the keyboard, the folded bar and the attach key are a touch screen's only (PaneTerminal.tsx, TerminalInput.tsx, KeyBar.tsx)
   const touch = useMediaQuery("(pointer: coarse)");
   if (!touch) return null;
   return (
     <SettingsBare.Provider value={true}>
       <SettingsGroup>
-        {/* the picture: a tap on the terminal, with the keyboard it brings up or not */}
         <SettingsRow label={t("Don't open the keyboard when tapping the terminal")} description={t("On this device, a tap on the terminal no longer brings up the keyboard; the key bar's keyboard key shows and hides it.")} icon={Keyboard} preview={<PhonePreview keyboard={!settings.terminalKeyboardOnRequest} bar="keys" />} reset={["terminalKeyboardOnRequest"]} keywords={t("Keyboard only from the key bar")}>
           <Toggle label={t("Don't open the keyboard when tapping the terminal")} checked={settings.terminalKeyboardOnRequest} onChange={(terminalKeyboardOnRequest) => update({ terminalKeyboardOnRequest })} />
         </SettingsRow>
@@ -55,7 +47,6 @@ export function KeyBarToggles() {
   );
 }
 
-/** The phone's key row: handles are a shortcut; buttons keep editing possible without dragging. */
 export function KeyBarSettings() {
   const t = useT();
   const { settings, update } = useSettings();
@@ -63,7 +54,6 @@ export function KeyBarSettings() {
   const ids = new Set(items.map(keyBarItemId));
   const available = KEY_BAR_KEYS.filter((key) => !ids.has(keyBarItemId({ type: "key", key })));
   const [chosenKey, setChosenKey] = useState<string>(available[0] ?? "");
-  // The combo editor names a base key; shortcuts such as ^C already include a modifier.
   const comboKeys = KEY_BAR_KEYS.filter((key) => !key.startsWith("ctrl-") && key !== "BackTab" && !["pipe", "tilde", "slash"].includes(key));
   const [comboKey, setComboKey] = useState<string>("ArrowLeft");
   const [character, setCharacter] = useState("");

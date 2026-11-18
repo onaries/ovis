@@ -1,3 +1,7 @@
+/**
+ * A relay client's side of a connection to a PC: Noise NK to its key, then Ovis Mux v1 admission with a device key
+ * (docs/relay.md).
+ */
 import { channelBinding, openClientSecureChannel } from "./relay-e2ee.ts";
 import { fromBase64Url, PAIR_APPROVAL_MS, pairCommitment, pairDigits, randomPairNonce, toBase64Url } from "./relay-pair-sas.ts";
 import type { SecureChannel, Transport } from "./relay-e2ee.ts";
@@ -30,6 +34,11 @@ export class RelayUnreachableError extends Error {
   }
 }
 
+/**
+ * The relay closed this client RELAY_NEW_SESSIONS_CLOSE: the PC named it as a device new to it while its relay pass
+ * allows no new sessions (relay/README.md, "New sessions"). Only a device that was pairing hears it; ones the PC
+ * knows still sign in.
+ */
 export class RelayNewSessionsRefusedError extends Error {
   readonly code = "new_sessions_refused";
   constructor() {
@@ -53,6 +62,7 @@ export class RelayPcOfflineError extends MuxProtocolError {
   }
 }
 
+/** WebSocket.OPEN, so an injected socket need not be a WebSocket */
 const OPEN = 1;
 
 export const ASSIGNMENT_MS = 10_000;
@@ -62,6 +72,7 @@ const PAIR_APPROVAL_GRACE_MS = 5_000;
 
 export interface RelaySocket {
   binaryType: BinaryType;
+  /** a WebSocket's: 1 while open; 2 once it is closing, before any close event */
   readonly readyState: number;
   send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
@@ -78,12 +89,35 @@ export interface RelayChannelOptions {
   readonly pcAnswerMs?: number;
   readonly carrier?: string;
   readonly requestTimeoutMs?: MuxOptions["requestTimeoutMs"];
+  /**
+   * A new device with no pairing code pairs by comparing digits (shared/relay-pair-sas.ts): this
+   * shows them, and resolves once the person says the PC shows the same. Without it such a device
+   * cannot pair. The PC's owner still has to approve it there.
+   */
   readonly compare?: (digits: string) => Promise<void>;
+  /**
+   * A signed-in client's account key: a new pairing signs in with it instead of a key of its own
+   * for this PC, so the row it gets is the account's to link (docs/account.md, rule 2).
+   */
   readonly accountKey?: { readonly private_key: CryptoKey; readonly public_spki: string };
+  /**
+   * What a comparison asks for, shown in the approval prompt: this PC only, or the account; `pc` by default.
+   * `vouched`: a PC's server pairing with another PC of its account (PAIR_INTENT_VOUCHED).
+   */
   readonly intent?: "pc" | "account" | "vouched";
+  /**
+   * A comparison only: told what the PC selected in its answer to HELLO, before PAIR_REQUEST goes out. A throw
+   * ends the attempt there with that error, and nothing is sent to pair.
+   */
   readonly beforeRequest?: (server: RelayServerInfo) => void;
+  /**
+   * Open the channel on one of the PC's direct carriers (`ws://<private IPv4>:<port>`, docs/relay.md
+   * "Direct on the same network") instead of through the relay: signing in only, never a pairing.
+   */
   readonly direct?: string;
+  /** Offer DIRECT_CARRIER, so the PC names its direct carriers in AUTH_OK: only a client that can open them. */
   readonly offerDirect?: boolean;
+  /** With offerDirect, also offer DIRECT_TAILNET: only a client that can open a carrier on a Tailscale address. */
   readonly offerTailnet?: boolean;
 }
 export interface RelayChannel {
@@ -93,6 +127,10 @@ export interface RelayChannel {
   readonly sessionId: string;
   readonly role: "drive" | "watch";
   readonly server: RelayServerInfo;
+  /**
+   * False once the relay socket has left OPEN, possibly with no close event yet: a socket closed
+   * under the page waits for the relay's answer to its close, and a browser drops what is sent meanwhile.
+   */
   readonly carrierOpen: boolean;
   readonly directCarriers?: readonly string[];
   readonly direct?: string;
@@ -112,6 +150,7 @@ export interface RelayServerInfo {
   readonly features?: readonly string[];
 }
 
+/** Resolves only after protected Noise, WELCOME and device admission all succeeded. Never retries. */
 export async function openRelayChannel(offer: RelayOffer, options: RelayChannelOptions): Promise<RelayChannel> {
   if (typeof offer.relay !== "string" || !isWssOrigin(offer.relay)) throw new UnsafeRelayDestinationError("relay");
   if (options.carrier !== undefined && !isWssOrigin(options.carrier)) throw new UnsafeRelayDestinationError("relay");
@@ -119,6 +158,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
   const direct = options.direct;
   if (direct !== undefined && (!isDirectCarrier(direct) || offer.code !== undefined)) throw new DirectCarrierUnusableError();
   const url = new URL("/v1/ws", direct ?? options.carrier ?? offer.relay);
+  // the PC behind a direct carrier is the one it is: nothing to route, and nothing for the network to read
   if (direct === undefined) {
     url.searchParams.set("server_id", offer.server_id);
     url.searchParams.set("role", "client");
@@ -134,6 +174,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
   return new Promise<RelayChannel>((resolve, reject) => {
     let phase: "assigned" | "handshake" | "welcome" | "pair" | "auth" | "ready" | "closed" = "assigned";
     const comparing = offer.code === undefined && device.device_id === null && options.compare !== undefined;
+    // an older PC selects none of these; a comparison names what it asks for, so the PC's prompt can say it
     const offered: readonly string[] = comparing
       ? [ACCOUNT_FEATURE, PAIR_SAS_FEATURE, options.intent === "account" ? PAIR_INTENT_ACCOUNT : options.intent === "vouched" ? PAIR_INTENT_VOUCHED : PAIR_INTENT_PC]
       : [ACCOUNT_FEATURE];
@@ -141,6 +182,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
     let phoneNonce: Uint8Array | undefined;
     let binding: Uint8Array | undefined;
     let challenge: Uint8Array | undefined;
+    /** set once PAIR_CONFIRM went out: before it, AUTH_OK would be a PC skipping the comparison on this phone */
     let confirmed = false;
     let secure: SecureChannel | undefined;
     let mux: MuxEngine | undefined;
@@ -148,6 +190,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
     const limits = { ...LIMITS_V1 };
     let welcome: Uint8Array | undefined;
     let passed: Uint8Array | undefined;
+    /** the nonce of a provisional WELCOME this phone signed in on, and the PC's answer to HELLO that may follow it */
     let provisionalNonce: string | undefined;
     let answered: Uint8Array | undefined;
     let server: RelayServerInfo = { version: "", relayProtocol: RELAY_PROTOCOL };
@@ -201,6 +244,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
       }
       if (phase === "welcome" && frame.type === FrameType.WELCOME) {
         if (comparing && frame.payload.provisional && !passed) { passed = bytes; return; }
+        // before any credential: a PC of another relay generation is an update, not a pairing
         if (frame.payload.relay_protocol !== RELAY_PROTOCOL) throw new MuxProtocolError("unsupported_version", `The PC speaks relay protocol ${frame.payload.relay_protocol}`);
         server = { version: frame.payload.server_version, relayProtocol: frame.payload.relay_protocol, features: frame.payload.features };
         if (frame.payload.features.some((feature) => !offered.includes(feature))) throw new MuxProtocolError("unsupported_extension", "Server selected unoffered features");
@@ -210,6 +254,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
         provisionalNonce = frame.payload.provisional ? frame.payload.nonce : undefined;
         if (comparing) {
           options.beforeRequest?.(server);
+          // an older PC pairs only with a code from its QR code
           if (!frame.payload.features.includes(PAIR_SAS_FEATURE)) throw new MuxProtocolError("unsupported_extension", "The PC cannot pair without a code");
           binding = secure ? channelBinding(secure) : undefined;
           if (!binding) throw new MuxProtocolError("internal_error", "The relay channel has no binding");
@@ -236,6 +281,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
         phase = "auth";
         const digits = pairDigits(binding, device.public_spki, phoneNonce, fromBase64Url(frame.payload.nonce));
         await send({ type: FrameType.PAIR_REVEAL, flags: 0, stream_id: 0, payload: { nonce: toBase64Url(phoneNonce) } });
+        // never awaited here: the PC's refusal or timeout must still come through while the person looks
         void options.compare?.(digits).then(() => {
           if (phase !== "auth") return;
           confirmed = true;
@@ -243,6 +289,8 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
         }).catch(failed);
         return;
       }
+      // a PC that selects something (the account feature) answers HELLO after the provisional WELCOME this
+      // phone already signed in on: the same nonce, so the sign-in stands, and only what it selected is new
       if (phase === "auth" && frame.type === FrameType.WELCOME && !frame.payload.provisional && provisionalNonce !== undefined && !answered) {
         if (frame.payload.nonce !== provisionalNonce || frame.payload.relay_protocol !== RELAY_PROTOCOL) throw new MuxProtocolError("protocol_error", "The PC's answer to HELLO changed its WELCOME");
         if (frame.payload.features.some((feature) => !offered.includes(feature))) throw new MuxProtocolError("unsupported_extension", "Server selected unoffered features");
@@ -254,14 +302,18 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
         throw new MuxProtocolError("protocol_error", "Unexpected frame before AUTH_OK");
       }
       if (comparing && !confirmed) throw new MuxProtocolError("protocol_error", "AUTH_OK before the digits were confirmed");
+      // a sign-in names this phone's own device; a pairing (a code, or digits compared) is given a new one
       if (offer.code === undefined && !comparing && frame.payload.device_id !== device.device_id) {
         throw new MuxProtocolError("auth_failed", "AUTH_OK named a different device");
       }
       const admitted = await store.update(offer.server_id, (current) => {
+        // a first pairing's key is saved only now that the PC has admitted it (device.ts getDevice)
         const kept = current ?? (device.device_id === null ? device : undefined);
         if (!kept || kept.server_public_key !== device.server_public_key || kept.public_spki !== device.public_spki) {
           throw new MuxProtocolError("auth_changed", "Stored relay identity changed during authentication");
         }
+        // the PC's answer to the relay-hints this phone offered in HELLO, inside the Noise channel the
+        // PC authenticated: the relay cannot have written these
         return { ...kept, device_id: frame.payload.device_id, relay: hintedRelay(kept.relay, frame.payload.relays),
           ...(options.offerDirect ? { direct: frame.payload.direct ?? [] } : {}) };
       });
@@ -283,6 +335,9 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
     };
     const failed = (error: unknown): void => stop(error instanceof Error ? error : new Error(String(error)));
     socket.onclose = (event) => {
+      // said first: the secure channel's own close below would report a plain lost socket. Only the relay says it,
+      // and only to a device that is pairing: the same code from a direct carrier's address (another host there, where
+      // 4403 often means "forbidden") or to a sign-in is a lost socket like any other, so the race goes on to the relay
       const pairing = offer.code !== undefined || device.device_id === null;
       if (event.code === RELAY_NEW_SESSIONS_CLOSE && direct === undefined && pairing) stop(new RelayNewSessionsRefusedError());
       transport.onclose?.(event.code, event.reason);
@@ -354,10 +409,21 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
   });
 }
 
+/**
+ * Whether the PC answers on a direct carrier, proven and nothing more: the socket is opened, the PC
+ * assigns it, and the Noise handshake to the key the offer pins completes; then it is closed before
+ * HELLO, so the PC holds no session for it. False for anything else within `ms`, a host at the
+ * address that is not the PC included.
+ */
 export async function probeDirect(offer: RelayOffer, direct: string, socketFor: (url: string) => RelaySocket, ms: number, signal?: AbortSignal): Promise<boolean> {
   return (await probePc(offer, { direct }, socketFor, ms, signal)).kind === "answered";
 }
 
+/**
+ * What a probe of the PC found: it `answered` (the Noise handshake to its pinned key completed, `ms`
+ * from the carrier's `assigned` frame, so one round trip to the PC and back), the carrier assigned the
+ * connection and no PC answered in time (`silent`: offline, for a relay), or nothing assigned it (`unreachable`).
+ */
 export type PcProbe = { readonly kind: "answered"; readonly ms: number } | { readonly kind: "silent" } | { readonly kind: "unreachable" };
 
 export function probePc(offer: RelayOffer, via: { readonly direct: string } | { readonly relay: string }, socketFor: (url: string) => RelaySocket, ms: number, signal?: AbortSignal): Promise<PcProbe> {
@@ -413,6 +479,7 @@ export function probePc(offer: RelayOffer, via: { readonly direct: string } | { 
       if (typeof value !== "object" || value === null || !("type" in value) || value.type !== "assigned") { settle(unreachable); return; }
       const started = performance.now();
       assignedAt = started;
+      // a handshake to another key is no answer from the PC: nothing is known of it
       void openClientSecureChannel(transport, {
         daemonPublicKeyB64: offer.server_public_key,
         events: { onopen: () => settle({ kind: "answered", ms: Math.round(performance.now() - started) }), onmessage: () => {}, onerror: () => settle(unreachable), onclose: failed },
@@ -428,6 +495,11 @@ export function orderDirectRoutes(carriers: readonly string[], worked?: string):
     .map(({ carrier }) => carrier);
 }
 
+/**
+ * Opens through `first` (the offer's own relay by default) and, when the offer names one of Ovis's
+ * regional relays and that attempt failed before the PC answered (so no pairing code was spent),
+ * through the other of the offer's relay and the global one, which such a PC is always linked to.
+ */
 export async function openRelayChannelWithFallback<O extends { readonly carrier?: string }>(
   offer: RelayOffer, options: O, open: (offer: RelayOffer, options: O) => Promise<RelayChannel>, first = offer.relay,
 ): Promise<{ channel: RelayChannel; relay: string }> {

@@ -1,10 +1,5 @@
 import type { Browser } from "playwright-core";
 
-/**
- * Input typed into a terminal while the app is offline is held for the user to send or discard
- * (AGENTS.md): a plain pane switch must not throw it away. The socket is refused for the whole
- * check, so every key goes to the draft and nothing reaches the pane.
- */
 export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string, paneA: string, paneB: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   try {
@@ -29,8 +24,6 @@ export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string,
   } finally {
     await context.close();
   }
-  // connected, but the pane's input never says it is ready: Send is refused, and the refused
-  // draft must still be there after a pane switch
   const notReady = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   try {
     await notReady.addInitScript((ids) => {
@@ -49,7 +42,6 @@ export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string,
     await page.locator(".pane-frame.is-current .xterm-helper-textarea").focus();
     await page.keyboard.type("echo held-b");
     await held.filter({ hasText: "echo held-b" }).waitFor({ timeout: 10_000 });
-    // Ctrl+Backspace erases the held draft's last word, and sends no Ctrl+W to the pane (#3415)
     await page.keyboard.press("Control+Backspace");
     await held.filter({ hasText: /^echo\s*$/ }).waitFor({ timeout: 10_000 });
     await page.keyboard.type("held-b");

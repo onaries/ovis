@@ -11,12 +11,9 @@ import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
 import { ZH } from "../src/lib/i18n.zh.ts";
 
-// Settings found through the command palette, on the unmodified app over the demo's fixture
-// transport: what a user types for a setting, in each language, opens its page and its group. All
-// files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
+// All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 
-/** What a user types for a setting, by language, and the page (and group, or `-`) the first Settings result opens. */
 const MATRIX: readonly (readonly ["en" | "ko" | "ja" | "zh", string, string, string])[] = [
   ["en", "theme", "appearance", "-"],
   ["en", "palette", "appearance", "-"],
@@ -68,12 +65,10 @@ const MATRIX: readonly (readonly ["en" | "ko" | "ja" | "zh", string, string, str
 
 interface SearchResult { width: number; language: string; query: string; expected: { page: string; section: string }; first: string | null; page: string | null; focusedSection: string | null; sectionVisible: boolean | null; overflow: string[]; focusReturned: boolean; pass: boolean }
 
-/** Where the focus is, as a selector-like name, so the one before the palette and the one after Settings closes compare. */
 const focusName = (page: Page): Promise<string> => page.evaluate(() => {
   const node = document.activeElement as HTMLElement | null;
   return node ? `${node.tagName.toLowerCase()}.${node.className}#${node.id}[${node.getAttribute("aria-label") ?? ""}]` : "none";
 });
-/** The page Settings shows, by the selected tab's id, and the group the focus is on. */
 const landing = async (page: Page, label: (name: string) => string): Promise<{ page: string | null; section: string | null; visible: boolean | null }> => {
   const shown = await page.evaluate(() => {
   const id = document.querySelector<HTMLElement>(".settings-dialog [role='tabpanel']:not([hidden])")?.getAttribute("aria-label") ?? null;
@@ -81,30 +76,20 @@ const landing = async (page: Page, label: (name: string) => string): Promise<{ p
   const section = active?.dataset.section ?? null;
   let visible: boolean | null = null;
   if (section !== null && active) {
-    // the group's head and its first control, which may arrive after it opens (the OpenAI key's form)
     const body = active.closest(".settings-body")?.getBoundingClientRect(), box = active.getBoundingClientRect();
     const control = active.querySelector("input, select, button, textarea")?.getBoundingClientRect();
     visible = body !== undefined && box.top >= body.top - 1 && box.top < body.bottom && control !== undefined && control.bottom <= body.bottom + 1;
   }
   return { page: id, section, visible };
   });
-  // the panel is named by its page's label in the language shown: back to the page's id
   const ids: Record<string, string> = { Appearance: "appearance", Chat: "chat", Terminal: "terminal", Alerts: "alerts", Agents: "agents", Shortcuts: "shortcuts", "Devices and PCs": "devices", Experimental: "experimental", About: "about" };
   const name = PAGES.find((name) => label(name) === shown.page);
   return { ...shown, page: shown.page === null ? null : name === undefined ? `unknown: ${shown.page}` : ids[name] };
 };
-/** Anything in the palette or Settings wider than the window: a long query or label must not push the sheet sideways. */
 const sideways = (page: Page): Promise<string[]> => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".command-palette, .palette-results, .settings-dialog, .settings-body:not([hidden])")]
   .filter((node) => node.scrollWidth > node.clientWidth + 1 || node.getBoundingClientRect().right > window.innerWidth + 0.5)
   .map((node) => `${node.className} ${node.scrollWidth}>${node.clientWidth}`));
 
-/**
- * Settings found through the palette: every row of the matrix in its language, on a desktop and on a
- * phone with a hardware keyboard, opens on its page and, when it names one, on its group, focused
- * and in view; closing returns the focus. A search that finds nothing, or one closed without
- * picking a result, leaves no request behind: Settings opened next starts at its top, and Back
- * and Forward do not land on a group either.
- */
 async function settingsSearch(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const results: SearchResult[] = [];
   const stale: { width: number; language: string; query: string; settingsRows: number; page: string | null; section: string | null; overflow: string[]; pass: boolean }[] = [];
@@ -125,7 +110,6 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
           await sheetRisen(page);
           await page.getByRole("button", { name: label("Close settings"), exact: true }).click();
           await page.locator(".settings-dialog").waitFor({ state: "detached" });
-          // the next row opens Settings again: its close's step back lands first
           await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         };
         for (const [rowLanguage, query, expectedPage, expectedSection] of MATRIX) {
@@ -143,7 +127,6 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
             await page.locator(".settings-dialog").waitFor();
             await page.waitForFunction(() => document.querySelector(".settings-dialog [role='tabpanel']:not([hidden])") !== null);
             if (expectedSection !== "-") await page.waitForFunction((section) => (document.activeElement as HTMLElement | null)?.dataset.section === section, expectedSection, { timeout: 3000 }).catch(() => undefined);
-            // a group's control drawn after the server answers is in view once it is there
             if (expectedSection !== "-") await page.waitForFunction(() => {
               const active = document.activeElement as HTMLElement | null;
               const body = active?.closest(".settings-body")?.getBoundingClientRect();
@@ -161,8 +144,6 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
           const pass = shown.page === expectedPage && (expectedSection === "-" || (shown.section === expectedSection && shown.visible === true)) && overflow.length === 0 && focusReturned;
           results.push({ width, language, query, expected: { page: expectedPage, section: expectedSection }, first: firstText, page: shown.page, focusedSection: shown.section, sectionVisible: shown.visible, overflow, focusReturned, pass });
         }
-        // a search that finds nothing, one closed without picking, and a 200-character unbroken one:
-        // none of them steers the Settings opened next, nor its Back and Forward
         for (const query of ["zzqxv-nothing-matches", MATRIX.find(([rowLanguage, , , section]) => rowLanguage === language && section === "quick-replies")![1], "w".repeat(200)]) {
           await openPalette(page, query);
           const settingsRows = await page.locator(".palette-section[data-section='settings-pages'] [role='option']").count();
@@ -200,7 +181,6 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
 
 try {
   await buildDemoApp(app);
-  // the same loop as scripts/settings-rows-demo-regression.ts, which has a second root: each Settings demo script loads the same index.html
   for (const [dir, extra] of [[app, ""]] as const) {
     const index = join(dir, "index.html");
     writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>${extra}${DEMO_FILE_PREVIEW_SCRIPT}\n    <script type="module"`));
@@ -222,7 +202,6 @@ try {
   try {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? chromium.executablePath(), headless: true, args: ["--no-sandbox"] });
     try {
-      // settingsSearch writes its rows into the evidence folder itself: no screenshot comes first here to make it
       if (process.env.UI_EVIDENCE_DIR) mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
       await settingsSearch(browser, url);
     } finally {

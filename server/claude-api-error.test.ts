@@ -25,10 +25,8 @@ test("reads a turn whose last entry is the API error as failed, and one a retry 
   const answer = entry({ type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done" }] } });
   expect(claudeTurnEnd(recorded)).toBe("failed");
   expect(claudeTurnEnd(`${recorded}${answer}`)).toBe("answered");
-  // a new prompt, a tool call or a tool's result: the turn is under way again
   expect(claudeTurnEnd(`${recorded}${entry({ type: "user", origin: { kind: "human" }, message: { role: "user", content: "again" } })}`)).toBe("running");
   expect(claudeTurnEnd(`${answer}${entry({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } })}`)).toBe("running");
-  // Claude Code's own records, a local command's output and a subagent's entries tell nothing of the session's turn
   const own = [
     entry({ type: "user", isMeta: true, message: { role: "user", content: "caveat" } }),
     entry({ type: "user", message: { role: "user", content: "<local-command-stdout>ok</local-command-stdout>" } }),

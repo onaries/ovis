@@ -4,7 +4,6 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { activePluginScript } from "./plugin-runtime.ts";
-
 /**
  * install.sh's `ovis` command and its `--add` step. The launcher's functions are cut out of install.sh
  * itself and run under /bin/sh with a HOME of their own; the whole script is run as `curl … | sh` runs
@@ -26,7 +25,6 @@ const CTRL_C = "\x03";
 const RUN_ENDS_WITHIN_MS = 45_000;
 setDefaultTimeout(RUN_ENDS_WITHIN_MS + 15_000);
 
-/** one top-level shell function from install.sh, by name, as written there (one line or a block) */
 function fn(name: string): string {
   const match = new RegExp(`^${name}\\(\\) \\{.*\\}$`, "m").exec(INSTALLER) ?? new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, "m").exec(INSTALLER);
   if (!match) throw new Error(`install.sh defines no ${name}()`);
@@ -42,15 +40,6 @@ const FUNCTIONS = ["say", "link", "launcher_text", "find_other_ovis", "write_lau
 const dir = mkdtempSync(join(tmpdir(), "ovis-install-command-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/**
- * The plugin's script, as a stand-in: it says where it ran from, what it was given and the dirs it
- * was handed. `add` (and `link`) leave a record, with whether their input is a terminal (and, on a PC
- * flagged `add-reads`, the line already typed there when they start), and like the
- * real one they fail while the app is not running. `status` says "running" while the PC's `running`
- * flag is set. `knows` is the release: one with `add`, one from before it (only `link`), or one from
- * before both, which answers a name it does not know with its usage and exit 2 as the real one does
- * (in single quotes there: the installer tells a release by the words `"link"` and COMMAND_ALIASES).
- */
 function pluginScript(knows: "add" | "link" | "neither" = "add", tui = false): string {
   const record = `{
   const { appendFileSync, existsSync } = await import("node:fs");
@@ -83,7 +72,6 @@ function readerScript(reader: "new" | "old"): string {
 }
 
 const STAND_INS: Record<string, string> = {
-  // the plugin installed already, under the id (and at the root) the test's files name; herdr runs while the PC's app does
   herdr: `case "$*" in
   --version) echo "herdr 0.9.3" ;;
   "plugin list") echo "$(cat "$SCRATCH/plugin-id") 0.0.0" ;;
@@ -94,25 +82,21 @@ const STAND_INS: Record<string, string> = {
   *) echo "unexpected herdr $*" >&2; exit 1 ;;
 esac`,
   node: `case "$1" in -p) case "$(uname -m)" in aarch64 | arm64) echo "22 arm64" ;; *) echo "22 x64" ;; esac ;; *) echo v22.0.0 ;; esac`,
-  // a rerun fetches nothing
   curl: `echo "unexpected curl $*" >&2; exit 1`,
 };
 
-/** One PC per test: a home directory, and a PATH that holds only what install.sh and the launcher run. */
 class Pc {
   readonly scratch: string;
   readonly bin: string;
   readonly launcher: string;
   readonly app: string;
 
-  /** `herdr: false`: a PC without herdr (Ovis on herdr-core, or nothing installed); `home`: how its home directory's name begins */
   constructor(options: { herdr?: boolean; home?: string } = {}) {
     this.scratch = mkdtempSync(join(dir, options.home ?? "pc-"));
     this.bin = join(this.scratch, "bin");
     this.launcher = join(this.scratch, ".local", "bin", "ovis");
     this.app = join(this.scratch, ".local", "share", "ovis", "app");
     mkdirSync(this.bin);
-    // (no perl: the add step empties the terminal with stty and dd, and finds its foreground with ps)
     for (const tool of ["sh", "cat", "uname", "ldd", "grep", "git", "tar", "awk", "sed", "mktemp", "rm", "sleep", "mv", "mkdir", "cp", "chmod", "ps", "tail", "readlink", "stty", "dd"]) {
       const real = Bun.which(tool);
       if (real) symlinkSync(real, join(this.bin, tool));
@@ -124,27 +108,22 @@ class Pc {
     this.plugin("plugin");
   }
 
-  /** herdr lists the plugin at `name` under `id`; `knows` is what its script does, `reader` how its add step reads an answer */
   plugin(name: string, knows: "add" | "link" | "neither" = "add", id = "devswha.ovis", reader: "new" | "old" = "new"): string {
     const root = join(this.scratch, name);
     mkdirSync(join(root, "scripts"), { recursive: true });
     writeFileSync(join(root, "scripts", "plugin.ts"), pluginScript(knows));
-    // a release from before link has no such file
     if (knows !== "neither") writeFileSync(join(root, "scripts", "plugin-link.ts"), readerScript(reader));
     writeFileSync(join(this.scratch, "plugin-id"), id);
     writeFileSync(join(this.scratch, "plugin-root"), root);
     return root;
   }
-  /** herdr lists no Ovis plugin */
   noPlugin(): this { writeFileSync(join(this.scratch, "plugin-id"), "someone.other"); return this; }
-  /** Ovis on herdr-core: its own checkout, where install.sh puts it */
   core(): string {
     mkdirSync(join(this.app, "scripts"), { recursive: true });
     writeFileSync(join(this.app, "scripts", "plugin.ts"), pluginScript());
     writeFileSync(join(this.app, "scripts", "plugin-link.ts"), readerScript("new"));
     return this.app;
   }
-  /** herdr's checkout at `name` as a git checkout with one commit, whose script `knows` what it is given: its root */
   checkout(name: string, knows: "add" | "link" | "neither" = "neither"): string {
     const root = this.plugin(name, knows);
     this.git(root, "init", "--quiet");
@@ -157,13 +136,6 @@ class Pc {
     if (run.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${run.stderr.toString()}`);
     return run.stdout.toString().trim();
   }
-  /**
-   * A release Settings → Updates installed for the checkout at `root` while its server ran on `port`,
-   * kept in `state` as server/updater.ts keeps it: in the folder named after the checkout and the
-   * port (updateStateDir), with a current.json that names the checkout's commit. `label` is what its
-   * add step records as the release that ran; `checkout` is another checkout at the same commit that
-   * keeps its releases in the same state dir.
-   */
   release(root: string, knows: "add" | "link" | "neither", options: { port?: number | string; state?: string; label?: string; checkout?: string; reader?: "new" | "old"; tui?: boolean } = {}): string {
     const state = options.state ?? join(this.scratch, ".config", "ovis");
     const updates = join(state, "updates", createHash("sha256").update(`${options.checkout ?? root}:${options.port ?? 7317}`).digest("hex").slice(0, 16));
@@ -174,48 +146,37 @@ class Pc {
     writeFileSync(join(updates, "current.json"), JSON.stringify({ source_revision: this.git(root, "rev-parse", "HEAD"), directory: release }));
     return release;
   }
-  /**
-   * herdr's checkout at `name` is a git checkout from before `link`, and Settings → Updates has since
-   * installed a release (what it `knows`), which is the code that runs.
-   */
   updated(name: string, knows: "add" | "link" | "neither"): string {
     return this.release(this.checkout(name), knows);
   }
-  /** a settings file of the plugin (`env` or `.env`), in the folder herdr gives it */
   settings(name: "env" | ".env", text: string, id = "devswha.ovis"): this {
     mkdirSync(join(this.scratch, "herdr-config", id), { recursive: true });
     writeFileSync(join(this.scratch, "herdr-config", id, name), text);
     return this;
   }
   flag(name: "add-fails" | "add-waits" | "add-reads" | "running"): this { writeFileSync(join(this.scratch, name), ""); return this; }
-  /** what the add step was run with, one record per run */
   addCalls(): { command: string; rest: string[]; terminal: boolean; typed?: string | null; release?: string }[] {
     const log = join(this.scratch, "add.calls");
     return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
   }
   environment(extra: Record<string, string> = {}): Record<string, string> {
-    // the source path: these stand-ins model herdr's checkout, not the release's binary (scripts/install-binary.test.ts)
     return { PATH: this.bin, HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_FROM_SOURCE: "1", ...extra };
   }
 
-  /** runs `call` after install.sh's constants and functions under sh with `set -eu`, as the script runs */
   sh(call: string, extra?: Record<string, string>): { code: number; out: string } {
     const run = Bun.spawnSync(["/bin/sh", "-c", `set -eu\n${CONSTANTS}\n${FUNCTIONS}\n${call}`], { cwd: this.scratch, env: this.environment(extra), stdout: "pipe", stderr: "pipe", timeout: 20_000 });
     return { code: run.exitCode ?? -1, out: run.stdout.toString() + run.stderr.toString() };
   }
-  /** the launcher install.sh writes, written */
   written(): this {
     const { code, out } = this.sh("write_launcher");
     if (code !== 0 || !existsSync(this.launcher)) throw new Error(`write_launcher wrote no launcher: ${out}`);
     return this;
   }
-  /** runs the written launcher as a shell would, by its path */
   ovis(args: string[], extra?: Record<string, string>): { code: number; out: string } {
     const run = Bun.spawnSync([this.launcher, ...args], { cwd: this.scratch, env: this.environment(extra), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 20_000 });
     return { code: run.exitCode ?? -1, out: run.stdout.toString() + run.stderr.toString() };
   }
 
-  /** the whole installer as a script or an agent runs it: the script on stdin, and no terminal */
   async unattended(args: string[] = [], extra?: Record<string, string>): Promise<{ out: string; exitCode: number }> {
     const child = Bun.spawn(["sh", "-s", "--", ...args], { cwd: this.scratch, env: this.environment(extra), stdin: Bun.file(join(ROOT, "install.sh")), stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => child.kill("SIGKILL"), RUN_ENDS_WITHIN_MS);
@@ -269,7 +230,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const text = readFileSync(pc.launcher, "utf8");
     expect(text.split("\n").slice(0, 2)).toEqual(["#!/bin/sh", MARK]);
     expect(statSync(pc.launcher).mode & 0o777).toBe(0o755);
-    // nothing of the write is left beside it
     expect(readdirSync(join(pc.scratch, ".local", "bin"))).toEqual(["ovis"]);
     expect(Bun.spawnSync(["/bin/sh", "-n", pc.launcher]).exitCode).toBe(0);
   });
@@ -278,7 +238,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const pc = new Pc().written();
     const text = readFileSync(pc.launcher, "utf8");
     expect(text).not.toContain(pc.scratch);
-    // the same words whichever PC wrote it
     expect(readFileSync(new Pc().written().launcher, "utf8")).toBe(text);
   });
 
@@ -287,7 +246,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const first = pc.ovis(["pair", "--approve"]);
     expect(first.code, first.out).toBe(0);
     expect(JSON.parse(first.out)).toMatchObject({ root: join(pc.scratch, "plugin", "scripts"), command: "pair", rest: ["--approve"] });
-    // the plugin reinstalled somewhere else: the same launcher follows it
     const moved = pc.plugin("plugin-moved");
     expect(JSON.parse(pc.ovis([]).out)).toMatchObject({ root: join(moved, "scripts"), command: "status", rest: [] });
   });
@@ -299,7 +257,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
   });
 
   it("runs Ovis on herdr-core from its checkout, with the dirs its service gives it", () => {
-    // with herdr on the PC or without it, while herdr lists no Ovis plugin
     const without = new Pc({ herdr: false }).written();
     const alone = without.core();
     expect(JSON.parse(without.ovis(["status"]).out)).toMatchObject({ root: join(alone, "scripts") });
@@ -307,16 +264,13 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const app = pc.core();
     const ran = JSON.parse(pc.ovis(["status"]).out);
     expect(ran).toMatchObject({ root: join(app, "scripts"), config: join(pc.scratch, ".config", "ovis"), state: join(pc.scratch, ".local", "state", "ovis") });
-    // the names from before the rename, while only those exist
     mkdirSync(join(pc.scratch, ".config", "herdr-web-ui"), { recursive: true });
     mkdirSync(join(pc.scratch, ".local", "state", "herdr-web-ui"), { recursive: true });
     expect(JSON.parse(pc.ovis(["status"]).out)).toMatchObject({ config: join(pc.scratch, ".config", "herdr-web-ui"), state: join(pc.scratch, ".local", "state", "herdr-web-ui") });
-    // dirs that are given are kept
     expect(JSON.parse(pc.ovis(["status"], { HERDR_PLUGIN_CONFIG_DIR: "/given/config", HERDR_PLUGIN_STATE_DIR: "/given/state" }).out)).toMatchObject({ config: "/given/config", state: "/given/state" });
   });
 
   it("runs the herdr plugin where an earlier herdr-core checkout is still there beside it", () => {
-    // OVIS_RUNTIME=herdr over an earlier herdr-core install: the installer's own steps run the plugin, so the command does
     const pc = new Pc().written();
     pc.core();
     const ran = JSON.parse(pc.ovis(["status"]).out);
@@ -324,7 +278,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     pc.flag("running");
     expect(pc.ovis(["add"]).code).toBe(0);
     expect(pc.addCalls()).toEqual([{ command: "add", rest: [], terminal: false }]);
-    // the plugin removed: the checkout is the install again
     pc.noPlugin();
     expect(JSON.parse(pc.ovis(["pair"]).out)).toMatchObject({ root: join(pc.app, "scripts") });
   });
@@ -384,7 +337,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
 
   it("says so in one line when Ovis is not installed", () => {
     for (const pc of [new Pc({ herdr: false }).written(), new Pc().written()]) {
-      // no herdr at all, and a herdr that lists no Ovis plugin
       pc.noPlugin();
       const ran = pc.ovis(["add"]);
       expect(ran.code).toBe(1);
@@ -419,7 +371,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       expect(code, out).toBe(0);
       expect(out).toContain(`Ovis: ${pc.launcher} is there already and is not this installer's, so it is left as it is and no ovis command was installed`);
       expect(out).toContain("ours=0");
-      // what the closing lines name instead of a command that is not there
       expect(out).toContain("command=bun /plugin/root/scripts/plugin.ts");
     }
     expect(readFileSync(file.launcher, "utf8")).toBe(own);
@@ -433,13 +384,11 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const named = (path: string) => pc.sh(`launcher_ours=1; root=/plugin/root; original_path='${path}'; ovis_command`).out;
     expect(named(`${pc.bin}:${join(pc.scratch, ".local", "bin")}`)).toBe("ovis");
     expect(named(pc.bin)).toBe(pc.launcher);
-    // another ovis comes first on the PATH: the name would run that one
     writeFileSync(join(pc.bin, "ovis"), "#!/bin/sh\n", { mode: 0o755 });
     expect(named(`${pc.bin}:${join(pc.scratch, ".local", "bin")}`)).toBe(pc.launcher);
   });
 
   it("on a checkout from before link, runs the release Settings → Updates installed", () => {
-    // herdr's checkout stays at the version first installed: its own script answers add with its usage
     const pc = new Pc().written().flag("running");
     pc.updated("first-install", "add");
     for (const name of ["add", "login", "link"]) {
@@ -447,9 +396,7 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       expect(ran.code, ran.out).toBe(0);
     }
     expect(pc.addCalls().map((call) => [call.release, call.command, ...call.rest])).toEqual([["updated", "add", "--google"], ["updated", "login", "--google"], ["updated", "link", "--google"]]);
-    // every other command stays with the checkout, whose script hands on by itself where it needs to
     expect(JSON.parse(pc.ovis(["pair"]).out)).toMatchObject({ root: join(pc.scratch, "first-install", "scripts"), command: "pair" });
-    // a running release from before add and login: the name it knows
     pc.updated("first-install-2", "link");
     expect(pc.ovis(["add"]).code).toBe(0);
     expect(pc.addCalls().at(-1)).toMatchObject({ release: "updated", command: "link" });
@@ -494,18 +441,15 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const printed = (out: string) => new RegExp(`${ADD_LINE}(.*)$`, "m").exec(out)?.[1] ?? "";
     const runs = (pc: Pc, command: string) => Bun.spawnSync(["/bin/sh", "-c", command], { cwd: pc.scratch, env: pc.environment(), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 20_000 }).exitCode;
 
-    // a checkout from before link, updated in the app: the launcher's `ovis add` is named, and runs
     const updated = new Pc().written().flag("running");
     const release = updated.updated("first-install", "link");
     const first = join(updated.scratch, "first-install");
     expect(printed(lines(updated, 1, first, release))).toBe(`${updated.launcher} add`);
     expect(runs(updated, printed(lines(updated, 1, first, release)))).toBe(0);
-    // an ovis of the user's own there: the running release's script, by the name it knows
     expect(printed(lines(updated, 0, first, release))).toBe(`bun ${release}/scripts/plugin.ts link`);
     expect(runs(updated, printed(lines(updated, 0, first, release)))).toBe(0);
     expect(updated.addCalls().map((call) => call.command)).toEqual(["link", "link"]);
 
-    // no release that can add: the line says to update, and names no command
     const stale = new Pc().written().flag("running");
     const old = stale.plugin("plugin", "neither");
     for (const ours of [0, 1] as const) {
@@ -534,7 +478,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     expect(statSync(join(linked.scratch, "notes.txt")).mode & 0o777).toBe(0o600);
     expect(lstatSync(`${linked.launcher}.new`).isSymbolicLink()).toBe(true);
     expect(readFileSync(`${plain.launcher}.new`, "utf8")).toBe("the user's own file\n");
-    // a write that fails leaves nothing of its own behind either
     const failing = new Pc();
     mkdirSync(failing.launcher.replace(/ovis$/, ""), { recursive: true });
     const { out } = failing.sh(`launcher_text() { return 1; }; write_launcher; echo "ours=$launcher_ours"`);
@@ -572,7 +515,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       expect(out).toContain(`command=${pc.launcher}`);
     }
 
-    // a launcher of the installer's that is there already stays the installer's, and the installer says it comes first
     const kept = new Pc().written();
     const later = other(kept);
     const again = write(kept, `${kept.bin}:${local(kept)}:${join(kept.scratch, "elsewhere")}`);
@@ -580,14 +522,11 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     expect(again).toContain("ours=1");
     expect(again).toContain("command=ovis");
 
-    // no other ovis: nothing is said
     const alone = new Pc();
     expect(write(alone, `${alone.bin}:${local(alone)}`).trim().split("\n")).toEqual(["ours=1", "command=ovis"]);
   });
 
   it("on a checkout from before link, runs the release kept for this checkout and port, whatever other folders are there", () => {
-    // only a release kept for another port (a start that fell back to 17317, since back on 7317): the
-    // server on 7317 runs the checkout itself, which cannot add
     const other = new Pc().written().flag("running");
     const first = other.checkout("first-install");
     other.release(first, "add", { port: 17317, label: "stale" });
@@ -597,9 +536,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     expect(other.addCalls()).toEqual([]);
     expect(other.sh(`running_code '${first}'`).out.trim()).toBe(first);
 
-    // many folders name the checkout's commit: other ports of this checkout, and another checkout at
-    // the same commit that keeps its releases in the same state dir. Whichever the listing gives last,
-    // the one of this checkout and port runs.
     const pc = new Pc().written().flag("running");
     const root = pc.checkout("first-install");
     const state = join(pc.scratch, ".config", "ovis");
@@ -617,20 +553,16 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const picked = (extra?: Record<string, string>) => pc.sh(`running_code '${root}'`, extra).out.trim();
     expect(ran()).toBe("running");
     expect(picked()).toBe(realpathSync(right));
-    // the very folder scripts/plugin.ts hands on to, on this port and on another
     for (const port of [7317, 27317, 8081, 9999]) {
       const active = activePluginScript(root, port, state);
       expect(picked({ PORT: String(port) })).toBe(active === join(root, "scripts", "plugin.ts") ? root : dirname(dirname(active)));
     }
     expect(picked({ PORT: "9999" })).toBe(root);
-    // the port a start settled on because 7317 could not be opened (scripts/plugin.ts keeps it in plugin-port)
     writeFileSync(join(state, "plugin-port"), "17317\n");
     expect(ran()).toBe("port-17317");
     expect(picked()).toContain(createHash("sha256").update(`${root}:17317`).digest("hex").slice(0, 16));
-    // a PORT that is set is the port, whatever an earlier start settled on
     expect(ran({ PORT: "27317" })).toBe("port-27317");
     expect(picked({ PORT: "27317" })).toContain(createHash("sha256").update(`${root}:27317`).digest("hex").slice(0, 16));
-    // a port file that names no port is passed by
     writeFileSync(join(state, "plugin-port"), "not a port\n");
     expect(ran()).toBe("running");
   });
@@ -640,7 +572,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       const made = new Pc().written().flag("running");
       return { pc: made, root: made.checkout("first-install") };
     };
-    /** the release `ovis add` runs, and the one the installer finds, which are the same */
     const ran = (made: Pc, root: string, extra?: Record<string, string>) => {
       const run = made.ovis(["add"], extra);
       const release = run.code === 0 ? made.addCalls().at(-1)?.release : `exit ${run.code}: ${run.out.trim()}`;
@@ -649,36 +580,30 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       return release;
     };
 
-    // OVIS_STATE_DIR in `env`, among a comment, a blank line, a line with no key and quotes around the value
     const moved = pc();
     moved.pc.release(moved.root, "add", { state: join(moved.pc.scratch, "state elsewhere"), label: "in OVIS_STATE_DIR" });
     moved.pc.settings("env", `# the plugin's settings\n\nnot a setting\n=nothing\n  OVIS_STATE_DIR = "${join(moved.pc.scratch, "state elsewhere")}"  \nOVIS_TOKEN=secret\n`);
     expect(ran(moved.pc, moved.root)).toBe("in OVIS_STATE_DIR");
 
-    // the name from before the rename, in a file: it wins over the new name the shell has, as in mergeEnvLayers
     const legacy = pc();
     legacy.pc.release(legacy.root, "add", { state: join(legacy.pc.scratch, "old-name"), label: "in HERDR_WEB_STATE_DIR" });
     legacy.pc.release(legacy.root, "add", { state: join(legacy.pc.scratch, "shell"), label: "in the shell's" });
     legacy.pc.settings("env", `HERDR_WEB_STATE_DIR='${join(legacy.pc.scratch, "old-name")}'\n`);
     expect(ran(legacy.pc, legacy.root, { OVIS_STATE_DIR: join(legacy.pc.scratch, "shell") })).toBe("in HERDR_WEB_STATE_DIR");
 
-    // PORT in `.env`: the folder of that port, not the default's
     const port = pc();
     port.pc.release(port.root, "add", { label: "port 7317" });
     port.pc.release(port.root, "add", { port: 8123, label: "port 8123" });
     port.pc.settings(".env", "PORT=8123\n");
     expect(ran(port.pc, port.root)).toBe("port 8123");
-    // and a file's PORT wins over the shell's, as every setting in them does
     expect(ran(port.pc, port.root, { PORT: "7317" })).toBe("port 8123");
 
-    // XDG_CONFIG_HOME in `.env`: the default state dir is under it
     const xdg = pc();
     xdg.pc.release(xdg.root, "add", { label: "under ~/.config" });
     xdg.pc.release(xdg.root, "add", { state: join(xdg.pc.scratch, "xdg", "ovis"), label: "under XDG_CONFIG_HOME" });
     xdg.pc.settings(".env", `XDG_CONFIG_HOME=${join(xdg.pc.scratch, "xdg")}\n`);
     expect(ran(xdg.pc, xdg.root)).toBe("under XDG_CONFIG_HOME");
 
-    // .env wins over env, and env over the shell's own
     const order = pc();
     for (const name of ["shell", "env", "dotenv"]) order.pc.release(order.root, "add", { state: join(order.pc.scratch, name), label: name });
     const shell = { OVIS_STATE_DIR: join(order.pc.scratch, "shell") };
@@ -688,14 +613,11 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     order.pc.settings(".env", `OVIS_STATE_DIR=${join(order.pc.scratch, "dotenv")}\n`);
     expect(ran(order.pc, order.root, shell)).toBe("dotenv");
 
-    // a plugin still under the id before the rename: its folder's files
     const renamed = pc();
     renamed.pc.release(renamed.root, "add", { state: join(renamed.pc.scratch, "old-id"), label: "old id" });
     renamed.pc.settings("env", `OVIS_STATE_DIR=${join(renamed.pc.scratch, "old-id")}\n`, "devswha.herdr-web-ui");
     expect(ran(renamed.pc, renamed.root)).toBe("old id");
 
-    // no settings: the state dir under its name from before the rename while it holds state of its own,
-    // and under the new one once only the bridge registry is left there (defaultStateDir)
     const named = pc();
     named.pc.release(named.root, "add", { state: join(named.pc.scratch, ".config", "herdr-web-ui"), label: "old name" });
     expect(ran(named.pc, named.root)).toBe("old name");
@@ -716,15 +638,12 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
   it("the installer adds through the checkout's own script where that knows link, and through the running release only before it", () => {
     const lines = (pc: Pc, root: string, code: string) => pc.sh(`add=0; terminal=0; launcher_ours=0; original_path=$PATH; root='${root}'; code='${code}'; add_pc; closing_lines`).out;
     const printed = (out: string) => new RegExp(`${ADD_LINE}(.*)$`, "m").exec(out)?.[1] ?? "";
-    // the checkout's script hands add on to the release that runs by itself (activePluginScript)
     const pc = new Pc().flag("running");
     const root = pc.checkout("plugin", "add");
     expect(printed(lines(pc, root, pc.release(root, "add")))).toBe(`bun ${root}/scripts/plugin.ts add`);
-    // by the name the checkout knows, whatever the release knows
     const older = new Pc().flag("running");
     const linking = older.checkout("plugin", "link");
     expect(printed(lines(older, linking, older.release(linking, "add")))).toBe(`bun ${linking}/scripts/plugin.ts link`);
-    // a checkout from before link cannot hand on: the release itself
     const oldest = new Pc().flag("running");
     const before = oldest.checkout("plugin");
     const release = oldest.release(before, "add");
@@ -734,12 +653,10 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
   it("tells the reader of the release that runs, not the checkout's: the checkout's script hands the add on to it", () => {
     const reads = (pc: Pc, root: string, code: string) => pc.sh(`root='${root}'; code='${code}'; if add_reads_answers; then echo new; else echo old; fi`).out.trim();
     const old = (pc: Pc, root: string, code: string) => pc.sh(`add=1; terminal=0; launcher_ours=0; original_path=$PATH; root='${root}'; code='${code}'; add_pc; echo "result=$add_result old=$add_old"; closing_lines`).out;
-    // a checkout at v0.5.2 whose app Settings → Updates has since brought to a release with the new reader
     const updated = new Pc().flag("running");
     const first = updated.checkout("plugin", "link");
     writeFileSync(join(first, "scripts", "plugin-link.ts"), readerScript("old"));
     expect(reads(updated, first, updated.release(first, "add"))).toBe("new");
-    // the release that runs is the old one: no add step, whatever is said of the name
     const stale = new Pc().flag("running");
     const root = stale.checkout("plugin", "link");
     const release = stale.release(root, "link", { reader: "old" });
@@ -750,7 +667,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     expect(stale.addCalls()).toEqual([]);
     // the word in a comment is not the function
     expect(readerScript("old")).toContain("answerOf");
-    // and the real script has it, by the words install.sh looks for
     expect(readFileSync(join(ROOT, "scripts", "plugin-link.ts"), "utf8")).toContain("\nexport function answerOf(");
   });
 
@@ -767,9 +683,7 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
       expect(run.exitCode, run.stdout.toString() + run.stderr.toString()).toBe(0);
     }
     expect(pc.addCalls()).toHaveLength(2);
-    // a path with nothing a shell reads is printed as it is
     expect(pc.sh(`quoted /home/someone/.local/bin/ovis`).out).toBe("/home/someone/.local/bin/ovis");
-    // the whole installer there: the line it ends on runs too
     const whole = new Pc({ home: "john smith " }).flag("running");
     const { out, exitCode } = await whole.unattended();
     expect(exitCode, out).toBe(0);
@@ -784,7 +698,6 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     const line = uninstall.split("\n").find((text) => text.includes("~/.local/bin/ovis")) ?? "";
     expect(line).toContain("rm -f ~/.local/bin/ovis");
     const pasted = (pc: Pc) => Bun.spawnSync(["/bin/sh", "-c", line], { cwd: pc.scratch, env: pc.environment(), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 20_000 });
-    // the installer's own goes
     const ours = new Pc().written();
     expect(pasted(ours).stderr.toString()).toBe("");
     expect(existsSync(ours.launcher)).toBe(false);
@@ -800,13 +713,10 @@ describe.skipIf(platform() === "win32")("the ovis launcher install.sh writes", (
     symlinkSync(join(linked.scratch, "elsewhere"), linked.launcher);
     pasted(linked);
     expect(lstatSync(linked.launcher).isSymbolicLink()).toBe(true);
-    // none there: nothing is said
     expect(pasted(new Pc()).stderr.toString()).toBe("");
   });
 
   it("does not promise that another ovis is never hidden", () => {
-    // it keeps the name only while it comes first on the PATH: the changelog and the guide say so
-    // the fragment was folded into CHANGELOG.md at 0.5.3
     const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
     expect(changelog).not.toMatch(/never\s+replaced\s+or\s+hidden/);
     const guide = readFileSync(join(ROOT, "docs", "guide.md"), "utf8");
@@ -830,14 +740,11 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
     const { out, exitCode } = await pc.unattended();
     expect(exitCode, out).toBe(0);
     expect(out).toContain("the phone step");
-    // ~/.local/bin is not on this PC's PATH, so the line gives the path
     expect(out).toContain(`Ovis: ${ADD_LINE}${pc.launcher} add\n`);
     expect(out).not.toContain(HINT_LINE);
     expect(out).toContain(`Ovis: ${TOKEN_LINE} (https://github.com/devswha/ovis/blob/main/docs/relay.md#a-pc-with-no-screen)`);
     expect(pc.addCalls()).toEqual([]);
-    // the launcher it wrote runs this PC's plugin
     expect(JSON.parse(pc.ovis(["status"]).out)).toMatchObject({ root: join(pc.scratch, "plugin", "scripts"), command: "status" });
-    // and where the PATH has ~/.local/bin, the line names the command alone
     const onPath = await pc.unattended([], { PATH: `${pc.bin}:${join(pc.scratch, ".local", "bin")}` });
     expect(onPath.out).toContain(`Ovis: ${ADD_LINE}ovis add\n`);
   });
@@ -877,7 +784,6 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
       // under `curl | sh` stdin is the script: the add step's input is the terminal all the same
       expect(pc.addCalls()).toEqual([{ command: "add", rest: [], terminal: true }]);
       expect(out.indexOf("the phone step")).toBeLessThan(out.indexOf("the add step"));
-      // added: the line that says how to add it is not printed
       expect(out).not.toContain("to add this PC to your Ovis account");
       // who counts as this PC is said once, before the add starts: "set OVIS_TOKEN first" can still be done
       expect(out.split(TOKEN_LINE)).toHaveLength(2);
@@ -891,7 +797,6 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
       it.concurrent(`discards what was typed before the add step starts (${how})`, async () => {
         const pc = new Pc().flag("running").flag("add-reads");
         if (how === "perl") { symlinkSync(Bun.which("perl")!, join(pc.bin, "perl")); rmSync(join(pc.bin, "stty")); }
-        // typed as soon as the installer says its first word, long before the add step
         const { out, exitCode } = await pc.atTerminal("--add", {}, { after: "Ovis", text: "y\n", once: true });
         expect(exitCode, out).toBe(0);
         expect(out.indexOf("y\r\n")).toBeLessThan(out.indexOf(TOKEN_LINE));
@@ -953,14 +858,12 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
     it.concurrent("does not run the add step of a release whose reader takes a line typed ahead (v0.5.2), and says to update first", async () => {
       const pc = new Pc().flag("running").flag("add-reads");
       pc.plugin("plugin", "link", "devswha.ovis", "old");
-      // y and Enter, typed over and over from the installer's first word on, as during the old sign-in
       const { out, exitCode } = await pc.atTerminal("--add", {}, { after: "Ovis", text: "y\n" });
       expect(exitCode, out).toBe(0);
       expect(pc.addCalls()).toEqual([]);
       expect(out).not.toContain("the add step");
       expect(out).toContain(`Ovis: ${OLD_READER_LINE}${pc.launcher} add`);
       expect(out).not.toContain(HINT_LINE);
-      // the same release, with the reader of the next one: its add step runs
       const next = new Pc().flag("running");
       next.plugin("plugin", "link", "devswha.ovis", "new");
       const ran = await next.atTerminal("--add");
@@ -975,7 +878,6 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
       const { out, exitCode } = await pc.atTerminal("--add");
       expect(exitCode, out).toBe(0);
       expect(pc.addCalls()).toEqual([]);
-      // no command of this release adds a PC, so none is named: neither `ovis add` nor the script
       expect(out).toContain(`Ovis: ${UPDATE_LINE}`);
       expect(out).not.toContain("to add this PC to your Ovis account");
       expect(out).not.toContain(" add\r\n");
@@ -983,18 +885,15 @@ describe.skipIf(platform() === "win32")("install.sh --add", () => {
     });
 
     it.concurrent("does not start the add step while the app is not running, and says what to run once it is", async () => {
-      // a fresh PC: this install put herdr there but cannot start it, so the app the add step asks is down
       const pc = new Pc();
       const { out, exitCode } = await pc.atTerminal("--add");
       expect(exitCode, out).toBe(0);
       expect(out).toContain("herdr is not running, so neither is the app yet");
-      // the real add fails there ("Ovis is not running …; start it first"), and so does the stand-in
       expect(out).not.toContain("start it first");
       expect(out).not.toContain("the add step");
       expect(pc.addCalls()).toEqual([]);
       expect(out).toContain(`Ovis: ${WAITS_LINE}${pc.launcher} add`);
       expect(out.split(TOKEN_LINE)).toHaveLength(2);
-      // the app up: the command the line names adds the PC
       pc.flag("running");
       expect(pc.ovis(["add"]).code).toBe(0);
       expect(pc.addCalls()).toHaveLength(1);

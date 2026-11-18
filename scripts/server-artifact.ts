@@ -1,18 +1,3 @@
-/**
- * What a folder that runs the compiled server holds, for every place that ships one: a remote PC's bundle
- * (scripts/build-remote-bundle.ts), the desktop app (app/electron/scripts/build.ts) and, for its binary, the release
- * (scripts/build-server.ts release). The server finds each of these beside its own binary (server/entries.ts ROOT):
- *
- *   ovis-server[.exe]            the server, every entry in one binary (server/main.ts)
- *   pty-host.mjs, pty-smoke.mjs  the Node PTY sidecar and the check that node-pty runs (where node-pty is carried)
- *   node_modules/@lydell/        node-pty and its one prebuilt package for the platform, for that sidecar
- *   dist/                        the built client
- *   bin/ovis-pty-sidecar(.json)  the Rust PTY host and its record, when one is given
- *   integrations/*.js            the agent integrations, built, and the installers that copy them
- *   scripts/install-*.js         into an agent's extensions (`BUN_BE_BUN=1 ./ovis-server scripts/install-gjc-integration.js`)
- *
- * No server/ or shared/ source is in it.
- */
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -24,7 +9,6 @@ const packageJson = (): { version: string; dependencies: Record<string, string> 
 
 export { binaryName };
 
-/** node-pty's prebuilt package for each platform, as the registry names it */
 const PTY_PACKAGE: Record<ServerPlatform, string> = {
   "linux-x64": "node-pty-linux-x64",
   "linux-arm64": "node-pty-linux-arm64",
@@ -47,23 +31,19 @@ const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes)
 /**
  * `bun build --compile` of server/main.ts for `platform` into `outfile`: minified JavaScript and Bun bytecode, no
  * source maps. The source is not published with it, but anyone who unpacks the file can read that code.
- * `--format=esm` because the entries await at top level, which bytecode allows only in an ES module. A test may compile
- * another `entry` with the same flags, to run server code as the binary runs it.
+ * `--format=esm` because the entries await at top level, which bytecode allows only in an ES module.
  */
 export async function buildBinary(platform: ServerPlatform, outfile: string, entry = "server/main.ts"): Promise<void> {
-  // server/statusline-install.ts writes these files out for Claude Code; the binary has no copy of them on disk
   const statusline = Object.fromEntries(["statusline-context.ts", "statusline-capture.ts"].map((name) => [name, readFileSync(join(root, "server", name), "utf8")]));
   const build = Bun.spawn([
     process.execPath, "build", "--compile", "--minify", "--bytecode", "--format=esm", `--target=bun-${platform}`,
     "--define", `OVIS_STATUSLINE_SOURCES=${JSON.stringify(statusline)}`,
-    // the file pool's thread (server/file-pool.ts) is an entry of its own in the binary
     entry, "server/file-worker.ts", "--outfile", outfile,
   ], { cwd: root, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
   const code = await build.exited;
   if (code !== 0) throw new Error(`bun build --compile for ${platform} exited with ${code}`);
 }
 
-/** The registry tarball at `url`, as bytes. */
 async function download(url: string): Promise<Uint8Array> {
   const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
@@ -83,7 +63,7 @@ async function ptyPackage(platform: ServerPlatform, into: string, downloads: str
       cpSync(installed, into, { recursive: true });
       return;
     }
-  } catch { /* not installed here: the pinned tarball */ }
+  } catch {}
   const url = `https://registry.npmjs.org/@lydell/${name}/-/${name}-${version}.tgz`;
   const bytes = await fetchTarball(url);
   if (sha256(bytes) !== pins[platform]) throw new Error(`Checksum mismatch: ${url}`);
@@ -95,7 +75,6 @@ async function ptyPackage(platform: ServerPlatform, into: string, downloads: str
   if (tar.exitCode !== 0) throw new Error(`Could not unpack ${archive}: ${tar.stderr.toString()}`);
 }
 
-/** The integration installers as one file each, and the integrations they install, built: what they import stays out. */
 async function integrations(dir: string): Promise<void> {
   mkdirSync(join(dir, "integrations"), { recursive: true });
   writeFileSync(join(dir, "integrations", "gjc.js"), await buildIntegration("gjc", "bun"));
@@ -115,21 +94,15 @@ export interface ArtifactOptions {
    * Windows', which carries no Node to run them
    */
   nodePty: boolean;
-  /** the Rust PTY host for `platform`, and the record it came with (scripts/pty-sidecar.ts install) when there is one */
   ptySidecar?: { binary: string; record?: string };
-  /** where a downloaded node-pty tarball is kept while it is unpacked */
   downloads?: string;
-  /** builds the binary; tests stand in for the compile */
   build?: (platform: ServerPlatform, outfile: string) => Promise<void>;
-  /** where installed packages are looked for (this checkout's node_modules), how a tarball is fetched and checked: tests */
   nodeModules?: string;
   fetchTarball?: (url: string) => Promise<Uint8Array>;
   pins?: Record<ServerPlatform, string>;
-  /** the built client; this checkout's dist/ unless a test gives another */
   dist?: string;
 }
 
-/** Fills `dir` (emptied first) with what runs the compiled server for `platform`. */
 export async function stageServerArtifact(options: ArtifactOptions): Promise<void> {
   const { platform, dir } = options;
   const dist = options.dist ?? join(root, "dist");
@@ -143,7 +116,6 @@ export async function stageServerArtifact(options: ArtifactOptions): Promise<voi
   if (options.nodePty) {
     copyFileSync(join(root, "server", "pty", "smoke.mjs"), join(dir, "pty-smoke.mjs"));
     const modules = join(dir, "node_modules", "@lydell");
-    // its type declarations are for a compiler, and nothing beside the binary compiles
     const installed = options.nodeModules ?? join(root, "node_modules");
     cpSync(join(installed, "@lydell", "node-pty"), join(modules, "node-pty"), { recursive: true, filter: (path) => !path.endsWith(".d.ts") });
     await ptyPackage(platform, join(modules, PTY_PACKAGE[platform]), options.downloads ?? join(dir, "..", `downloads-${platform}`), installed, options.fetchTarball ?? download, options.pins ?? PTY_PINS);

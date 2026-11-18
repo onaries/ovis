@@ -13,14 +13,11 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     disabled = false;
     /** under an inert column: the browser refuses it the focus */
     inert = false;
-    /** not drawn: no box */
     hidden = false;
-    /** the role of the surface it is in, as `closest` is asked for it ("dialog", "menu") */
     role: string | null = null;
     constructor(readonly name: string, readonly inside: HTMLElement[] = []) {}
     focus(): void { if (!this.inert && !this.disabled) page.activeElement = this; }
     hasAttribute(attribute: string): boolean { return attribute === "disabled" && this.disabled; }
-    /** how often it was brought into view */
     scrolled = 0;
     scrollIntoView(): void { this.scrolled += 1; }
     getAttribute(): string | null { return null; }
@@ -30,20 +27,17 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
       return this.role !== null && selector.includes(`[role="${this.role}"]`) ? this : null;
     }
     contains(other: unknown): boolean { return other === this || this.inside.some((node) => node.contains(other)); }
-    /** every element in it, in order: the hook filters what is a stop */
     querySelectorAll(): HTMLElement[] { return this.inside.flatMap((node) => [node, ...node.querySelectorAll()]); }
   }
   let page: { activeElement: HTMLElement | null; body: HTMLElement; prompts: HTMLElement[] };
   let events: EventTarget;
   let renderer: ReactTestRenderer | undefined;
 
-  /** a prompt as RelayPairingPrompt draws it: a surface that takes the focus by script only, and its two buttons */
   function prompt(name: string): HTMLElement {
     const node = new HTMLElement(name, [new HTMLElement(`${name} Approve`), new HTMLElement(`${name} Decline`)]);
     node.tabIndex = -1;
     return node;
   }
-  /** Settings: a button, a field, a button */
   function dialog(): HTMLElement {
     return new HTMLElement("settings", [new HTMLElement("back"), new HTMLElement("field"), new HTMLElement("close")]);
   }
@@ -55,7 +49,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
   async function open(surface: HTMLElement): Promise<void> {
     await act(async () => { renderer = create(createElement(Trap, { surface })); });
   }
-  /** Tab as the window hears it; true when the trap kept it from the browser */
   function tab(back = false): boolean {
     const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: back });
     events.dispatchEvent(event);
@@ -103,7 +96,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     const [first, second, inert, hidden] = [prompt("p1"), prompt("p2"), prompt("inert"), prompt("hidden")];
     inert.inert = true;
     hidden.hidden = true;
-    // Approve and Decline are disabled while a decision is on its way
     second.inside[0]!.disabled = true;
     second.inside[1]!.disabled = true;
     page.prompts = [first, inert, second, hidden];
@@ -115,7 +107,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
   it("reaches a prompt from a field in the dialog by Tab, on the prompt itself, and comes back to the dialog", async () => {
     const settings = dialog();
     await open(settings);
-    // the prompt arrives while a field has the focus: it leaves the focus there (RelayPairingPrompt's takesFocus)
     settings.inside[1]!.focus();
     page.prompts = [prompt("p1")];
     const walked: string[] = [];
@@ -143,7 +134,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     second.focus();
     const walked: string[] = [];
     for (const back of [false, false, true, true, true]) { expect(tab(back)).toBe(true); walked.push(focused()); }
-    // back from the second prompt itself is into the one above it, which is entered on itself too
     expect(walked).toEqual(["p2 Approve", "p2 Decline", "p2 Approve", "p2", "p1"]);
   });
 
@@ -176,7 +166,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
   });
 
   it("knows what is in a surface it holds Tab in, for as long as it does", async () => {
-    // what a prompt over the page may take the focus from (RelayPairingPrompt's takesFocus): Tab leads back here
     const settings = dialog();
     const [field, elsewhere] = [settings.inside[1] as never, new HTMLElement("history button") as never];
     expect(inFocusTrap(field)).toBe(false);
@@ -192,7 +181,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
   });
 
   it("brings a prompt into view when Tab lands on it or on one of its buttons", async () => {
-    // several devices in a short window: the stack scrolls, and what is about to be approved must be read
     const settings = dialog();
     await open(settings);
     settings.inside[2]!.focus();
@@ -203,7 +191,6 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
       tab();
       seen.push(`${focused()}: ${first.scrolled} ${second.scrolled} ${page.activeElement === first || page.activeElement === second ? "-" : page.activeElement!.scrolled}`);
     }
-    // the prompt first (its number and words), then the button on it; nothing of the dialog's is scrolled
     expect(seen).toEqual(["p1: 1 0 -", "p1 Approve: 2 0 1", "p1 Decline: 3 0 1", "p2: 3 1 -", "p2 Approve: 3 2 1", "p2 Decline: 3 3 1", "back: 3 3 0"]);
   });
 

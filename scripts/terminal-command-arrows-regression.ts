@@ -15,7 +15,6 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
   }
 }
 
-/** Mac keyboard events, then real readline cursor positions in an owned test pane. */
 export async function checkCommandArrows(browser: Browser, origin: string, paneId: string): Promise<void> {
   for (const platform of ["MacIntel", "Linux x86_64", "Win32"]) {
     const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
@@ -41,7 +40,6 @@ export async function checkCommandArrows(browser: Browser, origin: string, paneI
       await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
       await until(() => ready, "owned terminal must accept input");
       const input = page.locator(".xterm-helper-textarea");
-      // Let deferred IME sends run, then use a WS marker to bound both positive and negative assertions.
       const check = async (action: () => Promise<unknown>, expected: string[], label: string) => {
         const before = inputs.length;
         await action();
@@ -135,7 +133,6 @@ process.stdin.on("data", (data) => {
           await page.locator(shownRows(), { hasText: "start middle end" }).waitFor();
           await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "macos-command-arrows.png") });
         }
-        // Normal arrows, Option word movement and Ctrl+arrows as xterm sends them work in DECCKM mode.
         await input.press("ArrowLeft"); await probe("start middle end", 15);
         await input.press("ArrowRight"); await probe("start middle end", 16);
         await input.press("Alt+ArrowLeft"); await probe("start middle end", 13);

@@ -209,6 +209,7 @@ export const DEVICES_ZH: Record<string, string> = {
   "Show the QR code": "显示这个二维码",
   "Show a new code": "显示新代码",
   "Sign in above first; then this PC can show its QR code.": "请先在上方登录，然后这台电脑才能显示二维码。",
+  "Add this PC to your account first; then it can show its QR code.": "请先把这台电脑添加到你的账户，然后它才能显示二维码。",
   "This PC joined an Ovis account ({id}).": "这台电脑已加入 Ovis 账户（{id}）。",
   "Added by {device}.": "添加它的设备：{device}。",
   "Not me: revoke every device": "不是我：撤销所有设备",
@@ -251,4 +252,5 @@ export const DEVICES_ZH: Record<string, string> = {
   "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
   "Allow notifications for Ovis in the phone's Settings, then try again.": "请在手机的设置中允许 Ovis 的通知，然后重试。",
   "Could not send the test notification. Try again.": "无法发送测试通知。请重试。",
+  "Run ovis add on this machine, then scan its QR code with a signed-in device.": "请在这台机器上运行 ovis add，然后用已登录的设备扫描它的二维码。",
 };

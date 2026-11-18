@@ -15,8 +15,7 @@ interface Leg { up: Socket<undefined> | null; held: Buffer[]; entry: ProxiedRequ
  * A unix socket in front of the test herdr, for what a mirrored pane is sent: herdr's own
  * socket cannot be asked what it received or made to refuse. One upstream connection per
  * client connection, bytes passed on as they come (a subscription stays open), each
- * request's method and params kept in order. `refuse` answers pane.send_text, and only
- * that, with a herdr error.
+ * request's method and params kept in order.
  */
 function herdrProxy(path: string, upstream: string) {
   const log: ProxiedRequest[] = [];
@@ -62,7 +61,6 @@ function herdrProxy(path: string, upstream: string) {
         leg.entry = entry;
         log.push(entry);
         // A scrolled viewport can show a previous prompt while the live screen has moved on.
-        // Override only text reads: the mirror still draws the owned pane's real ANSI screen.
         const params = request.params as { source?: string; format?: string } | undefined;
         if (control.screens && request.method === "pane.read" && params?.format === "text") {
           const text = params.source === "detection" ? control.screens.detection : control.screens.visible;
@@ -100,7 +98,7 @@ function standIn(root: string): { script: string; resultFile: string } {
   const resultFile = join(root, "result.json");
   const script = join(root, "ask.cjs");
   writeFileSync(script, `
-const { writeFileSync } = require("node:fs");
+const { renameSync, writeFileSync } = require("node:fs");
 const { createHash } = require("node:crypto");
 process.stdin.setRawMode(true); process.stdin.resume();
 let value = "";
@@ -108,7 +106,9 @@ process.stdout.write("\\x1b[2J\\x1b[HPassword:");
 process.stdin.on("data", chunk => {
   value += chunk.toString();
   if (!value.includes("\\r")) return;
-  writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ hash: createHash("sha256").update(value).digest("hex"), length: value.length }));
+  // written aside and renamed in: the test reads the file as soon as it exists, never half written
+  writeFileSync(${JSON.stringify(resultFile + ".part")}, JSON.stringify({ hash: createHash("sha256").update(value).digest("hex"), length: value.length }));
+  renameSync(${JSON.stringify(resultFile + ".part")}, ${JSON.stringify(resultFile)});
   value = ""; process.stdout.write("\\r\\nAccepted\\r\\nReady>");
 });
 `);
@@ -116,20 +116,17 @@ process.stdin.on("data", chunk => {
 }
 
 /** One secret entered on a pane whose terminal is mirrored (a herdr that cannot attach), herdr behind the proxy. */
-/** `value`: the secret sent. `typed`: as the page types it to a bridge that does not take the prompt, the value and then Enter as `input`. */
 async function mirroredSecret(refuse: boolean, screens?: { visible: string; detection: string }, prompt = "Password:", value = "fixture-value", typed = false) {
   const root = mkdtempSync(join(tmpdir(), "ovis-secret-mirror-"));
   const { script, resultFile } = standIn(root);
   const herdr = herdrSocketPath();
   const proxy = herdrProxy(join(root, "herdr.sock"), herdr);
-  // the server under test reaches herdr through the proxy; this test's own calls name herdr's socket
   process.env["HERDR_SOCKET"] = join(root, "herdr.sock");
   const server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), terminalAttach: false });
   let workspace: string | undefined;
   let socket: WebSocket | undefined;
   const seen: any[] = [];
   const sends = () => proxy.log.filter((entry) => entry.method === "pane.send_text" || entry.method === "pane.send_keys");
-  /** the sends herdr had answered when the result reached the browser */
   let answeredAtResult: string[] | undefined;
   const until = async (predicate: () => boolean | Promise<boolean>) => {
     const deadline = Date.now() + 5000;

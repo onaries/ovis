@@ -21,9 +21,7 @@ import { useFocusTrap } from "../lib/useFocusTrap.ts";
 
 export interface AccountApprovalPromptProps {
   request: RemotePairingRequest;
-  /** the PC the request came through */
   pcName: string;
-  /** how many PCs of the account the device joins, from this device's own list */
   pcCount: number;
   /**
    * What the account service saw of the device asking (GET /v1/admissions): undefined while it is
@@ -51,11 +49,9 @@ export function AccountAsker({ asker, language }: { asker: Asker; language: stri
   );
 }
 
-/** The approval surface: AccountApprovalPrompt puts it on document.body. */
 export function AccountApprovalCard({ request, pcName, pcCount, asker, onDecide }: AccountApprovalPromptProps) {
   const t = useT();
   const { resolvedLanguage } = useSettings();
-  // Korean takes 을 or 를 by how the name ends, so the name carries it there
   const asObject = resolvedLanguage === "ko" ? `${request.label}${objectParticle(request.label)}` : request.label;
   const id = useId();
   const deny = useRef<HTMLButtonElement>(null);
@@ -78,7 +74,7 @@ export function AccountApprovalCard({ request, pcName, pcCount, asker, onDecide 
   };
 
   // Back answers nothing: the request shows by itself, and a Back meant for what was on the screen a
-  // moment before must neither deny it nor close what lies under it. Deny and Approve are its ways out
+  // moment before must neither deny it nor close what lies under it.
   usePhoneSheetBack(() => false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {

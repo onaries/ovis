@@ -28,14 +28,11 @@ import type { HerdrPane } from "../shared/protocol.ts";
  * RETRY_MS later whatever the pane holds. Each file is read on from where the last read stopped.
  */
 const POLL_MS = 2000;
-/** how long a pane's session is trusted before it is looked up again: the agent may have restarted there */
 const RESOLVE_MS = 30_000;
 /** how long after a lookup that failed the pane is asked again: every snapshot would ask, and two failures in one moment say no more than one */
 const RETRY_MS = 10_000;
 const START_SLACK_MS = 60_000;
-/** a timer past due by this much fired in a process that is gone */
 const DUE_GRACE_MS = 120_000;
-/** a timer due further out than this is held as a command is, to the hold's limit */
 const TIMER_LIMIT_MS = 24 * 3_600_000;
 const READ_CHUNK = 1024 * 1024;
 /** O_NONBLOCK: a FIFO put there is opened without waiting for a writer, and refused as no plain file */
@@ -51,6 +48,17 @@ export interface TaskCount { running: number; turnRunning: number; promptAt: num
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row | null => typeof value === "object" && value !== null && !Array.isArray(value) ? value as Row : null;
 
+/**
+ * - agy (`brain/<session>/.system_generated/logs/transcript_full.jsonl`): a `GENERIC` step at
+ *   `RUNNING` saying "Tool is running as a background task with task id: <id>" starts one (a
+ *   command past its `WaitMsBeforeAsync`, or a `schedule` timer: "Task Description: Timer: 1h 30m").
+ *   A `SYSTEM_MESSAGE` from `sender=<id>` (its result, or the timer's prompt) ends it, as does a
+ *   status check answering "Task: <id>" with a `Status:` other than RUNNING. A `USER_INPUT` step is
+ *   the person's prompt.
+ * - grok (`updates.jsonl`): each `background_tasks` update lists every task with its status, so the
+ *   newest one is the truth; a `user_message_chunk` that is no `<system-reminder>` notice is the
+ *   person's prompt.
+ */
 const AGY_START = /background task with task id: ([\w-]+\/task-\d+)/;
 const AGY_SENDER = /sender=([\w-]+\/task-\d+)/g;
 const AGY_STATUS = /Task: ([\w-]+\/task-\d+)\s+Status: (\w+)/g;
@@ -61,11 +69,9 @@ function timerDue(content: string, at: number): number | null {
   const timer = content.match(AGY_TIMER)?.[1];
   if (timer === undefined) return null;
   const due = at + [...timer.matchAll(/(\d+)([hms])/g)].reduce((sum, [, n, unit]) => sum + Number(n) * UNIT_MS[unit!]!, 0);
-  // a time that cannot be told, or is too far out, is held as a command is, to the hold's limit
   return Number.isFinite(due) && due - at <= TIMER_LIMIT_MS ? due : null;
 }
 
-/** One line of a session file, read into what it says runs. Lines that cannot matter are not parsed. */
 export function readTaskLine(agent: TaskAgent, state: SessionTasks, line: string): void {
   if (agent === "agy" ? !/USER_INPUT|SYSTEM_MESSAGE|\/task-\d/.test(line) : !line.includes('"background_tasks"') && !line.includes('"user_message_chunk"')) return;
   let entry: Row | null;
@@ -97,7 +103,6 @@ export function readTaskLine(agent: TaskAgent, state: SessionTasks, line: string
   }
 }
 
-/** What runs now of what the session's file said: `started`, when the pane's process started. */
 export function taskCount(state: SessionTasks, started: number | null, now: number): TaskCount {
   const live = [...state.tasks.values()].filter((task) => (started === null || task.at >= started - START_SLACK_MS) && (task.due === null || now < task.due + DUE_GRACE_MS));
   const turn = live.filter((task) => state.promptAt === null || task.at >= state.promptAt);
@@ -116,7 +121,6 @@ function readOn(tracked: Tracked): void {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return;
     const { ino, size } = stat;
-    // replaced or cut short: read afresh
     if (ino !== tracked.ino || size < tracked.offset) Object.assign(tracked, { ino, offset: 0, decoder: new StringDecoder("utf8"), partial: "", promptAt: null, tasks: new Map() });
     const buffer = Buffer.alloc(Math.min(READ_CHUNK, Math.max(0, size - tracked.offset)));
     while (tracked.offset < size) {
@@ -127,46 +131,27 @@ function readOn(tracked: Tracked): void {
       tracked.partial = lines.pop()!;
       for (const line of lines) readTaskLine(tracked.agent, tracked, line);
     }
-  } catch { /* read again at the next poll */ } finally { closeSync(fd); }
+  } catch {} finally { closeSync(fd); }
 }
 
 export interface AgentTaskDeps {
-  /**
-   * the pane's session file, when its process started (an upper bound, which differs a little
-   * between reads of one process) and which process that is, or null when it cannot be told
-   */
   resolve: (pane: HerdrPane & { agent: TaskAgent }) => Promise<{ path: string; started: number | null; owner: string | null } | null>;
   onChange: (paneId: string, count: TaskCount) => void;
-  /** the pane runs another session or process than before: its waits are not this one's */
   onReset: (paneId: string) => void;
   now?: () => number;
 }
 
 /**
- * The session id a lookup of `pane` asks by, null when none. A grok session is found by the id herdr
- * reports, so another id is another session's file; an agy one is found by the pane's process,
- * whatever the pane says of a session.
+ * A grok session is found by the id herdr reports, so another id is another session's file; an agy
+ * one is found by the pane's process, whatever the pane says of a session.
  */
 const sessionOf = (pane: HerdrPane): string | null => pane.agent === "grok" ? pane.agent_session?.value ?? null : null;
 
 export class AgentTaskStatus {
   private readonly panes = new Map<string, Tracked>();
   private readonly resolving = new Set<string>();
-  /** the panes a status asked for while a lookup of theirs was under way: should that one fail, the status gets its own */
   private readonly asked = new Map<string, HerdrPane>();
-  /** bumped each time a pane is let go, so a lookup that was under way then is dropped */
   private readonly lifetimes = new Map<string, number>();
-  /**
-   * the lookups that failed, by pane: for which agent, and by session (sessionOf) when. Kept until a lookup
-   * finds a session there, the pane runs another agent or it leaves. A miss of one session neither holds
-   * off the lookup of another herdr reports there nor counts as its first, and it stays beside that one's:
-   * where herdr names a session, then none or another, then the first again, and none of them is found,
-   * each is asked for only every RETRY_MS (so one entry per session herdr named for the pane since a
-   * lookup last found one). A known limit: a lookup that finds a session drops them all, so where herdr
-   * names in turn a session that is found and one that is not, the spacing starts over each time and
-   * every snapshot asks, the count told and let go in turn (nothing shows herdr naming two ids in turn
-   * for one pane). Not a status's lookup of a pane with no session: that one holds no snapshot off
-   */
   private readonly failed = new Map<string, { agent: TaskAgent; at: Map<string | null, number> }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
@@ -187,7 +172,6 @@ export class AgentTaskStatus {
     return this.panes.get(paneId)?.running ?? 0;
   }
 
-  /** Whether the pane's session is not known, or was looked up, found or not, long enough ago to look again. */
   stale(paneId: string): boolean {
     const tracked = this.panes.get(paneId);
     return tracked === undefined || (this.now() - tracked.resolvedAt >= RESOLVE_MS && !this.failedLately(paneId, tracked.agent, sessionOf(tracked.pane)));
@@ -200,7 +184,6 @@ export class AgentTaskStatus {
     this.asked.delete(paneId);
   }
 
-  /** A snapshot's panes: an agy or grok one is looked up, any other is let go. */
   async refresh(panes: readonly HerdrPane[]): Promise<void> {
     const ids = new Set(panes.filter((pane) => isTaskAgent(pane.agent)).map((pane) => pane.pane_id));
     for (const paneId of [...this.panes.keys()]) if (!ids.has(paneId)) this.letGo(paneId);
@@ -208,12 +191,6 @@ export class AgentTaskStatus {
     await Promise.all(panes.map((pane) => this.track(pane, true)));
   }
 
-  /**
-   * Look the pane's session up, unless it was a moment ago. `spaced`, as a snapshot's lookup is: nor
-   * a session that was not found less than RETRY_MS ago. A status of the pane does ask for that one
-   * at once: a turn that ends on a task is held only once its session is known. So one that asks
-   * while a lookup is under way is asked for again should that lookup fail: it began before the status.
-   */
   async track(reported: HerdrPane, spaced = false): Promise<void> {
     const agent = reported.agent;
     if (!isTaskAgent(agent)) return;
@@ -222,12 +199,9 @@ export class AgentTaskStatus {
     // the pane is asked for by that one (as herdr reports it, with no id, it is never found)
     const pane = agent === "grok" && reported.agent_session == null && known?.agent === agent ? { ...reported, agent_session: known.pane.agent_session } : reported;
     const session = sessionOf(pane);
-    // a session that is known stands for RESOLVE_MS, and for RETRY_MS after a lookup that failed, whoever
-    // asks; another agent there is looked up now, and so is another session herdr reports for it
     const recent = known === undefined ? spaced && this.failedLately(pane.pane_id, agent, session) : known.agent === agent && sessionOf(known.pane) === session && !this.stale(pane.pane_id);
     if (recent) return;
     if (this.resolving.has(pane.pane_id)) {
-      // as herdr reported it: what is known of the pane then says how it is asked for
       if (!spaced) this.asked.set(pane.pane_id, reported);
       return;
     }
@@ -246,13 +220,8 @@ export class AgentTaskStatus {
       // what the pane holds was never that one's
       const again = this.missAt(pane.pane_id, agent, session) !== undefined;
       if (current !== undefined && (again || current.agent !== agent || sessionOf(current.pane) !== session)) this.letGo(pane.pane_id);
-      // kept, the pane is asked for again by the poll, as herdr reports it now (by the session known for
-      // it, where herdr names none)
       else if (current !== undefined) current.pane = { ...pane, agent };
-      // a status's lookup of a pane with no session is not remembered: the snapshot after a turn's end
-      // asks too, as its finish alert may be due before RETRY_MS is over
       if (spaced || current !== undefined) this.miss(pane.pane_id, agent, session);
-      // the same gates stand for it: a pane kept through this failure is not asked for twice in one moment
       if (asked !== undefined) await this.track(asked);
       return;
     }
@@ -260,7 +229,6 @@ export class AgentTaskStatus {
     if (current !== undefined && current.agent === agent && current.path === found.path && current.owner === found.owner) {
       current.resolvedAt = this.now();
       current.pane = { ...pane, agent };
-      // a start that could not be read before may be now: the gone process's tasks are dropped then
       current.started ??= found.started;
       return;
     }
@@ -269,7 +237,6 @@ export class AgentTaskStatus {
     this.poll(pane.pane_id);
   }
 
-  /** Read on in each pane's file (or `only` the one), and tell a count that changed. */
   poll(only?: string): void {
     for (const [paneId, tracked] of this.panes) {
       if (only !== undefined && paneId !== only) continue;
@@ -287,24 +254,20 @@ export class AgentTaskStatus {
   }
 
   private endLifetime(paneId: string): void {
-    // only a lookup under way needs to see the change; with none, the pane leaves no entry behind
     if (this.resolving.has(paneId)) this.lifetimes.set(paneId, (this.lifetimes.get(paneId) ?? 0) + 1);
     else this.lifetimes.delete(paneId);
   }
 
-  /** When the pane's lookup for this agent and session last failed, if none has found a session there since. */
   private missAt(paneId: string, agent: TaskAgent, session: string | null): number | undefined {
     const misses = this.failed.get(paneId);
     return misses?.agent === agent ? misses.at.get(session) : undefined;
   }
 
-  /** Whether that lookup failed less than RETRY_MS ago. */
   private failedLately(paneId: string, agent: TaskAgent, session: string | null): boolean {
     const at = this.missAt(paneId, agent, session);
     return at !== undefined && this.now() - at < RETRY_MS;
   }
 
-  /** Remember a lookup that failed, beside the pane's misses of other sessions: another agent's are dropped for it. */
   private miss(paneId: string, agent: TaskAgent, session: string | null): void {
     const misses = this.failed.get(paneId);
     if (misses?.agent === agent) misses.at.set(session, this.now());

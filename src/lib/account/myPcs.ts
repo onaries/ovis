@@ -17,17 +17,8 @@ function joinRoute(pc: DirectoryPc): MyPc["join"] {
   return keyIdOf(server_public_key) === pc.server_id ? { server_public_key, relay: pc.relay } : undefined;
 }
 
-/** How long a PC new in the directory is offered as a card to add: as long as the PC's own screen keeps its pairing window open. */
 export const NEW_PC_MS = 10 * 60_000;
 
-/**
- * PCs that joined the directory lately and wait for this device to add them: offered as a card above the list. A PC
- * the directory has seen is left out and offered Join: it pulls its mailbox only while it belongs to an account, and
- * only its own account's directory notes the pull (docs/account.md, "Account service API"), so it was in this account
- * once, most often put there by another device (`ovis add` with a QR code, say). The sighting does not say it still
- * is: after Revoke all and a listing again the row keeps it while the PC's own screen may wait with a number, so the
- * join sheet keeps typing that number as its other way (AddPcSheet's onTypeNumber).
- */
 export function newPcs(pcs: readonly MyPc[], now: number): MyPc[] {
   return pcs.filter((pc) => pc.state === "needs-approval" && pc.join !== undefined && pc.last_seen_at === null && pc.added_at !== null && now - Date.parse(pc.added_at) < NEW_PC_MS);
 }
@@ -41,11 +32,8 @@ export interface MyPc {
   readonly server_id: string;
   readonly name: string;
   readonly state: MyPcState;
-  /** when the PC last came by the account service; null when it never has */
   readonly last_seen_at: string | null;
-  /** when the account's directory took it; null for a PC only this device's pairings know */
   readonly added_at: string | null;
-  /** in the account's directory; false for a PC paired by QR code that the account does not list yet */
   readonly listed: boolean;
   /** this device holds an admitted key for it, so it can open; whatever its state says */
   readonly paired: boolean;
@@ -65,11 +53,6 @@ export interface MyPc {
 
 const ORDER: Record<MyPcState, number> = { paired: 0, "needs-update": 1, "needs-approval": 2, offline: 3 };
 
-/**
- * One row per PC. `outdated`: PCs whose last connection showed an Ovis without accounts. A paired
- * PC is offline only once the directory has seen it and not lately: one that never pulled may just
- * not belong to the account yet.
- */
 export function myPcs(directory: readonly DirectoryPc[], paired: readonly RelayDevice[], options: { now: number; outdated?: ReadonlySet<string>; accountKey?: string; account?: string }): MyPc[] {
   const listed = new Map(directory.map((pc) => [pc.server_id, pc]));
   const rows: MyPc[] = [];

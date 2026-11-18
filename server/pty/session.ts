@@ -13,7 +13,6 @@ export interface PtySessionOptions {
   rows: number;
   onData: (data: string) => void;
   onExit: (code: number | null) => void;
-  /** Extra environment for the command, on top of this process's own. */
   env?: Record<string, string>;
   /** A private CLI gets only its supplied environment, not the server's credentials and hooks. */
   inheritEnv?: boolean;
@@ -27,7 +26,7 @@ export function writeLine(sink: import("bun").FileSink, line: string): boolean {
     quiet(sink.write(line)); quiet(sink.flush());
     return true;
   } catch {
-    return false; // host already gone
+    return false;
   }
 }
 
@@ -104,7 +103,6 @@ export class PtySession {
       const tail = decoder.decode();
       if (tail) this.options.onData(tail);
     } catch {
-      /* the pty closed underneath us; onExit reports it */
     } finally {
       reader.releaseLock();
     }
@@ -152,12 +150,10 @@ export class PtySession {
     try {
       if (sink && typeof sink !== "number" && "end" in sink) sink.end();
     } catch {
-      /* ignore */
     }
     try {
       this.proc.kill();
     } catch {
-      /* ignore */
     }
   }
 }

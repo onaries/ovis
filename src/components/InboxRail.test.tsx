@@ -8,22 +8,18 @@ import { SettingsProvider } from "../lib/settings.ts";
 import { usageCounters } from "../lib/usageCounters.ts";
 import type { InboxRailPcs, InboxRailProps } from "./InboxRail.tsx";
 
-// the list of PCs as the rail hands it over (RowMenu's own drawing is RowMenu's): its props are what is read
 const rowMenu = await import("./RowMenu.tsx");
 function RowMenu(_props: Parameters<typeof rowMenu.RowMenu>[0]) { return null; }
 await mock.module("./RowMenu.tsx", () => ({ ...rowMenu, RowMenu }));
 const { InboxRail } = await import("./InboxRail.tsx");
 
 const [workstation] = JSON.parse(JSON.stringify(machinesFixture.machines)) as Machine[];
-/** the fixture's PC, or another with its roster, in the state given */
 const pc = (state: Machine["state"] = "connected", more: Partial<Machine> = {}): Machine => ({ ...structuredClone(workstation!), state, ...more });
 
 describe("InboxRail", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let renderer: ReactTestRenderer | undefined;
-  /** every press the rail handed on, in order */
   let pressed: string[];
-  /** the animation frames asked for and not run yet: a case that waits for the status line's word runs them */
   let frames: FrameRequestCallback[];
   const runFrames = (): Promise<void> => act(async () => { for (const run of frames.splice(0)) run(0); });
 
@@ -50,13 +46,11 @@ describe("InboxRail", () => {
     descriptors.clear();
   });
 
-  /** one connected PC, the one the app is on, and a connection with nothing to say */
   const pcs = (change: Partial<InboxRailPcs> = {}): InboxRailPcs => ({ machines: [pc()], selectedId: "local", connection: null, saidByThread: false, onSelect: (machineId) => pressed.push(`pc:${machineId}`), ...change });
   const props = (change: Partial<InboxRailProps> = {}): InboxRailProps => ({
     onExit: () => pressed.push("exit"), onInbox: () => pressed.push("inbox"),
     waiting: null, alerts: { on: true, title: "Alerts on in the app. Tap to turn them off", toggle: () => pressed.push("alerts") },
     onSettings: () => pressed.push("settings"), pcs: pcs(),
-    // the shell's own: a shortcut's keys after the label, where the shortcut has keys
     shortcutTitle: (label, id) => id === "settings" ? `${label} (Ctrl+,)` : label,
     ...change,
   });
@@ -67,11 +61,9 @@ describe("InboxRail", () => {
   };
   const redraw = (change: Partial<InboxRailProps>) => act(async () => { renderer!.update(view(change)); });
   const buttons = (root: ReactTestInstance): ReactTestInstance[] => root.findAll((node) => node.type === "button");
-  /** which button a node is: the class the rail gives it alone */
   const kind = (node: ReactTestInstance): string => String(node.props.className).split(" ").find((name) => name.startsWith("inbox-rail-") && name !== "inbox-rail-item") ?? "";
   const button = (root: ReactTestInstance, name: string): ReactTestInstance => buttons(root).find((node) => kind(node) === `inbox-rail-${name}`)!;
   const named = (node: ReactTestInstance): [name: unknown, tooltip: unknown] => [node.props["aria-label"], node.props.title];
-  /** the lucide glyph a button draws */
   const glyph = (node: ReactTestInstance): string => String(node.findByType("svg").props.className).split(" ").find((name) => name.startsWith("lucide-")) ?? "";
   const press = (node: ReactTestInstance) => act(async () => { node.props.onClick(); });
 
@@ -83,13 +75,11 @@ describe("InboxRail", () => {
   it("holds the way out and the place at its top, then alerts, Settings and the PC in its lower group, each a plain button, and no magnifier", async () => {
     const root = await draw();
     const groups = root.findAll((node) => node.type === "div" && String(node.props.className).split(" ").includes("inbox-rail-group"));
-    // the list's search field is the screen's one magnifier: the command palette is under its shortcut and the thread's More
     expect(root.findAll((node) => node.type === "svg").some((node) => String(node.props.className).split(" ").includes("lucide-search"))).toBe(false);
     expect(groups.map((group) => [String(group.props.className).split(" ").at(-1), buttons(group).map(kind)])).toEqual([
       ["is-top", ["inbox-rail-exit", "inbox-rail-place"]],
       ["is-lower", ["inbox-rail-alerts", "inbox-rail-settings", "inbox-rail-pcs"]],
     ]);
-    // a plain Tab stop each: none is taken out of the keyboard's order or disabled
     for (const node of buttons(root)) expect([node.props.type, node.props.tabIndex, node.props.disabled === true]).toEqual(["button", undefined, false]);
   });
 
@@ -98,7 +88,6 @@ describe("InboxRail", () => {
     const exit = buttons(root)[0]!;
     expect(kind(exit)).toBe("inbox-rail-exit");
     expect(named(exit)).toEqual(["Back to Ovis", "Back to Ovis"]);
-    // the mark is the app's own, drawn as a picture that says nothing: the button's name says it
     const mark = exit.findByType("img");
     expect([mark.props.src, mark.props.alt]).toEqual(["/icons/icon-192.png?v=sheep1", ""]);
     await press(exit);
@@ -131,9 +120,7 @@ describe("InboxRail", () => {
     const lower = root.findAll((node) => node.type === "div" && String(node.props.className).split(" ").includes("is-lower"))[0]!;
     expect(buttons(lower).map(kind)).toEqual(["inbox-rail-waiting", "inbox-rail-alerts", "inbox-rail-settings", "inbox-rail-pcs"]);
     const waiting = button(root, "waiting");
-    // the name says the number; the tooltip says what a press does
     expect(named(waiting)).toEqual(["12 waiting for you", "Open the next session waiting for you"]);
-    // the count is the app's own waiting pill, drawn from its number and hidden from a screen reader
     const pill = waiting.findByProps({ "data-count": 12 });
     expect([pill.props.className, pill.props["aria-hidden"]]).toEqual(["header-more-dot is-waiting", "true"]);
     await press(waiting);
@@ -162,7 +149,6 @@ describe("InboxRail", () => {
 
   describe("the PC", () => {
     const pcButton = (root: ReactTestInstance) => button(root, "pcs");
-    /** the dot hung on the PC's glyph: its state's class, or none drawn */
     const dot = (root: ReactTestInstance): string | null => {
       const [drawn] = pcButton(root).findAll((node) => node.type === "span" && String(node.props.className).split(" ").includes("inbox-rail-dot"));
       return drawn ? String(drawn.props.className).split(" ").find((name) => name.startsWith("is-")) ?? "" : null;
@@ -176,12 +162,10 @@ describe("InboxRail", () => {
       expect(facts()).toEqual(["PC workstation · Connected", "PC workstation · Connected", "lucide-monitor"]);
       await redraw({ pcs: pcs({ machines: [pc("disconnected")] }) });
       expect(facts()).toEqual(["PC workstation · Offline", "PC workstation · Offline", "lucide-monitor-off"]);
-      // a PC that fails, or was never reached, is away as its rows in the list are
       for (const state of ["error", "connecting"] as const) {
         await redraw({ pcs: pcs({ machines: [pc(state)] }) });
         expect(facts()).toEqual(["PC workstation · Offline", "PC workstation · Offline", "lucide-monitor-off"]);
       }
-      // one being reached again is not struck: it is the PC to wait for
       await redraw({ pcs: pcs({ machines: [pc("reconnecting")] }) });
       expect(facts()).toEqual(["PC workstation · Reconnecting…", "PC workstation · Reconnecting…", "lucide-monitor"]);
     });
@@ -191,7 +175,6 @@ describe("InboxRail", () => {
       expect(named(pcButton(root))).toEqual(["PC workstation · Reconnecting…", "PC workstation · Reconnecting…"]);
       await redraw({ pcs: pcs({ machines: [pc(), laptop()], connection: "reconnecting" }) });
       expect(named(pcButton(root))).toEqual(["PCs · Reconnecting…", "PCs · Reconnecting…"]);
-      // back, the hold says Connected: the name is the steady one again
       await redraw({ pcs: pcs({ connection: "connected" }) });
       expect(named(pcButton(root))).toEqual(["PC workstation · Connected", "PC workstation · Connected"]);
     });
@@ -205,24 +188,19 @@ describe("InboxRail", () => {
     });
 
     it("draws its dot only while the connection has something to say, and none while the open thread's chip says the same word", async () => {
-      // Given a connection with nothing to say: no dot, whatever the PC's own state.
       const root = await draw();
       expect(dot(root)).toBeNull();
       await redraw({ pcs: pcs({ machines: [pc("disconnected")] }) });
       expect(dot(root)).toBeNull();
 
-      // When the connection is lost, and when it is back for its moment: a dot of that state.
       await redraw({ pcs: pcs({ connection: "reconnecting" }) });
       expect(dot(root)).toBe("is-reconnecting");
       await redraw({ pcs: pcs({ connection: "connected" }) });
       expect(dot(root)).toBe("is-connected");
-      // the dot is a drawing: the word is the button's name
       expect(pcButton(root).findByProps({ className: "inbox-rail-dot is-connected" }).props["aria-hidden"]).toBe("true");
 
-      // When the thread's chip says the same word: one fact, one place.
       await redraw({ pcs: pcs({ connection: "reconnecting", saidByThread: true }) });
       expect(dot(root)).toBeNull();
-      // the name still says how the PC stands
       expect(named(pcButton(root))[0]).toBe("PC workstation · Reconnecting…");
       await redraw({ pcs: pcs() });
       expect(dot(root)).toBeNull();
@@ -249,7 +227,6 @@ describe("InboxRail", () => {
       await act(async () => { pcButton(root).props.onClick({ currentTarget: anchor }); });
       expect(pcButton(root).props["aria-expanded"]).toBe(true);
       const menu = menus()[0]!.props;
-      // it opens from its own button, which takes the focus back when it closes (RowMenu's own rule for its anchor)
       expect([menu.anchor, menu.title]).toEqual([anchor, "PCs"]);
       expect(menu.items.map((item: { id: string; label: string; hint: string; current: boolean; disabled: boolean }) => [item.id, item.label, item.hint, item.current, item.disabled])).toEqual([
         ["local", "workstation", "Connected", true, false],
@@ -257,13 +234,11 @@ describe("InboxRail", () => {
         ["studio", "Studio", "Offline", false, true],
       ]);
 
-      // a press on another connected PC opens it; one on the PC the app is on changes nothing
       await act(async () => { menu.items[0]!.run(); });
       expect(pressed).toEqual([]);
       await act(async () => { menu.items[1]!.run(); });
       expect(pressed).toEqual(["pc:laptop"]);
 
-      // the button's press again, or the menu's own close, puts it away
       await act(async () => { menu.onClose(); });
       expect([pcButton(root).props["aria-expanded"], menus().length]).toEqual([false, 0]);
     });

@@ -35,7 +35,7 @@ afterEach(() => {
 /** where a stand-in hc is found at all: discovery runs one only when every folder above it is safe, which a shared TMPDIR need not be */
 const checkedTmp = platform === "win32" ? tmpdir() : "/tmp";
 
-it.skipIf(platform === "win32")("runs the hc it found, not an unrelated one named first", async () => {
+it.skipIf(platform === "win32")("refuses to start on an unrelated hc named in OVIS_HC_BIN, and runs no other", async () => {
   const dir = mkdtempSync(join(checkedTmp, "ovis-hc-found-"));
   cleanup = () => rmSync(dir, { recursive: true, force: true });
   const script = (name: string, output: string) => {
@@ -47,16 +47,30 @@ it.skipIf(platform === "win32")("runs the hc it found, not an unrelated one name
   process.env["OVIS_HC_BIN"] = script("hc", "herbstclient 0.9.5");
   const core = script("herdr-core", "hc 0.1.17");
   process.env["PATH"] = join(dir, "bin");
-  const adapter = await startRuntime(join(dir, "state"), () => findHc({ env: process.env, home: dir, loginShellPath: async () => null, usualDirs: [] }), noLogin);
+  const started = startRuntime(join(dir, "state"), () => findHc({ env: process.env, home: dir, loginShellPath: async () => null, usualDirs: [] }), noLogin);
+  await expect(started).rejects.toThrow("OVIS_HC_BIN");
+  expect(hcBin()).not.toBe(core);
+});
+
+it.skipIf(platform === "win32")("runs another hc when the app's own does not answer, and logs which one in its place", async () => {
+  const dir = mkdtempSync(join(checkedTmp, "ovis-hc-bundled-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  const own = hcIn(dir, "app", "herbstclient 0.9.5");
+  const other = hcIn(dir, "usual", "hc 0.1.17");
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  const adapter = await startRuntime(join(dir, "state"), () => findHc({ env: { OVIS_HC_BIN: own, OVIS_HC_BIN_BUNDLED: "1", PATH: join(dir, "empty") }, home: dir, loginShellPath: async () => null, usualDirs: [join(dir, "usual")] }), noLogin);
   if (!adapter) throw new Error("runtime did not start");
   try {
-    expect(hcBin()).toBe(core);
+    expect(hcBin()).toBe(other);
+    const lines = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes(own));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(other);
   } finally {
     adapter.stop();
   }
 });
 
-/** a stand-in hc in `folder` that answers --version with `says` */
 function hcIn(dir: string, folder: string, says: string): string {
   mkdirSync(join(dir, folder), { recursive: true, mode: 0o755 });
   const path = join(dir, folder, "herdr-core");
@@ -96,7 +110,6 @@ it.skipIf(platform === "win32")("never runs a file the search did not just verif
   try {
     expect(hcBin()).toBe(old);
     rmSync(old);
-    // the file an earlier look found was replaced with one that is not herdr-core
     const replaced = hcIn(dir, "other", "herbstclient 0.9.5");
     hcBin();
     await hcRecovery();
@@ -116,7 +129,6 @@ it.skipIf(platform === "win32")("starts nothing, and runs no other hc, when none
   cleanup = () => rmSync(dir, { recursive: true, force: true });
   process.env["OVIS_RUNTIME"] = "herdr-core";
   await expect(startRuntime(join(dir, "state"), async () => null, noLogin)).rejects.toThrow(/no herdr-core found/);
-  // a search that throws leaves no read of the terminals' environment running behind it
   let read = false;
   const reading = async () => { await new Promise((resolve) => setTimeout(resolve, 0)); read = true; return {}; };
   await expect(startRuntime(join(dir, "state"), async () => { throw new Error("search failed"); }, reading)).rejects.toThrow("search failed");
@@ -155,7 +167,6 @@ it.skipIf(platform === "win32")("tightens an existing state directory and socket
 });
 
 it.skipIf(platform === "win32")("runs hc connect with HERDR_SOCKET as it was before the adapter took it", async () => {
-  // regression (#3336 follow-up): a core hc connect starts would aim every pane's herdr at Ovis's own adapter
   const dir = mkdtempSync(join(tmpdir(), "ovis-hc-herdr-socket-"));
   const previousHcSocket = process.env["HC_SOCKET"];
   cleanup = () => {
@@ -207,7 +218,6 @@ it.skipIf(platform === "win32")("runs hc connect in the user's terminal environm
 });
 
 it.skipIf(platform === "win32")("starts without waiting for the login shell when a core already runs", async () => {
-  // regression: every server start waited for the login profile (seconds on a slow one), also where the core it reaches runs already
   const dir = mkdtempSync(join(tmpdir(), "ovis-hc-core-runs-"));
   const previousHcSocket = process.env["HC_SOCKET"];
   let release = (_env: Record<string, string>) => {};
@@ -219,7 +229,6 @@ it.skipIf(platform === "win32")("starts without waiting for the login shell when
   const bin = join(dir, "herdr-core");
   writeFileSync(bin, `#!/bin/sh\n[ "$1" = --version ] && echo 'hc 0.1.17'\n`, { mode: 0o755 });
   process.env["OVIS_RUNTIME"] = "herdr-core";
-  // the core's socket answers: it runs
   process.env["HC_SOCKET"] = join(dir, "hc.sock");
   const core = Bun.listen({ unix: join(dir, "hc.sock"), socket: { data() {} } });
   const stopCore = cleanup;
@@ -231,7 +240,6 @@ it.skipIf(platform === "win32")("starts without waiting for the login shell when
 });
 
 it.skipIf(platform === "win32")("waits for the login shell when the core's socket file is left with nothing listening", async () => {
-  // regression: a crashed core's socket file read as a running core, so `hc connect` started a new one without the login environment
   const dir = mkdtempSync(join(tmpdir(), "ovis-hc-stale-socket-"));
   const previousHcSocket = process.env["HC_SOCKET"];
   cleanup = () => {
@@ -244,7 +252,6 @@ it.skipIf(platform === "win32")("waits for the login shell when the core's socke
   process.env["OVIS_RUNTIME"] = "herdr-core";
   process.env["HC_SOCKET"] = join(dir, "hc.sock");
   writeFileSync(join(dir, "hc.sock"), "");
-  // the login read answers a turn of the event loop later, after a start that does not wait for it is done
   const late = async () => { await new Promise((resolve) => setImmediate(resolve)); return { GH_TOKEN: "from-profile" }; };
   const adapter = await startRuntime(join(dir, "state"), async () => ({ bin, version: "0.1.17" }), late);
   if (!adapter) throw new Error("runtime did not start");
@@ -275,7 +282,6 @@ it("rejects herdr-core on an OS it is not served on before creating state", asyn
   Object.defineProperty(process, "platform", { value: "freebsd" });
   await expect(startRuntime(state, standIn, noLogin)).rejects.toThrow(/not freebsd/);
   expect(existsSync(state)).toBe(false);
-  // a start that failed serves nothing: the gates still read herdr
   expect(capabilities()).toBe(HERDR);
 });
 
@@ -285,7 +291,6 @@ it("refuses alt-runtime with its own error, and never serves herdr in its place"
   const state = join(dir, "state");
   process.env["OVIS_RUNTIME"] = "alt-runtime";
   process.env["HERDR_SOCKET"] = "default-socket";
-  // the error a saved choice falls back to herdr from (server/index.ts), not a start that ran and failed
   await expect(startRuntime(state, standIn, noLogin)).rejects.toBeInstanceOf(NoAltRuntimeError);
   expect(existsSync(state)).toBe(false);
   expect(capabilities()).toBe(HERDR);
@@ -296,7 +301,6 @@ it("names herdr-core as the runtime served while it runs, and herdr again once i
   const dir = mkdtempSync(join(tmpdir(), "ovis-hc-served-"));
   cleanup = () => rmSync(dir, { recursive: true, force: true });
   process.env["OVIS_RUNTIME"] = "herdr-core";
-  // choosing the runtime serves nothing yet: a bridge that inherits OVIS_RUNTIME and starts none stays on herdr
   expect(capabilities()).toBe(HERDR);
   const adapter = await startRuntime(join(dir, "state"), standIn, noLogin);
   if (!adapter) throw new Error("runtime did not start");
@@ -317,9 +321,7 @@ it.skipIf(platform !== "win32")("serves herdr-core on Windows through a named pi
   try {
     expect(adapter.socketPath).toMatch(/^\\\\\.\\pipe\\ovis-herdr-core-[0-9a-f]{32}$/);
     expect(process.env["HERDR_SOCKET"]).toBe(adapter.socketPath);
-    // the client's own address for it: a pipe name is used as it is
     expect(socketAddress(adapter.socketPath)).toBe(adapter.socketPath);
-    // a second server on the same state folder is refused while this one listens
     await expect(startRuntime(join(dir, "state"), standIn, noLogin)).rejects.toThrow(/Another Ovis owns this state directory/);
     // and through a junction to the same folder, which names the same pipe
     symlinkSync(join(dir, "state"), join(dir, "alias"), "junction");
@@ -327,7 +329,6 @@ it.skipIf(platform !== "win32")("serves herdr-core on Windows through a named pi
   } finally {
     adapter.stop();
   }
-  // and the pipe went with it: a server started afterwards takes the same name
   const again = await startRuntime(join(dir, "state"), standIn, noLogin);
   if (!again) throw new Error("runtime did not start again");
   again.stop();

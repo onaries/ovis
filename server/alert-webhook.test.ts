@@ -9,7 +9,6 @@ import { createPushService } from "./push.ts";
 
 interface Received { path: string; headers: Headers; body: string }
 
-/** A destination on loopback that records every post and answers with `status` (or the next of `statuses`). */
 function startDestination() {
   const received: Received[] = [];
   const waiters: Array<() => void> = [];
@@ -29,7 +28,6 @@ function startDestination() {
   return {
     url: (path = "/hook") => `http://127.0.0.1:${server.port}${path}`,
     received,
-    /** resolves once `count` posts arrived, or fails after 5 s */
     posts(count: number): Promise<void> {
       return new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`fewer than ${count} posts`)), 5_000);
@@ -37,7 +35,6 @@ function startDestination() {
         check();
       });
     },
-    /** holds every answer until the returned release is called */
     hold(): () => void {
       let release!: () => void;
       gate = new Promise<void>((resolve) => { release = () => { gate = null; resolve(); }; });
@@ -126,7 +123,6 @@ describe("alert webhook presets", () => {
 
   it("keeps a reachable link base when this PC's own loopback address saves, and says when none is known", async () => {
     const hook = webhook();
-    // a first save over the relay knows no address a phone opens
     expect(hook.save({ preset: "json", url: destination.url() }, "https://relay.ovis.invalid").reachable_link).toBe(false);
     expect(hook.save({ preset: "json" }, "http://127.0.0.1:7317").reachable_link).toBe(false);
     expect(hook.save({ preset: "json" }, "https://pc.tailnet.example").reachable_link).toBe(true);
@@ -161,7 +157,6 @@ describe("alert webhook delivery", () => {
     hook.send({ ...alert, title: "third" });
     await hook.settled();
     const titles = destination.received.map((post) => JSON.parse(post.body).title);
-    // the first was on its way; the third replaced the second, and is tried once and retried three times
     expect(titles).toEqual(["first", "third", "third", "third", "third"]);
     expect(hook.view()).toMatchObject({ last_error: "HTTP 503", last_success_at: null });
   });
@@ -345,7 +340,6 @@ describe("web push alerts reach the webhook", () => {
     expect(kinds.map((post) => post.kind)).toEqual(["input", "done", "ended"]);
     expect(kinds[0]).toMatchObject({ text: "Work PC · codex: waiting for your input\nhttps://pc.example/?pane=w1%3Ap1&view=chat", url: "https://pc.example/?pane=w1%3Ap1&view=chat" });
 
-    // its own choices, not a device's: finishes off
     hook.save({ preset: "json", alerts: { input: true, done: "off" } }, undefined);
     await step(() => push.onStatus("w1:p1", "working"));
     await step(() => push.onStatus("w1:p1", "done"));
@@ -361,13 +355,11 @@ describe("web push alerts reach the webhook", () => {
     hook.save({ preset: "json", url: destination.url("/a") }, undefined);
     const push = createPushService({ stateDir, timing: { short: 0, long: 0, longTurn: 0 }, webhook: hook });
     push.seed([pane("w1:p1", "working")]);
-    // scheduled for A; the timer has not fired when B replaces A
     await push.onStatus("w1:p1", "blocked");
     hook.save({ preset: "json", url: destination.url("/b") }, undefined);
     await push.settled();
     await hook.settled();
     expect(destination.received).toHaveLength(0);
-    // the next alert, which arose with B set, reaches B
     await push.onStatus("w1:p1", "working");
     await push.onStatus("w1:p1", "blocked");
     await push.settled();
@@ -377,7 +369,6 @@ describe("web push alerts reach the webhook", () => {
 
   it.each([
     ["the terminal ended", async (push: ReturnType<typeof createPushService>) => { await push.onEnded("w1:p1"); }],
-    // the new blocked alert is held back by a window in use; only the old one's retry could reach the destination
     ["it went working and blocked again", async (push: ReturnType<typeof createPushService>) => { inUseNow = true; await push.onStatus("w1:p1", "working"); await push.onStatus("w1:p1", "blocked"); await push.settled(); inUseNow = false; }],
     ["it was muted and unmuted", async (push: ReturnType<typeof createPushService>) => { mutedNow = true; push.mutesChanged(); mutedNow = false; push.mutesChanged(); }],
   ])("drops a retry once %s", async (_name, change) => {

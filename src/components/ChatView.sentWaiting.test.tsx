@@ -8,7 +8,6 @@ import { SettingsProvider } from "../lib/settings.ts";
 import { ChatView } from "./ChatView.tsx";
 import { SentWaitingList } from "./SentWaiting.tsx";
 
-// The renderer has no layout engine: every ref gets a node with only the geometry ChatView reads.
 class Node extends EventTarget {
   readonly clientHeight = 600;
   readonly clientWidth = 600;
@@ -49,7 +48,6 @@ beforeEach(() => {
     },
     document: {
       ...listen, visibilityState: "visible", activeElement: null, querySelector: () => null,
-      // the chat's timeline chunk asks for this as it loads (@legendapp/list): a page without that stylesheet has none
       getElementById: () => null,
       documentElement: { lang: "", dataset: {}, style, hasAttribute: () => false },
     },
@@ -62,12 +60,10 @@ beforeEach(() => {
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  // the pane's conversation, and nothing to anything else the chat reads (its slash commands, a prompt on screen)
   fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: RequestInfo | URL) =>
     String(input).includes("pane/conversation?") ? Response.json(answer) : Response.json({ commands: [], prompt: null }), { preconnect: globalThis.fetch.preconnect }));
 });
 
-/** `signal`, or a failure once `ms` have passed without it */
 async function within(signal: Promise<void>, ms: number, what: string): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not come within ${ms} ms`)), ms); });
@@ -92,7 +88,6 @@ test.each([["working", false], ["idle", true]] as const)(
     answer = { source: "grok-transcript", activity, turns: [{ role: "assistant", ts: new Date(Date.now() - 10_000).toISOString(), parts: [{ kind: "text", text: "earlier" }] }] };
     rememberWaitingSend(waitingKey("local", paneId), "fix the bug");
     try {
-      // the chat lays out a read's answer in one go: its metadata (onMetadata), then its turns and activity
       let applied!: () => void;
       const read = new Promise<void>((resolve) => { applied = resolve; });
       await act(async () => {
@@ -100,10 +95,8 @@ test.each([["working", false], ["idle", true]] as const)(
           paneId, refreshKey: 0, connected: true, ended: false, agent: "grok", agentStatus: "idle", onMetadata: () => { applied(); },
         })), { createNodeMock: () => new Node() });
       });
-      // the conversation read, started as the chat mounted, applied: what it set is rendered as this act ends
       await act(async () => { await within(read, 5_000, "the conversation read"); });
       if (renderer === undefined) throw new Error("Chat did not mount");
-      // a send is said unanswered only while the agent rests: one at work may still take it
       expect(renderer.root.findByType(SentWaitingList).props.resting).toBe(resting);
     } finally { act(() => { forgetWaitingSends(waitingKey("local", paneId)); }); }
   },

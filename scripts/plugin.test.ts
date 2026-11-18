@@ -14,11 +14,6 @@ import { trustRefusal } from "../server/herdr-core/discovery.ts";
 import { profileGroups } from "../server/herdr-discovery.ts";
 import { decodeOffer, encodeOffer } from "../shared/relay-offer.ts";
 
-/**
- * The plugin's settings files, read by hand the way a headless PC runs `status` or `pair`:
- * no HERDR_PLUGIN_CONFIG_DIR, so the script asks herdr (a fake one here) for the config dir.
- */
-
 const ROOT = join(import.meta.dir, "..");
 let scratch: string;
 let configDir: string;
@@ -33,7 +28,6 @@ async function run(command: string, extra: Record<string, string | undefined> = 
   return { out, err, exitCode };
 }
 
-/** The environment a command runs in: this test's own home and state, and `extra`. */
 function launchEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const bin = join(scratch, "bin");
   const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: scratch, HERDR_PLUGIN_STATE_DIR: join(scratch, "state") };
@@ -44,7 +38,6 @@ function launchEnv(extra: Record<string, string | undefined> = {}): Record<strin
 }
 
 function launch(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string; timeout?: number } = {}) {
-  // `stdin`: what is piped in, which is not a terminal; `timeout`: the command is killed after that many ms
   return Bun.spawn(["bun", "scripts/plugin.ts", command, ...more.args ?? []], { cwd: ROOT, env: launchEnv(extra), stdout: "pipe", stderr: "pipe", ...more.stdin === undefined ? {} : { stdin: new Blob([more.stdin]) }, ...more.timeout === undefined ? {} : { timeout: more.timeout, killSignal: "SIGKILL" } });
 }
 
@@ -126,13 +119,10 @@ describe("the version status names", () => {
   });
 });
 
-/** What the app's bridge health answers (server/index.ts): it holds the port whether herdr answers or not. */
 const BRIDGE_HEALTH = { ok: true, auth: { required: false, authenticated: true }, bridge_protocol: 1 };
-/** What the app's full health answers while herdr does (every release since v0.1.0 has sent these). */
 const APP_HEALTH = { ok: true, herdr: { version: "0.9.3", protocol: 1 }, auth: { required: false, authenticated: true } };
 
 describe("the herdr socket", () => {
-  /** a stand-in server that records the HERDR_SOCKET it was started with, then exits */
   const socketSeen = async (): Promise<string> => {
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
@@ -152,7 +142,6 @@ describe("the herdr socket", () => {
 });
 
 describe("server.log", () => {
-  /** starts a stand-in server that runs `body` and exits before it answers, so the start fails */
   const failedStart = async (body: string) => {
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
@@ -176,14 +165,12 @@ describe("server.log", () => {
   it("appends while the recorded server is still alive", async () => {
     mkdirSync(join(scratch, "state"));
     writeFileSync(state("server.log"), "live run\n");
-    // this test's own process stands in for a server that is still running
     writeFileSync(state("server.pid"), `${process.pid}\n`);
     await failedStart(`console.log("this run");`);
     expect(readFileSync(state("server.log"), "utf8")).toStartWith("live run\nthis run\n");
     expect(existsSync(state("server.log.1"))).toBe(false);
   });
 
-  /** the lines a failed start showed from the log */
   const shown = (err: string) => err.slice(err.indexOf("ends with:\n") + "ends with:\n".length).trimEnd().split("\n");
 
   it("reads only the log's end, without the line the read cut", async () => {
@@ -205,8 +192,6 @@ describe("server.log", () => {
 
 describe("starts at the same moment", () => {
   it("open one server between them, whose record stop finds", async () => {
-    // each stand-in server reports its pid here, then binds only once the test says go: both starts
-    // decide while the first one's server has not taken the port yet
     const control = join(scratch, "control.sock");
     const servers: { pid: number; socket: { write(data: string): number } }[] = [];
     const listeners: (() => void)[] = [];
@@ -254,7 +239,6 @@ describe("starts at the same moment", () => {
       const reader = second.stdout.getReader();
       const decoder = new TextDecoder();
       let secondOut = "";
-      /** reads the second start's output until it says `text`, or to its end */
       const readSecond = async (text?: string) => {
         while (text === undefined || !secondOut.includes(text)) {
           const { value, done } = await reader.read();
@@ -262,7 +246,6 @@ describe("starts at the same moment", () => {
           secondOut += decoder.decode(value, { stream: true });
         }
       };
-      // the second start either waits for the first or (the bug) opens a server of its own
       const waits = readSecond("another start or stop of Ovis is running");
       await within(Promise.race([waits, serversUp(2)]), "the second start to wait or spawn");
       open = true;
@@ -285,12 +268,11 @@ describe("starts at the same moment", () => {
         expect(stat === null ? "gone" : stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toMatch(/^(gone|Z)$/);
       } else expect(() => process.kill(pid, 0)).toThrow();
     } finally {
-      for (const { pid } of servers) try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ }
+      for (const { pid } of servers) try { process.kill(-pid, "SIGKILL"); } catch {}
       listener.stop(true);
     }
   }, 60_000);
 
-  /** a recorded server (a sleep) on a free port, and a root whose stand-in server marks that it was spawned */
   const recordedSleeper = (birth: (pid: number) => unknown) => {
     const server = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
     mkdirSync(join(scratch, "state"), { recursive: true });
@@ -328,7 +310,6 @@ describe("starts at the same moment", () => {
     } finally { chmodSync(dir, 0o700); }
   });
 
-  // a recorded server that exited while its parent (a plugin host, say) has not reaped it yet
   it.skipIf(platform() !== "linux" || !Bun.which("setsid"))("start a server when the recorded one has exited but is not reaped yet", async () => {
     const parent = spawn("sh", ["-c", `setsid sh -c 'echo $$; exec sleep 0.2' & exec sleep 30`], { stdio: ["ignore", "pipe", "ignore"] });
     try {
@@ -352,8 +333,6 @@ describe("starts at the same moment", () => {
   }, 30_000);
 
   it("take turns in the dir herdr hands them, while the record is still under the old id's", async () => {
-    // a server started under the old id runs; herdr hands the updated plugin the new id's dir. A
-    // start and a stop that read the record in different dirs must still share one lock
     const plugins = join(scratch, "plugins");
     const legacy = join(plugins, "devswha.herdr-web-ui");
     const current = join(plugins, "devswha.ovis");
@@ -366,13 +345,11 @@ describe("starts at the same moment", () => {
       expect(existsSync(join(current, "lifecycle.lock.guard"))).toBe(true);
       expect(existsSync(join(legacy, "lifecycle.lock.guard")), "regression: the lock followed the record into the old id's dir").toBe(false);
     } finally {
-      try { process.kill(-server.pid!, "SIGKILL"); } catch { /* stopped */ }
+      try { process.kill(-server.pid!, "SIGKILL"); } catch {}
     }
   });
 
   it("keep a server whose birth matches though the clock stepped forward past the record", async () => {
-    // the wall clock jumped (NTP on a PC without a clock of its own, a resumed VM): the record now
-    // looks older than this boot, though the very process it names runs
     const { server, root } = recordedSleeper((pid) => { const reading = readProcessBirth(pid); return reading.state === "identified" ? reading.birth : null; });
     const beforeBoot = (Date.now() - uptime() * 1000) / 1000 - 3600;
     utimesSync(join(scratch, "state", "server.owner"), beforeBoot, beforeBoot);
@@ -383,7 +360,7 @@ describe("starts at the same moment", () => {
       const stopped = await run("stop", { HERDR_PLUGIN_ROOT: root, PORT: "1" });
       expect(stopped.out).toContain(`stopped Ovis (pid ${server.pid})`);
       expect(() => process.kill(server.pid!, 0)).toThrow();
-    } finally { try { process.kill(-server.pid!, "SIGKILL"); } catch { /* stopped */ } }
+    } finally { try { process.kill(-server.pid!, "SIGKILL"); } catch {} }
   }, 30_000);
 
   it("leave a server alone whose birth could not be read when it was started, while it still runs", async () => {
@@ -400,7 +377,6 @@ describe("starts at the same moment", () => {
     const { server, root } = recordedSleeper(() => undefined);
     const owner = join(scratch, "state", "server.owner");
     writeFileSync(owner, JSON.stringify({ pid: server.pid, birth_unknown: true }));
-    // written an hour before this boot: whatever holds its pid now is another process
     const beforeBoot = (Date.now() - uptime() * 1000) / 1000 - 3600;
     utimesSync(owner, beforeBoot, beforeBoot);
     try {
@@ -409,7 +385,6 @@ describe("starts at the same moment", () => {
     } finally { process.kill(-server.pid!, "SIGKILL"); }
   });
 
-  /** Another process holding the lifecycle lock (or, with `guardOnly`, only its native guard, as one stopped mid-acquisition would) until released. */
   const holdLock = async (guardOnly = false) => {
     const lock = join(scratch, "state", "lifecycle.lock");
     mkdirSync(join(scratch, "state"), { recursive: true });
@@ -425,7 +400,6 @@ describe("starts at the same moment", () => {
       kill: () => holder.kill("SIGKILL"),
     };
   };
-  /** Reads a process's output until it says `text`, within 15 s; what it said so far. */
   const readUntil = async (reader: ReadableStreamDefaultReader<Uint8Array>, text: string, what: string) => {
     const decoder = new TextDecoder();
     let said = "";
@@ -461,7 +435,6 @@ describe("starts at the same moment", () => {
     const holder = await holdLock();
     const ours = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(APP_HEALTH) });
     const { server, root } = recordedSleeper((pid) => { const reading = readProcessBirth(pid); return reading.state === "identified" ? reading.birth : null; });
-    // the start waits behind the other, which then moves to another port, records its server and comes up there
     rmSync(join(scratch, "state", "server.pid"));
     try {
       const start = launch("start", { HERDR_PLUGIN_ROOT: root });
@@ -483,7 +456,7 @@ describe("starts at the same moment", () => {
   }, 30_000);
 
   it("stop the server they spawned when its record cannot be written, so none runs unrecorded", async () => {
-    mkdirSync(join(scratch, "state", "server.owner"), { recursive: true }); // a path that cannot take the record
+    mkdirSync(join(scratch, "state", "server.owner"), { recursive: true });
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
     writeFileSync(join(root, "server", "managed.ts"), "setInterval(() => {}, 1 << 30);\n");
@@ -497,11 +470,10 @@ describe("starts at the same moment", () => {
       expect(started.exitCode).toBe(1);
       expect(started.err).toContain("it was stopped");
       expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
-    } finally { if (pid > 0) try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ } }
+    } finally { if (pid > 0) try { process.kill(-pid, "SIGKILL"); } catch {} }
   }, 30_000);
 
   it("start a server when the recorded pid now runs another process", async () => {
-    // the birth kept for the record is not the one running under its pid: the pid was handed on
     const { server, root } = recordedSleeper(() => ({ platform: process.platform, value: process.platform === "linux" ? `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:1` : "Thu Jan 1 00:00:00 1970" }));
     try {
       const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
@@ -529,7 +501,6 @@ describe("port", () => {
   });
 
   it("does not start on another port when the PORT the user set cannot be opened, and says so", async () => {
-    // holds the port without answering as the app would
     const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
     try {
       writeFileSync(join(configDir, ".env"), `PORT=${holder.port}\n`);
@@ -585,14 +556,12 @@ describe("port", () => {
   });
 
   it("follows a start that is coming up on another port instead of opening a second server", async () => {
-    // the app answers on the port the other start fell back to
     const ours = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(APP_HEALTH) });
-    // the kept port is held by someone else; its first health probe is the moment the other start writes its choice
     const stranger = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { keep(ours.port!); return new Response(null, { status: 404 }); } });
     try {
       keep(stranger.port!);
       mkdirSync(join(scratch, "state"), { recursive: true });
-      writeFileSync(join(scratch, "state", "server.pid"), `${process.pid}\n`); // the other start's record, alive
+      writeFileSync(join(scratch, "state", "server.pid"), `${process.pid}\n`);
       const started = await run("start");
       expect(started.out).toContain(`already running at http://127.0.0.1:${ours.port}`);
       expect(started.exitCode).toBe(0);
@@ -602,7 +571,6 @@ describe("port", () => {
   });
 
   it("keeps the port of its own server that cannot reach herdr instead of moving the app (#428)", async () => {
-    // the app answers its bridge health, but the full one fails as it does while herdr is away
     const ours = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -613,7 +581,7 @@ describe("port", () => {
     try {
       keep(ours.port!);
       mkdirSync(join(scratch, "state"), { recursive: true });
-      writeFileSync(join(scratch, "state", "server.pid"), `${process.pid}\n`); // the start that runs it, alive
+      writeFileSync(join(scratch, "state", "server.pid"), `${process.pid}\n`);
       // a start that moves anyway spawns no real server: there is no server/managed.ts under this root
       const started = await run("start", { HERDR_PLUGIN_ROOT: scratch });
       expect(started.out).not.toContain("instead");
@@ -625,7 +593,6 @@ describe("port", () => {
   }, 40_000);
 
   it("reports its own server as running when herdr comes back while start asks why it cannot reach it", async () => {
-    // herdr is away through the wait and the check after the bridge probe, and back for the question after that
     let afterBridge = -1;
     const ours = Bun.serve({
       hostname: "127.0.0.1",
@@ -650,7 +617,6 @@ describe("port", () => {
 
 describe("stop", () => {
   it("stops the server an install started under its old id after herdr updated the plugin to the new id", async () => {
-    // herdr hands the updated plugin plugins/devswha.ovis while the running server's record is under devswha.herdr-web-ui
     const plugins = join(scratch, "plugins");
     const legacy = join(plugins, "devswha.herdr-web-ui");
     mkdirSync(legacy, { recursive: true });
@@ -662,12 +628,11 @@ describe("stop", () => {
       expect(existsSync(join(legacy, "server.pid"))).toBe(false);
       expect(() => process.kill(server.pid!, 0)).toThrow();
     } finally {
-      try { process.kill(-server.pid!, "SIGKILL"); } catch { /* already stopped */ }
+      try { process.kill(-server.pid!, "SIGKILL"); } catch {}
     }
   });
 
   it("does not signal a process that took the recorded server's pid", async () => {
-    // the server recorded here had another birth: the process under its pid now is someone else's
     const other = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
     try {
       mkdirSync(join(scratch, "state"));
@@ -680,12 +645,11 @@ describe("stop", () => {
       expect(stopped.out).toContain(`Ovis is not running (pid ${other.pid} now belongs to another process)`);
       expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
     } finally {
-      try { process.kill(-other.pid!, "SIGKILL"); } catch { /* stopped */ }
+      try { process.kill(-other.pid!, "SIGKILL"); } catch {}
     }
   });
 
   it("returns only once the server's process group is gone", async () => {
-    // a server that takes a second to exit, as the supervisor does while its bridge shuts down
     const server = spawn("sh", ["-c", "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done"], { detached: true, stdio: "ignore" });
     const pid = server.pid!;
     mkdirSync(join(scratch, "state"));
@@ -699,9 +663,7 @@ describe("stop", () => {
     expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
   });
 
-  // a server that exited while its parent (a plugin host, say) has not reaped it yet
   it.skipIf(platform() !== "linux" || !Bun.which("setsid"))("counts an exited, unreaped server as gone", async () => {
-    // the inner shell leads its own group; its parent turns into a sleep that never reaps it
     const parent = spawn("sh", ["-c", `setsid sh -c 'echo $$; exec sleep 0.2' & exec sleep 30`], { stdio: ["ignore", "pipe", "ignore"] });
     try {
       const pid = Number(await new Promise<string>((resolve) => parent.stdout!.once("data", (chunk) => resolve(String(chunk).trim()))));
@@ -762,8 +724,108 @@ describe("the state dir when run by hand", () => {
   });
 });
 
+describe("the devices status lists apart", () => {
+  const GROUPS = { unlinked: [{ id: "6a1f0c9e2b7d4a10", label: "Old phone" }], own_word: [{ id: "0d4c1b7a9e2f3c58", label: "Tab\u001b]0;let\u0007let" }, { id: "1e5d2c8b0a3f4d69", label: "Laptop" }] };
+  /** An Ovis on a port of its own whose health answer is `answer` for each request, by the request's authorization. */
+  function answering(answer: (authorization: string | null) => Record<string, unknown>) {
+    const asked: (string | null)[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      if (new URL(request.url).pathname !== "/api/health") return new Response(null, { status: 404 });
+      asked.push(request.headers.get("authorization"));
+      return Response.json(answer(request.headers.get("authorization")));
+    } });
+    writeFileSync(join(configDir, ".env"), `PORT=${server.port}\n`);
+    return { server, asked, env: { HOST: "127.0.0.1", HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: join(scratch, "app-state"), OVIS_TOKEN: "" } };
+  }
+  const lines = (out: string) => out.split("\n").filter((line) => /^(relay )?devices /.test(line));
+
+  it("are the two groups of the owner's health answer, each device by its name with no control character, and its id", async () => {
+    const pc = answering(() => ({ ...APP_HEALTH, account_devices: GROUPS }));
+    try {
+      const result = await run("status", pc.env);
+      expect(result.exitCode, result.err).toBe(0);
+      expect(lines(result.out)).toEqual([
+        "relay devices outside the account: Old phone (6a1f0c9e2b7d4a10)",
+        "devices that joined the account on their own word: Tab]0;letlet (0d4c1b7a9e2f3c58), Laptop (1e5d2c8b0a3f4d69)",
+      ]);
+      expect(pc.asked).toEqual([null]);
+    } finally { await pc.server.stop(true); }
+  });
+
+  it("say none for an empty group, and are not printed by a server that sends none", async () => {
+    const empty = answering(() => ({ ...APP_HEALTH, account_devices: { unlinked: [], own_word: [] } }));
+    try {
+      expect(lines((await run("status", empty.env)).out)).toEqual(["relay devices outside the account: none", "devices that joined the account on their own word: none"]);
+    } finally { await empty.server.stop(true); }
+    const older = answering(() => APP_HEALTH);
+    try {
+      // it let the command in: nothing is asked again, with the token or without
+      const result = await run("status", { ...older.env, OVIS_TOKEN: "the-token" });
+      expect(result.out.split("\n")[0]).toBe(`running http://127.0.0.1:${older.server.port}`);
+      expect(lines(result.out)).toEqual([]);
+      expect(older.asked).toEqual([null]);
+    } finally { await older.server.stop(true); }
+  });
+
+  /**
+   * `status` with fetch replaced inside the command, so nothing listens: each request gets the next of `answers` (the
+   * last one again once they run out). What it printed, and each request's path and authorization.
+   */
+  async function statusAnswering(answers: readonly Record<string, unknown>[], token: string): Promise<{ out: string; asked: string }> {
+    writeFileSync(join(configDir, ".env"), "PORT=9\n");
+    const asked = join(scratch, "asked");
+    rmSync(asked, { force: true });
+    const plugin = JSON.stringify(join(ROOT, "scripts", "plugin.ts"));
+    const child = Bun.spawn([process.execPath, "-e", `import { appendFileSync } from "node:fs";
+const answers = ${JSON.stringify(answers)};
+globalThis.fetch = async (input, init) => {
+  const request = new Request(input, init);
+  appendFileSync(${JSON.stringify(asked)}, \`\${new URL(request.url).pathname} \${request.headers.get("authorization") ?? "none"}\\n\`);
+  return Response.json(answers.length > 1 ? answers.shift() : answers[0]);
+};
+process.argv = [process.execPath, ${plugin}, "status"];
+const { runPlugin } = await import(${plugin});
+await runPlugin();`], { cwd: ROOT, stdout: "pipe", stderr: "pipe", env: launchEnv({ HOST: "127.0.0.1", HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: join(scratch, "app-state"), OVIS_TOKEN: token }) });
+    const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exitCode, err).toBe(0);
+    expect(out.split("\n")[0]).toBe("running http://127.0.0.1:9");
+    return { out, asked: readFileSync(asked, "utf8") };
+  }
+  const notice = (out: string) => out.split("\n").filter((line) => line.startsWith("account devices: "));
+
+  it("are never asked for with the token over TCP: the app's answer that did not let the command in is the one request, and status says so", async () => {
+    // its first answer is the app's and lets nothing in, and whatever answers the same address next would be handed the
+    // token (an earlier status asked again with it)
+    const { out, asked } = await statusAnswering([{ ...APP_HEALTH, auth: { required: true, authenticated: false, reason: "token_required" } }, { ...APP_HEALTH, account_devices: GROUPS }], "the-token");
+    expect(asked).toBe("/api/health none\n");
+    expect(lines(out)).toEqual([]);
+    expect(notice(out)).toHaveLength(1);
+    expect(notice(out)[0]).toContain("token");
+    expect(out).not.toContain("the-token");
+  });
+
+  it("print a device's id with no control character, on its group's one line", async () => {
+    const groups = { unlinked: [{ id: "6a1f0c9e\n2b7d4a10", label: "Old phone" }], own_word: [{ id: "0d4c1b7a\u001b[2J9e2f3c58", label: "Tab" }] };
+    const { out } = await statusAnswering([{ ...APP_HEALTH, account_devices: groups }], "");
+    expect(lines(out)).toEqual([
+      "relay devices outside the account: Old phone (6a1f0c9e2b7d4a10)",
+      "devices that joined the account on their own word: Tab (0d4c1b7a[2J9e2f3c58)",
+    ]);
+  });
+
+  it("name the token as the reason they are not shown only when the app asks for it", async () => {
+    // a PC that wants this device paired, with no token set, and an open LAN that lets the command in but is not its owner
+    for (const auth of [{ required: true, authenticated: false, reason: "pairing_required" }, { required: false, authenticated: true, via: "open", role: "drive" }]) {
+      const { out, asked } = await statusAnswering([{ ...APP_HEALTH, auth }], "");
+      expect(asked).toBe("/api/health none\n");
+      expect(lines(out)).toEqual([]);
+      expect(notice(out)).toHaveLength(1);
+      expect(notice(out)[0]).not.toContain("token");
+    }
+  });
+});
+
 describe("add and login", () => {
-  /** An Ovis on a port of its own whose PC is already in an account: `link` says so and ends. */
   function linkedPc() {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const path = new URL(request.url).pathname;
@@ -825,7 +887,6 @@ describe("add and login", () => {
       if (path === "/api/health") return Response.json(APP_HEALTH);
       calls.push(`${request.method} ${path}`);
       if (path === "/api/relay") return Response.json({ phase: "online", blocked: null });
-      // a code that runs out in a second, so the next one is written soon
       const soon = new Date(Date.now() + 1_000).toISOString();
       if (path === "/api/relay/code") return Response.json({ code: `ABCD-EFGH-J${++codes}`, expires_at: soon, server_id: "0123456789abcdef0123456789abcdef" });
       if (path === "/api/relay/offer") return Response.json({ url: encodeOffer({ v: 1, server_id: "0123456789abcdef0123456789abcdef", server_public_key: exportPublicKey(key.publicKey), relay: "wss://relay.ovis.sh", code: "123456" }, "https://app.ovis.sh"), expires_at: soon });
@@ -833,7 +894,6 @@ describe("add and login", () => {
       return new Response(null, { status: 404 });
     } });
     writeFileSync(join(configDir, ".env"), `PORT=${server.port}\n`);
-    // its reader takes the first code's lines and ends: the write of the next code fails
     const child = Bun.spawn(["sh", "-c", "bun scripts/plugin.ts link --code | head -n 2"], {
       cwd: ROOT, stdout: "pipe", stderr: "pipe",
       env: launchEnv({ HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: join(scratch, "app-state"), OVIS_TOKEN: "" }),
@@ -841,7 +901,6 @@ describe("add and login", () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let result: "taken back" | "left valid";
     try {
-      // a run whose write failed unheard is gone at once, with nothing taken back: its exit is the other end of the wait
       result = await Promise.race([
         taken.then(() => "taken back" as const),
         child.exited.then(() => "left valid" as const),
@@ -869,16 +928,8 @@ describe("add and login", () => {
   });
 });
 
-/**
- * A machine profile as the plugin finds it: its local owner on the unix socket its lock records (`serve.lock/http.json`,
- * `door: 1`), its TCP port answering liveness and nothing else (server/machine-profile.ts machineTcpAnswer).
- */
 describe.skipIf(platform() === "win32")("a machine profile, under the fleet preview", () => {
   type Call = { door: "socket" | "tcp"; call: string; host: string | null; origin: string | null };
-  /**
-   * Where a profile's folders are made: in a folder the profile's own walk accepts, the test's temporary folder when it
-   * passes that walk, else the system's sticky /tmp (as server/machine-profile.contract.test.ts does).
-   */
   const walked = (): string => {
     const parent = platform() === "win32" || trustRefusal(realpathSync(tmpdir()), profileGroups(), true) === null ? tmpdir() : "/tmp";
     const home = mkdtempSync(join(parent, "ovis-plugin-profile-"));
@@ -889,16 +940,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   afterEach(() => { for (const home of homes.splice(0)) { chmodSync(home, 0o700); rmSync(home, { recursive: true, force: true }); } });
   /** OVIS_TOKEN of every run here: the profile ignores it, and no output names it */
   const TOKEN = "plugin-profile-test-token";
-  /**
-   * A stand-in profile. `record`: what its lock records beside its port and socket (a string: the record's whole text);
-   * `owner`: its socket's answer to a path instead of the stand-in's own; `at`: where its socket listens instead of
-   * `serve.sock` in the state folder's real path, as a profile names it; `named`: the socket its record names, when not
-   * that one; `tcp`: its TCP port answers health as an ordinary server does, or with this body; `linked`: `serve.sock`
-   * is a link to its socket elsewhere; `folderMode`: the state folder's mode instead of 0700; `parentMode`: the mode of
-   * the folder that holds it. `settings` writes more lines into the plugin's settings file. `bearers` lists, for each
-   * call, its door and whether it carried an `authorization` header. Its state folder is `state` in `home`, made where
-   * the profile's own walk accepts it, and its socket is 0600, as the profile makes them.
-   */
   function profilePc(record: Record<string, unknown> | string = { door: 1 }, more: { owner?: (path: string) => Response | undefined; at?: string; named?: string; tcp?: true | Record<string, unknown>; linked?: true; folderMode?: number; parentMode?: number } = {}) {
     const calls: Call[] = [];
     const bearers: string[] = [];
@@ -1025,7 +1066,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   }, 90_000);
 
   it("takes the health check on the owner socket only: an app answering full health on the TCP port is not taken, and gets no request", async () => {
-    // a state folder that fails the profile's own check, and an ordinary app's full health on the port
     const pc = profilePc({ door: 1 }, { folderMode: 0o777, tcp: true });
     try {
       const status = await run("status", pc.env);
@@ -1039,7 +1079,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   it("does not take an app on the PORT it was given for the profile when starting, and starts nothing", async () => {
     const pc = profilePc({ door: 1 }, { folderMode: 0o777 });
     const asked: string[] = [];
-    // an ordinary app on the port: bridge health and full health
     const app = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => {
       asked.push(`${request.method} ${new URL(request.url).pathname}${new URL(request.url).search}`);
       return Response.json(new URL(request.url).searchParams.get("scope") === "bridge" ? BRIDGE_HEALTH : APP_HEALTH);
@@ -1084,7 +1123,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
       const record = join(pc.state, "serve.lock", "http.json");
       rmSync(record);
       expect(Bun.spawnSync(["mkfifo", "-m", "600", record]).exitCode).toBe(0);
-      // killed after 20 s, should it wait
       const status = await run("status", pc.env, { timeout: 20_000 });
       expect([status.out.split("\n")[0], status.exitCode], status.err).toEqual([`down http://127.0.0.1:${pc.port}`, 0]);
     } finally { await pc.stop(); }
@@ -1094,7 +1132,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   it("takes no record larger than 4 KiB", async () => {
     const pc = profilePc();
     try {
-      // the profile's own record, made longer than the bound by white space after it
       const own = JSON.stringify({ port: pc.port, hostname: "127.0.0.1", socket: join(realpathSync(pc.state), "serve.sock"), door: 1 });
       writeFileSync(join(pc.state, "serve.lock", "http.json"), `${own}${" ".repeat(4096)}`);
       expect((await run("status", pc.env)).out.split("\n")[0]).toBe(`down http://127.0.0.1:${pc.port}`);
@@ -1107,7 +1144,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   it("keeps the door a command's health check passed on: with the record gone after that, the later requests of pair --approve and add still go to the socket", async () => {
     let record = "";
     const pc: ReturnType<typeof profilePc> = profilePc({ door: 1 }, { owner: (path) => {
-      // the record goes as the socket answers health
       if (path === "/api/health") rmSync(join(pc.state, "serve.lock", "http.json"), { force: true });
       if (path === "/api/devices/pair/start") return Response.json({ code: "123456", expires_at: new Date(Date.now() + 600_000).toISOString() });
       return undefined;
@@ -1155,7 +1191,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
     expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health"]);
   }, 30_000);
 
-  /** A profile's health while its engine does not answer (server/machine-profile.ts machineHealth): no `herdr` */
   const ENGINE_DOWN = { ok: true, auth: { required: false, authenticated: true, via: "local", role: "drive" }, machine_profile: { engine: "herdr", runtime_down: true, reason: "herdr is not running for the selected session" } };
 
   it("takes a profile whose engine does not answer as running on its owner socket: status says the engine is down, add goes on", async () => {
@@ -1205,7 +1240,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
     expect(pc.calls.map((call) => `${call.door} ${call.call}`)).toEqual(["socket GET /api/health", "socket GET /api/health"]);
   }, 30_000);
 
-  /** A profile's owner socket answering pair/start with a code and /api/access with a Tailscale serve command */
   const pairing = (path: string): Response | undefined => path === "/api/devices/pair/start" ? Response.json({ code: "123456", expires_at: new Date(Date.now() + 600_000).toISOString() })
     : path === "/api/access" ? Response.json({ tailscale: { state: "running", serving_url: null, serve_command: "tailscale serve --bg --https=7317 http://127.0.0.1:1" } }) : undefined;
 
@@ -1224,7 +1258,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
 
   it("phone asks and changes nothing of Tailscale for a profile, and names the relay's commands", async () => {
     const pc = profilePc({ door: 1 }, { owner: pairing });
-    // a Tailscale that runs and serves nothing yet, so `phone` would publish the app; it records every call
     const calls = join(scratch, "tailscale-calls");
     writeFileSync(join(scratch, "bin", "tailscale"), `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\ncase "$1 $2" in\n  "status --json") echo '{"BackendState":"Running","Self":{"DNSName":"pc.example.ts.net."}}' ;;\n  "serve status") echo '{}' ;;\nesac\n`);
     chmodSync(join(scratch, "bin", "tailscale"), 0o755);
@@ -1237,7 +1270,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
   }, 30_000);
 
   it("start spawns nothing for a profile that does not answer, and exits 1; one that answers is reported running", async () => {
-    // a launcher that marks that it was spawned, under a root of its own
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
     writeFileSync(join(root, "server", "managed.ts"), `require("node:fs").writeFileSync(${JSON.stringify(join(scratch, "spawned"))}, ""); process.exit(1);\n`);
@@ -1263,7 +1295,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
     const { FakeAccountService } = await import("../shared/account-service-fake.ts");
     const state = join(walked(), "state");
     mkdirSync(state, { mode: 0o700 });
-    // a herdr that answers the profile's ping (protocol 22), and nothing else, on a socket of this test
     const herdr = Bun.listen<{ line: string }>({ unix: join(scratch, "herdr.sock"), socket: {
       open(client) { client.data = { line: "" }; },
       data(client, chunk) {
@@ -1279,7 +1310,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
     const server = createServer({ profile: "machine", stateDir: state, port: 0, hostname: "127.0.0.1", tailscaleOwner: null, sidecar: false,
       relay: new RelayService({ stateDir: state, relay: "wss://relay.invalid" }), accountService: { url: "https://account.test", fetch: account.fetch } });
     try {
-      // the record serve() writes once it listens: the socket in the state folder's real path (server/machine-profile.ts claimServerState)
       const socket = join(realpathSync(state), "serve.sock");
       mkdirSync(join(state, "serve.lock"));
       writeFileSync(join(state, "serve.lock", "http.json"), JSON.stringify({ port: server.port, hostname: "127.0.0.1", socket, door: 1 }));
@@ -1287,16 +1317,13 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
       const env = { HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: state, OVIS_TOKEN: TOKEN, OVIS_ACCOUNT_SERVICE_URL: "https://account.test" };
       const status = await run("status", env);
       expect(status.out.split("\n")[0], status.err).toBe(`running http://127.0.0.1:${server.port}`);
-      // in no account, under the preview, with no terminal: the refusal that follows the account's status, read on the socket
       const add = await run("add", env, { args: ["--print"] });
       expect([add.out, add.exitCode], add.err).toEqual(["Adding this PC needs a terminal: the QR code and the code to type are a key to this PC, so they are never written to a pipe, a file or a log. Run ovis add in a terminal (over ssh, run ssh -t).\n", 1]);
       printed({ socket }, status, add);
-      // its herdr gone: the profile still runs, and says why its engine does not answer
       herdr.stop(true);
       rmSync(join(scratch, "herdr.sock"), { force: true });
       const down = await run("status", env);
       expect(down.out.split("\n").slice(0, 2), down.err).toEqual([`running http://127.0.0.1:${server.port}`, "engine: down (herdr is not running for the selected session)"]);
-      // control: the same profile with no door in its record is not taken as running (its TCP port is not asked)
       writeFileSync(join(state, "serve.lock", "http.json"), JSON.stringify({ port: server.port, hostname: "127.0.0.1", socket }));
       expect((await run("status", env)).out.split("\n")[0]).toBe(`down http://127.0.0.1:${server.port}`);
     } finally {
@@ -1309,7 +1336,6 @@ describe.skipIf(platform() === "win32")("a machine profile, under the fleet prev
 });
 
 describe("pair --approve", () => {
-  /** An Ovis on a port of its own with two requests waiting, which records what is decided about them. */
   function waitingPc() {
     const decisions: unknown[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -1325,21 +1351,16 @@ describe("pair --approve", () => {
   it("answers nothing with lines piped in, whatever they carry: it is not a terminal, so it says so and fails, and no request is declined", async () => {
     const { server, decisions } = waitingPc();
     try {
-      // both requests' digits, as `printf '222\n444\n' | ovis pair --approve` hands them over (or an ssh without -t)
       const result = await run("pair", { PORT: String(server.port) }, { args: ["--approve"], stdin: "222\n444\n" });
       expect(result.exitCode, result.err).toBe(1);
       expect(result.out).toBe("This is not run in a terminal, so no request can be answered here. Nothing was declined: the requests keep waiting. Run this in a terminal to answer them (over ssh, run ssh -t).\n");
-      // the requests still wait, the person's own phone among them
       expect(decisions).toEqual([]);
     } finally { await server.stop(true); }
   });
 
-  // The real terminal, and the system's own tcflush behind `discardTyped`: a fake keyboard cannot show that the
-  // input queue named there is the one that holds what was typed. `script` runs the command on a pty of its own
   it.skipIf(platform() === "win32" || Bun.which("script") === null)("discards what was typed at a real terminal before the question showed: digits begun ahead of it are no part of the Enter pressed at it", async () => {
     const decisions: unknown[] = [];
     let asked = (): void => undefined;
-    // held until the digits typed ahead are in the terminal
     const typedAhead = new Promise<void>((resolve) => { asked = resolve; });
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, async fetch(request) {
       const path = new URL(request.url).pathname;
@@ -1365,7 +1386,6 @@ describe("pair --approve", () => {
       }
     };
     try {
-      // the request's own last three digits, typed and not sent before anything is asked: the terminal echoes them
       child.stdin.write("222");
       child.stdin.flush();
       await shows("222");
@@ -1382,8 +1402,7 @@ describe("pair --approve", () => {
       child.stdin.end();
       expect(await child.exited).toBe(0);
     } finally {
-      // the end of the input ends cat, and with it the terminal and the command on it
-      try { child.stdin.end(); } catch { /* ended above */ }
+      try { child.stdin.end(); } catch {}
       child.kill();
       await reading.catch(() => undefined);
       await server.stop(true);
@@ -1426,7 +1445,6 @@ describe("pair relay offer", () => {
           expect(request.headers.get("x-herdr-update")).toBe("1");
           expect(request.headers.get("origin")).toBe(`http://127.0.0.1:${server.port}`);
           if (phase === "bad-offer") return Response.json({ url: "https://app.ovis.sh/#offer=not-valid" });
-          // Construct via the shared encoder so this fixture exercises the production URL contract.
           validOfferUrl = encodeOffer({
             v: 1, server_id: "0123456789abcdef0123456789abcdef",
             server_public_key: exportPublicKey(key.publicKey), relay: "wss://relay.ovis.sh", code: "123456",
@@ -1493,7 +1511,6 @@ describe("a command handed on to the release the app updated to", () => {
   const plugin = JSON.stringify(join(ROOT, "scripts", "plugin.ts"));
   const releaseScript = join("release-test", "scripts", "plugin.ts");
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  /** `promise`, or a failure after 10 s: a command that hangs fails its test, which still reaches its `finally` */
   async function within<T>(promise: Promise<T>, what: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1502,10 +1519,7 @@ describe("a command handed on to the release the app updated to", () => {
   }
 
   /**
-   * plugin.ts `command` with a release the app updated to whose plugin.ts is a stand-in: it writes its pid, ends with 3
-   * on SIGTERM, 4 on SIGHUP and 6 on SIGINT, and says "up" once it listens. The process notes in `notes`, as it starts
-   * the release, how many SIGTERM and SIGHUP listeners it has; with `fail`, the release cannot be started, and once the
-   * command gave up the process sends itself a SIGTERM. With `group`, it leads a process group of its own, as a command
+   * With `group`, it leads a process group of its own, as a command
    * in a terminal does. Its stderr goes into a file: a release left running would hold a pipe open.
    */
   function handOn(command: string, { fail = false, group = false } = {}) {
@@ -1560,9 +1574,6 @@ setInterval(() => {}, 1_000);`], {
         expect(new TextDecoder().decode(up.value)).toBe("up\n");
         run.child.kill(signal);
         const code = await within(run.child.exited, "the command never exited");
-        // regression for phone-setup (fails on main: it listened for nothing, ended by the signal, and left the release
-        // running), and for every command with a SIGINT sent to it alone (fails at 69ebe4b1: it was ignored, and the
-        // command went on waiting for the release)
         expect({ notes: run.notes(), code, releaseLeft: alive(run.released()) }, run.said()).toEqual({ notes: "spawn 1 1\n", code: exit, releaseLeft: false });
       }, 30_000);
     }
@@ -1580,8 +1591,6 @@ setInterval(() => {}, 1_000);`], {
     posix(`${command}: stops listening when the release cannot be started, so a later SIGTERM ends the process as it would`, async () => {
       using run = handOn(command, { fail: true });
       await within(run.child.exited, "the command never exited");
-      // regression for link and a-later-command (fails on main: the listener left behind throws on the release that never
-      // started, and the process ends with 1 instead)
       expect({ notes: run.notes(), signal: run.child.signalCode }, run.said()).toEqual({ notes: "spawn 1 1\nthrew the release cannot start\n", signal: "SIGTERM" });
     }, 30_000);
   }
@@ -1618,15 +1627,12 @@ describe("a checkout whose packages are not installed", () => {
     const port = quietPort();
     for (const [command, said] of [["status", `down http://127.0.0.1:${port}\n`], ["stop", "Ovis is not running\n"]] as const) {
       const { out, err, code } = await runIn(copy, [command], port);
-      // regression (fails on main: Cannot find package 'qrcode-generator', then the relay's and the account's packages)
       expect({ command, code, first: out.split("\n")[0] + "\n" }, err).toEqual({ command, code: 0, first: said });
     }
   }, 30_000);
 
   it.skipIf(process.platform === "win32")("the commands that need a package fail before they change anything: no pairing code asked for, nothing published or decided", async () => {
     const copy = await withoutPackages();
-    // an app whose phone address Tailscale serves, so a pairing would draw its QR code, recording every request that
-    // changes something
     const changes: string[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const path = new URL(request.url).pathname;
@@ -1637,7 +1643,6 @@ describe("a checkout whose packages are not installed", () => {
       if (path === "/api/relay/pairings") return Response.json({ pairings: [] });
       return new Response(null, { status: 404 });
     } });
-    // a Tailscale that runs and serves nothing yet, so `phone` would publish the app; it records every call
     const calls = join(scratch, "tailscale-calls");
     writeFileSync(join(scratch, "bin", "tailscale"), `#!/bin/sh
 echo "$*" >> ${JSON.stringify(calls)}

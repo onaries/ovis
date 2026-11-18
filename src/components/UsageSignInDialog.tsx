@@ -19,11 +19,9 @@ import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import "./UsageAccountDialog.css";
 
-/** how often the dialog looks at the login's screen while it waits for the user */
 const PROMPT_POLL_MS = 1000;
 /** Codex's device code lives 15 minutes; a login still open past this is left to its terminal */
 const FOLLOW_MS = 16 * 60_000;
-/** reads of the login's screen that may fail in a row (a herdr busy for a moment) before the dialog hands over */
 const READ_FAILURES_MAX = 3;
 
 type Phase =
@@ -32,15 +30,11 @@ type Phase =
   | { kind: "following"; login: string }
   | { kind: "ended"; outcome: SignInOutcome }
   | { kind: "failed"; message: string }
-  /** handing over to a terminal tab: the private sign-in stopped, the visible one starting */
   | { kind: "handing-over" };
 
 export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose }: {
-  /** a first sign-in in the agent's own home, or signing an account in again */
   readonly request: Extract<UsageLoginRequest, { provider: "claude" | "codex" }>;
-  /** shows the login's terminal tab (Settings closes) */
   readonly onOpenTerminal: (paneId: string) => void;
-  /** the login ended with a new sign-in on the PC */
   readonly onSignedIn?: () => void;
   readonly onClose: () => void;
 }) {
@@ -60,7 +54,6 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
   const signedInRef = useRef(onSignedIn);
   signedInRef.current = onSignedIn;
   const codeInput = useRef<HTMLInputElement>(null);
-  // the code was sent, and the CLI has shown something else since: the follow loop reads these
   const sentRef = useRef(false);
   const answered = useRef(false);
   const surface = useFocusTrap<HTMLDivElement>(true);
@@ -88,7 +81,6 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
     return () => controller.abort();
   }, [phase.kind, provider, replace, request, t]);
 
-  // follows the login's screen until its CLI exits, then reads the sign-ins again
   const login = phase.kind === "following" ? phase.login : null;
   useEffect(() => {
     if (login === null) return;
@@ -105,7 +97,6 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
         else if (answered.current && sentRef.current) { sentRef.current = false; setSent(false); setCodeError(t("The sign-in asked for the code again. Paste it once more.")); }
         setPrompt(next);
         if (next.ended) {
-          // the account the server found in this login's own home; the lists before and after only for a server too old to say
           const after = next.succeeded === undefined ? (await fetchUsageLoginAccounts(provider, controller.signal)).accounts : [];
           window.dispatchEvent(new Event("herdr-usage-changed"));
           const outcome = followedOutcome(next, before.current ?? [], after, again);
@@ -114,7 +105,6 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
           if (outcome.kind === "signed-in") signedInRef.current?.();
           return;
         }
-        // a whole round read: only that clears the failures, so failed account reads after the end still count
         failures = 0;
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -167,7 +157,6 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
     return () => { window.removeEventListener("pagehide", leaving); leaving(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const close = (): void => { void stopFollowing().catch(() => undefined); onClose(); };
-  // Back stops the sign-in and closes the dialog, as Escape does, not Settings under it
   const closeRef = useRef(close); closeRef.current = close;
   usePhoneSheetBack(() => { closeRef.current(); });
   // Open terminal: the private sign-in stops and the same one starts in a terminal tab, which any device that

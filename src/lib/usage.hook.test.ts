@@ -4,18 +4,14 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { UsageReport } from "../../shared/protocol.ts";
 import { useUsage } from "./usage.ts";
 
-// The real hook over a fetch the test answers, on fake clocks: advancing the timers moves both of the device's clocks
-// and brings the hook's next ask; setting the system time moves the wall clock alone, as a correction does.
 const START = Date.parse("2026-09-29T12:00:00Z");
 const MINUTE = 60_000;
-/** The PC's clock when the page opens: 40 minutes ahead of this device's. */
 const PC = START + 40 * MINUTE;
 
 describe("the report the usage hook hands on", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let renderer: ReactTestRenderer | null;
   let hook: ReturnType<typeof useUsage> | null;
-  /** what the PC does with an ask: answer, fail, or nothing at all */
   let pc: () => Promise<Response>;
   let asks: number;
   let answered: Set<() => void>;
@@ -55,9 +51,7 @@ describe("the report the usage hook hands on", () => {
     descriptors.clear();
   });
 
-  /** The PC's own clock, which no correction of the device's touches. */
   const pcNow = (): number => PC + Math.round(performance.now() - openedAt);
-  /** The PC answering with its time and one account another tool recorded, last read at `readAt` on the PC's clock. */
   const says = (readAt: number) => async (): Promise<Response> => Response.json({
     server_time: new Date(pcNow()).toISOString(),
     providers: [{ id: "claude", key: "claude:recorded", account: "me@example.com", plan: null, windows: [], problem: null, checked_at: new Date(readAt).toISOString(), recorded: { by: "omp", stale: false, signed_in: false } }],
@@ -65,7 +59,6 @@ describe("the report the usage hook hands on", () => {
   const silent = (): Promise<Response> => new Promise(() => {});
   const stale = (): boolean | undefined => hook?.report?.providers[0]?.recorded?.stale;
 
-  /** the PC's next answer or failure to an ask; a test that waits for one never given ends at the runner's own limit */
   function heard(): Promise<void> {
     return new Promise((resolve) => {
       const done = () => { answered.delete(done); resolve(); };
@@ -75,24 +68,20 @@ describe("the report the usage hook hands on", () => {
   async function open(): Promise<void> {
     function Probe() { hook = useUsage(true); return null; }
     const first = heard();
-    // the hook asks from an effect, which runs as this step ends: the answer is waited for in the next
     await act(async () => { renderer = create(createElement(Probe)); });
     await act(async () => { await first; });
   }
-  /** a minute on both of the device's clocks, which brings the hook's next ask */
   async function minute(wait: "heard" | "unheard"): Promise<void> {
     const next = wait === "heard" ? heard() : null;
     await act(async () => { jest.advanceTimersByTime(MINUTE); await next; });
   }
 
   it("ages the report in hand as it asks again, before any answer: a PC that never answers leaves no record current", async () => {
-    // a record the PC sees read again and again: 13 minutes old at each of its answers
     pc = () => says(pcNow() - 13 * MINUTE)();
     await open();
     await minute("heard");
     await minute("heard");
     expect([asks, stale()]).toEqual([3, false]);
-    // from its last answer on, the PC is silent: the count starts there, and not where the page opened
     pc = silent;
     await minute("unheard");
     await minute("unheard");
@@ -109,7 +98,6 @@ describe("the report the usage hook hands on", () => {
     expect(stale()).toBe(false);
     await minute("heard");
     expect(stale()).toBe(true);
-    // the PC is back, and saw the record read again a minute ago
     pc = says(PC + 2 * MINUTE);
     await minute("heard");
     expect(stale()).toBe(false);
@@ -130,11 +118,9 @@ describe("the report the usage hook hands on", () => {
     pc = says(PC - 13 * MINUTE);
     await open();
     pc = silent;
-    // twenty minutes asleep on a device whose running clock stands still meanwhile, and the page asks on waking
     setSystemTime(new Date(Date.now() + 20 * MINUTE));
     await minute("unheard");
     expect([asks, stale()]).toEqual([2, true]);
-    // then the device's clock is put right, 25 minutes back: what went by is not taken back
     setSystemTime(new Date(Date.now() - 25 * MINUTE));
     await minute("unheard");
     expect([asks, stale()]).toEqual([3, true]);
@@ -154,7 +140,6 @@ describe("the report the usage hook hands on", () => {
   it("takes a record as the PC has just called it, though the device's clock was set back while the ask was in flight", async () => {
     pc = says(PC - 2 * MINUTE);
     await open();
-    // the next ask is answered, and before the answer arrives the device's clock is put right, an hour back
     pc = async () => {
       setSystemTime(new Date(Date.now() - 60 * MINUTE));
       return says(PC - 2 * MINUTE)();

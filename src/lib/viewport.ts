@@ -58,9 +58,8 @@ const topInset = document.createElement("div");
 topInset.style.cssText = "position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none;contain:strict";
 topInset.setAttribute("aria-hidden", "true");
 root.append(topInset);
-// Width separates portrait and landscape. Retain the baseline when a keyboard
-// shrinks all three viewports, but not when a split view shrinks the large
-// viewport while leaving only its ordinary visual inset.
+// Retain the baseline when a keyboard shrinks all three viewports, but not when a split view
+// shrinks the large viewport while leaving only its ordinary visual inset.
 const unobstructedHeights = new Map<number, { large: number; height: number }>();
 const typing = keyboardTypingField;
 // An iPad home-screen app with a hardware keyboard (iPadOS 26, Magic Keyboard) reports a visual viewport
@@ -122,13 +121,9 @@ const applyKeyboard = (held: boolean): void => {
     || !!viewport && Math.abs(viewport.width - document.documentElement.clientWidth) < 2 && reference - height > reference * 0.2);
   if (!visible) unobstructedHeights.set(width, { large, height: Math.max(reference, height) });
   root.toggleAttribute("data-keyboard", visible);
-  // the key bar's keyboard control reads this value with its tap word (lib/keyboardControl.ts):
-  // label and tap hold the user's word while the value is mid-animation
   keyboardControl.measure(visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);
   else {
-    // Only correct the standalone status region when the screen-to-CSS gap
-    // agrees with the measured top safe area.
     const inset = topInset.getBoundingClientRect().height;
     const missing = window.screen.height - largeViewport.getBoundingClientRect().height;
     const standalone = window.matchMedia("(display-mode: standalone)").matches;
@@ -196,7 +191,6 @@ if (ios) {
     disarm(pressed);
     field(event.target)?.setAttribute("data-armed", "");
   }, true);
-  // unfiltered: a field disabled while it had the focus is no longer one `field` accepts
   document.addEventListener("focusout", (event) => {
     if (event.target instanceof Element) event.target.removeAttribute("data-armed");
   }, true);
@@ -226,7 +220,6 @@ const syncWindowControls = (): void => {
   const slack = Math.max(1, viewport?.scale ?? 1) + 1;
   root.toggleAttribute("data-window-controls", standaloneApp.matches && width < screenWidth - slack);
 };
-// every way in or out of a window changes its width, so a resize is the only event to follow
 if (drawsWindowControls) {
   viewport?.addEventListener("resize", syncWindowControls);
   window.addEventListener("resize", syncWindowControls);

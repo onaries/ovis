@@ -31,11 +31,9 @@ it.each(["socket success", "socket failure", "session success", "session failure
         descriptors: [{ ...descriptor(selected!), ...(selected === b.herdr_socket && outcome === "stale independent socket" ? { managed_remote: false, pid: 9898 } : {}) }], runtimeDir: "/runtime", registryDir: "/registry" };
     }),
     spyOn(posixHost, "alive").mockImplementation(async (_ssh, pid) => pid !== 9898),
-    // a chosen socket the PC verifies as this account's and answering
     spyOn(posixHost, "chosenSocketStatus").mockResolvedValue("usable"),
     spyOn(posixHost, "start").mockRejectedValue(new Error("B could not start")),
     spyOn(posixHost, "installBundle").mockResolvedValue(undefined),
-    // the SSH tunnel to a bridge (machine-tunnel.fixture.ts)
     ...tunnelRelays(relays, (remotePort) => {
       const socket = remotePort === 12345 ? a.herdr_socket : b.herdr_socket;
       return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request, server) {
@@ -78,22 +76,17 @@ it.each(["socket success", "socket failure", "session success", "session failure
   }
 });
 
-// default: the default session chosen by its socket (on the card of a PC that also runs its own Ovis, or beside a chosen
-// session that stopped). It is remembered as herdr to start there when absent, never as that socket (#3518)
 it.each(["manual", "catalog socket", "catalog new", "manual default", "catalog default"])("remembers %s choice through refresh, restart and reconnect", async (kind) => {
   const dir = mkdtempSync(join(tmpdir(), "machine-herdr-choice-"));
   const catalog = kind.startsWith("catalog");
   const byDefault = kind.endsWith("default");
   const id = catalog ? herdrMachineId("fixture-profile") : "12345678-1234-1234-1234-123456789abc";
   const profile = { id: "fixture-profile", label: "fixture", enabled: true, target: { destination: "fixture-only", ...(byDefault ? {} : { session: "work" }) } };
-  // the session's own socket, as that PC spells it
   const own = (session?: string) => session ? `/home/fixture/.config/herdr/sessions/${session}/herdr.sock` : "/home/fixture/.config/herdr/herdr.sock";
   const socket = byDefault ? own() : kind === "catalog new" ? own("work") : "/home/fixture/desktop/herdr/sessions/work/herdr.sock";
-  // what that PC answers when asked which herdr to use: for default, herdr's own session beside another one
   const found = [...(byDefault ? [{ socket_path: socket, label: "Default session" }] : []), { socket_path: byDefault ? own("work") : socket, session: "work", label: "work" }];
   const descriptor = { socket_path: socket, pid: 4242, port: 12345, token: "a".repeat(64), bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: true };
   if (!catalog) writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only" } }]));
-  // bridged: the bridge that serves the default session's socket still runs, so a PC saved without that socket meets it
   let started = false, bridged = false;
   const relays: ReturnType<typeof Bun.serve>[] = [];
   const mocks = [
@@ -106,9 +99,7 @@ it.each(["manual", "catalog socket", "catalog new", "manual default", "catalog d
     spyOn(posixHost, "descriptors").mockImplementation(async () => started ? [descriptor] : []),
     spyOn(posixHost, "foundSessions").mockResolvedValue({ gone: false, sessions: found }),
     spyOn(posixHost, "alive").mockResolvedValue(true),
-    // a chosen socket the PC verifies as this account's and answering
     spyOn(posixHost, "chosenSocketStatus").mockResolvedValue("usable"),
-    // the SSH tunnel to a bridge (machine-tunnel.fixture.ts)
     ...tunnelRelays(relays, () => {
       return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request, server) {
         const path = new URL(request.url).pathname;
@@ -135,13 +126,11 @@ it.each(["manual", "catalog socket", "catalog new", "manual default", "catalog d
     expect(failed).toMatchObject({ phase: "failed", action_required: "choose_herdr", found_herdr_sessions: found });
     expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ action_required: "choose_herdr", found_herdr_sessions: found });
     const target = byDefault ? { destination: "fixture-only", herdr_socket: socket } : { destination: "fixture-only", session: "work", ...(kind === "catalog new" ? { start_new_herdr: true } : { herdr_socket: socket }) };
-    // what the PC is saved with
     const saved = byDefault ? { destination: "fixture-only", start_new_herdr: true } : target;
     expect(await run(target)).toMatchObject({ phase: "connected", target });
     expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ action_required: null });
     expect(manager.list().find((pc) => pc.id === id)?.target).toEqual(saved);
     bridged = kind === "catalog default";
-    // the catalog's next refresh keeps it too: the socket is not pinned again there
     if (catalog) { manager.syncHerdrProfiles([profile]); expect(manager.list().find((pc) => pc.id === id)?.target).toEqual(saved); }
     else { expect(JSON.parse(readFileSync(join(dir, "machines.json"), "utf8"))[0].target).toEqual(saved); manager.patch(id, { enabled: false }); }
     manager.stop();
@@ -158,9 +147,6 @@ it.each(["manual", "catalog socket", "catalog new", "manual default", "catalog d
       }
       expect(restored.list().find((pc) => pc.id === id)?.target).toEqual(saved);
       if (kind === "manual default") {
-        // That PC restarted since: no bridge is left there, and another herdr session runs before the default one. The
-        // PC's bridge is started with leave to start herdr when absent (started), as chosen, so it connects by itself
-        // instead of stopping at a new choice
         await new Promise<void>((resolve, reject) => {
           const deadline = setTimeout(() => { off(); reject(new Error("the reconnect did not finish")); }, 5000);
           const off = restored.subscribe(() => { if (["connected", "error"].includes(restored.list().find((pc) => pc.id === id)?.state ?? "")) { clearTimeout(deadline); off(); resolve(); } });
@@ -207,7 +193,6 @@ it("puts a chosen session that stopped on the card as a choice, and never retrie
     expect(failed.error).toContain("no longer running");
     const pc = manager.list().find((machine) => machine.id === id);
     expect(pc).toMatchObject({ action_required: "choose_herdr", found_herdr_sessions: [] });
-    // an action for the owner, not a PC to try again later
     expect(retries).not.toHaveBeenCalled();
     expect(starts).toBe(1);
   } finally { manager.stop(); retries.mockRestore(); for (const mock of mocks) mock.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
@@ -216,7 +201,6 @@ it("puts a chosen session that stopped on the card as a choice, and never retrie
 it.each(["refused", "gone", "usable"] as const)("reuses a live bridge for a chosen socket only once the PC verifies that socket (%s)", async (status) => {
   const dir = mkdtempSync(join(tmpdir(), "machine-herdr-reuse-"));
   const id = "12345678-1234-1234-1234-123456789abe";
-  // a bridge registered for a socket that is not this account's (or no longer answers)
   const socket = "/home/other/.config/herdr/herdr.sock";
   const descriptor = { socket_path: socket, pid: 4242, port: 12345, token: "b".repeat(64), bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: true };
   writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only", herdr_socket: socket } }]));
@@ -233,7 +217,6 @@ it.each(["refused", "gone", "usable"] as const)("reuses a live bridge for a chos
     spyOn(posixHost, "alive").mockResolvedValue(true),
     spyOn(posixHost, "chosenSocketStatus").mockImplementation(async (_ssh, _inspection, path) => { checked.push(path); return status; }),
     spyOn(posixHost, "foundSessions").mockResolvedValue({ gone: true, sessions: [] }),
-    // the SSH tunnel to a bridge (machine-tunnel.fixture.ts)
     ...tunnelRelays(relays, () => {
       return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request, server) {
         const path = new URL(request.url).pathname;
@@ -255,7 +238,6 @@ it.each(["refused", "gone", "usable"] as const)("reuses a live bridge for a chos
     expect(checked).toEqual([socket]);
     if (status === "usable") { expect(settled.phase).toBe("connected"); expect(starts).toBe(0); }
     else {
-      // never taken: the bridge started instead checks the socket itself and says why
       expect(starts).toBe(1);
       expect(settled).toMatchObject({ phase: "failed", action_required: "choose_herdr" });
     }

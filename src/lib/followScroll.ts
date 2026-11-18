@@ -1,6 +1,5 @@
 import type { LegendListRef } from "@legendapp/list/react";
 
-// No row is this object, so the list finds nothing to scroll to.
 const NO_ROW = Object.freeze({});
 /**
  * The list's scrollToEnd does not scroll at once: it waits for the list's next commit, and then

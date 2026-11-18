@@ -1,3 +1,9 @@
+/**
+ * The questions an agent asked the user with its question tool, read from the call's recorded
+ * arguments: omp's `ask`, OmO's `ask_user_question` (`request_user_input` under a Codex model) and
+ * Claude Code's `AskUserQuestion`.
+ */
+
 export interface AskedOption {
   label: string;
   description: string | null;

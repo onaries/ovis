@@ -153,6 +153,30 @@ function gjcScreen(lines: string[]): Screen {
 }
 
 /**
+ * `? for shortcuts          Gemini 3.8 Flash · high`, the status row under the composer. The left
+ * is `? for shortcuts`, `esc to cancel` while a turn or question is up, or blank while a panel is
+ * open. The right is the display name and the effort word. A mode word may sit in front
+ * (`auto · Gemini 4 Hydrogen · medium`). The banner's `Gemini 3.8 Flash (High)` is not this row,
+ * and a missing or cut-off row names none.
+ */
+const AGY_EFFORT = new RegExp(`^(?:${EFFORT}|extra-low)$`, "u");
+
+function agyScreen(lines: string[]): Screen {
+  let end = lines.length - 1;
+  while (end >= 0 && lines[end]!.trim() === "") end--;
+  if (end < 0) return NOTHING;
+  const hinted = /^\s*(?:\? for shortcuts|esc to cancel)\s{2,}(\S(?:.*\S)?)\s*$/u.exec(lines[end]!);
+  const aligned = hinted ?? /^\s{2,}(\S(?:.*\S)?)\s*$/u.exec(lines[end]!);
+  if (!aligned) return NOTHING;
+  const parts = aligned[1]!.split(" · ");
+  if (parts.length < 2 || parts.length > 3 || !AGY_EFFORT.test(parts[parts.length - 1]!)) return NOTHING;
+  if (parts.length === 3 && /\s/u.test(parts[0]!)) return NOTHING;
+  const model = parts.length === 3 ? parts[1]! : parts[0]!;
+  if (model === "" || model !== model.trim()) return NOTHING;
+  return { model, reasoning_effort: parts[parts.length - 1]! };
+}
+
+/**
  * `0.0%/262k (auto)          (provider) model-id • high`, the stats row of Pi's footer: the context
  * figure on the left, the model id its transcript records on the right, then its thinking level
  * when the model reasons (` • thinking off` when that level is off). Pi cuts a right side too wide
@@ -166,6 +190,7 @@ function piScreen(lines: string[]): Screen {
 }
 
 const SCREENS: Partial<Record<ConversationResponse["source"], (lines: string[]) => Screen>> = {
+  "agy-transcript": agyScreen,
   "claude-transcript": claudeScreen,
   "codex-transcript": codexScreen,
   "gjc-transcript": gjcScreen,

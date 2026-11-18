@@ -11,7 +11,6 @@ const SCOPE = `${ORIGIN}/s/${SERVER_ID}/`;
 
 type Store = Map<string, Response>;
 
-/** sw.js run against in-memory caches and a network that answers `pages` and `files`. */
 function worker(options: { shell: boolean; build: string; caches?: Record<string, Record<string, string>>; network: Record<string, string>; keptAt?: Date; offline?: boolean; brokenCaches?: boolean }) {
   const stores = new Map<string, Store>();
   const key = (request: Request | string) => new URL(typeof request === "string" ? request : request.url, ORIGIN).href;
@@ -63,7 +62,6 @@ function worker(options: { shell: boolean; build: string; caches?: Record<string
   const code = stampServiceWorker(source, options.build, undefined, options.shell);
   new Function("self", "caches", "fetch", code)(self, cacheStorage, fetch);
 
-  /** Navigates to the PC's scope: what the page got, once the worker finished what it keeps. */
   async function navigate(): Promise<string> {
     let responded: Promise<Response> | undefined;
     const pending: Promise<unknown>[] = [];

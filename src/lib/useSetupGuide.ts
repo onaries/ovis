@@ -11,33 +11,19 @@ const storage = (): Storage | null => {
 };
 
 export interface SetupGuideFacts {
-  /** the plan usage setting: turned off, the guide's remembered Continue goes (USAGE_ARMED_KEY) */
   showUsage?: boolean;
-  /** the app is in (past the access gate) */
   enabled: boolean;
-  /** this PC's workspaces once the roster has them; null before */
   workspaces: number | null;
-  /** undefined until the server's access facts and this device's role are both known; null when it sent none */
   pairingGate: "open" | "closed" | "unavailable" | null | undefined;
   watching: boolean;
 }
 
-/**
- * The setup guide's place in the app: shown by itself once on a fresh install (lib/setupGuideFlow.ts),
- * resumed where a reload left it, and opened again by Settings → Agents' Setup guide (lib/setupGuide.ts).
- * `stepAside` is told of every pane picked (lib/useSelection.ts onPick: a row, the palette, a new
- * workspace, an alert, the tab the guide opened): the guide steps aside, still mounted, for it. The
- * app's own fallback pick of a first pane is no pick, and leaves it in front.
- */
 export function useSetupGuide({ enabled, workspaces, pairingGate, watching, showUsage = false }: SetupGuideFacts) {
-  // plan usage turned off (here, in Settings or on another device): the guide's remembered Continue is forgotten, so a
-  // guide opened again reads no usage before its Continue is pressed again
   const usageWas = useRef(showUsage);
   useEffect(() => {
-    if (usageWas.current && !showUsage) { try { storage()?.removeItem(USAGE_ARMED_KEY); } catch { /* nothing kept */ } }
+    if (usageWas.current && !showUsage) { try { storage()?.removeItem(USAGE_ARMED_KEY); } catch { } }
     usageWas.current = showUsage;
   }, [showUsage]);
-  // read before this page saves anything: a save made by the guide itself must not count
   const [savedSettings] = useState(() => { try { return storage()?.getItem(SETTINGS_STORAGE_KEY) != null; } catch { return true; } });
   const [record] = useState(() => { const store = storage(); return store === null ? null : readGuide(store); });
   const [guide, setGuide] = useState<GuideState | null>(() => record?.status === "open" ? record.state : null);
@@ -46,12 +32,8 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching, show
   pausedRef.current = paused;
   const [sharedRevision, setSharedRevision] = useState<number | null>(null);
   const decided = useRef(record !== null);
-  // the same, as state: the page's own notices wait for it, as the guide may still open over them
-  // (a browser with saved settings is settled from the start: the guide never opens by itself there, autoOpen)
   const [settled, setSettled] = useState(record !== null || savedSettings);
-  // this tab opened the guide itself (the welcome, or Settings): its progress may replace a closed record once
   const openedHere = useRef(false);
-  // the record this tab wrote last: a close that storage no longer holds is older than it
   const lastWrite = useRef<string | null>(null);
   // a watching device sets nothing up: no guide is restored, reopened or kept for it (the server refuses
   // its installs and workspaces anyway, as #2330's Settings hides Install for it)
@@ -79,12 +61,9 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching, show
       if (watchingRef.current || !enabledRef.current) return;
       decided.current = true; setSettled(true); openedHere.current = true; setGuide(at === undefined ? REOPENED : { ...REOPENED, at }); setPaused(false);
     };
-    // closed in another tab of this browser: closed here too, read from the event itself (storage may
-    // already hold this tab's own later write)
     const onStorage = (event: StorageEvent): void => {
       if (event.key !== GUIDE_STORAGE_KEY || event.newValue === null) return;
       if (readGuide({ getItem: () => event.newValue })?.status !== "closed") return;
-      // a close that arrives after this tab opened the guide again and wrote it is the older of the two
       const store = storage();
       if (store !== null && lastWrite.current !== null && store.getItem(GUIDE_STORAGE_KEY) === lastWrite.current) return;
       decided.current = true; setSettled(true); openedHere.current = false; setGuide(null); setPaused(false);
@@ -97,31 +76,24 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching, show
   useEffect(() => {
     const store = storage();
     if (guide === null || store === null) return;
-    // a close made in another tab wins over progress this tab has not opened afresh since
     if (!openedHere.current && readGuide(store)?.status === "closed") { setGuide(null); setPaused(false); return; }
     openedHere.current = false;
-    // what this tab wrote, not what storage holds a moment later: another tab may have written since
     lastWrite.current = saveGuide(store, guide);
   }, [guide]);
 
-
   const openRef = useRef(false);
   openRef.current = guide !== null && !watching;
-  // the tabs the guide asked to show: every one asked for before the guide went away is void
   const tickets = useRef(0);
   const wasOpen = useRef(false);
   if (wasOpen.current && !openRef.current) tickets.current += 1;
   wasOpen.current = openRef.current;
-  // the ref at once: a Start answer in the same update as the pick must see it (finish below)
   const stepAside = useCallback(() => { if (openRef.current) { pausedRef.current = true; setPaused(true); } }, []);
 
   const dispatch = useCallback((event: GuideEvent) => setGuide((current) => current === null ? null : guideStep(current, event)), []);
   const guideRef = useRef(guide);
   guideRef.current = guide;
   const close = useCallback(() => {
-    // a pane picked right after closing (Done's first workspace) finds it closed, not open
     openRef.current = false;
-    // a guide begun and closed: the sidebar's Setup: N left may say what it left (components/SetupProgressRow.tsx)
     const begun = guideRef.current?.step === "setup";
     tickets.current += 1;
     setGuide(null);
@@ -132,16 +104,11 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching, show
   const resume = useCallback(() => { pausedRef.current = false; setPaused(false); }, []);
   // turned into a watching device (its pairing changed): an open guide goes, without closing it for this browser
   useEffect(() => { if (watching) { setGuide(null); setPaused(false); } }, [watching]);
-  // and the render that brings the role already shows none
-  // the first workspace opened from the guide: the guide closes, and its pane is shown only when the
-  // user stayed on the guide, not over a pane they went to while it was being made
   const finish = useCallback((select: () => void) => {
     const aside = pausedRef.current;
     close();
     if (!aside) select();
   }, [close]);
-  // a tab the guide opens (an install's) is selected once the roster has it, if it is still the latest
-  // asked for, Start was not pressed since, and the guide has stayed open since (tickets, above)
   const ticket = useCallback(() => {
     const mine = ++tickets.current;
     return () => tickets.current === mine && openRef.current;
@@ -151,20 +118,16 @@ export function useSetupGuide({ enabled, workspaces, pairingGate, watching, show
 }
 
 /**
- * The agents this PC is signed in to, read while the setup guide's agent list shows; the first one
- * seen turns plan usage on (`turnOn`) when it is off. `ready` (the agents set up from the list) reads
- * them afresh. Closing the guide stops it: no retry reads again, and no late answer turns usage on
+ * Closing the guide stops it: no retry reads again, and no late answer turns usage on
  * over a choice made since in Settings.
  */
 export function useSignedInUsage(ready: readonly string[], read: (refresh: boolean) => Promise<readonly string[]>, showing: boolean, turnOn: () => void, enabled = true): readonly string[] | null {
-  // null until a read answers: the sign-ins are not known, and nothing may be said about them
   const [signedIn, setSignedIn] = useState<readonly string[] | null>(null);
   const shown = useRef(showing);
   shown.current = showing;
   const readyKey = ready.join(",");
   // nothing is read, nor turned on, until the caller says so (the guide: after the user's own press on the agent step)
   useEffect(() => !enabled ? undefined : readSignedIn(
-    // an agent signed in just now: read the accounts afresh, not what the server last saw
     () => read(readyKey !== ""),
     (agents) => {
       setSignedIn(agents);
@@ -180,7 +143,6 @@ export function useSignedInUsage(ready: readonly string[], read: (refresh: boole
  * `again` changes; null until it answers, and when it cannot (a watching device, an older server).
  */
 export function useOtherDevice(enabled: boolean, again?: unknown): string | null;
-/** With `pending`, undefined until the list first answers (or fails), so a caller can wait for it. */
 export function useOtherDevice(enabled: boolean, again: unknown, pending: true): string | null | undefined;
 export function useOtherDevice(enabled: boolean, again?: unknown, pending = false): string | null | undefined {
   const [name, setName] = useState<string | null | undefined>(undefined);

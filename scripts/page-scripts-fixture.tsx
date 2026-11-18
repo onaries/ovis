@@ -1,4 +1,3 @@
-/** Owned, synthetic fixture for the file viewer's Page view: a field that stands for the message box, and the viewer as a popup or beside it. */
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FileViewer } from "../src/components/FileViewer.tsx";
@@ -10,7 +9,6 @@ declare global { interface Window { pageScriptsQa: { open: (path: string, docked
 function Fixture() {
   const [shown, setShown] = useState<Shown | null>(null);
   const [messages] = useState<Array<Record<string, unknown>>>([]);
-  // `at`: every open is a viewer of its own, as closing and opening a file is in the app
   window.pageScriptsQa = { open: (path, docked) => setShown({ path, docked, at: Date.now() }), close: () => setShown(null), messages };
   return <SettingsProvider>
     <div style={{ display: "flex", height: "100vh" }}>
@@ -22,6 +20,5 @@ function Fixture() {
     {shown && !shown.docked && <FileViewer key={shown.at} path={shown.path} paneId={null} onClose={() => setShown(null)} />}
   </SettingsProvider>;
 }
-// what a page's script says to the app around it: the probe pages say when they ran and which keys they got
 addEventListener("message", (event) => { if (event.data && typeof event.data === "object" && "probe" in event.data) window.pageScriptsQa?.messages.push(event.data as Record<string, unknown>); });
 createRoot(document.getElementById("root")!).render(<Fixture />);

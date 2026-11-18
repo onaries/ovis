@@ -1,6 +1,8 @@
 /**
  * pi-ask answers only through `pi.events` inside the pi process (its docs/remote-events.md: no
- * terminal keystrokes, no network API).
+ * terminal keystrokes, no network API). The extension, which the user installs with
+ * `bun scripts/install-pi-integration.ts`, listens there and serves HTTP on a unix socket that only
+ * the user can open: `<pi agent dir>/<PI_ASK_BRIDGE_DIRECTORY>/<pid>.sock`.
  */
 
 export const PI_ASK_BRIDGE_DIRECTORY = "herdr-web-ui-ask";
@@ -9,6 +11,7 @@ export const PI_ASK_SUBMIT_TIMEOUT_MS = 3_000;
 /** A unix socket path longer than this does not fit sockaddr_un on macOS (104 bytes, with its NUL). */
 export const PI_ASK_SOCKET_PATH_MAX = 100;
 
+/** pi-ask 1.2.0's channels (src/remote-ask.ts). */
 export const PI_ASK_EVENTS = {
   started: "@eko24ive/pi-ask:started",
   completed: "@eko24ive/pi-ask:completed",
@@ -47,6 +50,10 @@ export interface PiAskBridgeState {
   pid: number;
   sessionFile: string | null;
   flows: PiAskFlow[];
+  /**
+   * The ask_user calls pi-ask still waits on, read from pi's live branch (`getBranch()`): a /tree
+   * move changes it without writing to the session file.
+   */
   openCalls: string[] | null;
 }
 
@@ -70,16 +77,21 @@ export function piAskOpenCalls(open: readonly string[], entry: unknown): string[
   return calls.length ? [...open.filter((call) => !calls.includes(call)), ...calls] : [...open];
 }
 
+/** One extension command as `pi.getCommands()` lists it (pi 1.3.0 core/slash-commands.ts). */
 export interface PiBridgeCommand {
+  /** pi's invocation name, without the slash: `name:2` when two extensions register `name` */
   name: string;
   description?: string;
+  /** `sourceInfo.scope`: user, project, temporary (-e) or system */
   scope?: string;
+  /** `sourceInfo.origin`: package (an installed pi package) or top-level */
   origin?: string;
 }
 
 export interface PiBridgeCommands {
   version: typeof PI_ASK_BRIDGE_VERSION;
   pid: number;
+  /** Null when pi could not say: no `getCommands` in this pi, or its extension runtime is not bound. */
   commands: PiBridgeCommand[] | null;
 }
 

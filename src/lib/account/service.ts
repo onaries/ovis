@@ -59,33 +59,21 @@ export function pcAccountServiceOf(document: { querySelector(selector: string): 
   }
 }
 
-/**
- * The sign-ins this page offers, from `<meta name="ovis-account-providers" content="github,apple">`:
- * GitHub alone without it, and Apple only once the service is set up for it, so no button leads
- * to a sign-in the service would refuse.
- */
 export function accountProvidersOf(document: { querySelector(selector: string): { getAttribute(name: string): string | null } | null }): AccountProvider[] {
   const named = new Set((document.querySelector('meta[name="ovis-account-providers"]')?.getAttribute("content") ?? "").split(",").map((name) => name.trim()));
   const offered = ACCOUNT_PROVIDERS.filter((provider) => named.has(provider));
   return offered.length > 0 ? offered : ["github"];
 }
 
-/** The providers with a device flow a PC's own page can start (lib/account/deviceSignIn.ts). */
 export const DEVICE_PROVIDERS = ["github", "google"] as const;
 export type DeviceProvider = (typeof DEVICE_PROVIDERS)[number];
 
 export interface OfferedProviders {
   readonly providers: AccountProvider[];
   readonly device: DeviceProvider[];
-  /** the sign-ins the Ovis link page finishes (`device_page`); empty when the service has no link page */
   readonly page: DeviceProvider[];
 }
 
-/**
- * The sign-ins the service is set up for (`GET /v1/providers`), so a Google button shows only where
- * Google can finish. A service that cannot say leaves the build's own list (`fallback`), and a PC's
- * page GitHub alone, as before the service could be asked.
- */
 export async function offeredProviders(service: string, fallback: readonly AccountProvider[], options: { fetch?: Fetch } = {}): Promise<OfferedProviders> {
   const before: OfferedProviders = { providers: [...fallback], device: ["github"], page: [] };
   let body: unknown;
@@ -135,10 +123,8 @@ export class SignedOutError extends Error {
   }
 }
 
-/** The name an admission is shown and signed under when its own has nothing left once made plain. */
 export const UNNAMED_DEVICE = "Device";
 
-/** A device of the account waiting at a PC (`GET /v1/admissions`), and who is asking. */
 export interface Admission extends AccountAsker { readonly key: string; readonly label: string; readonly server_id: string; readonly at: string }
 
 export interface DirectoryPc {
@@ -183,7 +169,6 @@ export function parseAccountLimits(value: unknown): AccountLimits | null {
   if (until !== undefined && until !== null && (typeof until !== "number" || !Number.isFinite(until))) return null;
   const metered = data_metering === undefined || data_metering === "on";
   return {
-    // a long name is shortened, never a reason to drop the limits
     plan: plan.trim().length > 32 ? `${plan.trim().slice(0, 31)}…` : plan.trim(),
     pcs_max,
     ...(typeof pcs_used === "number" ? { pcs_used } : {}),
@@ -218,7 +203,6 @@ function legacySignInId(refreshToken: string): string {
   return `saved-${bytesToHex(sha256(utf8ToBytes(refreshToken)).subarray(0, 16))}`;
 }
 
-/** Whether `a` is `b`'s sign-in, or one of its refreshes. */
 export function sameSignIn(a: AccountSession, b: AccountSession): boolean {
   return a.refresh_token === b.refresh_token || (a.sign_in_id !== undefined && a.sign_in_id === b.sign_in_id);
 }
@@ -237,9 +221,7 @@ export interface AccountServiceOptions {
   readonly store: AccountStore;
   readonly fetch?: Fetch;
   readonly now?: () => number;
-  /** serializes refresh and sign-out between tabs; the browser's Web Locks by default */
   readonly lock?: AccountLock;
-  /** the one sign-in this service acts for (forSignIn) */
   readonly signIn?: AccountSession;
 }
 
@@ -282,7 +264,6 @@ export class AccountService {
         return seen;
       });
     } catch {
-      // a store that takes no write (storage full) is still read, as before sign-ins were named
       return this.options.store.get("session");
     }
     return seen;
@@ -297,19 +278,18 @@ export class AccountService {
     return new AccountService({ ...this.options, signIn: session });
   }
 
-  async listPcs(): Promise<DirectoryPc[]> {
-    const body = await this.call("GET", "/v1/pcs");
+  async listPcs(signal?: AbortSignal): Promise<DirectoryPc[]> {
+    const body = await this.call("GET", "/v1/pcs", undefined, signal);
     const pcs = isRecord(body) && Array.isArray(body.pcs) ? body.pcs : null;
     if (pcs === null) throw new AccountServiceError(502, "invalid_answer", "The account service sent no PC list");
     return pcs.map(parsePc).filter((pc): pc is DirectoryPc => pc !== null);
   }
 
   /** Lists a PC in the account's directory, with its relay key and relay so a new device can compare digits with it. */
-  async putPc(serverId: string, entry: { label: string; public_key: string; relay: string }): Promise<void> {
-    await this.call("PUT", `/v1/pcs/${serverId}`, entry);
+  async putPc(serverId: string, entry: { label: string; public_key: string; relay: string }, signal?: AbortSignal): Promise<void> {
+    await this.call("PUT", `/v1/pcs/${serverId}`, entry, signal);
   }
 
-  /** Takes a PC out of the account's directory (it rings nobody and admits nothing either way). */
   async deletePc(serverId: string): Promise<void> {
     await this.call("DELETE", `/v1/pcs/${serverId}`);
   }
@@ -317,9 +297,12 @@ export class AccountService {
   /**
    * Says this signed-in device waits at that PC with its account key: the account's other devices
    * hear of it, and the PC takes a comparison that asks to join the account for 10 minutes.
+   * `quiet`: asks the account service to take it as a quiet admission. The service decides: it honours
+   * the ask only for a sign-in made in an app itself, and takes any other as an ordinary admission; a service that
+   * does not know the field ignores it.
    */
-  async postAdmission(serverId: string, label: string, key: string, os: AccountOs | null = null): Promise<void> {
-    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key, ...(os === null ? {} : { os }) });
+  async postAdmission(serverId: string, label: string, key: string, os: AccountOs | null = null, signal?: AbortSignal, { quiet = false }: { quiet?: boolean } = {}): Promise<void> {
+    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key, ...(os === null ? {} : { os }), ...(quiet ? { quiet: true } : {}) }, signal);
   }
 
   /**
@@ -342,13 +325,11 @@ export class AccountService {
     });
   }
 
-  /** The account's plan and limits (`GET /v1/account/limits`); null when the service does not report them. */
   async limits(): Promise<AccountLimits | null> {
     const body = await this.call("GET", "/v1/account/limits");
     return parseAccountLimits(body);
   }
 
-  /** The account's sign-in methods, one per provider. */
   async identities(): Promise<AccountIdentity[]> {
     const body = await this.call("GET", "/v1/identities");
     const list = isRecord(body) && Array.isArray(body.identities) ? body.identities : [];
@@ -424,7 +405,6 @@ export class AccountService {
     await this.call("DELETE", "/v1/account");
   }
 
-  /** Leaves a signed record in the mailbox of each listed PC of the account (at most 32 at a time). */
   async postRecord(serverIds: readonly string[], record: AccountRecord): Promise<number> {
     if (serverIds.length === 0) return 0;
     const body = await this.call("POST", "/v1/records", { server_ids: serverIds, record });
@@ -451,7 +431,6 @@ export class AccountService {
         const response = await this.fetch(new URL("/v1/signout", live.service), { method: "POST", headers: { authorization: `Bearer ${live.access_token}` } });
         if (!response.ok) throw await failure(response);
       } catch (error) {
-        // a refresh the service refused: the sign-in had already ended there
         if (!(error instanceof SignedOutError)) throw error;
       } finally {
         if (!replaced) await this.options.store.update("session", (current) => current?.refresh_token === session.refresh_token || current?.refresh_token === live.refresh_token ? undefined : current);
@@ -474,7 +453,6 @@ export class AccountService {
       if (error instanceof AccountServiceError && (error.status === 400 || error.status === 401)) return this.signedOut(from);
       throw error;
     }
-    // the same sign-in, refreshed
     const carried: AccountSession = from.sign_in_id === undefined ? next : { ...next, sign_in_id: from.sign_in_id };
     let kept = false;
     await this.options.store.update("session", (current) => {
@@ -485,32 +463,51 @@ export class AccountService {
     return carried;
   }
 
-  /** A session whose access token is good, refreshing once between tabs; `stale` is a token the service just refused. */
-  private async fresh(stale?: string): Promise<AccountSession> {
+  /**
+   * A session whose access token is good, refreshing once between tabs; `stale` is a token the service just refused.
+   * `signal` bounds this caller's wait, the wait for the lock included: work not begun by then is skipped, and a
+   * refresh already sent finishes, so the token it rotated is kept for the next call.
+   */
+  private async fresh(stale?: string, signal?: AbortSignal): Promise<AccountSession> {
+    signal?.throwIfAborted();
     // bound to a sign-in that is no longer the stored one: the stored one is someone else's to use or end
     const foreign = (session: AccountSession | undefined): boolean => this.options.signIn !== undefined && (session === undefined || !sameSignIn(session, this.options.signIn));
     const session = await this.session();
     if (foreign(session)) throw new SignedOutError();
     if (session === undefined) return this.signedOut();
     if (stale === undefined && session.expires_at - REFRESH_EARLY_MS > this.now()) return session;
-    return this.lock(async () => {
+    return this.locked(async () => {
       const current = await this.session();
       if (foreign(current)) throw new SignedOutError();
       if (current === undefined) return this.signedOut();
       // another tab refreshed while this one waited: its tokens are the ones to use
       if (current.access_token !== (stale ?? session.access_token)) return current;
       return this.refreshed(current);
+    }, signal);
+  }
+
+  /** The lock between tabs, with `signal` bounding the wait for it: work that was not begun by then never begins. */
+  private locked<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal === undefined) return this.lock(work);
+    signal.throwIfAborted();
+    const run = this.lock(async () => { signal.throwIfAborted(); return work(); });
+    return new Promise<T>((resolve, reject) => {
+      const stop = (): void => reject(signal.reason);
+      signal.addEventListener("abort", stop, { once: true });
+      run.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
     });
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<unknown> {
+  /** `signal`: ends the request itself, not only the wait for it (a post given up must not land later). */
+  private async call(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
     let stale: string | undefined;
     for (const retry of [false, true]) {
-      const session = await this.fresh(stale);
+      const session = await this.fresh(stale, signal);
       const response = await this.fetch(new URL(path, session.service), {
         method,
         headers: { authorization: `Bearer ${session.access_token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal === undefined ? {} : { signal }),
       });
       if (response.status === 401 && !retry) { stale = session.access_token; continue; }
       if (response.status === 401) return this.signedOut(session);

@@ -4,7 +4,7 @@ import { ANSI_RE, type AnswerStep, KEY, finishPrompt, keySteps, own, type Parsed
 /**
  * OpenCode v2's questions are forms its service holds (GET /api/session/{id}/form), read for the
  * exact session herdr reports for the pane and answered through POST .../reply (prompt.ts), never
- * from the screen. Registered so that a Chat send's outcome knows the card it opened.
+ * from the screen.
  */
 export const nativeQuestionReader: DialogReader = {
   id: "opencode-question",
@@ -18,7 +18,6 @@ export const nativeQuestionReader: DialogReader = {
 
 /** the TUI's own text for a typed answer's row (routes/session/question.tsx at v1.2.27) */
 const CUSTOM_LABEL = "Type your own answer";
-/** the content of one row inside the prompt's left border `┃` */
 const ROW_RE = /^ *┃(?: {2}(.*))?$/u;
 const OPTION_RE = /^(\d+)\. (.+)$/u;
 /** a single question's footer: one row wide, or wrapped into a key row and a word row on a narrow pane */
@@ -50,7 +49,6 @@ export function parseOpenCodeV1Question(screen: string): ParsedPrompt | null {
   else if (FOOTER_WORDS_RE.test(row(end) ?? "") && FOOTER_KEYS_RE.test(row(end - 1) ?? "")) footer = end - 1;
   else return null;
   if (row(footer - 1) !== "") return null;
-  // the rows above the footer, back to the box's top: options with their descriptions, then the question
   let top = footer - 1;
   while (top > 0 && row(top - 1) !== undefined) top--;
   const body = lines.slice(top, footer - 1).map((line) => ROW_RE.exec(line)![1] ?? "");
@@ -89,7 +87,6 @@ export function parseOpenCodeV1Question(screen: string): ParsedPrompt | null {
   });
 }
 
-/** Whether the screen still ends in a 1.x question prompt, as promptTailIsActive asks of each card. */
 export const openCodeV1QuestionActive = (screen: string): boolean => parseOpenCodeV1Question(screen) !== null;
 
 export const v1QuestionReader: DialogReader = {

@@ -39,7 +39,6 @@ public class OvisAuthPlugin extends Plugin {
             call.reject("That sign-in names no state", "invalid_url");
             return;
         }
-        // one sign-in at a time: a new one ends the one before
         if (waiting != null) {
             PluginCall replaced = waiting;
             release(replaced);

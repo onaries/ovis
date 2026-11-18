@@ -102,6 +102,7 @@ describe("envelope boundaries", () => {
     rejects(() => encodeFrame({ ...stream, type: FrameType.HTTP_DATA, payload: new Uint8Array(16377) }));
   });
   it("rejects text-kind mux records", () => {
+    // JSON transport input is untrusted, even when a caller bypasses TypeScript.
     rejects(() => Reflect.apply(decodeFrame, undefined, ["not binary"]));
   });
   it("rejects wrong envelope version", () => {

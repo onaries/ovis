@@ -9,21 +9,16 @@ import {
 import { root, runScript } from "./shell-workflow-rules.ts";
 import { files, read } from "./source-scan.ts";
 
-// GitHub's answers for devswha/ovis, cut down to the fields the check reads: main's push run of
-// c99017754 (the 0.5.1 release commit) and its jobs, in the order GitHub listed them. The matrix
-// job was one job on the self-hosted PC then; it runs there in three parts now, listed in its place.
 const REPO = "devswha/ovis";
 const SHA = "c99017754cb330143589afb2f74473828b86615e";
 const RUN = 42426987381;
 const commit = { repository: REPO, sha: SHA };
 const ONE_JOB = "Browser regression (other scripts)";
-/** `names` with the matrix job's one job as the three parts the self-hosted PC runs. */
 const split = (names: string[]): string[] => names.flatMap((name) => (name === ONE_JOB ? [1, 2, 3].map((part) => `${ONE_JOB.slice(0, -1)} ${part}/3)`) : [name]));
 const SELF_HOSTED = split([
   "Detect changes", "herdr-core live contract", "Browser regression (ui-regression)", "Native macOS session identity",
   ONE_JOB, "Integration tests", "Native Windows install", "Fast checks", "Rust PTY host", "Integration and browser",
 ]);
-/** The same run on GitHub's runners, where the matrix job is four (as Release's own validate listed them). */
 const HOSTED = [...SELF_HOSTED.filter((name) => !name.startsWith("Browser regression (other scripts ")), ...[3, 4, 1, 2].map((shard) => `Browser regression (other scripts ${shard}/4)`)];
 
 type Fields = Record<string, unknown>;
@@ -35,7 +30,6 @@ const runs = (...list: unknown[]) => ({ total_count: list.length, workflow_runs:
 const listedJob = (name: string, over: Fields = {}): Fields => ({ id: 128567271573, run_id: RUN, run_attempt: 1, head_sha: SHA, status: "completed", conclusion: "success", name, ...over });
 const jobs = (list: unknown[]) => ({ total_count: list.length, jobs: list });
 const passed = (names: string[], over: Fields = {}) => jobs(names.map((name) => listedJob(name, over)));
-/** `names` as jobs, the named ones changed (or left out with null). */
 const withJob = (names: string[], changed: Record<string, Fields | null>) =>
   jobs(names.flatMap((name) => (changed[name] === null ? [] : [listedJob(name, changed[name] ?? {})])));
 
@@ -91,7 +85,6 @@ describe("the run GitHub lists", () => {
     for (const answer of [null, undefined, "", [], [listedRun()], {}, { workflow_runs: [listedRun()] }, { total_count: "1", workflow_runs: [listedRun()] }, { total_count: 1, workflow_runs: {} }, { total_count: 1, workflow_runs: null }]) {
       expect(pushRun(answer, commit)).toBe("GitHub's list of runs is not { total_count, workflow_runs }");
     }
-    // the list of every push run of main, when the commit filter is ignored: 100 of 2157
     expect(pushRun({ total_count: 2157, workflow_runs: Array.from({ length: 100 }, () => listedRun()) }, commit)).toBe("GitHub listed 100 of 2157 runs");
     expect(pushRun({ total_count: 2, workflow_runs: [listedRun()] }, commit)).toBe("GitHub listed 1 of 2 runs");
     expect(pushRun({ total_count: 0, workflow_runs: [listedRun()] }, commit)).toBe("GitHub listed 1 of 0 runs");
@@ -111,7 +104,6 @@ describe("the run's state", () => {
     for (const conclusion of ["failure", "timed_out", "startup_failure"]) {
       expect(runProblem({ ...completed, conclusion })).toEqual({ answer: "no", why: `main's run ${RUN} ended ${JSON.stringify(conclusion)}`, failed: true });
     }
-    // a run a newer push cancelled did not fail
     for (const conclusion of ["cancelled", "skipped", "action_required", "neutral", "stale", "", null]) {
       expect(runProblem({ ...completed, conclusion })).toEqual({ answer: "no", why: `main's run ${RUN} ended ${JSON.stringify(conclusion)}` });
     }
@@ -171,7 +163,6 @@ describe("the run's jobs", () => {
       expect(jobsFinding(withJob(SELF_HOSTED, { "Fast checks": over }), completed, commit))
         .toEqual({ answer: "no", why: `job "Fast checks" is not of attempt 1 of run ${RUN} for this commit` });
     }
-    // the first attempt's jobs of a run that is on its second
     expect(jobsFinding(passed(SELF_HOSTED), { ...completed, attempt: 2 }, commit).answer).toBe("no");
   });
 
@@ -196,7 +187,6 @@ describe("the run's jobs", () => {
     expect(jobsFinding(jobs([]), running, commit)).toEqual(wait);
     expect(jobsFinding(withJob(SELF_HOSTED, { "Fast checks": { status: "in_progress", conclusion: null }, "Integration and browser": null }), running, commit)).toEqual(wait);
     expect(jobsFinding(withJob(SELF_HOSTED, { "Integration tests": { status: "queued", conclusion: null } }), running, commit)).toEqual(wait);
-    // every job passed, and the run has not said so yet: the next look decides
     expect(jobsFinding(passed(SELF_HOSTED), running, commit)).toEqual(wait);
     expect(jobsFinding(jobs([]), { ...running, status: "queued" }, commit)).toEqual({ answer: "wait", why: `main's run ${RUN} is queued and no job of it has failed` });
   });
@@ -219,7 +209,6 @@ describe("job names", () => {
     expect(matrixJobs(1)).toEqual(["Browser regression (other scripts)"]);
     expect(matrixJobs(3)).toEqual([1, 2, 3].map((shard) => `Browser regression (other scripts ${shard}/3)`));
     expect(matrixJobs(4)).toEqual([1, 2, 3, 4].map((shard) => `Browser regression (other scripts ${shard}/4)`));
-    // the checks a merge requires
     for (const required of ["Fast checks", "Integration and browser", "Native Windows install"]) expect(CI_JOBS).toContain(required);
   });
 
@@ -239,14 +228,12 @@ describe("job names", () => {
     expect(namesProblem(shards(" 1/3", " 2/3"))).toBe(neither);
     expect(namesProblem(shards(" 1/3", " 2/3", " 3/3", " 1/4", " 2/4", " 3/4", " 4/4"))).toBe(neither);
     expect(namesProblem(shards(" 3/3", " 1/4"))).toBe(neither);
-    // the one job a run listed before the self-hosted PC ran three parts: no run of this ci.yml lists it
     for (const list of [[""], ["", " 1/3", " 2/3", " 3/3"], [" 1/3", " 2/3", " 3/3", " 3/3"], [" 1/4", " 2/4", " 3/4", " 4/4", " 4/4"], ["", ""], [" 1/2", " 2/2"], [" 1/4", " 2/4", " 3/4", " 4/4", " 5/4"], [" 0/4", " 1/4", " 2/4", " 3/4"], [" 1/1"], ["  1/4", " 2/4", " 3/4", " 4/4"]]) {
       expect(namesProblem(shards(...list))).toStartWith("the jobs are not ci.yml's (not ci.yml's, or there twice: ");
     }
   });
 });
 
-/** A clock that only moves when the check sleeps. */
 function clock() {
   let now = 1_700_000_000_000;
   const slept: number[] = [];
@@ -254,7 +241,6 @@ function clock() {
   return { now: () => now, sleep: async (ms: number) => { slept.push(ms); now += ms; }, log: (line: string) => { logged.push(line); }, slept, logged };
 }
 
-/** GitHub giving each of the two paths the next of its answers, and the last one again after that; an Error is thrown. */
 function github(answers: { runs: unknown[]; jobs?: unknown[] }) {
   const calls: string[] = [];
   const seen = { runs: 0, jobs: 0 };
@@ -366,7 +352,6 @@ describe("waiting for main's run", () => {
     expect(await reuse(commit, api.read, WAIT, time)).toEqual({ green: false, run: null, why: "GitHub could not be read (The operation timed out.), 3 times in a row" });
     expect(api.calls).toHaveLength(3);
     expect(time.slept).toEqual([5_000, 5_000]);
-    // the jobs failing counts the same
     expect((await reuse(commit, github({ runs: [runs(listedRun())], jobs: [down] }).read, WAIT, clock())).why).toEndWith("3 times in a row");
   });
 
@@ -394,7 +379,6 @@ describe("waiting for main's run", () => {
   });
 });
 
-/** GitHub over HTTP: each URL answers the next of its responses, the last one again after that. */
 function http(answers: Record<string, Array<[number, string] | Error>>) {
   const requests: Array<{ url: string; headers: Record<string, string> }> = [];
   const seen: Record<string, number> = {};
@@ -459,7 +443,6 @@ describe("the reuse job's environment", () => {
       expect(await main(ENV, { ...clock(), get: api.get })).toEqual({ green: false, run: null, why: `GitHub could not be read (${reason}), 3 times in a row` });
       expect(api.requests).toHaveLength(3);
     }
-    // once is asked again
     const api = http({ [RUNS_URL]: [[502, ""], ok(runs(listedRun()))], [JOBS_URL]: [[200, "{"], ok(passed(SELF_HOSTED))] });
     expect((await main(ENV, { ...clock(), get: api.get })).green).toBe(true);
   });
@@ -467,20 +450,17 @@ describe("the reuse job's environment", () => {
   it("ends a call GitHub never answers after 20 seconds, and answers no after three of them", async () => {
     const asked: number[] = [];
     const ended: Error[] = [];
-    // GitHub takes the request and never answers: only the call's own signal ends it
     const hung: Get = (_url, init) => new Promise((_resolve, reject) => {
       const { signal } = init;
       if (!signal) { reject(new Error("the call carries no signal")); return; }
       const end = (): void => { ended.push(signal.reason as Error); reject(signal.reason); };
       if (signal.aborted) end(); else signal.addEventListener("abort", end, { once: true });
     });
-    // the 20 seconds, cut to a moment: the signal is the platform's own and ends the call the same way
     const outcome = await main(ENV, { ...clock(), get: hung, timeout: (ms) => { asked.push(ms); return AbortSignal.timeout(5); } });
     expect(asked).toEqual([20_000, 20_000, 20_000]);
     expect(ended.map((reason) => reason.name)).toEqual(["TimeoutError", "TimeoutError", "TimeoutError"]);
     expect(outcome).toEqual({ green: false, run: null, why: `GitHub could not be read (${ended[0]!.message}), 3 times in a row` });
 
-    // without a clock's own, every call still carries one, not yet ended when GitHub answers in time
     const api = http(green);
     const signals: Array<AbortSignal | null | undefined> = [];
     expect((await main(ENV, { ...clock(), get: (url, init) => { signals.push(init.signal); return api.get(url, init); } })).green).toBe(true);
@@ -528,8 +508,6 @@ describe("the answer for $GITHUB_OUTPUT", () => {
   });
 });
 
-// The step runs `bun scripts/release-ci-reuse.ts` and reads its stdout: the script itself, against a
-// local server in GitHub's place.
 describe("the script as the reuse job runs it", () => {
   const made: string[] = [];
   afterEach(() => { for (const path of made.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -591,7 +569,6 @@ describe("the script as the reuse job runs it", () => {
     expect([unreachable.stdout, unreachable.code]).toEqual(["green=false\nrun=\n", 0]);
     expect(unreachable.stderr).toContain("GitHub could not be read (");
 
-    // the job summary is a directory: writing it throws, the answer is still printed
     const summary = mkdtempSync(join(tmpdir(), "release-ci-reuse-summary-"));
     made.push(summary);
     mkdirSync(join(summary, "summary.md"));
@@ -600,7 +577,6 @@ describe("the script as the reuse job runs it", () => {
   }, 30_000);
 
   it("says that it waits and that it asks again on stderr: stdout holds the answer alone", async () => {
-    // one second to wait in: the first look uses it up, and the look after it is the answer
     const second = { RELEASE_CI_WAIT_SECONDS: "1" };
     let failed = false;
     let looks = 0;
@@ -654,7 +630,6 @@ describe("the script as the reuse job runs it", () => {
   }, 30_000);
 });
 
-// More of GitHub's answers for devswha/ovis, as [job, conclusion] in the order listed.
 describe("runs of devswha/ovis", () => {
   const real = (id: number, sha: string, status: string, conclusion: string | null, attempt: number, listed: Array<[string, string]>) => {
     const at = { repository: REPO, sha };
@@ -682,7 +657,6 @@ describe("runs of devswha/ovis", () => {
     const listed = all(order, { "Native macOS session identity": "cancelled" });
     const sha = "2d6f32a1a29dc712815be26a7a0f4fb8ae9d6ea3";
     expect(real(42632441834, sha, "completed", "failure", 1, listed)).toEqual({ answer: "no", why: `main's run 42632441834 ended "failure"`, failed: true });
-    // the jobs alone say no too, should the run ever claim success
     expect(real(42632441834, sha, "completed", "success", 1, listed)).toEqual({ answer: "no", why: `"Native macOS session identity" ended "cancelled" in main's run 42632441834` });
   });
 
@@ -691,8 +665,6 @@ describe("runs of devswha/ovis", () => {
   });
 });
 
-// CI_JOBS is what a green run is held to, so it has to be what ci.yml runs: a job added or renamed
-// there, or one a push run may skip, fails here until scripts/release-ci-reuse.ts follows.
 describe("ci.yml", () => {
   interface CiStep { id?: string; name?: string; if?: string; run?: string; env?: Record<string, string> }
   interface CiJob { name?: string; if?: string; uses?: string; outputs?: Record<string, string>; strategy?: { matrix?: Record<string, unknown> }; steps?: CiStep[] }
@@ -707,7 +679,6 @@ describe("ci.yml", () => {
     const names = Object.entries(ci.jobs).map(([id, job]) => job.name ?? id);
     expect([...names].sort(), UPDATE).toEqual([...CI_JOBS, CI_MATRIX_JOB].sort());
     expect(new Set(names).size).toBe(names.length);
-    // a name GitHub fills in per job is the matrix job's, written whole
     expect(names.filter((name) => name.includes("${{")), UPDATE).toEqual([CI_MATRIX_JOB]);
   });
 
@@ -734,9 +705,6 @@ describe("ci.yml", () => {
     expect(ci.jobs["changes"]!.outputs).toMatchObject({ code: "${{ steps.filter.outputs.code }}", draft: "${{ steps.filter.outputs.draft }}" });
   });
 
-  // hosted_only is set by pages.yml's and the Release's calls (scripts/light-runner-workflow.test.ts), not in main's push run.
-  // Each of these exact expressions decides only a runner, a cache mode or whether a cache step runs; any other read of
-  // the input (`toJSON(inputs.hosted_only) == 'false'`, say) is one more place where the two runs could differ.
   const HOSTED_ONLY_READS = [
     "${{ inputs.hosted_only && 'ubuntu-24.04' || fromJSON(needs.changes.outputs.fast) }}",
     "${{ inputs.hosted_only && 'ubuntu-24.04' || fromJSON(needs.changes.outputs.linux) }}",
@@ -747,9 +715,6 @@ describe("ci.yml", () => {
     "${{ inputs.hosted_only }}",
   ];
 
-  // The Release's own call passes hosted_only: true (the Release run is hosted and cacheless as a whole). Each expression
-  // above decides only where a job runs, a cache mode or whether a cache step runs, never which check runs, so main's
-  // push run (input unset) checks what the Release run's own ci.yml checks, and the Release may still take it.
   it("passes hosted_only: true in a Release run's call, which moves runners and caches only", () => {
     const validate = Bun.YAML.parse(readFileSync(join(root, ".github/workflows/release-validate.yml"), "utf8")) as { jobs: Record<string, { uses?: string; with?: Record<string, unknown> }> };
     const calls = Object.values(validate.jobs).filter((job) => job.uses === "./.github/workflows/ci.yml");
@@ -757,76 +722,72 @@ describe("ci.yml", () => {
     expect(calls[0]!.with?.["hosted_only"]).toBe(true);
   });
 
+  it("fetches the ratchets' base on every run that reaches check fast, and before it", () => {
+    const steps = ci.jobs["fast"]!.steps!;
+    const fetchBase = steps.findIndex((step) => step.name === "Fetch the base the ratchets compare with");
+    const checkFast = steps.findIndex((step) => step.run?.trim() === "bun run check fast");
+    expect(fetchBase, "Name Fast checks' step that fetches the ratchets' base `Fetch the base the ratchets compare with`").not.toBe(-1);
+    expect(checkFast, "Run the check in Fast checks' step `bun run check fast`").not.toBe(-1);
+    // no `if:` at all, as every step of this job but the artifact upload has: `always()` and `success()` run on a push too
+    expect([undefined, "always()", "success()"], "A condition that may be false leaves the ratchets comparing with nothing while the run still passes: the fetch takes no `if:`, or one a push run meets").toContain(steps[fetchBase]!.if);
+    expect(fetchBase, "The fetch hands RATCHET_BASE to check fast, so it has to come before it").toBeLessThan(checkFast);
+  });
+
   it("gives no step a condition on the event, which differs between a push run and Release's own", () => {
     const reading = Object.entries(ci.jobs).flatMap(([id, job]) => (job.steps ?? []).filter((step) => /\b(?:github|inputs)\./.test(step.if ?? "") && !HOSTED_ONLY_READS.includes(step.if!)).map((step) => `${id}: ${step.if}`));
     expect(reading, "A step that runs for some events only makes main's push run check something else than the Release run's own ci.yml: decide in Detect changes instead, as code and draft are").toEqual([]);
   });
 
-  // Every place where ci.yml reads the event or the run's inputs, with why a Release run may still
-  // take main's push run although the two differ there.
   const LIGHT = "${{ inputs.hosted_only && 'ubuntu-24.04' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || fromJSON(github.ref == 'refs/heads/main' && vars.CI_MAIN_SELF_HOSTED_LABELS || vars.CI_LIGHT_LABELS || vars.CI_SELF_HOSTED_LABELS || '[\"self-hosted\",\"self-hosted-ovis\"]') }}";
   const EVENT_READS: Record<string, string> = {
-    // which runs wait for or cancel one another (scripts/ci-concurrency.test.ts), not what a run checks
     "concurrency.group": "validation-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-manual' || '' }}",
     "concurrency.cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-    // a light job's guard against a fork's pull request: a push and a Release run carry none, and
-    // the rest reads the ref and the repository's variables, the same for both
     "jobs.changes.runs-on": LIGHT,
     "jobs.herdr-core-live.runs-on": LIGHT,
     "jobs.integration-browser.runs-on": LIGHT,
-    // the macOS session job's guard against a fork's pull request (scripts/light-runner-workflow.test.ts): a push and a
-    // Release run carry none, and both then stay on macos-15 (the test below)
-    "jobs.macos-session.runs-on": "${{ inputs.hosted_only && 'macos-15' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"') }}",
-    // the runner of the Linux jobs (scripts/ci-runner-route.sh): the self-hosted PC for a push,
-    // GitHub's for the Release run's own call. The jobs and their steps are the same on either;
-    // the unit tests the self-hosted runner skips run in release-validate.yml's own Fast checks, on
-    // GitHub's runner, whenever main's run is taken
+    "jobs.macos-session.runs-on": "${{ inputs.hosted_only && 'macos-15' || github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || fromJSON(github.workflow == 'CI' && vars.CI_MAC_LABELS || '\"macos-15\"') }}",
     "jobs.changes.steps.route.env.EVENT_NAME": "${{ github.event_name }}",
     "jobs.changes.steps.route.env.HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
     "jobs.changes.steps.route.env.REQUESTED_LABELS": "${{ inputs.self_hosted_labels }}",
-    // code and draft: true and false for every event but a pull request (the test below runs the step)
     "jobs.changes.steps.filter.env.EVENT_NAME": "${{ github.event_name }}",
     "jobs.changes.steps.filter.env.PR_DRAFT": "${{ github.event.pull_request.draft }}",
     "jobs.changes.steps.filter.env.BASE_SHA": "${{ github.event.pull_request.base.sha }}",
-    // the release guards' base: the commit before a push, none in a Release run, which then checks
-    // its commit as a release. release.yml's preflight (`release-guards.ts --release`) checks more
-    // than either before anything is validated, and release-validate.yml's Fast checks runs this
-    // step again
     "jobs.fast.steps.Release guards.env.BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
-    // the ratchets' base: the same commits, none in a Release run, whose ratchets then compare with nothing (a pull
-    // request's own run compared them before it merged)
     "jobs.fast.env.EVENT_BASE": "${{ github.event.pull_request.base.sha || github.event.before }}",
+    // the last main commit whose CI passed, for a push to main only: a Release run's caller is no push, so it finds none
+    "jobs.changes.steps.ratchet.env.EVENT_NAME": "${{ github.event_name }}",
   };
 
-  it("never validates a release on the self-hosted Mac: CI_MAC_LABELS reaches neither a Release run nor main's run", () => {
-    // A Release run calls ci.yml under its own workflow name, with its caller's event, and may take main's push run in
-    // place of its own: the variable is read only in ci.yml's own runs off main, so both stay on GitHub's macos-15.
+  it("never runs a Release run's own jobs on the self-hosted Mac: CI_MAC_LABELS is read only in ci.yml's own runs and in pull requests", () => {
     const dir = join(root, ".github/workflows");
     const reads = readdirSync(dir).filter((name) => name.endsWith(".yml"))
       .flatMap((name) => readFileSync(join(dir, name), "utf8").split("\n").filter((line) => line.includes("CI_MAC_LABELS") && !line.trimStart().startsWith("#")).map((line) => `${name}: ${line.trim()}`));
-    expect(reads).toEqual([`ci.yml: runs-on: ${String((ci.jobs["macos-session"] as CiJob & { "runs-on"?: string })["runs-on"])}`]);
-    expect(reads[0]).toContain("fromJSON(github.workflow == 'CI' && github.ref != 'refs/heads/main' && vars.CI_MAC_LABELS || '\"macos-15\"')");
+    const pullRequestOnly = "runs-on: ${{ fromJSON(matrix.os == 'macos-15' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_MAC_LABELS || toJSON(matrix.os)) }}";
+    expect([...reads].sort()).toEqual([
+      `ci.yml: runs-on: ${String((ci.jobs["macos-session"] as CiJob & { "runs-on"?: string })["runs-on"])}`,
+      `pty-sidecar.yml: ${pullRequestOnly}`,
+      `remote-bundles.yml: ${pullRequestOnly}`,
+    ]);
+    const ciRead = reads.find((read) => read.startsWith("ci.yml: "))!;
+    expect(ciRead).toContain("inputs.hosted_only && 'macos-15' || ");
+    expect(ciRead).toContain("fromJSON(github.workflow == 'CI' && vars.CI_MAC_LABELS || '\"macos-15\"')");
   });
 
   it("reads the event and the run's inputs only where a push run may differ from Release's own", () => {
     const EVENT = /\bgithub\.event\w*|\bgithub\s*\[|\(\s*github\s*\)|\binputs\b/;
-    /** Where `value` is read as an expression: all of an `if`, elsewhere what stands inside ${{ }}. */
     const expressions = (key: string, value: string): string => (key === "if" ? value : [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((match) => match[1]).join("\n"));
     const found: Record<string, string> = {};
     const scan = (value: unknown, path: string[]): void => {
       if (typeof value === "string") {
         if (EVENT.test(expressions(path.at(-1)!, value)) && !HOSTED_ONLY_READS.includes(value)) found[path.join(".")] = value;
       } else if (Array.isArray(value)) {
-        // a step by its id or name, which stay when a step is added before it
         value.forEach((entry: CiStep | null, index) => scan(entry, [...path, entry?.id ?? entry?.name ?? String(index)]));
       } else if (typeof value === "object" && value !== null) {
         for (const [key, entry] of Object.entries(value)) scan(entry, [...path, key]);
       }
     };
-    // `on` declares the events and inputs; everything else may read them
     for (const [key, value] of Object.entries(ci)) if (key !== "on") scan(value, [key]);
     expect(found, "ci.yml reads the event or the run's inputs somewhere new, or no longer where it did. Main's push run and the Release run's own ci.yml differ exactly there: list the place in EVENT_READS with why a Release run may still take main's run, or decide in Detect changes instead, as code and draft are").toEqual(EVENT_READS);
-    // the scan itself: a step's `if` whole, a script only inside an expression
     for (const [key, value, read] of [
       ["if", "github.event_name == 'push'", true], ["if", "needs.changes.outputs.draft != 'true'", false], ["if", "inputs.self_hosted_labels != ''", true],
       ["run", "echo \"${{ github.event.before }}\"", true], ["run", "# where github.event_name is the caller's event\necho inputs.x", false],
@@ -835,23 +796,15 @@ describe("ci.yml", () => {
     ] as const) expect([key, value, EVENT.test(expressions(key, value)) && !HOSTED_ONLY_READS.includes(value)]).toEqual([key, value, read]);
   });
 
-  // GITHUB_EVENT_NAME and GITHUB_EVENT_PATH are the same event, read by what a step runs instead of
-  // by ci.yml: the sources of the unit and integration suites, tests included.
   const EVENT_VARIABLE_READS = [
-    // the client build: restored from the runner's cache for a pull request and a push to main,
-    // built for every other event. A release that takes main's run takes that restored build for
+    // A release that takes main's run takes that restored build for
     // the Integration and Browser jobs (docs/development.md#releasing); an entry is one a job of
     // that same run built, named after the commit and everything else the build reads, and a
     // restore checks every file's sha256
     "scripts/build-cache.ts",
-    // the check report's revision fields: a pull request's head and base, the commit itself otherwise
     "scripts/check-report.ts", "scripts/check.ts",
-    // the runner's own guard against a fork's code: a push and a Release run of this repository pass alike
     "scripts/self-hosted-runner/job-started.sh",
-    // tests that hand the variables to the code above and to pr-title.yml's script, and read none themselves
     "scripts/build-cache.test.ts", "scripts/check-report.test.ts", "scripts/check.test.ts", "scripts/pr-title.test.ts", "scripts/self-hosted-runner.test.ts",
-    // the job-started hook's test harness: started only by the hook's tests, it hands the hook an event path;
-    // no workflow starts it, and it decides nothing about what a run does
     "scripts/self-hosted-runner/hook-test-harness.sh",
   ];
 
@@ -862,9 +815,8 @@ describe("ci.yml", () => {
     expect(read(".github/actions/setup-ci/action.yml")).not.toMatch(/\bgithub\.event|\bGITHUB_EVENT_/);
   });
 
-  it.skipIf(process.platform === "win32")("decides code=true and draft=false for a push, as for the Release run's own call, even after a docs-only commit", async () => {
+  it.skipIf(process.platform === "win32")("runs CI for pushes and server fixture changes and skips heavy checks for docs-only PRs", async () => {
     const filter = ci.jobs["changes"]!.steps!.find((step) => step.id === "filter")!;
-    // a push and a workflow_dispatch carry no pull request: both expressions are empty for them
     expect(filter.env).toEqual({ EVENT_NAME: "${{ github.event_name }}", PR_DRAFT: "${{ github.event.pull_request.draft }}", BASE_SHA: "${{ github.event.pull_request.base.sha }}" });
     const dir = mkdtempSync(join(tmpdir(), "release-ci-reuse-filter-"));
     try {
@@ -888,9 +840,105 @@ describe("ci.yml", () => {
         return readFileSync(output, "utf8");
       };
       for (const event of ["push", "workflow_dispatch"]) expect(await decided({ EVENT_NAME: event, PR_DRAFT: "", BASE_SHA: "" })).toBe("draft=false\ncode=true\n");
-      // the same commit as a pull request is what the filter may skip: the answer above is not the only one it has
       expect(await decided({ EVENT_NAME: "pull_request", PR_DRAFT: "false", BASE_SHA: base })).toBe("draft=false\ncode=false\n");
       expect(await decided({ EVENT_NAME: "pull_request", PR_DRAFT: "true", BASE_SHA: base })).toBe("draft=true\ncode=false\n");
+
+      const docsCommit = git("rev-parse", "HEAD");
+      mkdirSync(join(dir, "server/fixtures"), { recursive: true });
+      writeFileSync(join(dir, "server/fixtures/prompt.txt"), "Continue?\n");
+      git("add", "server/fixtures/prompt.txt");
+      git("commit", "-q", "-m", "update prompt fixture");
+      expect(await decided({ EVENT_NAME: "pull_request", PR_DRAFT: "false", BASE_SHA: docsCommit })).toBe("draft=false\ncode=true\n");
+
+      const fixtureCommit = git("rev-parse", "HEAD");
+      git("mv", "server/fixtures/prompt.txt", "docs/prompt.txt");
+      git("commit", "-q", "-m", "move prompt to docs");
+      expect(await decided({ EVENT_NAME: "pull_request", PR_DRAFT: "false", BASE_SHA: fixtureCommit })).toBe("draft=false\ncode=true\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform === "win32")("gives a push to main the latest passed push run of main in its history as the ratchets' base, and no base otherwise", async () => {
+    const ratchet = ci.jobs["changes"]!.steps!.find((step) => step.id === "ratchet")!;
+    const fetchBase = ci.jobs["fast"]!.steps!.find((step) => step.name === "Fetch the base the ratchets compare with")!;
+    const dir = mkdtempSync(join(tmpdir(), "release-ci-reuse-ratchet-"));
+    try {
+      const git = (...args: string[]): string => {
+        const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: dir, env: { PATH: process.env.PATH ?? "", HOME: dir } });
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        return result.stdout.toString().trim();
+      };
+      const commit = (message: string): string => { git("commit", "-q", "--allow-empty", "-m", message); return git("rev-parse", "HEAD"); };
+      git("init", "-q", "-b", "main");
+      const [a, b] = [commit("a"), commit("b")];
+      // HEAD is a merge commit, as a pull request's checkout is: first parent b, last parent a side commit
+      git("checkout", "-q", "-b", "side", a);
+      const side = commit("side");
+      git("checkout", "-q", "main");
+      git("merge", "-q", "--no-ff", "-m", "head", "side");
+      const head = git("rev-parse", "HEAD");
+      expect(git("rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([b, side]);
+      git("checkout", "-q", "--orphan", "elsewhere");
+      const elsewhere = commit("not in main's history");
+      git("checkout", "-q", "main");
+      // gh answers the step's own query (passed push runs of ci.yml on main) with PASSED, any other query with ANY: a
+      // cancelled run of HEAD itself, which only a query that lost one of its filters would see; sleep returns at once
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "gh"), `#!/bin/sh
+echo call >> "$CALLS"
+[ -n "$DOWN" ] && exit 1
+# the step's own query, argument by argument: an argument holding a separator could not pass for one of its neighbours
+asked() {
+  [ "$#" -eq 18 ] || return 1
+  [ "$1" = run ] && [ "$2" = list ] && [ "$3" = --repo ] && [ "$4" = o/r ] && [ "$5" = --workflow ] && [ "$6" = ci.yml ] &&
+  [ "$7" = --branch ] && [ "$8" = main ] && [ "$9" = --event ] && [ "\${10}" = push ] && [ "\${11}" = --status ] && [ "\${12}" = success ] &&
+  [ "\${13}" = --limit ] && [ "\${14}" = 100 ] && [ "\${15}" = --json ] && [ "\${16}" = headSha ] && [ "\${17}" = --jq ] && [ "\${18}" = '.[].headSha' ]
+}
+if asked "$@"; then printf '%s\\n' $PASSED; else printf '%s\\n' $ANY; fi
+`, { mode: 0o755 });
+      writeFileSync(join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const found = async (env: Record<string, string>): Promise<{ base: string; calls: number }> => {
+        const [output, calls] = [join(dir, "output"), join(dir, "calls")];
+        for (const file of [output, calls]) writeFileSync(file, "");
+        const result = await runScript(ratchet.run!, dir, { PATH: `${bin}:${process.env.PATH ?? ""}`, EVENT_NAME: "push", REF: "refs/heads/main", REPOSITORY: "o/r", GITHUB_OUTPUT: output, CALLS: calls, ANY: head, ...env });
+        expect(result.code).toBe(0);
+        return { base: readFileSync(output, "utf8").trim(), calls: readFileSync(calls, "utf8").split("\n").filter(Boolean).length };
+      };
+      // the latest passed commit by history, whatever the order of the list; never one outside the push's history
+      expect((await found({ PASSED: `${a} ${b}` })).base).toBe(`base=${b}`);
+      expect((await found({ PASSED: `${b} ${a}` })).base).toBe(`base=${b}`);
+      expect((await found({ PASSED: `${elsewhere} ${a}` })).base).toBe(`base=${a}`);
+      expect(await found({ PASSED: elsewhere })).toEqual({ base: "", calls: 1 });
+      expect(await found({ PASSED: "" })).toEqual({ base: "", calls: 1 });
+      // only a push to main asks; an API that does not answer is asked three times, then gives no base
+      const notAPushToMain: Record<string, string>[] = [{ EVENT_NAME: "pull_request" }, { REF: "refs/heads/feature" }];
+      for (const env of notAPushToMain) expect(await found({ PASSED: b, ...env })).toEqual({ base: "", calls: 0 });
+      expect(await found({ PASSED: b, DOWN: "1" })).toEqual({ base: "", calls: 3 });
+      // and a push with no base fails Fast checks' fetch step before it fetches anything
+      const fetched = await runScript(fetchBase.run!, dir, { GITHUB_EVENT_NAME: "push", EVENT_BASE: a, LAST_GREEN: "", GITHUB_ENV: join(dir, "env") });
+      expect([fetched.code, fetched.output.includes("No passed main commit")]).toEqual([1, true]);
+      // a base it has is fetched into a depth-1 checkout of HEAD and handed on: for a push the passed commit, not the one
+      // before the push; for a pull request its merge commit's first parent, not the event's base
+      git("config", "uploadpack.allowAnySHA1InWant", "true");
+      const shallow = join(dir, "shallow");
+      expect(Bun.spawnSync(["git", "clone", "-q", "--depth", "1", `file://${dir}`, shallow], { env: { PATH: process.env.PATH ?? "", HOME: dir } }).exitCode).toBe(0);
+      const handed = async (env: Record<string, string>): Promise<string> => {
+        const file = join(dir, "env");
+        writeFileSync(file, "");
+        const result = await runScript(fetchBase.run!, shallow, { GITHUB_ENV: file, ...env });
+        expect(result.code).toBe(0);
+        return readFileSync(file, "utf8").trim();
+      };
+      expect(await handed({ GITHUB_EVENT_NAME: "push", EVENT_BASE: b, LAST_GREEN: a })).toBe(`RATCHET_BASE=${a}`);
+      expect(Bun.spawnSync(["git", "cat-file", "-e", `${a}^{commit}`], { cwd: shallow }).exitCode).toBe(0);
+      const has = (sha: string): boolean => Bun.spawnSync(["git", "cat-file", "-e", `${sha}^{commit}`], { cwd: shallow }).exitCode === 0;
+      expect(has(b)).toBe(false);
+      expect(await handed({ GITHUB_EVENT_NAME: "pull_request", EVENT_BASE: a, LAST_GREEN: "" })).toBe(`RATCHET_BASE=${b}`);
+      expect(has(b)).toBe(true);
+      // the base reaches the fetch step from Detect changes' ratchet step
+      expect([ci.jobs["changes"]!.outputs?.["ratchet_base"], fetchBase.env?.["LAST_GREEN"]]).toEqual(["${{ steps.ratchet.outputs.base }}", "${{ needs.changes.outputs.ratchet_base }}"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

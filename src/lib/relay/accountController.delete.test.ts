@@ -5,13 +5,12 @@ import type { ReactElement } from "react";
 import { FakeAccountService } from "../../../shared/account-service-fake.ts";
 import { RelayShell, type RelayShellProps } from "../../components/RelayShell.tsx";
 import { memoryAccountStore } from "../account/store.ts";
-import type { RelayDeviceStore } from "./device.ts";
+import type { ShellDeviceStore } from "./device.ts";
 import { mountRelayShell, type RelayShellMount } from "./shell.tsx";
 
 const SERVICE = "https://account.ovis.sh";
 const ACCOUNT = "acct-test";
 
-/** Spins the microtask queue until `holds`, or fails naming `what`: the shell's reads are promises alone, so no clock takes part. */
 async function until(holds: () => boolean, what: string): Promise<void> {
   for (let turn = 0; turn < 10_000; turn++) { if (holds()) return; await Promise.resolve(); }
   throw new Error(`gave up waiting for ${what}`);
@@ -23,8 +22,8 @@ describe("deleting the account from the hosted shell", () => {
   beforeEach(() => { browser = createShellTestPage(); rendered = []; });
   afterEach(() => { browser.dispose(); });
 
-  const noDevices: RelayDeviceStore = {
-    async get() { return undefined; }, async list() { return []; }, async remove() {},
+  const noDevices: ShellDeviceStore = {
+    async get() { return undefined; }, async list() { return []; }, async remove() {}, async removeRow() { return false; },
     async update(_serverId, change) { return change(undefined); },
   };
   const shellProps = (element: ReactElement): RelayShellProps => {
@@ -35,7 +34,6 @@ describe("deleting the account from the hosted shell", () => {
   const last = (): RelayShellProps => shellProps(rendered.at(-1)!);
   const accountView = () => { const { state } = last(); return state.kind === "list" || state.kind === "empty" ? state.account ?? null : null; };
 
-  /** `onDelete` runs as the service answers a delete, before the page sees the answer; `beforeDelete` before the service sees it */
   async function signedInShell(clock: () => number = Date.now, provider: "github" | "apple" = "github", onDelete?: (store: ReturnType<typeof memoryAccountStore>, fake: FakeAccountService) => Promise<void>, beforeDelete?: () => Promise<void>) {
     const fake = new FakeAccountService(clock);
     const accountStore = memoryAccountStore();
@@ -88,7 +86,6 @@ describe("deleting the account from the hosted shell", () => {
     await (last().onDeleteAccount?.() as Promise<void> | undefined);
     expect(fake.requests.slice(before)).not.toContain("DELETE /v1/account");
     expect(fake.deleted("acct-two")).toBe(false);
-    // the other sign-in's page, with no failure of a delete it never asked for to try again
     expect(accountView()).toMatchObject({ kind: "signed-in", error: null });
     expect((await accountStore.get("session"))?.account).toBe("acct-two");
   });
@@ -99,7 +96,6 @@ describe("deleting the account from the hosted shell", () => {
       await store.set("session", { ...mine, account: "acct-two", access_token: service.issueToken("acct-two"), refresh_token: "refresh-two", sign_in_id: "another-sign-in" });
     });
     last().onDeleteAccount?.();
-    // the other sign-in's directory, read after the delete, drawn
     const readAfter = () => fake.requests.slice(fake.requests.indexOf("DELETE /v1/account") + 1).includes("GET /v1/pcs");
     await until(() => fake.deleted(ACCOUNT) && (accountView()?.kind === "signed-out" || (readAfter() && (accountView() as { pcs?: unknown }).pcs != null)), "the delete settled");
     expect(accountView()?.kind).toBe("signed-in");
@@ -118,7 +114,6 @@ describe("deleting the account from the hosted shell", () => {
   it("after a delete whose answer was lost, the next press finds the sign-in gone: signed out, saying so, and the key kept", async () => {
     let deletes = 0;
     const { fake, accountStore } = await signedInShell(Date.now, "github", async () => {
-      // the service erased the account, and the answer never came back
       if (++deletes === 1) throw new TypeError("network connection lost");
     });
     const key = (await accountStore.key()).public_spki;
@@ -135,7 +130,6 @@ describe("deleting the account from the hosted shell", () => {
   it("keeps the key of an account that still exists: a delete that never left the device, then a sign-out in another tab", async () => {
     let deletes = 0;
     const { fake, accountStore } = await signedInShell(Date.now, "github", undefined, async () => {
-      // offline: the request never reaches the service
       if (++deletes === 1) throw new TypeError("offline");
     });
     const key = (await accountStore.key()).public_spki;
@@ -151,10 +145,6 @@ describe("deleting the account from the hosted shell", () => {
   describe("in the phone app, with a sign-in over ten minutes old", () => {
     const savedFetch = globalThis.fetch;
     afterEach(() => { Reflect.deleteProperty(globalThis, "Capacitor"); globalThis.fetch = savedFetch; });
-    /**
-     * The app's Sign in with Apple, and the service answering it with a fresh sign-in to `to`; resolves once that
-     * answer is sent (the nonce's digest before it is the platform's own work, which no promise of this page awaits).
-     */
     const nativeSignInTo = (fake: FakeAccountService, to: string): Promise<void> => {
       const tokened = Promise.withResolvers<void>();
       Object.defineProperty(globalThis, "Capacitor", { configurable: true, value: { isNativePlatform: () => true, getPlatform: () => "ios", PluginHeaders: [{ name: "OvisAuth" }], nativePromise: async () => ({ idToken: "apple-id-token" }) } });
@@ -197,7 +187,6 @@ describe("deleting the account from the hosted shell", () => {
       let now = Date.now();
       const { fake, accountStore } = await signedInShell(() => now, "apple");
       now += 11 * 60_000;
-      // the app's sheet stays open until the test lets it answer
       const sheet = Promise.withResolvers<{ idToken: string }>();
       const opened = Promise.withResolvers<void>();
       const tokened = Promise.withResolvers<void>();
@@ -222,7 +211,6 @@ describe("deleting the account from the hosted shell", () => {
       let now = Date.now();
       const { fake, accountStore } = await signedInShell(() => now, "apple");
       now += 11 * 60_000;
-      // the first write of the sign-in after the sheet answered waits until the test lets it go
       let armed = false;
       const reached = Promise.withResolvers<void>();
       const gate = Promise.withResolvers<void>();

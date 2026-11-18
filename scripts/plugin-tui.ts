@@ -1,35 +1,22 @@
-/**
- * `tui`: runs the terminal client (crates/ovis-tui) in this terminal: herdr-core's terminals as herdr shows them.
- *
- * It neither starts nor asks the server anything, and the program never talks to it. It takes no turn in the
- * plugin's lifecycle lock either.
- */
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const TUI_NAME = "ovis-tui";
-/** the setting that names the program, ahead of the install's own */
 export const TUI_BIN_VARIABLE = "OVIS_TUI_BIN";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
 export type TuiLookup =
   | { readonly kind: "found"; readonly path: string }
-  /** OVIS_TUI_BIN is set and names no file: the install's own program is not tried instead */
   | { readonly kind: "configured-missing"; readonly path: string }
   | { readonly kind: "missing"; readonly looked: readonly string[] };
 
-/**
- * Where an install keeps the program: in its bin/ (a checkout's, beside its PTY host), beside the
- * server itself (a compiled install's root is its bin/ already), else a local build of the crate.
- */
 export function tuiPaths(root: string): readonly string[] {
   return [join(root, "bin", TUI_NAME), join(root, TUI_NAME), join(root, "crates", "ovis-tui", "target", "release", TUI_NAME)];
 }
 
 export const isFile = (path: string): boolean => existsSync(path) && statSync(path).isFile();
 
-/** The program to run: OVIS_TUI_BIN from the merged settings, else the first of tuiPaths that is a file. */
 export function findTui(settings: Env, where: { readonly root: string; readonly home: string; readonly onPath?: (name: string) => string | null }, fileAt: (path: string) => boolean = isFile): TuiLookup {
   const configured = settings[TUI_BIN_VARIABLE] ?? "";
   if (configured !== "") {
@@ -55,7 +42,6 @@ export function tuiEnv(caller: Env): Record<string, string> {
 
 export const WINDOWS_MESSAGE = "ovis tui: the terminal client runs on Linux and macOS only.\n";
 
-/** What a lookup that found nothing to run says, for the person who typed `ovis tui`. */
 export function lookupMessage(lookup: Exclude<TuiLookup, { kind: "found" }>): string {
   switch (lookup.kind) {
     case "configured-missing":
@@ -79,18 +65,13 @@ export function lookupMessage(lookup: Exclude<TuiLookup, { kind: "found" }>): st
 
 export interface TuiOptions {
   readonly platform: NodeJS.Platform;
-  /** the install's root (plugin.ts ROOT) and the home a leading `~/` stands for */
   readonly where: { readonly root: string; readonly home: string };
-  /** the caller's own environment, which the program inherits */
   readonly caller: Env;
-  /** the plugin's merged settings: the process environment and its config files */
   readonly settings: Env;
   readonly err: (text: string) => void;
-  /** where the launcher's signal handlers go: process.on for the command; what it returns takes the handler off again */
   readonly on: (signal: "SIGINT" | "SIGTERM" | "SIGHUP", handler: () => void) => () => void;
 }
 
-/** Runs the program with the terminal handed over; its exit code, or 128 + the signal that ended it. */
 export async function runTui(args: readonly string[], options: TuiOptions): Promise<number> {
   if (options.platform === "win32") {
     options.err(WINDOWS_MESSAGE);
@@ -107,7 +88,6 @@ export async function runTui(args: readonly string[], options: TuiOptions): Prom
   let child: Bun.Subprocess<"inherit", "inherit", "inherit"> | undefined;
   // a SIGTERM or SIGHUP sent to this process alone is passed on, so both end; listened for before the program starts,
   // so one that comes while it starts cannot end this process under it: Bun runs the listener after `child` is set.
-  // A program that could not be started has nothing to pass one on to, and the listeners go on every way out.
   for (const signal of ["SIGTERM", "SIGHUP"] as const) offs.push(options.on(signal, () => child?.kill(signal)));
   try {
     try {

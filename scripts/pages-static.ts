@@ -4,8 +4,7 @@
  * the path and any other status redirects; `_headers` rules are applied in order, each matching
  * rule's `! Name` lines removing a header and its `Name: value` lines setting it (a header two
  * rules set is joined with a comma, as Pages joins it). Paths match as Pages matches them: one
- * `*` splat for anything, `:name` for one path segment. Nothing here is the deployed host; it is
- * the closest thing to it that runs in a test.
+ * `*` splat for anything, `:name` for one path segment.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
@@ -52,14 +51,12 @@ export function parseHeaders(text: string): HeaderRule[] {
   return rules;
 }
 
-/** The matched placeholders and splat put into a rule's target. */
 function fill(target: string, groups: Record<string, string> | undefined): string {
   let out = target;
   for (const [name, value] of Object.entries(groups ?? {})) out = out.replaceAll(`:${name}`, value);
   return out;
 }
 
-/** The first redirect rule `pathname` matches: where to, and whether to rewrite (200) or redirect. */
 export function redirectFor(rules: RedirectRule[], pathname: string): { to: string; status: number } | null {
   for (const rule of rules) {
     const match = rule.from.exec(pathname);
@@ -120,7 +117,6 @@ export async function pagesResponse(site: PagesSite, request: Request): Promise<
   return response;
 }
 
-/** The site on loopback; `port` 0 picks a free one. `seen` is told every request that reaches the host, as the host itself would log it. */
 export function servePagesSite(dir: string, port = 0, hostname = "127.0.0.1", seen?: (request: Request) => void): ReturnType<typeof Bun.serve> {
   const site = loadPagesSite(dir);
   return Bun.serve({ hostname, port, fetch: (request) => { seen?.(request); return pagesResponse(site, request); } });

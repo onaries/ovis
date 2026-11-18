@@ -22,7 +22,6 @@ function stateDir(): string {
   return dir;
 }
 
-/** `tailscale status --json` for this PC (user 1) and its peers */
 function status(peers: { name: string; user: string; online?: boolean; tags?: string[]; os?: string }[]): string {
   const peer = Object.fromEntries(peers.map((p, index) => [`key${index}`, {
     HostName: `os-host-of-${p.name}`, DNSName: `${p.name}.tail.ts.net.`, UserID: p.user, Online: p.online ?? true, OS: p.os ?? "linux", ...(p.tags ? { Tags: p.tags } : {}),
@@ -122,7 +121,6 @@ it("adds a PC of the same Tailscale login through the relay with one tap, after 
   expect(added.status).toBe(201);
   const { machine } = await added.json() as { machine: Machine };
   expect(machine).toMatchObject({ kind: "relay", name: "pc-b", relay: { server_id: b.context.services.relay.serverId() } });
-  // added, it is no longer offered
   expect(await (await ask("GET")).json()).toEqual({ pcs: [] });
 });
 
@@ -226,7 +224,6 @@ it("lists the current Ovis of a PC that also runs an older one on another port",
 
 it("lists an Ovis whose relay is off, which may be a current one, over an older one", async () => {
   const older = olderOvis();
-  // a current Ovis that never started its relay names no relay ID either
   const relayOff = olderOvis({ phase: "off" });
   const pcs = new TailnetPcs({ readStatus: onePeer, ports: [443, 8443], origin: (_dnsName, port) => port === 443 ? older.url : relayOff.url });
   expect(await pcs.list(new Set())).toEqual([{ name: "pc-b", url: relayOff.url, relay: "off", outdated: false }]);
@@ -234,7 +231,6 @@ it("lists an Ovis whose relay is off, which may be a current one, over an older 
 
 it("tells each refusal of the code request in its own failure, never with that PC's own words", async () => {
   const cases: [{ status: number; code: string }, string][] = [
-    // its health named its relay ID: a current Ovis, so a missing route is something in between, not its version
     [{ status: 405, code: "method_not_allowed" }, "no_code"],
     [{ status: 404, code: "not_found" }, "no_code"],
     [{ status: 409, code: "relay_off" }, "relay_off"],

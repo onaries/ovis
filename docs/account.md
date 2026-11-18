@@ -34,7 +34,9 @@ are ([Ovis Mux v1](relay.md#ovis-mux-v1)).
    the account service handed it.
 7. **The account service can hide records, never forge them.** It stores the PC directory
    (`server_id`, a name, the PC's relay public key and the relay it is reached through; no account
-   or device keys), a mailbox of signed records per PC, and admission requests.
+   or device keys), a mailbox of signed records per PC, and admission requests. First-link
+   admission trusts it: while a code made to put a PC in an account lives, its word on a device's
+   key lets that device in ([The account's word](#the-accounts-word)).
 8. **Tailscale is not membership.** A PC found on your Tailscale is added over SSH (Add a connection →
    SSH, [remote-pcs.md](remote-pcs.md)), and one an older Ovis added through the relay with a code that
    PC handed over to your own Tailscale login is a paired device of that PC. Neither is an account member by itself: membership comes only from the
@@ -62,7 +64,10 @@ id. Rows made any other way keep random ids, and a device already on a PC keeps 
 (an `add` for a key already present changes nothing): it knows that id from its pairing.
 
 A PC belongs to at most one account: the account of its first member. A record for another account
-is refused (`account_mismatch`). **Revoke all** clears the PC's account with its members; tombstones
+is refused (`account_mismatch`). A PC in no account that its signed-in owner set up for one
+([`relay-account`](#pc-api): `ovis add` names it before it shows its code, and so does adding the PC
+from its own page) takes its first member from that account alone: a first link that names another
+is refused the same way. **Revoke all** clears the PC's account with its members; tombstones
 stay.
 
 Relay rows paired before the account existed and never linked (a PC that was off when the phone
@@ -70,6 +75,40 @@ moved its pairings over) are listed under `unlinked` in [`/api/account/status`](
 as "not covered by account removal". The client links them on its next connection. A browser paired
 with a code on the PC's own address holds a cookie, not a key: it cannot be linked, stays outside
 the account, and only **Revoke** on the PC removes it.
+
+### How a device joined
+
+The PC records on a row how a `link` made it a member: `joined_by` in `devices.json`.
+
+| value | when |
+|---|---|
+| `code` | the row paired with a code made for a PC in no account (the relay tab's QR code, or [a code made for an account](#a-code-made-for-an-account)) and linked into the account that code held it to, on a PC from before [the account's word](#the-accounts-word) was asked |
+| `service` | the row linked while such a code lived, and the account service vouched for its key ([The account's word](#the-accounts-word)) |
+| `word` | any other link that takes a row from no account into one, with no member behind it: a device that already drove this PC named the account itself (paired with a plain code, approved by its digits on this PC, or let in by a code a device outside the account started through the relay) |
+
+The mark is set once, by the link that takes the row into its account, and a later link of the
+row keeps it, whatever key or account it names. A restart keeps it. When two state folders are
+merged, the account and key are chosen as before and the mark apart from them: `word` (or a
+value the PC does not know) on either copy is kept, whichever account the row takes. Otherwise
+the row takes the mark of the copy whose account it takes, or, where both copies are in the same
+account, the other copy's when that one has none. A row that became a member before this has none, and neither has one
+an account member's `add` or approval let in: neither is listed. An approval is a remote one, or
+a code a member started through the relay while a member, and still a member when the code is
+used (`member_approved_in` on the row names that account, with the member in `added_by`). It
+counts only for a link into that same account: any other link is on the device's own word. A code
+a device outside the account started names its starter in `added_by` and approves nothing, even
+when the starter joins the account before the code is used. A value the PC
+does not know is kept as it is and counts as `word`. Nothing changes who gets in: the mark only
+shows the owner which members joined on their own word.
+
+[`GET /api/account/status`](#pc-api) lists them under `own_word`, beside `unlinked`: a row is in
+one of the two at most, so a device that links on its own word moves from `unlinked` to
+`own_word` and stays there until it is removed. The PC's own `GET /api/health` tells its driving
+owner both groups with their names (`account_devices`), and `ovis status` prints them when the
+answer it gets without a token carries them: on a machine profile's owner socket, or over TCP when
+the app lets the command in without one. It sends no token over TCP for them, and otherwise says
+the groups are not shown, naming the token only when the app asks for it. Its first line counts relay devices only: a browser paired on the PC's
+own address is outside the account too, and **Settings → Devices** lists it.
 
 ## Records
 
@@ -165,10 +204,43 @@ One rule for every way in: a pairing code, comparing digits, and joining through
   else a fresh one, never a code another place started (which may be on a screen as digits). That
   code ends when the PC gets its first member, however it does (a `link` over any pairing, the
   one a sign-in on the PC opens included): left pending, it would admit one more device after the
-  PC joined. An offer asked for without the header is what it was, on any PC: the first-run
+  PC joined. It also ends, with every device that waits to link under it, when another account
+  takes the place of the one named for the PC, and on **Reset relay identity**. An offer asked for without the header is what it was, on any PC: the first-run
   guide's QR code, the relay tab where the page has no account, a phone's **Use the relay** and
   `bun scripts/plugin.ts pair` keep it, without those guards, and a signed-in device that redeems
-  such a code on a PC in no account links itself the same way.
+  such a code on a PC in no account links itself the same way. It never carries the code of an
+  offer asked for with the header: with that code pending it starts a code of its own, which
+  replaces it as every new code does.
+- **And only for a PC that an account was named for.** The device that scans that QR code is taken
+  into the account named for the PC ([`relay-account`](#pc-api): its signed-in owner added it on
+  its own page, or ran `ovis add`), and into no other. So a PC with none named makes no such code:
+  the offer with the header answers `409 no_account_named`, starting no code and leaving the one
+  pending as it was. `GET /api/relay` says whether one is named (`account_named`), and the relay
+  tab, where its button would be, says what names one ([Adding a PC](#adding-a-pc), "By QR code").
+  The offer's answer names the account its code was made for (`account`), and a signed-in tab
+  lists the PC in its own account beside the QR code only when that is the account.
+  A device that waits to link on a PC with none named is refused `409 account_mismatch` and goes
+  at once.
+- **A device that pairs with that QR code's code waits to link.** The code of an offer asked for
+  with `x-ovis-no-account-only` is redeemed through the relay only: sent to the PC's own address
+  (`POST /api/devices/pair`) it pairs nobody, is answered `401 invalid_code` as a wrong code is,
+  and spends none of its tries. Through the relay it makes no device. The device that pairs with it
+  is in no list and on no disk, its sign-in answer names the `watch` role, and until it has linked
+  itself into an account it makes two calls and no other: it reads its own account status
+  (`GET /api/account/status`) and sends its link (`POST /api/account/link`). Everything else, a
+  socket included, is answered `403 link_required` before any route runs, and it is told none of
+  the PC's direct carriers. Its link makes it a device and the PC's first member in one write,
+  which is when it is announced; the code then ends, as above, and any other device that still
+  waited under it goes. A device that has not linked 30 seconds after it paired is gone: its
+  sessions end (`auth_revoked`) and its key signs in no more. Nothing was written for it, so
+  nothing is left of it. The code takes five such pairings, and a device that goes does not give
+  its pairing back: with none left and no device waiting, the code has ended. Ending the code
+  (**New code**, another tab, `POST /api/devices/pair/cancel`) takes the devices that wait under
+  it, and removing a key on the PC (**Revoke**, **Revoke all**, an account's `remove`) takes the
+  devices that wait with that key. A signed-in app joins as before: the account steps it takes
+  after pairing are exactly those two calls.
+- **A code can name the account it is for** ([A code made for an account](#a-code-made-for-an-account)):
+  its devices wait to link in the same way, and only a link into that account makes one a device.
 - **Every admission is announced** on every device connected to the PC: the new device's name and who
   approved it.
 
@@ -211,6 +283,153 @@ Comparisons that ask to join the account have their own 20, and so do other PCs 
 vouched for ([Adding a PC of your account](#adding-a-pc-of-your-account)), so a flood of either
 cannot pause pairing by QR code or code, or the other.
 
+## A code made for an account
+
+The call that makes a pairing code can name the account the PC is to join: `POST /api/relay/offer`
+and `POST /api/relay/code` take the header
+
+```
+x-ovis-expect-account: <account id>      (1 to 64 of A-Z a-z 0-9 _ -)
+```
+
+from the callers they take today (drive access, on a direct connection). The code is the relay
+tab's kind ([Who may admit a device](#who-may-admit-a-device)): made only while the PC is in no
+account, redeemed through the relay only, five pairings, and a device that pairs with it waits to
+link, makes its two calls and is gone after 30 seconds if it has not linked. One thing differs:
+such a device is taken into the account the header named and into no other, whatever account was
+named for the PC (`relay-account`). A link that names another account is refused 409
+`account_mismatch`; the device goes at once. The code stays for the device of the right account
+only while it can still pair one: with its five pairings spent, or its ten minutes over, it ends
+as the last device that waits under it goes. A link into that account makes the device a member,
+and the PC joins the account. "That account" is the account id in the device's link, which the
+device signs with its own key: the PC checks the signature and that the id is the one the code
+was made for.
+
+The answers carry today's fields and two more:
+
+```json
+POST /api/relay/code  -> { "code": "ABCDE-FGHJK", "expires_at": "…", "server_id": "…", "expect_account": "acct_1", "pairing": { "id": "<32 hex>" } }
+POST /api/relay/offer -> { "url": "https://app.ovis.sh/s/<server_id>/#offer=…", "expires_at": "…", "expect_account": "acct_1", "pairing": { "id": "<32 hex>" } }
+```
+
+`expect_account` repeats the account the call named; a PC from before this answers with neither
+field, and a call without the header gets today's code. `pairing.id` names the code in every
+answer of both calls, with the header or without. `POST /api/relay/code`
+with the header makes a new code, as it does without. `POST /api/relay/offer` with the header
+carries the code pending when that was made for the same account (the typed code's, say), with
+the same `pairing.id`; otherwise it starts a code of its own. An offer without the header, the
+relay tab's offer included, never carries such a code: it starts its own, which replaces it.
+
+An offer other than the relay tab's can also say which code it is to carry, with the header
+
+```
+x-ovis-pairing: <pairing.id> | new
+```
+
+With an id it carries that code while it is the one pending and the offer can carry it;
+otherwise it is refused 409 `pairing_gone`, starts no code and leaves the one pending as it was.
+With `new` it always starts a fresh code. So a command that made a code to type shows that same
+code as its QR code or none, and never shows or replaces a code that another command or a screen
+made. Any other value is refused 400 `invalid_pairing`.
+
+`POST /api/devices/pair/cancel` takes `{ "id": "<pairing.id>" }` beside `{ "code" }`: it ends the
+code pending only when that is the code named (by both, when both are given), and answers
+`cancelled: false` otherwise. A caller that names its own pairing ends that pairing and no other.
+
+The refusals, in this order: 409 `relay_off` and `relay_offline` as ever; 400 `invalid_account`
+when the header names no account id; 409 `in_account` when the PC is in an account; then 409
+`code_unavailable` for a typed code on a relay that takes none, and 409 `pairing_gone` for an
+offer whose `x-ovis-pairing` id is no longer the code pending. A device whose call waited (on
+the relay, for a typed code) and that was removed meanwhile is refused 401 `unauthorized`, and one
+made a device that only watches is refused 403 `read_only`. A refused call starts no code and
+leaves the one pending as it was.
+
+`POST /api/relay/offer/keep` `{ "id": "<pairing.id>" }` (the same callers and guard) answers the
+status of the code with that id, whatever the relay's state. A body without an `id` answers 400
+`invalid_body`; a device removed, or made one that only watches, while its request was on its way
+is refused 401 `unauthorized` or 403 `read_only`, and the guard's own refusals stand. A valid
+request answers 200:
+
+```json
+{ "state": "live", "id": "…", "expect_account": "acct_1", "expires_at": "…",
+  "waiting": [{ "id": "…", "label": "…", "link": "asked" }],
+  "turned_away": [{ "n": 1, "id": "…", "label": "…", "why": "account_mismatch", "link": "sent", "account": "acct_9" }],
+  "service_retry_ms": 0 }
+{ "state": "ended", "id": "…", "expect_account": "acct_1", "ended": { "why": "joined", "at": "…" }, "joined": { "device_id": "…", "label": "…" }, "turned_away": [] }
+{ "state": "unknown" }
+```
+
+`live`: it is the code pending. Once its ten minutes are over it pairs no new device (they are
+also counted on a clock that only moves forward, and once either clock says they are over they
+stay over, so changing the PC's clock gives the code no time back), but a device
+that paired with it in time still has its own 30 seconds to link, and the code reads `live` until
+that device has linked or its time is over. `unknown`: this PC knows no such code; it keeps the
+eight that ended last, in memory. `waiting` lists the devices that paired with it and have not
+linked yet, with what their last link did: `not_sent`, `sent` (answered at once), `asked` (it waits
+for the account service) or `service_unreachable` (the service did not answer for it).
+`turned_away` is the code's whole history, oldest first: every device of it that went without
+becoming a member, numbered from 1, with `why` (`account_mismatch` with the `account` its link
+named, `unverified`, `link_timeout`, `link_refused` after five links, `code_ended`, `removed`) and
+the `link` it had last. `service_retry_ms` says how long until this PC may ask the account service
+again, 0 when it may now. `ended.why` is one of:
+
+| `why` | when |
+|---|---|
+| `joined` | the PC joined an account; `joined` names the device when it was one of this code's |
+| `overused` | its five pairings are spent and no device waits under it |
+| `expired` | its ten minutes are over, and no device that paired with it in time waits to link |
+| `replaced` | another code was made |
+| `cancelled` | it was taken back (`POST /api/devices/pair/cancel`), or ended otherwise |
+| `revoked` | a device that held it was revoked, or every device was (**Revoke all**) |
+| `guessed` | five wrong codes |
+
+A `label` is the device's own word, and no proof of whose device it is.
+
+### The account's word
+
+While a code made to put this PC in an account lives (the relay tab's QR code, or a code made for
+an account), a link into an account passes only when that account vouched for the device: the
+account service holds an admission at most 10 minutes old, by its own clock, for the link's `key`
+at this PC, posted by a sign-in of the account the code is for (`POST /v1/admissions`). It is asked
+about the key the device holds once linked, not the one it paired with. This holds for every link
+made while such a code lives (past its ten minutes too, while a device that paired with it in time
+still waits to link), from a device that already drove this PC too, and such a link is held
+to that code's account as well (409 `account_mismatch` otherwise). A device that paired with such a code is held to
+it until it links or goes, also once the code's ten minutes are over: its link is judged against the
+account service and held to the account the code was made for.
+
+- **The mark.** The offer of such a code carries `"admission": 1`, in the QR link and in the offer
+  a typed code delivers; no other offer does. An app that knows it posts the device's admission
+  first and pairs only once the post was answered. An app from before posts nothing: its link is
+  refused as below, and it joins after it loads the app again and scans once more.
+- **How the PC asks.** With its relay key, as for its mailbox: `POST /v1/pc/challenge`, then
+  `POST /v1/pc/mailbox` naming that account with `ack: null`. It needs no member for it, and it
+  reads, applies and acknowledges no record. Both calls have 5 seconds together. One read at a time,
+  at least 10 seconds apart, and a link is judged by a read that started after it arrived. So a
+  link waits 15 seconds at most, and a flood of links does not make the PC call the service more.
+- **Which admissions count.** The ordinary ones (`admissions`) count for every such link. The
+  quiet ones (`quiet_admissions`, which only an app's own sign-in can post) count only for the PC's first member, linked by a
+  device that paired with that code. A device that already drove the PC, and a device that joins
+  by comparing digits ([Joining through the account](#who-may-admit-a-device)), count the ordinary
+  ones only.
+- **Not vouched for:** 403 `unverified_device`. A device that waits to link goes at once, and its
+  pairing stays spent; a device that already drove the PC keeps what it had. The code is not
+  ended, so the account's own device still pairs with it.
+- **No answer, or 429:** 503 `account_unavailable` with `retry-after` in seconds: when this PC may
+  ask again. The device and the code stay, and the device sends the same link again after that
+  time. A 429 that names a wait holds every read back that long, a minute at most; a link that no
+  read can judge within its 15 seconds is answered at once, without a call. A 429 with no wait
+  counts as the usual 10 seconds.
+- **A code that ended or changed meanwhile:** a device that already drove the PC gets 409
+  `pairing_ended` when the code alive as its link arrived is not the one alive when it is
+  judged; nothing changes for it.
+- **No account service.** A PC whose account service is turned off (`OVIS_ACCOUNT_SERVICE_URL=off`)
+  makes no such code: the offer and the typed code with `x-ovis-expect-account`, and the relay
+  tab's offer, answer 409 `account_service_off` and start nothing.
+
+The row such a link writes is marked `service` ([How a device joined](#how-a-device-joined)).
+While the account service is away no device joins this way; `ovis add --approve` still adds one.
+
 ## Negotiation
 
 A client offers features in `HELLO`; a PC that supports them selects them in `WELCOME`, as with
@@ -240,15 +459,18 @@ only what the prompt says and which failure count a comparison spends.
 ## PC API
 
 All under `/api/account/`, JSON, `cache-control: no-store`. Every route needs drive access; through
-the relay too. Mutations need the app's mutation guard, like the other routes.
+the relay too. Mutations need the app's mutation guard, like the other routes. A device that waits
+to link ([Who may admit a device](#who-may-admit-a-device)) reaches its own status and its link,
+and nothing else.
 
 `GET /api/account/status`
 
 ```json
-{ "account": "acct_1" , "members": 3, "unlinked": ["6a1f0c9e2b7d4a10"], "removals": [<remove>, …], "adds": [<add>, …], "blocked": ["<key>", …], "enrolling": false, "mailbox": { "last_pull_at": "2026-11-05T01:02:03.000Z", "error": null } }
+{ "account": "acct_1" , "members": 3, "unlinked": ["6a1f0c9e2b7d4a10"], "own_word": ["0d4c1b7a9e2f3c58"], "removals": [<remove>, …], "adds": [<add>, …], "blocked": ["<key>", …], "enrolling": false, "mailbox": { "last_pull_at": "2026-11-05T01:02:03.000Z", "error": null } }
 ```
 
 `account` is `null` before the first member. `unlinked` lists relay rows that are not members.
+`own_word` lists the members that joined on their own word ([How a device joined](#how-a-device-joined)).
 `removals` lists the signed `remove`s behind this PC's tombstones for its account, as received (a
 Revoke on the PC has none). `adds` lists the signed `add`s behind its rows, as received: the one
 that made a row, or the approver's own for a row its remote approval made. `blocked` lists every key
@@ -262,6 +484,9 @@ With `?fresh=1` the PC first pulls its mailbox (a pull that starts after the req
 waiting there is counted, and adds `fresh`: true only when that pull read the whole mailbox
 without an error, for the PC's current account and relay identity. A PC whose account service is
 turned off (`off`) has no mailbox and answers `fresh: true`; one whose address is unusable does not.
+A device that waits to link reads one body, whatever the PC holds: `account` `null`, `members` 0,
+`unlinked` its own id alone, every other list empty, `enrolling` and `blocked_all` false. No
+mailbox is read for it, and `fresh` is ignored.
 
 `POST /api/account/relay-account` `{ "account" }`: the account this PC asks its relay pass under while it
 has no members ([relay.md](relay.md#relay-pass)): over a direct connection with drive access (the PC's own
@@ -269,13 +494,34 @@ screen, after it listed the PC), or through the relay only from a drive account 
 account (`account_required` otherwise). Kept in `relay/account.json`; a
 name that is not an account id answers 400 `invalid_account`. Answers 204. Naming an account grants
 nothing: the service gives a pass only when that account lists the PC.
+While the PC has no member, it is also the account its first member comes from: a `link` that
+names another account is refused 409 `account_mismatch`, whichever code its device paired with,
+and the answer says to run `ovis add` on the PC again, which names the account its owner is
+signed in to now. A device that waited to link goes with that refusal; a device that was paired
+keeps what it had; the code is not ended, so the device of the named account still pairs with it.
+Naming another account in place of the one named ends the relay tab's code and every device that
+waits under it, so a waiting device scans the code shown after it. That code is also held to the
+account named when it was made: a device that waits under it is taken into that account only, and
+only while that account is the one named (a name that cannot be read is none).
+A device that waits to link is taken into no other account, so with none named it is refused the
+same way, and the relay tab's QR code is made only once one is named
+([Who may admit a device](#who-may-admit-a-device)).
+No answer through the relay names that account. Once a PC has a member, its members' account
+decides, whatever was named.
 
 `POST /api/account/link` `{ "record": <link> }`: the request's own device must be the record's
 `device_id`, with `old_key` its current key, `server_id` this PC's. The row's key becomes `key` and it
 becomes a member, in one write. `old_key` equal to `key` makes a row whose key already is the account
 key a member. Answers `{ "device": <paired device> }`. The row's other sessions end (`auth_changed`):
 they signed in with a key it no longer has. The linking session goes on, with no member's rights,
-until it signs in again with the new key.
+until it signs in again with the new key. A device that waits to link becomes a device by its
+link: its row is written then, as a drive member. A key this PC removed itself (**Revoke**,
+**Revoke all**) before the device paired comes back with it when it is the key the device paired
+with. A key an account removed stays out: that link is refused `tombstoned`, as is a link that
+would move the device to a removed key, nothing is written and the removal stands. A key removed
+while the device waits takes the device with it. Such a device sends five links; the next is
+answered `403 link_required`, and it is gone. A link it sent while it waited that is judged after
+another of its links made it a member is answered `403 link_required` and changes nothing.
 
 `POST /api/account/records` `{ "records": [<record>, …] }`: at most 32. Applies each in order and
 answers every outcome, never failing the whole batch for one record:
@@ -316,6 +562,11 @@ refused link leaves the barrier (with no account here no add applies anyway); th
 takes it over. The first link that succeeds keeps it, unless the PC has no account again (its
 first member was revoked before enrolling it): then the next first link takes it over. There is no timeout: a client that never enrolls leaves the account's adds waiting,
 and its devices join this PC by comparing digits instead.
+
+The link of a device that waits to link ([Who may admit a device](#who-may-admit-a-device)) writes
+its barrier later: once the link has passed every check, in the step that writes the row which
+makes it a device, and before that row. A link of such a device that is refused, or that outlives
+the device's 30 seconds, writes none.
 
 An enrollment applies, whatever the order sent:
 
@@ -379,10 +630,11 @@ Tailnet Lock follow the same idea: an existing device approves once, and the ser
 messages):
 
 **By QR code.** On the new PC, Settings → Devices and PCs → Add a connection → Ovis relay →
-**Show the QR code**, with the relay on. A device that is signed in to the account scans it: it is
-paired with its account key, links itself as the PC's first member, lists the PC in the account's
-directory and enrolls it ([Enrolling a PC](#enrolling-a-pc)). Nothing is typed and nothing is
-approved on the PC, and the PC itself needs no sign-in. Because the code admits whoever holds it
+**Show the QR code**, with the relay on and an account named for the PC: signing in on the PC's
+own page and adding it there names one, and so does `ovis add`. A device that is signed in to that
+account scans it: it is paired with its account key, links itself as the PC's first member, lists
+the PC in the account's directory and enrolls it ([Enrolling a PC](#enrolling-a-pc)). Nothing is
+typed and nothing is approved on the PC. Because the code admits whoever holds it
 ([Who may admit a device](#who-may-admit-a-device)), the page guards it:
 
 - The QR code is for a PC in no account. On a PC that is in one the tab has no button and no QR
@@ -394,6 +646,15 @@ approved on the PC, and the PC itself needs no sign-in. Because the code admits 
   the PC itself refuses the code (`409 in_account`), so a page that read it a moment too early
   shows no QR code either: the refusal makes it look at the PC at once, and the notice below
   takes the QR code's place.
+- It is for a PC that an account was named for. On a PC with none named the tab has no button and
+  no QR code either, and asks the PC for no code: where the button would be it says **Sign in
+  above first; then this PC can show its QR code.** to a browser that is signed out, and **Add
+  this PC to your account first; then it can show its QR code.** to one that is signed in. The PC
+  says whether an account is named in its relay state (`account_named` of `GET /api/relay`, which
+  the page reads again every 15 seconds while the relay is online), and it refuses the code
+  itself (`409 no_account_named`). A press made on a relay state that said one was named when
+  none is meets that refusal: the QR code comes down with no failure to read, and the page reads the relay
+  state again at once, which brings the sentence.
 - Nothing is asked of the PC before the press. The QR code comes down, and its six-digit code is
   ended on the PC (`POST /api/devices/pair/cancel` with that code), when the dialog closes or
   another tab opens, when the page goes (a reload, a closed tab or window: the request is sent to
@@ -643,7 +904,9 @@ is what authenticates the PC.
   key's tombstone, after its row is written. A code started through the relay, or a comparison an
   account member approves remotely, is refused for a tombstoned key, except on a PC in no account:
   there a code started through the relay may let back a key the PC revoked itself (not one the
-  account removed), and clears its tombstone.
+  account removed), and clears its tombstone. Through the relay tab's QR code, the link of the
+  device that paired with it brings back a key the PC revoked itself, and not one the account
+  removed.
 - A stop between two such writes leaves a row and a tombstone for one key. On start the PC tells them
   apart by time: a row made before the key's removal is revoked, one made after it keeps its device
   and the tombstone goes. A row that is no pairing of its key here (an `add`, a remote approval, a
@@ -957,12 +1220,13 @@ with "continue only if you started this on your own PC".
 | code | status | meaning |
 |---|---|---|
 | `account_required` | 403 | this needs a drive account member |
-| `account_mismatch` | 409 | the record is for another account than this PC's |
+| `account_mismatch` | 409 | the record is for another account than this PC's; or, on a PC in no account, a first link names another account than the one its owner set it up for (`relay-account`), or comes from a device that waits to link while no account is named |
 | `record_invalid` | 400 | a record that does not parse, or a field out of range |
 | `signature_invalid` | 400 | the signature does not hold over the signing bytes |
 | `signer_not_member` | — | the signer is not a drive account member on this PC (a record outcome) |
 | `tombstoned` | — | the key was removed through the account; only this PC can let it back in (a record outcome) |
 | `link_not_owner` | 403 | a link for another device, another PC, or a key that is not the row's |
+| `link_required` | 403 | the device paired with a code made for a PC in no account and has not linked itself into an account: it reads its own account status and sends its link, and gets nothing else |
 | `key_in_use` | 409 | a link to a key another row already has |
 | `introduction_unknown_key` | 404 | an introduction for a key no account member added on this PC |
 | `introduction_invalid` | 400 | an introduction's PC list does not parse, or a `server_id` does not derive from its key |
@@ -971,6 +1235,7 @@ with "continue only if you started this on your own PC".
 | `enrolling` | — | the PC waits for its first member's enrollment; an add waits too (a record outcome) |
 | `removal_pending` | — | the key is held: a waiting remove or an enrollment named it, or the waiting queue cannot be trusted (a record outcome) |
 | `in_account` | 409 | `POST /api/relay/offer` with `x-ovis-no-account-only`: this PC is in an account, so it makes no QR code that would put it in one |
+| `no_account_named` | 409 | `POST /api/relay/offer` with `x-ovis-no-account-only`: no account was named for this PC (`relay-account`), so it makes no QR code yet |
 
 ## What this does not protect against
 
@@ -991,14 +1256,11 @@ with "continue only if you started this on your own PC".
   compromised PC can use the sign-in kept there. Its account key is linked to no PC (a browser
   paired with a code holds a cookie), so its signatures admit nobody.
 - **A device that names an account it does not hold.** An account's first member on a PC links
-  itself: its `link` is signed by the device's own key and names the account (rule 4), and the
-  account service holds no device keys to check that against (rule 7). So `ovis add`, which takes
-  a device whose row names the signed-in account as that account's, cannot tell the owner's phone
-  from a changed client that pairs with the code and names that account's id. The id is no
-  secret on the PC: a device with drive access can read it there. Such a device is not asked
-  about, and the command ends well, naming it as the device that added the PC. What still shows
-  it: every admission is announced on every device connected to the PC, and the command prints
-  the device's name.
+  itself: its `link` is signed by the device's own key and names the account (rule 4). While a
+  code made to put the PC in an account lives, the account must vouch for that key
+  ([The account's word](#the-accounts-word)). `ovis status` lists the members that joined on their
+  own word ([How a device joined](#how-a-device-joined)): review them there, and revoke any device
+  you don't recognize.
 - **A PC the directory names under a familiar name.** Whoever holds a sign-in to the account can
   list a PC of their own in the directory (device-code phishing, [Who is asking](#who-is-asking)). **Add** on
   its row in the relay tab pairs A with that PC, whose owner approves it there: A's machine list then

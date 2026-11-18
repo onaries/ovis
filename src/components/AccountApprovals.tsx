@@ -1,8 +1,7 @@
 /**
- * Devices asking to join the account through the PC this window is in (`remote-pairings`): the
- * first waits in AccountApprovalPrompt. An approval tells this PC first, which lets the device in
- * here; then this device signs the `add` for the account's other PCs and leaves the PCs it checked
- * itself with this PC as the new device's introduction (lib/account/join.ts).
+ * An approval tells this PC first, which lets the device in here; then this device signs the `add`
+ * for the account's other PCs and leaves the PCs it checked itself with this PC as the new device's
+ * introduction (lib/account/join.ts).
  */
 import { useEffect, useState } from "react";
 

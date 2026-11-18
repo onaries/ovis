@@ -7,7 +7,6 @@ import { HerdrError } from "../herdr/client.ts";
 import { grokEcho, grokQueue, sendGrokQueuedNow, showsMessage } from "./grok-queue.ts";
 import { grokScreen, type GrokScreenState } from "./grok-screen.fake.ts";
 
-// Grok 1.0.77's screens as herdr's detection read gave them (src/lib/fixtures-input-rows/README.md)
 const recorded = (name: string): string => readFileSync(join(import.meta.dir, "../../src/lib/fixtures-input-rows/grok-1.0.77", `${name}-119.txt`), "utf8");
 const promptState = (screen: string) => inputRowState("grok", screenFromAnsi(screen));
 
@@ -21,10 +20,8 @@ describe("Grok's queue and prompt on recorded screens", () => {
     ["after-send-now", { mode: "fullscreen", rows: ["second follow-up please", "third follow-up please"], enterSendsNow: true }, "ready"],
     ["queued-multiline", { mode: "fullscreen", rows: [
       "a long queued follow-up part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 par…", "multi line A (+1 line)"], enterSendsNow: true }, "ready"],
-    // the focus off the prompt: its placeholder reads as a draft, and the framed queue pane as no queue to read
     ["queue-pane-focused", null, "draft"],
     ["scrollback-focused", { mode: "fullscreen", rows: [], enterSendsNow: false }, "draft"],
-    // the approval card replaces the input box
     ["permission", null, "gone"],
     ["draft-lines", { mode: "fullscreen", rows: [], enterSendsNow: false }, "draft"],
     ["draft-second-line", { mode: "fullscreen", rows: [], enterSendsNow: false }, "draft"],
@@ -49,17 +46,12 @@ describe("Grok's queue and prompt on recorded screens", () => {
   });
 });
 
-/** a recorded screen with its one queued row (`    #1 fourth follow-up please`) drawn as `row` */
 const withTopRow = (name: string, row: string): string => recorded(name).replace(/^ {4}#1 .*$/m, `    #1 ${row}`);
-/** `queued-1` with its queued row drawn as `rows`, numbered from #1 */
 const withRows = (...rows: string[]): string => recorded("queued-1").replace(/^ {4}#1 .*$/m, rows.map((row, index) => `    #${index + 1} ${row}`).join("\n"));
-/** `working` with its newest prompt echo (`     ❯ Tell me a long story about lighthouses.`, then its time) drawn as `lines` */
 const withEcho = (...lines: string[]): string => recorded("working").replace(/^ {5}❯ .*$/m, [`     ❯ ${lines[0]!.padEnd(98)}7:22 PM`, ...lines.slice(1).map((line) => `       ${line}`)].join("\n"));
 const parts = Array.from({ length: 13 }, (_, index) => `part${index + 1}`).join(" ");
 
 describe("Send now's one more Enter, decided on recorded screens", () => {
-  // `before`: the screen read before the queueing Enter; `after`: the read after it, where the message's own row may not
-  // be drawn yet, so an older row drawn the same way is on top
   it.each([
     ["the message alone on top of a queue empty before it", "working", "queued-1", "fourth follow-up please", null],
     ["an older row cut to the same drawn prefix", "queued-long", "queued-long", `a long queued follow-up ${parts} partial rewrite of the rest`, GROK_QUEUED_MESSAGE],
@@ -78,10 +70,6 @@ describe("Send now's one more Enter, decided on recorded screens", () => {
     expect(failed === null ? null : [failed.code, failed.message]).toEqual(outcome === null ? null : ["submit_changed", outcome]);
   });
 
-  // another client queued a row drawn the same way as the message between the read before the send and its Enter: the
-  // read after it shows that row alone, and the read SUBMIT_DELAY_MS later the message's own row under it. A second row
-  // under the same first one can as well be another client's queued after the message: queued, whose first the screen
-  // does not tell
   it.each([
     ["the same one row on both reads", [withRows("fix config (+1 line)"), withRows("fix config (+1 line)")], "fix config\nuse dev", null],
     ["another client's row of the same first line and line count, then the message's", [withRows("fix config (+1 line)"), withRows("fix config (+1 line)", "fix config (+1 line)")], "fix config\nuse dev", GROK_QUEUED_MESSAGE],
@@ -99,9 +87,6 @@ describe("Send now's one more Enter, decided on recorded screens", () => {
     expect(failed === null ? null : [failed.code, failed.message]).toEqual(outcome === null ? null : ["submit_changed", outcome]);
   });
 
-  // read at rest before the send, working with no queued row after it: the message started that turn only when Grok
-  // echoes it as its newest prompt, drawn since the read before; another client's turn shows that client's prompt, or
-  // nothing new yet, the message's row not drawn yet
   it.each([
     ["the message echoed as the newest prompt", "idle", withEcho("fourth follow-up please"), "fourth follow-up please", null],
     ["the message's lines echoed one per row", "idle", withEcho("fix config", "use dev"), "fix config\nuse dev", null],

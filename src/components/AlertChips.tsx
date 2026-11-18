@@ -5,12 +5,6 @@ import type { Settings } from "../lib/settings.ts";
 
 export interface AlertChip { label: string; title: string; icon: LucideIcon; on: boolean; onChange: (on: boolean) => void }
 
-/**
- * Alert me when's chips, one list for Settings → Alerts and the setup guide's alerts (and its Done, which names
- * the ones on). The two Finished chips are the one setting's two levels, and every turn takes in the long ones:
- * Any on lights Long too, Any off keeps Long, Long off turns both off. The minute and the inclusion are on the
- * chips' tooltips and the row's line (G-096). `withError`: Stopped on an error, which only Settings offers.
- */
 export function alertMeWhenChips(t: Translate, settings: Settings, filters: AlertFilters, update: (patch: Partial<Settings>) => void, withError: boolean): AlertChip[] {
   const chips: AlertChip[] = [
     { label: t("Needs input"), title: t("An agent asks you something"), icon: MessageCircleQuestionMark, on: settings.alertInput, onChange: (alertInput) => update({ alertInput }) },

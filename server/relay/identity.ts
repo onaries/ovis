@@ -49,7 +49,7 @@ export function savedServerId(stateDir: string): string | undefined {
   try { return parseIdentity(readFileSync(relayIdentityPath(stateDir), "utf8")).server_id; } catch { return undefined; }
 }
 
-/** Makes a saved identity private again before parsing it, even if its content is corrupt. */
+/** Off Windows, makes a saved identity private again before parsing it, even if its content is corrupt. */
 function loadExisting(path: string, text: string): RelayIdentity {
   if (process.platform !== "win32") {
     try {

@@ -28,9 +28,9 @@ import { chromePath } from "./chrome-path.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
 import { openMoreGroup } from "./header-more.ts";
 import { sheetRisen } from "./settings-page.ts";
+import { serveDemo } from "./demo-server.ts";
 
 const TARGET = 44;
-/** --pointer-target: the smallest hit area a mouse gets */
 const POINTER = 24;
 /** the walk's step (measure): Chromium hit-tests on device pixels (3x here), so an edge reads up to a step either way */
 const RESOLUTION = 0.25;
@@ -39,13 +39,10 @@ const app = mkdtempSync(join(tmpdir(), "ovis-tap-targets-demo-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 if (evidence) mkdirSync(evidence, { recursive: true });
 
-/** A control under test: its selector, its name in the failure message, and whether it is only a neighbour
- *  (its own size is not this test's: nothing else may take a point of its drawn box) */
 interface Target { name: string; selector: string; neighbour?: boolean }
 interface Box { left: number; top: number; right: number; bottom: number }
 interface Area { name: string; neighbour: boolean; taps: Box | null; drawn: { x: number; y: number; width: number; height: number }; hit: { width: number; height: number }; stolen: string[] }
 
-/** Each control's hit area as the page answers taps, measured from its drawn centre (see the header). */
 const measure = (page: Page, targets: Target[], finger: boolean): Promise<Area[]> => page.evaluate(([targets, finger]) => {
   const LIMIT = 120, STEP = 0.25;
   return targets.map(({ name, selector, neighbour = false }) => {
@@ -61,7 +58,6 @@ const measure = (page: Page, targets: Target[], finger: boolean): Promise<Area[]
     while (top - STEP >= 0 && cy - top < LIMIT && lands(cx, top - STEP)) top -= STEP;
     while (bottom + STEP < innerHeight && bottom - cy < LIMIT && lands(cx, bottom + STEP)) bottom += STEP;
     const CONTROL = "button, a[href], input, select, textarea, summary, [role=button], [role=tab], [role=menuitem], [role=switch], [role=option], [role=checkbox]";
-    // another control under the point: a neighbour (or its expander) that takes this tap
     const thief = (x: number, y: number): Element | null => {
       const control = document.elementFromPoint(x, y)?.closest(CONTROL) ?? null;
       return control && control !== element && !element.contains(control) && !control.contains(element) ? control : null;
@@ -75,7 +71,6 @@ const measure = (page: Page, targets: Target[], finger: boolean): Promise<Area[]
       const dx = Math.max(x0 + r - x, 0, x - (x1 - r)), dy = Math.max(y0 + r - y, 0, y - (y1 - r));
       return dx * dx + dy * dy > r * r;
     };
-    // each edge is midway between the walk's last landing point and its first miss; the screen's edge counts as reached
     const edge = (at: number, step: number, limit: number) => (at + step < 0 || at + step > limit ? Math.min(Math.max(at + step, 0), limit) : at + step / 2);
     const extent = { left: edge(left, -STEP, innerWidth), right: edge(right, STEP, innerWidth), top: edge(top, -STEP, innerHeight), bottom: edge(bottom, STEP, innerHeight) };
     const stolen: string[] = [];
@@ -86,11 +81,8 @@ const measure = (page: Page, targets: Target[], finger: boolean): Promise<Area[]
         if (whole && !lands(x, y)) { stolen.push(`${where} (${Math.round(x)},${Math.round(y)}) lands on ${what(x, y)}`); return; }
       }
     };
-    // nothing else takes a point of the drawn box, and the measured rectangle is the control's to its rounded corners
     sweep(box.x, box.y, box.right, box.bottom, "its drawn box", false);
     sweep(left, top, right, bottom, "its hit rectangle", true);
-    // where the control and its invisible expander reach, from the CSS: the box and its ::before, which is
-    // positioned against the control's padding box
     const taps = { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
     const before = getComputedStyle(element, "::before");
     if (before.content !== "none" && before.position === "absolute") {
@@ -105,13 +97,10 @@ const measure = (page: Page, targets: Target[], finger: boolean): Promise<Area[]
   });
 }, [targets, finger] as const);
 
-/** Every running transition and the fonts settle, and a phone's emulated pointer leaves the page, before a measure or a capture. */
 async function settle(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity).map((animation) => animation.finished.catch(() => undefined))));
   await page.mouse.move(-50, -50);
-  // a growing field (the terminal line sizes itself to its text a frame or more after it is drawn) stops moving:
-  // five frames in a row with the same boxes, within two seconds
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
     const shape = () => [...document.querySelectorAll("textarea, .composer-surface, .terminal-input, .sidebar")].map((element) => { const box = element.getBoundingClientRect(); return `${box.x},${box.y},${box.width},${box.height}`; }).join("|");
     const deadline = performance.now() + 2000;
@@ -128,14 +117,11 @@ async function settle(page: Page): Promise<void> {
   }));
 }
 
-// what moves on its own (a working dot's pulse, the live voice level and its clock, a message's time of day) is held still or
-// not drawn, so two runs, and the same page before and after a change, capture the same pixels
 const STILL = ".voice-bars, .voice-meter, .voice-timer, .chat-time { visibility: hidden !important; }";
 async function capture(page: Page, width: string, state: string): Promise<void> {
   if (evidence) await page.screenshot({ path: join(evidence, `tap-targets-${width.replace(" ", "-")}-${state}.png`), animations: "disabled", style: STILL });
 }
 
-// a phone's one lens button (components/LensToggle.tsx); wider, the switch's two lenses
 const view = (phone: boolean): Target[] => phone ? [{ name: "the lens button", selector: ".app-header .lens-toggle" }] : [
   { name: "the Chat lens", selector: ".app-header .view-switch > button:first-child" },
   { name: "the Terminal lens", selector: ".app-header .view-switch > button:nth-child(2)" },
@@ -162,7 +148,6 @@ const LINE: Target[] = [
   { name: "Enter", selector: ".terminal-input .terminal-input-send", neighbour: true },
 ];
 
-/** No two controls' reach (box and expander, as the CSS lays them out) share a point, even where one lies under the other. */
 function apart(areas: Area[], where: string): string[] {
   const failures: string[] = [];
   for (const [index, one] of areas.entries()) for (const other of areas.slice(index + 1)) {
@@ -174,7 +159,6 @@ function apart(areas: Area[], where: string): string[] {
   return failures;
 }
 
-/** Phone: each control's hit area is a finger's both ways and wholly its own. */
 function assertFinger(areas: Area[], where: string): string[] {
   const failures: string[] = apart(areas, where);
   for (const area of areas) {
@@ -186,7 +170,6 @@ function assertFinger(areas: Area[], where: string): string[] {
   return failures;
 }
 
-/** Desktop: a mouse's hit area is the drawn box, within a pixel's rounding. */
 function assertMouse(areas: Area[], where: string): string[] {
   const failures: string[] = apart(areas, where);
   for (const area of areas) {
@@ -197,7 +180,6 @@ function assertMouse(areas: Area[], where: string): string[] {
   return failures;
 }
 
-/** A floor both ways (a finger's --touch-target, a mouse's --pointer-target), the hit area wholly the control's own. */
 function assertFloor(areas: Area[], where: string, floor: number): string[] {
   const failures: string[] = apart(areas, where);
   for (const area of areas) {
@@ -209,11 +191,6 @@ function assertFloor(areas: Area[], where: string, floor: number): string[] {
   return failures;
 }
 
-/**
- * The five controls of #3406, each at the floor of its pointer: on a short phone (360x780) Cancel under a
- * long sheet, the Rename pane field and Settings' search field take a finger's 44 px; with a mouse at 1280
- * a changed row's Restore defaults and a docked Markdown file's Preview and Source take 24 px.
- */
 async function floors(browser: Browser, server: { port: number }): Promise<string[]> {
   const failures: string[] = [];
   const base = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/`;
@@ -222,9 +199,7 @@ async function floors(browser: Browser, server: { port: number }): Promise<strin
     await context.addInitScript(([settings, panel]) => {
       if (localStorage.getItem("ovis:settings") !== null) return;
       localStorage.setItem("ovis:settings", settings);
-      // Files beside the pane is kept in a key of its own (lib/settings.ts)
       if (panel) localStorage.setItem("ovis:files-panel", "true");
-      // a phone's More carries the pane's actions (Rename pane, below) where its tabs are in the header (Settings -> Tabs on a phone)
       localStorage.setItem("ovis:phone-tabs", JSON.stringify("header"));
     }, [JSON.stringify({ language: "en", theme: "dark", darkTheme: "codex", defaultView: "chat", alertsOn: false, ...settings }), filesPanel] as const);
     const page = await context.newPage();
@@ -265,7 +240,6 @@ async function floors(browser: Browser, server: { port: number }): Promise<strin
     } finally { await context.close(); }
   }
   for (const density of ["comfortable", "compact"] as const) {
-    // a row off its default (the compact density) draws Restore defaults beside its label
     const { context, page, errors } = await open(1280, 900, false, { density, fileOpen: "panel" }, true);
     const label = density === "compact" ? "1280 compact" : "1280";
     try {
@@ -297,13 +271,10 @@ async function scenario(browser: Browser, server: { port: number }, width: numbe
   const failures: string[] = [];
   try {
     await context.addInitScript((density) => {
-      // the first load's settings; the terminal step below changes them as Settings would
       if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "dark", darkTheme: "codex", defaultView: "chat", alertsOn: false, voiceInput: "on", showUsage: true, density }));
-      // the browser's own dictation, as a phone has it: it starts hearing at once and never hears a word
       class Recognition { onaudiostart: (() => void) | null = null; onend: (() => void) | null = null; start() { queueMicrotask(() => this.onaudiostart?.()); } stop() { this.onend?.(); } abort() { this.onend?.(); } }
       Object.defineProperty(window, "webkitSpeechRecognition", { value: Recognition, configurable: true });
       Object.defineProperty(window, "SpeechRecognition", { value: Recognition, configurable: true });
-      // the demo ends its working turn 4500 ms in (2400 ms after a send): held, so the plan chip stays at work
       const later = window.setTimeout.bind(window);
       const held: number[] = [];
       Object.defineProperty(window, "tapTargetsHeld", { value: held });
@@ -364,17 +335,7 @@ try {
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>${DEMO_FILE_PREVIEW_SCRIPT}<script type="module"`));
   const prefix = "/herdr-web-ui/demo/app/";
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith(prefix)) return new Response("not found", { status: 404 });
-    let file: string;
-    try { file = decodeURIComponent(path.slice(prefix.length)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return await body.exists() ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix });
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
     try {

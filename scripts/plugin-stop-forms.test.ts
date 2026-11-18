@@ -4,7 +4,7 @@ import { startedByThisPlugin } from "./plugin.ts";
 
 // After herdr plugin update moves a plugin from source to the compiled server (scripts/plugin-launch.ts), Stop runs as
 // the binary while the server running is Bun's server/managed.ts, and the other way round: each form must recognise
-// the other's server as this plugin's, and nothing else. ci.yml runs this file on Windows too.
+// the other's server as this plugin's, and nothing else.
 const checkout = join(import.meta.dir, "..", "plugin checkout");
 const env = { OVIS_PLUGIN_CHECKOUT: checkout };
 const bun = process.platform === "win32" ? "C:\\Users\\me\\.bun\\bin\\bun.exe" : "/home/me/.bun/bin/bun";

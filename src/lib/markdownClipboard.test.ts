@@ -3,9 +3,6 @@ import { renderedClipboardPayload, type ClipboardNode } from "./markdownClipboar
 
 const text = (value: string): ClipboardNode => ({ tag: "", text: value });
 const element = (tag: string, content: readonly ClipboardNode[], attrs?: Record<string, string>): ClipboardNode => ({ tag, children: content, attrs });
-// The plain text is the browser's own selection string, passed through untouched; only the rich
-// HTML is built from the nodes, so that is all these tests look at. The browser regression
-// (scripts/chat-selection-copy-regression.ts) holds the exact plain-text expectations.
 const html = (nodes: readonly ClipboardNode[]): string => renderedClipboardPayload(nodes, "").html;
 
 describe("renderedClipboardPayload", () => {

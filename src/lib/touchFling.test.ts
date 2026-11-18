@@ -7,7 +7,6 @@ import type { FrameClock } from "./touchWheelPacer.ts";
 
 const FRAME_MS = 1000 / 60;
 
-/** A frame clock and a time the test advances by hand: each `frame()` is one 60 Hz frame later. */
 function controlledFrames() {
   let callbacks = new Map<number, () => void>();
   let next = 1;
@@ -29,7 +28,6 @@ function controlledFrames() {
   };
 }
 
-/** A finger moving `speed` pixels per millisecond, sampled every frame for `ms`, from time 0. */
 function swipe(speed: number, ms: number) {
   const tracker = createVelocityTracker();
   let t = 0;
@@ -69,7 +67,6 @@ describe("the finger's speed at the lift", () => {
     const tracker = createVelocityTracker();
     tracker.add(0, 0);
     expect(tracker.release(0)).toBe(0);
-    // a move that shares the touch's timestamp still flings, at the cap
     tracker.add(0, 500);
     expect(tracker.release(0)).toBe(FLING_MAX_VELOCITY);
     tracker.reset();
@@ -84,7 +81,6 @@ describe("the finger's speed at the lift", () => {
       for (const [t, position] of moves) tracker.add(t!, position!);
       expect(tracker.release(moves.at(-1)![0]!)).toBe(0);
     }
-    // the same speed past the slop flings
     const tracker = createVelocityTracker();
     tracker.add(0, 0);
     tracker.add(24, FLING_SLOP_PX + 1);

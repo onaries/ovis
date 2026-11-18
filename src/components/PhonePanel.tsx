@@ -7,11 +7,6 @@ import { copyText } from "../lib/clipboard.ts";
 import { QrCode } from "./QrCode.tsx";
 import { useT } from "../lib/i18n.ts";
 
-/**
- * Add a connection → Phones and devices → Tailscale: the address a phone opens this PC at. On the phone itself there is
- * no camera to point at the screen it is shown on, so the address is copied or shared, and its QR code, for another
- * device's camera, waits behind Show QR code.
- */
 export function PhonePanel({ url, phone = false }: { url: string; phone?: boolean }) {
   const t = useT();
   return (
@@ -39,7 +34,6 @@ export function Address({ url, title }: { url: string; title?: string }) {
   );
 }
 
-/** Share (where the browser can) and Copy for a link; Copy says Copied for a moment once it worked. */
 export function ShareLink({ url, copyLabel, children }: { url: string; copyLabel: string; children?: ReactNode }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -68,7 +62,6 @@ export function ShareLink({ url, copyLabel, children }: { url: string; copyLabel
   );
 }
 
-/** A QR code drawn only once asked for: on a phone it is for another device's camera, not the reader's. */
 export function QrReveal({ value, label, hint }: { value: string; label: string; hint?: string }) {
   const t = useT();
   const [shown, setShown] = useState(false);

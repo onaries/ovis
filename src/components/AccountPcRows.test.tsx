@@ -18,9 +18,7 @@ const LAPTOP = "b".repeat(32);
 const pc = (server_id: string, name: string): MyPc => ({ server_id, name, state: "needs-approval", last_seen_at: null, added_at: null, listed: true, paired: false, linked: false });
 
 const NOW = Date.parse("2026-11-11T00:00:00Z");
-/** a PC the account last heard from ten days before `NOW` */
 const gone = (server_id: string, name: string): MyPc => ({ ...pc(server_id, name), state: "offline", last_seen_at: "2026-11-01T00:00:00Z", added_at: "2026-10-01T00:00:00Z" });
-/** a press of a row's button, inside the list's group */
 const click = (group: { focus: () => void } = { focus() {} }) => ({ currentTarget: { closest: () => group } });
 
 const textOf = (node: ReactTestInstance): string =>
@@ -110,22 +108,16 @@ describe("the account's PCs in a PC's own Settings", () => {
     const ago = (ms: number): string => new Date(NOW - ms).toISOString();
     const HOUR = 3_600_000;
     const root = await mount(createElement(AccountPcRows, { watching: false, now: NOW, remove: async () => {}, onRemoved: () => {}, pcs: [
-      // in use: a device of the account that opens it lists it again, so a removal would not last
       { ...pc(DESK, "Live"), last_seen_at: ago(60_000), added_at: ago(900 * HOUR) },
-      // off since last night: back tomorrow
       { ...pc("c".repeat(32), "Overnight"), state: "offline", last_seen_at: ago(20 * HOUR), added_at: ago(900 * HOUR) },
-      // just listed by its own Add this PC screen, which lists it again while it waits
       { ...pc("d".repeat(32), "Fresh"), last_seen_at: null, added_at: ago(HOUR) },
-      // nothing known of when: not offered
       { ...pc("e".repeat(32), "Unknown"), last_seen_at: null, added_at: null },
       { ...pc(LAPTOP, "Gone"), state: "offline", last_seen_at: ago(49 * HOUR), added_at: ago(900 * HOUR) },
-      // listed once and never enrolled
       { ...pc("f".repeat(32), "Abandoned"), last_seen_at: null, added_at: ago(49 * HOUR) },
     ] }));
     expect(root.findAll((node) => node.type === "button").map((button) => button.props["aria-label"])).toEqual(["Remove Gone from the list", "Remove Abandoned from the list"]);
     expect(unusedPc({ last_seen_at: ago(48 * HOUR - 1000), added_at: ago(900 * HOUR) }, NOW)).toBe(false);
     expect(unusedPc({ last_seen_at: ago(48 * HOUR + 1000), added_at: ago(900 * HOUR) }, NOW)).toBe(true);
-    // a clock behind the service's, or a date that does not parse: not offered
     expect(unusedPc({ last_seen_at: "soon", added_at: null }, NOW)).toBe(false);
   });
 
@@ -145,7 +137,6 @@ describe("the account's PCs in a PC's own Settings", () => {
     expect(words).toContain("Takes Laptop off your account's list of PCs on every device.");
     // it ends no access, now or later
     expect(words).toContain("It revokes nothing: devices paired with Laptop keep their access, and a device you later remove from your account is not removed from it.");
-    // and it is not for good on a PC that is used again
     expect(words).toContain("If Laptop is used again, it comes back on the list when a device of your account opens it.");
     expect(words).toContain("Until then it cannot use the Ovis relay where the relay needs an account.");
     expect(words).not.toContain("within two days");
@@ -166,7 +157,6 @@ describe("the account's PCs in a PC's own Settings", () => {
     const root = await mount(createElement(AccountPcRows, { pcs: [gone(LAPTOP, "Laptop")], watching: false, now: NOW, remove: async () => {}, onRemoved: () => {} }));
     await act(async () => { root.find((node) => node.type === "button" && node.props["aria-label"] === "Remove Laptop from the list").props.onClick(click(group)); });
     await act(async () => { dialogs(root)[0]!.find((node) => node.type === "button" && textOf(node) === "Cancel").props.onClick(); });
-    // a no gives the focus back to the button by itself (ConfirmDialog)
     expect(focused).toBe(0);
     await act(async () => { root.find((node) => node.type === "button" && node.props["aria-label"] === "Remove Laptop from the list").props.onClick(click(group)); });
     await act(async () => { await dialogs(root)[0]!.find((node) => node.type === "button" && textOf(node) === "Remove from list").props.onClick(); });
@@ -195,7 +185,6 @@ describe("the account's PCs in a PC's own Settings", () => {
     }));
     await act(async () => { root.find((node) => node.type === "button" && node.props["aria-label"] === "Remove Desk from the list").props.onClick(click()); });
     await act(async () => { await dialogs(root)[0]!.find((node) => node.type === "button" && textOf(node) === "Remove from list").props.onClick(); });
-    // no dialog left to retry in: the page reads the stored sign-in again and shows signed out, or the other account
     expect(dialogs(root)).toHaveLength(0);
     expect(textOf(root)).not.toContain("Try again");
     expect([attempts, rechecks]).toEqual([1, 1]);
@@ -244,7 +233,6 @@ describe("Settings → Devices and PCs", () => {
     expect(page.indexOf("<AccountSection ", account + 1)).toBe(-1);
     expect(account).toBeLessThan(page.indexOf('<SettingsGroup section="devices">'));
     expect(account).toBeLessThan(fold);
-    // and its link from Add a connection opens no fold to reach it
     expect(page.slice(page.indexOf("const openAccount"), page.indexOf("const accountService"))).not.toContain("details");
   });
 });

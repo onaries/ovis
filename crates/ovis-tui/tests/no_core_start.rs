@@ -1,8 +1,6 @@
 //! The program in a PTY with no core running and a fake `hc` on `PATH` that records any call: it
 //! starts no core (a core started from it would inherit its environment and hand it to every
-//! agent), says how to start one, and leaves. The program's own check ends the run before hc-tui
-//! starts, so a core that goes away after that check is covered by hc-tui's test of
-//! `Embed::no_core_start` (patch 0005), not here.
+//! agent), says how to start one, and leaves.
 #![cfg(unix)]
 
 #[path = "../upstream/crates/hc-tui/tests/common/pty.rs"]
@@ -34,7 +32,6 @@ struct Hosted(Pty);
 
 impl Drop for Hosted {
     fn drop(&mut self) {
-        // it may have exited already: then there is nothing to kill
         let _ = self.0.child.kill();
         let _ = self.0.child.wait();
     }

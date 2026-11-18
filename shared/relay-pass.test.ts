@@ -35,6 +35,7 @@ test("a v2 pass whose new-session field was edited does not hold, and only the e
   const pass = await signAdmitting(false);
   const [, body, sig] = pass.split(".") as [string, string, string];
   const payload = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+  // the signature covers the whole payload: neither flipping the field nor dropping it back to v1 holds
   expect(await checkRelayPass(`ovp1.${encode({ ...payload, new: 1 })}.${sig}`, keys, SID, NOW)).toEqual({ ok: false, reason: RELAY_PASS_INVALID });
   const { new: _new, ...v1 } = payload;
   expect(await checkRelayPass(`ovp1.${encode({ ...v1, v: 1 })}.${sig}`, keys, SID, NOW)).toEqual({ ok: false, reason: RELAY_PASS_INVALID });
@@ -76,6 +77,7 @@ test("a pass is refused for another PC, from the future, under an unknown key or
   expect(await checkRelayPass(await sign(), keys, "f".repeat(32), NOW)).toEqual(invalid);
   expect(await checkRelayPass(await sign(SID, NOW + RELAY_PASS_SKEW_S + 1), keys, SID, NOW)).toEqual(invalid);
   expect(await checkRelayPass(await stranger.sign(), keys, SID, NOW)).toEqual(invalid);
+  // same kid, another key: the signature is what fails
   expect(await checkRelayPass(await other.sign(), keys, SID, NOW)).toEqual(invalid);
 });
 

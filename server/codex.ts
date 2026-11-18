@@ -1,5 +1,4 @@
-/** Native Codex rollouts contain both display events and model context. Only
- * conversation records belong in chat; developer prompts and terminal chrome do not. */
+/** Native Codex rollouts contain both display events and model context. */
 import { constants as sqliteConstants, Database } from "bun:sqlite";
 import { closeSync, existsSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
@@ -41,7 +40,7 @@ function contextOnly(text: string): boolean {
 /**
  * An answer to Codex's queued questions (request_user_input_async) reaches the model as
  * a user message: a JSON list of {answer, question, questionItemId} inside
- * `<send_user_message_question_reply>`. The chat shows what was answered, not the envelope.
+ * `<send_user_message_question_reply>`.
  */
 function questionReply(text: string): string | null {
   const match = text.trim().match(/^<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>$/);
@@ -63,7 +62,6 @@ function questionTitles(args: RecordValue): string[] {
     : [];
 }
 
-/** A tool call's output as Codex recorded it, as text. */
 export function codexOutputText(value: unknown): string {
   return contentText(value);
 }
@@ -91,7 +89,6 @@ function entries(text: string): RecordValue[] {
   });
 }
 
-/** Memory blocks are metadata unless the answer quotes them in Markdown code. */
 function withoutMemoryCitations(text: string): string {
   const opening = "<oai-mem-citation>";
   const closing = "</oai-mem-citation>";
@@ -165,7 +162,6 @@ function withoutMemoryCitations(text: string): string {
           || (within > 0 && end.quoteDepth === token.line.quoteDepth && !end.blank && end.indent < within))) { i--; break; }
         if (end.kind === "fence" && end.line.quoteDepth === token.line.quoteDepth && end.marker[0] === token.marker[0]
           && end.marker.length >= token.marker.length && /^[ \t]*$/.test(end.info)) {
-          // Skip the closing line's raw backtick/citation tokens too.
           while (i + 1 < tokens.length && tokens[i + 1]!.kind !== "line") i++;
           break;
         }
@@ -178,7 +174,6 @@ function withoutMemoryCitations(text: string): string {
     parts.push(text.slice(kept, token.index));
     const close = text.indexOf(closing, token.index + opening.length);
     kept = close === -1 ? text.length : close + closing.length;
-    // Metadata contents cannot open code spans or fences in the surrounding answer.
     while (i + 1 < tokens.length && tokens[i + 1]!.index < kept) i++;
   }
   parts.push(text.slice(kept));
@@ -212,7 +207,6 @@ interface CodexParseState {
   activeCallId?: string;
 }
 
-/** Complete records are folded once; snapshots detach mutable tools from prior HTTP answers. */
 export function createCodexTranscriptParser(state: CodexParseState = { turns: [], tools: new Map(), messages: [] }): TranscriptParser {
   const { turns, tools, messages } = state;
   const assistant = (ts: string): ConversationTurn => {
@@ -348,8 +342,7 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         const name = string(payload.name) || "tool";
         const raw = payload.type === "function_call" ? payload.arguments : payload.input;
         let args = record(raw);
-        if (typeof raw === "string") { try { args = record(JSON.parse(raw)); } catch { /* Freeform tool input. */ } }
-        // a patch, bare or in an exec script, is summed up by the files it touches
+        if (typeof raw === "string") { try { args = record(JSON.parse(raw)); } catch {} }
         const patch = typeof raw === "string" ? patchText(raw) : null;
         const summary = patch !== null && patchFiles(patch).length > 0 ? patchFiles(patch).join(", ")
           : /^request_user_input/.test(name) && questionTitles(args).length > 0
@@ -399,8 +392,6 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         }
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;
-        // the pictures it returned (view_image, an image generation, a screenshot a command read), named by
-        // the call this output answers and fetched only when shown; the generation event's copy is not read
         const pictures = codexOutputPictures(payload.output).map(({ mediaType }, index) => ({ media_type: mediaType, ref: `codex-tool:${string(payload.call_id)}:${index}` }))
           .filter(({ ref }) => CODEX_TOOL_IMAGE_REF.test(ref));
         const subImages = state.callImages?.get(callId);
@@ -423,8 +414,6 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
   return {
     write,
     snapshot(tail = ""): ConversationTurn[] {
-      // A valid final line without a newline is visible now, but is not committed:
-      // the writer can still extend it before the next poll.
       if (tail.trim()) {
         const preview = createCodexTranscriptParser(structuredClone(state));
         preview.write(tail);
@@ -441,7 +430,6 @@ export function parseCodexTranscript(text: string, maxTurns = 100): Conversation
   return parser.snapshot().slice(-maxTurns);
 }
 
-/** Codex's store changed while it was read immutable (openCodexStore): what was read is not used. */
 export class CodexStoreChanged extends Error {}
 
 /**
@@ -488,7 +476,6 @@ export function openCodexStore(home: string): { db: Database; immutable: boolean
   };
 }
 
-/** Whether a store read that failed may be taken as failed, not torn: a Codex wrote no immutable read under it. */
 const storeUnchanged = (opened: ReturnType<typeof openCodexStore> | undefined): boolean => {
   if (opened?.immutable !== true) return true;
   try { opened.settled(); return true; } catch { return false; }
@@ -496,7 +483,6 @@ const storeUnchanged = (opened: ReturnType<typeof openCodexStore> | undefined): 
 
 export const defaultCodexHome = (): string => process.env["CODEX_HOME"] || join(homedir(), ".codex");
 
-/** The environment's CODEX_HOME, by pid and argv; descriptor-derived stores are never cached. */
 const processHomes = new Map<string, { home: string | null; at: number }>();
 /**
  * A visible chat reads its conversation up to every 2 s while the transcript changes, the
@@ -507,10 +493,6 @@ const processHomes = new Map<string, { home: string | null; at: number }>();
  */
 const PROCESS_HOME_TTL_MS = 30_000;
 
-/**
- * The environment's CODEX_HOME, or a uniquely open Linux store when a launcher selects a
- * project store without exporting CODEX_HOME. Only the environment result is cached.
- */
 export async function processCodexHome(pid: number, argv: readonly string[] = []): Promise<string | null> {
   const key = `${pid}\0${argv.join("\0")}`;
   const known = processHomes.get(key);
@@ -522,16 +504,13 @@ export async function processCodexHome(pid: number, argv: readonly string[] = []
   return home ?? openProcessCodexHome(pid);
 }
 
-/** Require an interactive rollout and either its store database or its held writer lock. */
 function openProcessCodexHome(pid: number): string | null {
   if (process.platform !== "linux") return null;
   try {
-    // An invalid explicit home keeps the existing fallback; it does not opt into discovery.
     const named = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11);
     if (named) return null;
     const directory = `/proc/${pid}/fd`;
     const descriptors = readdirSync(directory);
-    // A partial scan cannot establish that the store is unique.
     if (descriptors.length > 512) return null;
     const paths: string[] = [];
     const locks: { path: string; id: string }[] = [];
@@ -546,7 +525,6 @@ function openProcessCodexHome(pid: number): string | null {
       const lockId = nodePath.basename(nodePath.dirname(path)) === "thread-writer-locks"
         ? WRITER_LOCK.exec(nodePath.basename(path))?.[1] : undefined;
       if (!isAbsolute(path) || (nodePath.basename(path) !== "state_5.sqlite" && !path.endsWith(".jsonl") && !lockId)) continue;
-      // An uninspectable held candidate makes the scan incomplete: uniqueness is unknown.
       const current = statSync(path, { bigint: true });
       // A resumed Codex may close its database. Its matching exclusive writer lock
       // still proves ownership; merely having the lock file open does not.
@@ -656,7 +634,7 @@ export function codexHomeInPsLine(text: string): string | null {
 }
 
 /**
- * The store a pane's Codex writes to. A launcher can start Codex with its own CODEX_HOME (a
+ * A launcher can start Codex with its own CODEX_HOME (a
  * harness keeps one per profile), so a single store for the whole server misses those panes:
  * an explicit `configured` store wins, then the pane's Codex process's own, then the default.
  */
@@ -664,11 +642,6 @@ export async function paneCodexHome(paneId: string, configured?: string): Promis
   return (await paneCodexHomePlaced(paneId, configured)).home;
 }
 
-/**
- * paneCodexHome, and whether it was `placed`: configured, or told by a Codex process of the pane. One not
- * placed is the default store only because no Codex process was seen (a probe failed or raced): a reader
- * that finds a conversation there asks again, as a Codex proven since may keep its store elsewhere.
- */
 export async function paneCodexHomePlaced(paneId: string, configured?: string, known?: ProcessInfo | null): Promise<{ home: string; placed: boolean }> {
   if (configured) return { home: configured, placed: true };
   try {
@@ -676,15 +649,10 @@ export async function paneCodexHomePlaced(paneId: string, configured?: string, k
     // started with another CODEX_HOME writes to a store that is not this pane's conversation
     const [first] = (await codexProcessesOf(paneId, known)).list;
     if (first !== undefined) return { home: (await processCodexHome(first.pid, first.argv)) ?? defaultCodexHome(), placed: true };
-  } catch { /* herdr busy: the default store */ }
+  } catch {}
   return { home: defaultCodexHome(), placed: false };
 }
 
-/**
- * A rollout's first line, parsed, when it is a session_meta; null when the file is not a rollout.
- * Throws when that line is not JSON, or when it does not end within the read (no newline in a
- * full read): what it holds past the read cannot be checked, even when the part read parses.
- */
 function rolloutMetaLine(path: string): RecordValue | null {
   // refused where a read bound the path to another file (openBound)
   const fd = openBound(path);
@@ -698,7 +666,6 @@ function rolloutMetaLine(path: string): RecordValue | null {
   } finally { closeSync(fd); }
 }
 
-/** The session_meta payload on a rollout's first line, or null when the file is not a rollout. */
 function rolloutHeader(path: string): RecordValue | null {
   const header = rolloutMetaLine(path);
   return header === null ? null : record(header.payload);
@@ -771,7 +738,6 @@ export function directoryKey(cwd: string): string {
   return /^[a-z]:\\/.test(plain) ? plain[0]!.toUpperCase() + plain.slice(1) : plain;
 }
 
-/** Whether two cwds are one directory by `directoryKey`; POSIX ones only when they are equal. */
 export function sameDirectory(left: string, right: string): boolean {
   if (directoryKey(left) === directoryKey(right)) return true;
   if (process.platform !== "win32") return false;
@@ -783,9 +749,7 @@ export function sameDirectory(left: string, right: string): boolean {
   } catch { return false; }
 }
 
-/** The other Codex panes herdr shows in this pane's directory, in any spelling `sameDirectory` takes. */
 export function codexPeersIn(panes: readonly HerdrPane[], paneId: string, cwd: string): HerdrPane[] {
-  // the agent first: sameDirectory can ask the file system, and only Codex panes need it
   return panes.filter((pane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex"
     && pane.cwd != null && sameDirectory(pane.cwd, cwd));
 }
@@ -801,7 +765,7 @@ export function storedCwdCondition(cwd: string): { where: string; params: string
   // Keep both: the original is needed when Codex recorded it before a rename or via a link.
   let canonical = cwd;
   if (process.platform === "win32") {
-    try { canonical = realpathSync.native(cwd); } catch { /* A removed cwd still has its reported spelling. */ }
+    try { canonical = realpathSync.native(cwd); } catch {}
   }
   const params = [...new Set([cwd, canonical].flatMap((path) => storedCwds(path)).flatMap((spelling) => {
     const drive = /^((?:\\\\\?\\)?)([A-Za-z])(:\\.*)$/s.exec(spelling);
@@ -824,7 +788,6 @@ export function rolloutInsideStore(root: string, file: string, paths: PlatformPa
   return path.length > inside.length && path.startsWith(inside);
 }
 
-/** A rollout file of the store, as its canonical path, whatever conversation it is; null for anything else. */
 function storeRolloutPath(path: string, codexHome: string): string | null {
   try {
     const canonical = realpathSync(withoutVerbatimPrefix(path));
@@ -850,7 +813,6 @@ export function codexRolloutPath(path: string, codexHome: string): string | null
   }
 }
 
-/** Bytes [start, end) of a file as text; a cut first line is dropped. */
 export function readRange(path: string, start: number, end: number): string {
   // refused where a read bound the path to another file (openBound)
   const fd = openBound(path);
@@ -862,11 +824,9 @@ export function readRange(path: string, start: number, end: number): string {
   } finally { closeSync(fd); }
 }
 
-/** A question Codex queued with request_user_input_async; `options` is empty for a free-form one. */
 export interface QueuedQuestion { key: string; title: string; options: string[] }
 
 const QUESTION_SCAN_BYTES = 4 * 1024 * 1024;
-/** Per rollout: how far it was read, the questions asked and the ones answered since. */
 const questionScans = new Map<string, { ino: number; size: number; cut: boolean; asked: QueuedQuestion[]; answered: Set<string> }>();
 
 /**
@@ -877,7 +837,6 @@ const questionScans = new Map<string, { ino: number; size: number; cut: boolean;
  * the tool parsed.
  */
 export function unansweredCodexQuestions(path: string): Promise<QueuedQuestion[]> {
-  // two viewers polling, or a poll overlapping an answer: one scan per file at a time
   const running = questionScansInFlight.get(path);
   if (running) return running;
   const scan = scanQuestions(path).finally(() => questionScansInFlight.delete(path));
@@ -890,13 +849,11 @@ const questionScansInFlight = new Map<string, Promise<QueuedQuestion[]>>();
 async function scanQuestions(path: string): Promise<QueuedQuestion[]> {
   const stat = statSync(path);
   const known = questionScans.get(path);
-  // the scan is built on a copy and kept only once complete
   const scan = known && known.ino === stat.ino && stat.size >= known.size
     ? { ...known, asked: [...known.asked], answered: new Set(known.answered) }
     : { ino: stat.ino, size: Math.max(0, stat.size - QUESTION_SCAN_BYTES), cut: stat.size > QUESTION_SCAN_BYTES, asked: [] as QueuedQuestion[], answered: new Set<string>() };
   if (stat.size > scan.size) {
     const bytes = Buffer.from(await Bun.file(path).slice(scan.size, stat.size).arrayBuffer());
-    // whole lines only: a line still being written is read again next time
     const end = bytes.lastIndexOf(0x0a) + 1;
     let text = bytes.subarray(0, end).toString("utf8");
     if (scan.cut && end > 0) { text = text.slice(text.indexOf("\n") + 1); scan.cut = false; }
@@ -939,37 +896,25 @@ async function scanQuestions(path: string): Promise<QueuedQuestion[]> {
 
 const readdir = (path: string): string[] => { try { return readdirSync(path); } catch { return []; } };
 
-/** A byte range of rollout history: the file's first `end` bytes; an earlier rollout's `identity` as its chain was resolved. */
 export interface HistorySegment { path: string; end: number; identity?: FileIdentity }
 
-/**
- * Chains per rollout, newest first, with the rollout they were resolved from (`live`). A header never
- * changes, so a complete chain is kept for as long as that file is the one its path names (another
- * rollout put at the path, continuing something else or nothing, resolves its own); one that stops at a
- * cut no file holds yet is kept a short while, so every append does not walk sessions/ again, and then
- * looked up afresh.
- */
 const historyChains = new Map<string, { chain: HistorySegment[]; complete: boolean; at: number; live: FileIdentity | undefined }>();
 const INCOMPLETE_CHAIN_MS = 30_000;
 
-/** Drops every remembered chain: the next read resolves each one again. */
 export function forgetHistoryChains(): void {
   historyChains.clear();
 }
 
-/** Drops one rollout's remembered chain: its next read resolves it again. */
 export function forgetHistoryChain(path: string): void {
   historyChains.delete(path);
 }
 
-/** Everything remembered about one rollout: its chain, its question scan and any scan in flight. */
 export function forgetCodexStateFor(path: string): void {
   historyChains.delete(path);
   questionScans.delete(path);
   questionScansInFlight.delete(path);
 }
 
-/** Every remembered chain and question scan: the next read resolves each one again. */
 export function forgetAllCodexState(): void {
   historyChains.clear();
   questionScans.clear();
@@ -977,7 +922,6 @@ export function forgetAllCodexState(): void {
   linesBeforeCut.clear();
 }
 
-/** Lines before a cut, per file identity and cut: the bytes before a cut never change. */
 const linesBeforeCut = new Map<string, number>();
 
 function countLines(path: string, end: number): number {
@@ -1009,7 +953,6 @@ function byteAt(path: string, offset: number): number | null {
   } finally { closeSync(fd); }
 }
 
-/** A rollout's first ordinal: where the history it continues ends, 0 for a whole history. */
 function firstOrdinal(header: RecordValue): number {
   const ordinal = record(header.history_base).end_ordinal_exclusive;
   return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : 0;
@@ -1093,14 +1036,8 @@ function historyChain(path: string, home: string): HistorySegment[] {
   return remember(chain, false);
 }
 
-/**
- * historyChain, for reading now: a remembered chain can outlive its files (a parent
- * archived since, moved out of sessions/). Then it is looked up again and comes back
- * shorter, so the stream's id changes and a cursor into the old chain answers 409 once.
- */
 function liveChain(path: string, home: string): HistorySegment[] {
   const chain = historyChain(path, home);
-  // a rollout replaced since it was weighed (another file at its path) is weighed again, as one gone is
   if (chain.every((segment) => {
     const now = statSync(segment.path, { throwIfNoEntry: false });
     return now !== undefined && now.dev === segment.identity?.dev && now.ino === segment.identity.ino;
@@ -1109,20 +1046,17 @@ function liveChain(path: string, home: string): HistorySegment[] {
   return historyChain(path, home);
 }
 
-/** Whether every earlier rollout a conversation continues was found (historyChain), as of now. */
 function chainComplete(path: string, home: string): boolean {
   liveChain(path, home);
   return historyChains.get(path)?.complete === true;
 }
 
-/** A Codex conversation's files oldest first, each with how many of its bytes belong to it. */
 export function codexHistorySegments(path: string, home = defaultCodexHome()): HistorySegment[] {
   return [...liveChain(path, home)].reverse().concat({ path, end: statSync(path).size });
 }
 
 /**
- * The last `budget` bytes of a Codex conversation, across the earlier rollouts a
- * paginated one continues. A rollout can reach hundreds of MB while the chat
+ * A rollout can reach hundreds of MB while the chat
  * shows only its latest turns, so nothing before the budget is read.
  */
 export function codexHistoryTail(path: string, budget: number, home = defaultCodexHome()): string {
@@ -1140,17 +1074,11 @@ export function codexHistoryTail(path: string, budget: number, home = defaultCod
 const normalizeDisplay = (text: string): string => text.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "");
 const anchorLength = (letters: string): number => Buffer.byteLength(letters, "utf8");
 
-/**
- * A prompt as compared with the one an answer answered: without Codex's "›" marker and the spaces
- * and line breaks the screen wraps it at, punctuation kept (`a < b` and `a > b` are other prompts).
- */
 const promptKey = (text: string): string => text.normalize("NFKC").replace(/^\s*\u203a/, "").replace(/\s+/g, "");
 
 /**
- * A text exactly as written, but for the spaces and line breaks a screen wraps it at: an answer counts
- * on screen only shown character for character, so `base + 1` is not `base - 1`. One whose markdown
- * Codex renders its own way (code, emphasis, links) is not found that way, and the terminal stands in
- * rather than a guess at how it rendered.
+ * One whose markdown Codex renders its own way (code, emphasis, links) is not found that way, and the
+ * terminal stands in rather than a guess at how it rendered.
  */
 const markedDisplay = (text: string): string => text.normalize("NFKC").replace(/\s+/g, "");
 
@@ -1230,13 +1158,10 @@ const FOOTER_CLOCK = "(?:(?:1[0-2]|[1-9]):[0-5]\\d [AP]M|(?:[01]\\d|2[0-3]):[0-5
  */
 const CODEX_TURN_FOOTER = new RegExp(`^[ \\t]*Worked for <?\\d+(?:ms|s|m|h)(?: \\d+(?:ms|s|m|h))*(?: \\u2022 (?:[A-Z][a-z]{2} \\d{1,2}(?:, \\d{4})? at )?${FOOTER_CLOCK})?[ \\t]*\\r?$`);
 
-/** Whether a text's last line is shaped like that footer: an answer may end in one of its own. */
 const endsInTurnFooter = (text: string): boolean => CODEX_TURN_FOOTER.test(text.trimEnd().split("\n").at(-1) ?? "");
 
-/** A text's letters and digits alone, as Unicode folds them: how the footer path tells which turns may be the one shown. */
 const alnum = (text: string): string => text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 
-/** A text with each run of whitespace one space, every other character as written (no Unicode folding): how the footer path compares. */
 const collapsed = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 /** A terminal soft wrap may split a word; spaces inside a rendered row still count. */
@@ -1270,7 +1195,6 @@ function codexShownText(nodes: InlineNode[]): string | null {
   return shownText(nodes.map(rendered), true);
 }
 
-/** Compare whole rendered paragraphs, tables and flat ordered lists, preserving punctuation and order. */
 function completedAnswerMatches(answer: string, screen: string): boolean {
   if (completedRowsMatch(answer, screen)) return true;
   const words: string[] = [];
@@ -1357,8 +1281,7 @@ function idleTurnFooter(lines: readonly string[]): number | null {
  * the assistant printed first has no bullet either). So every row it may end on is a reading of it (`prompts`,
  * shortest first), and a conversation asked any of them may be the one shown: read to its first blank row alone,
  * the conversation asked just that paragraph owned the turn of one asked all of it; read to the cell's end alone,
- * the one asked the prompt with those rows pasted under it did. Null when the screen shows no such turn, or none
- * with its prompt (shownAnswers), whose answers fall back as before.
+ * the one asked the prompt with those rows pasted under it did.
  */
 function footedAnswer(screen: string): { text: string; prompts: string[]; rows: string[] } | null {
   const lines = screen.split("\n").map((line) => line.replace(/\r$/, ""));
@@ -1392,7 +1315,6 @@ function withoutFences(text: string): string {
   return kept.join("\n");
 }
 
-/** The answer a rollout records its last finished turn ended on (task_complete): null when it ended on none, or no turn is read finished. */
 function lastFinishedAnswer(rollout: string): string | null {
   let last: string | null = null;
   for (const line of rollout.split("\n")) {
@@ -1400,12 +1322,11 @@ function lastFinishedAnswer(rollout: string): string | null {
     try {
       const payload = (JSON.parse(line) as { payload?: Record<string, unknown> }).payload ?? {};
       if (payload["type"] === "task_complete") last = typeof payload["last_agent_message"] === "string" ? payload["last_agent_message"] : null;
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return last;
 }
 
-/** How a rollout's last turn stands: ended in an error, ended otherwise, begun and not ended, or no turn read at all. */
 export type CodexTurnEnd = "failed" | "answered" | "running" | null;
 
 /**
@@ -1425,16 +1346,14 @@ export function codexTurnEnd(rollout: string): CodexTurnEnd {
       const turn = string(entry.payload?.["turn_id"]) || undefined;
       if (type === "task_started") { active = turn; end = "running"; continue; }
       if (type !== "task_complete" && type !== "turn_complete" && type !== "turn_aborted") continue;
-      // an end of a turn begun before the read: a sub-agent's names another root than its own
       const root = string(entry.payload?.["root_turn_id"]) || undefined;
       if (active !== undefined ? turn !== undefined && turn !== active : turn !== undefined && root !== undefined && turn !== root) continue;
       end = type === "task_complete" && string(record(entry.payload?.["error"]).message) !== "" ? "failed" : "answered";
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return end;
 }
 
-/** The end of a rollout file, where its last turn's end is: what codexTurnEnd reads. */
 export async function codexLastTurnEnd(path: string, tailBytes = 256 * 1024): Promise<CodexTurnEnd> {
   const handle = await open(path, "r");
   try {
@@ -1448,16 +1367,12 @@ export async function codexLastTurnEnd(path: string, tailBytes = 256 * 1024): Pr
   }
 }
 
-/** What a line of a rollout must hold to tell of a turn's start or end (turnUnderWay), looked for before it is parsed. */
 const TURN_RECORDS = ['"task_started"', '"turn_started"', '"task_complete"', '"turn_complete"', '"turn_aborted"', '"user_message"', '"agent_message"', '"item_completed"', '"assistant"'];
 
 /**
  * Whether a rollout's read ends inside a turn: one begun (task_started, or what an older Codex records of one: a
  * prompt, an answer) and not ended since (task_complete, turn_aborted). Its screen may show an answer the rollout
- * does not hold yet: Codex writes one only once it is complete (turnAfter). Null when the read records nothing of
- * a turn at all: read whole, that is a thread that was only started, which is not under way (a turn its screen
- * shows finished was recorded begun long before); cut, its turn may have begun before the read and written no
- * message since (underWay).
+ * does not hold yet: Codex writes one only once it is complete (turnAfter).
  */
 function turnUnderWay(rollout: string): boolean | null {
   let open: boolean | null = null;
@@ -1471,12 +1386,11 @@ function turnUnderWay(rollout: string): boolean | null {
       else if (entry.type === "event_msg" && (type === "task_started" || type === "turn_started" || type === "user_message" || type === "agent_message"
         || type === "item_completed" && (payload["item"] as { type?: unknown } | undefined)?.type === "UserMessage")
         || entry.type === "response_item" && type === "message" && payload["role"] === "assistant" && payload["channel"] !== "analysis") open = true;
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return open;
 }
 
-/** A text without its parenthesized stretches, nested ones too (four deep). */
 function withoutParens(text: string): string {
   let out = text;
   for (let pass = 0; pass < 4; pass++) {
@@ -1492,23 +1406,16 @@ function withoutParens(text: string): string {
  * stretch (a link's target, which Codex draws after its label, relative to the folder: "the runbook
  * (docs/runbook.md)" for `[the runbook](/repo/docs/runbook.md)`), a named entity, a task mark, a tag, every
  * digit (a list Codex numbers itself, a location it writes its own way) and the case of its letters. An autolink
- * (`<https://…>`, `<a@b.c>`) is no tag: Codex draws its address, so its letters stay. Only for what a conversation
- * may have said (saidAnywhere), where leaving more out only adds a doubt.
+ * (`<https://…>`, `<a@b.c>`) is no tag: Codex draws its address, so its letters stay.
  */
 const bareLetters = (text: string): string => withoutParens(text).replace(/&[A-Za-z][A-Za-z0-9]{1,31};|\[[ xX]\]|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>\n]{0,40})?\/?>/g, "")
   .normalize("NFKC").toLowerCase().replace(/[^\p{L}]/gu, "");
 
-/** A stretch of JSON text with its string escapes read: what a record that could not be parsed holds as written. */
 const unescaped = (json: string): string => json.replace(/\\(?:u([0-9a-fA-F]{4})|([\s\S]))/g, (_escape, hex: string | undefined, char: string) =>
   hex !== undefined ? String.fromCharCode(Number.parseInt(hex, 16)) : char === "n" ? "\n" : char === "t" ? "\t" : char === "r" || char === "b" || char === "f" ? " " : char);
 
-/**
- * Named entities a screen shows as a sign or a space, never as a letter or a digit (NFKC): no word is read through
- * one of them (saidAnywhere), where a run of three unknown ones could stand for any word of nine letters.
- */
 const SIGN_ENTITY = /&(?:amp|lt|gt|quot|apos|nbsp|ensp|emsp|thinsp|middot|bull|hellip|mdash|ndash|lsquo|rsquo|ldquo|rdquo|laquo|raquo|larr|rarr|uarr|darr|harr|times|divide|plusmn|deg|sect|para|copy|reg|cent|pound|euro|yen|shy|zwj|zwnj);/g;
 
-/** The forms a screen may show a recorded text in beside the text itself (lineForms'), where they differ from it. */
 function shownForms(text: string): string[] {
   const forms = [text];
   const add = (form: string) => { if (form !== text && !forms.includes(form)) forms.push(form); };
@@ -1519,22 +1426,12 @@ function shownForms(text: string): string[] {
 }
 
 /**
- * Whether what was read of a rollout holds `letters` (letters and digits) anywhere: in a message, a prompt, a tool's
- * call or its output. Each text is read as written, in the forms a screen shows it in (shownForms) and as an
- * answer's anchor is looked for (saidText, cut at link targets); and, against `bare` (bareLetters of the text
- * shown), without what Codex draws another way (withoutFences: a fence's language is not on screen; bareLetters),
- * so that an answer with a local link counts as said where the screen shows its target relative to the folder. Any
- * stretch of the text counts, not only all of it (holdsStretch). A line that is no record counts too, for all it
- * holds: the read began inside it (an answer or an output longer than the read), or it is being written.
- *
  * With `words` (the words the text shown ends on, their letters alone: Codex numbers a list itself), a record that
  * holds every one of them counts as well (mayShowWords, as loadedConversation weighs what another conversation may
  * show): Codex draws some answers so that no stretch of the screen is in their record, its words in another order
  * or said again (a table's rows as records, its cells wrapped side by side, a named entity as a letter).
  */
 function saidAnywhere(rollout: string, letters: string, bare: string, words: readonly string[] | null = null): boolean {
-  // each record's text as readSaid keeps one (its pieces between link targets, whole where it has a link, its named
-  // entities as ENTITY, but for those that are signs), and where each record ends in it
   let said = "";
   const ends: number[] = [];
   let stripped = "";
@@ -1568,13 +1465,8 @@ function holdsStretch(said: string, shown: string): boolean {
   return said.includes(shown.slice(-48));
 }
 
-/** What a conversation's turns tell of it, for a footed turn (footedTurnOwner): read from its parsed turns once per read. */
 interface Told { any: boolean; footerEnded: boolean; users: string[]; lastAnswer: string | undefined }
 
-/**
- * What the footer paths found in a rollout's read, kept while that read stands. A rollout only grows, so a read is
- * told by its length and its hash, and a lookup made every few seconds scans again only the reads that changed.
- */
 interface ReadFacts {
   turn?: { open: boolean | null };
   ended?: { answer: string | null };
@@ -1588,7 +1480,6 @@ interface ReadFacts {
 const readFacts = new Map<string, ReadFacts>();
 const readStamps = new WeakMap<object, { text: string; stamp: string }>();
 
-/** A read's stamp: its length and hash, taken once per candidate. */
 function stampOf(candidate: { path: string; text: string }): string {
   const known = readStamps.get(candidate);
   if (known !== undefined && known.text === candidate.text) return known.stamp;
@@ -1600,14 +1491,12 @@ function stampOf(candidate: { path: string; text: string }): string {
 function factsOf(candidate: { path: string; text: string }): ReadFacts {
   const stamp = stampOf(candidate);
   const facts = readFacts.get(stamp) ?? { said: new Map<string, boolean>() };
-  // the most recently used last, the oldest dropped
   readFacts.delete(stamp);
   readFacts.set(stamp, facts);
   if (readFacts.size > 128) readFacts.delete(readFacts.keys().next().value!);
   return facts;
 }
 
-/** What each scan of a candidate's read found (turnUnderWay, lastFinishedAnswer, lastFinishedTurn and so on), each found once per read. */
 type Candidate = { path: string; text: string };
 const turnOf = (candidate: Candidate): boolean | null => (factsOf(candidate).turn ??= { open: turnUnderWay(candidate.text) }).open;
 const endedOn = (candidate: Candidate): string | null => (factsOf(candidate).ended ??= { answer: lastFinishedAnswer(candidate.text) }).answer;
@@ -1630,11 +1519,6 @@ function toldOf(candidate: Candidate): Told {
   return facts.told;
 }
 
-/**
- * Whether a candidate may be showing an answer its read does not hold: a turn under way (turnUnderWay), or a read
- * that records nothing of a turn and is not known whole (`whole`): cut by its budget or continuing a rollout that
- * was not found, its turn may have begun before the read and written no message since.
- */
 const underWay = (candidate: Candidate, whole: (path: string) => boolean): boolean => turnOf(candidate) ?? !whole(candidate.path);
 
 function saidBy(candidate: Candidate, letters: string, bare: string, words: readonly string[] | null): boolean {
@@ -1649,22 +1533,16 @@ function saidBy(candidate: Candidate, letters: string, bare: string, words: read
   return known;
 }
 
-/**
- * saidAnywhere, for the record a read was cut inside (a lead): kept by the lead's length and hash and by what was
- * asked, apart from the reads' facts (readFacts), of which a lead has no other and would take the place of a read's.
- */
 const saidInLeads = new Map<string, boolean>();
 function saidInLead(lead: string, letters: string, bare: string, words: readonly string[] | null): boolean {
   const asked = `${lead.length}:${Bun.hash(lead)}\0${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
   const known = saidInLeads.get(asked) ?? saidAnywhere(lead, letters, bare, words);
-  // the most recently asked last, the oldest dropped
   saidInLeads.delete(asked);
   saidInLeads.set(asked, known);
   if (saidInLeads.size > 256) saidInLeads.delete(saidInLeads.keys().next().value!);
   return known;
 }
 
-/** Whether a recorded prompt is one of the readings of the prompt a screen shows (footedAnswer's `rows`), row for row. */
 const askedAsShown = (asked: string, rows: readonly string[]): boolean => rows.some((row, at) => row.trim() !== "" && completedRowsMatch(asked, rows.slice(0, at + 1).join("\n")));
 
 /**
@@ -1672,33 +1550,6 @@ const askedAsShown = (asked: string, rows: readonly string[]): boolean => rows.s
  * matchCodexTranscript cannot read it (#3262 case 1): an answer longer than the screen, whose start has scrolled
  * off, or one with a code block, whose fences Codex does not draw. A Codex TUI on the shared app-server daemon
  * holds no rollout open and herdr may report no thread for it, so only its screen binds it.
- *
- * The screen, from its last header on and without Codex's own hook and hint rows (footedView), must show the last
- * turn finished and the composer idle (idleTurnFooter). What counts is the one block that ends right above that
- * footer, since the footer before it: never a prompt, a queued message, a tool's call or its output
- * (codexScreenParts), which may quote any conversation. That block is compared with the answer as Codex draws it
- * (withoutFences), character for character but for the spaces and line breaks a screen wraps at (markedDisplay:
- * `a && b` is not `a || b`), in one of two ways:
- * - its start is on screen (a "•" row): from that row to the footer it is the whole answer, nothing more at
- *   either end;
- * - its start has scrolled off: it runs from the very top of a read that shows no header and no earlier footer,
- *   and all of it is the end of the answer.
- * Either way it holds at least 64 letters and digits, 12 distinct, as an anchor does (answerAnchor).
- *
- * Exactly one candidate may have finished its last turn on that answer, and it must be this folder's (`owners`:
- * never one herdr reported, a title named or the command line resumed, of another folder). Where the turn's
- * prompt is on screen above the answer, that candidate must also own the turn as footedTurnOwner tells: asked one
- * of the readings of that prompt, and no other candidate asked any of them (another conversation may have ended
- * on the text Codex drew for this pane's own answer, a link's target relative to the folder; its prompt was
- * another). And none of the candidates may be showing something else than its read holds: none that may be under
- * way, whose screen may show an answer it has not written yet (underWay, asked of every candidate before any
- * read is searched), and no other whose read holds the end of that text anywhere (saidAnywhere: a fork, two that
- * printed the same file, one that quoted it or whose tool printed it, the pane's own that recorded it with a
- * link; and, where the prompt is not on screen, one of whose records holds every word of that end, however Codex
- * drew it). None does while a candidate's answer ends in a footer-shaped line of its own. The caller offers this only
- * while every conversation the pane may be running is a candidate (lastTurnConversation). `leads`: what each read
- * that is not whole cut at its start, as reads of their own, asked for only once everything else leaves one
- * conversation.
  */
 export function footedTailTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, wholeRead: (path: string) => boolean = () => false,
   leads: () => { path: string; text: string }[] = () => []): string | null {
@@ -1712,7 +1563,6 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   const block = parts.at(-1);
   if (block === undefined || block.prompt || block.tool) return null;
   const rows = block.text.split("\n");
-  // the last row at the start of the screen's line begins what ends above the footer: an answer's "•"
   let start = rows.length - 1;
   while (start >= 0 && /^(?:\s|$)/.test(rows[start]!)) start--;
   const whole = start >= 0;
@@ -1723,12 +1573,9 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   if (letters.length < 64 || new Set(letters).size < 12) return null;
   if (candidates.some((candidate) => finishedOf(candidate).some(endsInTurnFooter))) return null;
   const fits = (answer: string) => { const recorded = markedDisplay(withoutFences(answer)); return whole ? recorded === shown : recorded.endsWith(shown); };
-  // every candidate that ended on it counts, this folder's or not: two of them leave the choice open, and one
-  // of another folder is never taken (it only keeps this folder's from winning by elimination)
   const found = candidates.filter((candidate) => { const answer = endedOn(candidate); return answer !== null && fits(answer); });
   const own = found[0];
   if (found.length !== 1 || own === undefined || !owners.has(own.path)) return null;
-  // the prompt of that turn, where the screen shows it: the answer's "•" row with a "›" row above it
   const footed = whole ? footedAnswer(lines.join("\n")) : null;
   if (footed !== null) {
     const turn = footedTurnOwner(footed, candidates, [], owners, fits);
@@ -1737,8 +1584,6 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   if (candidates.some((candidate) => underWay(candidate, wholeRead))) return null;
   const anchor = letters.slice(-160);
   const bare = bareLetters(drawn).slice(-160);
-  // too few letters outside what Codex draws its own way (rows of figures, each numbered): nothing is left to
-  // look for in another read, so nothing tells whether another conversation said this
   if (bare.length < 48) return null;
   // Where no prompt on screen tells whose turn this is, a read that holds every word of the end shown counts too:
   // the pane's own answer may be drawn with no stretch of its record left (saidAnywhere), and another
@@ -1750,7 +1595,6 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   return leads().some((lead) => lead.path !== own.path && saidInLead(lead.text, anchor, bare, words)) ? null : own.path;
 }
 
-/** The answers a conversation's rollout records its turns finished on (task_complete), as written. */
 function finishedAnswerTexts(rollout: string): string[] {
   return rollout.split("\n").flatMap((line) => {
     if (!line.includes('"task_complete"')) return [];
@@ -1789,26 +1633,6 @@ function footedView(screen: string): string {
   return kept.join("\n");
 }
 
-/**
- * The conversation whose last turn the screen shows finished, when its answer is too short for an anchor
- * (answerAnchor wants 64 letters and digits: "확인", "ok"), which matchCodexTranscript cannot find (#3262 case 2).
- * The screen, from its last header on and without Codex's own hook and hint rows (footedView), must show that turn
- * as footedAnswer reads one: its prompt, its answer ending right above Codex's "Worked for" footer, the composer
- * idle below. One candidate of this folder (`owners`: never one herdr reported or a title named, of another
- * folder) owns it as footedTurnOwner tells, under matchCodexTranscript's own rules for a footed turn, and its last
- * finished turn was asked exactly that prompt and answered exactly that text: character for character, but for
- * where the screen wrapped a row (completedRowsMatch: inside a word too). An answer Codex renders its own way (a
- * link, emphasis) is not read: the terminal stands in.
- *
- * A word proves less than a long answer, so every doubt keeps the terminal standing in: another candidate whose
- * latest turn was asked the prompt shown, or may have been (its read shows no prompt, its turn is not read
- * finished: it may have recorded the answer another way, or not yet), any candidate that ever finished on the same
- * letters and digits (another conversation that said "ok", a fork, an older turn of another thread), a screen
- * without the footer (a turn under way), an answer ending in a footer-shaped line of its own. Only a thread that
- * was only started is left out of the doubt: one read whole (`whole`) that records no turn at all shows no
- * finished one. The caller offers this only while every conversation the pane may be running is a candidate
- * (lastTurnConversation).
- */
 export function footedShortTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, whole: (path: string) => boolean = () => false): string | null {
   const footed = footedAnswer(footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))));
   if (footed === null) return null;
@@ -1816,26 +1640,17 @@ export function footedShortTranscript(screen: string, candidates: { path: string
   if (shown === "" || footed.prompts.length === 0) return null;
   const weighed = candidates.filter((candidate) => !(turnless(candidate) && whole(candidate.path)));
   const turn = footedTurnOwner(footed, weighed, [], owners);
-  // an answer long enough for an anchor is matchCodexTranscript's to find
   if (turn === null || answerAnchor(turn.answer) !== null) return null;
-  // its prompt is one of the readings of the prompt shown, row for row
   if (!askedAsShown(turn.asked, footed.rows) || !completedRowsMatch(turn.answer, footed.text)) return null;
   if (turn.askedElsewhere(true)) return null;
   return weighed.some((candidate) => candidate.path !== turn.path && finishedOf(candidate).some((answer) => alnum(answer) === shown)) ? null : turn.path;
 }
 
-/** Whether what was read of a rollout records no turn at all: no prompt, no answer, none begun or finished. */
 function turnless(candidate: { path: string; text: string }): boolean {
   return !toldOf(candidate).any && askedOf(candidate).length === 0 && finishedOf(candidate).length === 0
     && !candidate.text.includes('"task_complete"') && turnOf(candidate) !== true;
 }
 
-/**
- * The last turn a conversation's rollout records finished (task_complete), with what that turn, by its id,
- * was asked (null when the read holds no message of it: cut by the tail read, or an older Codex). Null when
- * it records no finished turn.
- */
-/** Every prompt a rollout records as asked (its UserMessage items, finished turn or not), as written. */
 function askedPrompts(rollout: string): string[] {
   const asked = new Map<string, string>();
   for (const line of rollout.split("\n")) {
@@ -1846,12 +1661,11 @@ function askedPrompts(rollout: string): string[] {
       const item = payload["item"] as { type?: unknown; content?: unknown } | undefined;
       if (typeof turn !== "string" || payload["type"] !== "item_completed" || item?.type !== "UserMessage" || !Array.isArray(item.content)) continue;
       asked.set(turn, (asked.get(turn) ?? "") + item.content.map((part: { text?: unknown }) => typeof part?.text === "string" ? part.text : "").join(""));
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return [...asked.values()];
 }
 
-/** Whether a rollout's read ends on an answer no task_complete followed: its turn still open, or its finish cut from the read. */
 function endsOnUnfinishedAnswer(rollout: string): boolean {
   let open = false;
   for (const line of rollout.split("\n")) {
@@ -1862,7 +1676,7 @@ function endsOnUnfinishedAnswer(rollout: string): boolean {
       if (payload["type"] === "task_complete") open = false;
       else if (entry.type === "event_msg" && payload["type"] === "agent_message"
         || entry.type === "response_item" && payload["type"] === "message" && payload["role"] === "assistant" && payload["channel"] !== "analysis") open = true;
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return open;
 }
@@ -1882,7 +1696,7 @@ function lastFinishedTurn(rollout: string): { asked: string | null; answer: stri
       } else if (payload["type"] === "task_complete") {
         last = typeof payload["last_agent_message"] === "string" ? { asked: asked.get(turn) ?? null, answer: payload["last_agent_message"] } : null;
       }
-    } catch { /* a record cut by the tail read */ }
+    } catch {}
   }
   return last;
 }
@@ -1890,7 +1704,7 @@ function lastFinishedTurn(rollout: string): { asked: string | null; answer: stri
 /**
  * A screen's answers, each as it would be compared whole: a line at the start of the screen's line (a "\u2022"
  * or "\u25e6" one, without its bullet) with the indented and blank lines below it, up to the next such line or
- * a "\u2500" rule Codex draws below a finished turn. An answer counts only as one such block.
+ * a "\u2500" rule Codex draws below a finished turn.
  */
 function shownBlocks(text: string): string[] {
   const blocks: string[] = [];
@@ -1904,10 +1718,8 @@ function shownBlocks(text: string): string[] {
   return blocks.map(markedDisplay);
 }
 
-/** `marked`: the anchor as markedDisplay reads it, symbols included, for a screen to show as well. */
 interface Anchor { anchor: string; words: string[]; marked: string; whole: RegExp }
 
-/** The end of a text as markedDisplay reads it that holds its last `letters` letters and digits. */
 function markedEnding(text: string, letters: number): string {
   const marked = markedDisplay(text);
   let at = marked.length;
@@ -1915,7 +1727,6 @@ function markedEnding(text: string, letters: number): string {
   return marked.slice(at);
 }
 
-/** The words a text ends with (runs of letters and digits, or `between` them), as many as make up its last `length` of them, the first cut to fit. */
 function wordsEnding(text: string, length: number, between = /[^\p{L}\p{N}]+/u): string[] {
   const words = text.normalize("NFKC").split(between).filter(Boolean);
   const taken: string[] = [];
@@ -1927,13 +1738,11 @@ function wordsEnding(text: string, length: number, between = /[^\p{L}\p{N}]+/u):
   return taken.reverse();
 }
 
-/** A conversation's answers among its turns, as written. */
 /** What the agent said, as a screen shows it: a failed request's error is Codex's own line on screen, not an answer, and reads differently there. */
 const spoken = (part: ConversationPart): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text" && part.failed !== true;
 const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
   .flatMap((turn) => turn.parts).filter(spoken).map((part) => part.text);
 
-/** Each candidate's turns as last parsed, so the matchers of one lookup parse a rollout's read once between them. */
 const parsedTurns = new WeakMap<object, { text: string; turns: ConversationTurn[] }>();
 function turnsOf(candidate: { path: string; text: string }): ConversationTurn[] {
   const known = parsedTurns.get(candidate);
@@ -1943,29 +1752,11 @@ function turnsOf(candidate: { path: string; text: string }): ConversationTurn[] 
   return turns;
 }
 
-/**
- * The one conversation a footed turn on screen may belong to (footedTurnOwner): what its last finished turn was
- * asked and ended on, as recorded, and whether another candidate's latest turn may have been asked the prompt
- * shown (`askedElsewhere`; with `unread`, a read that shows no prompt at all counts as asked too).
- */
 interface FootedTurn { path: string; asked: string; answer: string; askedElsewhere: (unread: boolean) => boolean }
 
-/**
- * The answer Codex finished last with its footer below (footedAnswer) counts for one conversation only: the one
- * candidate whose last finished turn was asked the prompt shown and ended on exactly that answer. This is that
- * candidate as far as letters and digits tell, for the caller to compare exactly; null when none or several may
- * be it, or when the one that may is not this folder's.
- */
 function footedTurnOwner(footed: { text: string; prompts: readonly string[] }, candidates: { path: string; text: string }[], displays: readonly string[], footerOwners: ReadonlySet<string> | null,
-  /** whether a recorded answer may be the one shown, read loosely: its letters and digits those shown; the tail path's own reading for an answer with a code block */
   fits: (answer: string) => boolean = (answer) => alnum(answer) === alnum(footed.text)): FootedTurn | null {
-  // None does while a candidate's answer ends in a footer-shaped line of its own, as nothing tells that line
-  // from Codex's: the terminal stands in, as it does whenever the pane's own conversation is not a candidate
   if (candidates.some((candidate) => toldOf(candidate).footerEnded || finishedOf(candidate).some(endsInTurnFooter))) return null;
-  // A candidate whose last finished turn may be the one shown, read loosely (its prompt unread, or ending in
-  // the one shown, and its answer's letters and digits those shown: one Codex rendered its own way, a turn
-  // steered with more messages) counts too, so the one strict match is the only one that may be, or none is.
-  // (the prompt shown is any of its readings: a candidate asked one of them counts, as owner or against one)
   const readings = footed.prompts.map(alnum);
   if (readings.length === 0) return null;
   const endsAsShown = (asked: string) => readings.some((reading) => asked.endsWith(reading));
@@ -1973,34 +1764,20 @@ function footedTurnOwner(footed: { text: string; prompts: readonly string[] }, c
     const last = lastTurnOf(candidate);
     return last !== null && fits(last.answer) && (last.asked === null || endsAsShown(alnum(last.asked)));
   });
-  // only a conversation of this folder (footerOwners: the store's rows for it) may own the footer; another
-  // candidate (one herdr reported, or a title named, of another folder) can only keep it from owning one
   const owner = maybe.length === 1 && (footerOwners === null || footerOwners.has(maybe[0]!.path)) ? maybe[0]! : null;
   const ownerLast = owner === null ? null : lastTurnOf(owner);
   if (owner === null || ownerLast?.asked == null) return null;
-  // The footed answer, the same text or read through its rendering (markup, a table, a link Codex shows
-  // relative to the folder), counts only while no other candidate's latest turn was asked the prompt shown:
-  // another conversation may have recorded the answer another way that Codex renders as this text, and its
-  // turn may be unfinished or its finish cut from the read and still be the one on screen. Telling such
-  // renderings apart is not attempted: a same-prompt screen is left to the guarded matches of the caller. A prompt
-  // asked only before its latest turn does not count once that turn is read finished (its own prompt recorded
-  // last): that conversation's screen shows the later turn. While it may still be running, or its finish
-  // has no turn of its own, the screen may have been read before it began, and every prompt counts.
-  // `unread`: a read that shows no prompt at all counts as asked too, as it may have cut the one asked
   const askedElsewhere = (unread: boolean) => candidates.some((candidate) => {
     if (candidate.path === owner.path) return false;
     const last = lastTurnOf(candidate);
     if (last !== null && (last.asked === null || endsAsShown(alnum(last.asked)))) return true;
     const prompts = askedOf(candidate);
     const { users, lastAnswer } = toldOf(candidate);
-    // and, read whole, one whose read may have cut its prompt while its turn is unfinished and its last answer
-    // may be the one shown (rendered the same, too short to tell, or its anchor on screen as answerAnchor reads it)
     if (prompts.length === 0 && users.length === 0) return unread || unfinishedOf(candidate) && [lastAnswer].some((answer) => {
       if (answer === undefined) return false;
       const found = answerAnchor(answer);
       return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches(answer, footed.text);
     });
-    // a prompt sent as several messages reads as its parts' run
     if (last !== null && prompts.at(-1) === last.asked) return users.length > 0 && endsAsShown(users.join(""));
     return prompts.some((asked) => endsAsShown(alnum(asked))) || users.some((_, at) => endsAsShown(users.slice(0, at + 1).join("")));
   });
@@ -2026,7 +1803,6 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const answerParts = partsOf(screen);
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
-  // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
   const wholeBlocks = answerParts.flatMap(shownBlocks);
   const renderedProgress = !blocks && screen.split("\n").some((line) => STATUS_ROW.test(line.trimEnd()));
   const parsed = candidates.map(turnsOf);
@@ -2092,10 +1868,8 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   }
   const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
   const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
-  // the same text binds while no other candidate records the prompt shown; a rendering only while no other's read may have cut it either
   const footedOwner = turn !== null && footed!.prompts.includes(collapsed(turn.asked)) && !turn.askedElsewhere(false)
     && (collapsed(turn.answer) === collapsed(footed!.text) || !turn.askedElsewhere(true) && completedAnswerMatches(turn.answer, footed!.text)) ? turn.path : null;
-  // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
     said.get(candidates[at]!.path) ?? { text: answersOf(turns).flatMap(saidText).join(""), ends: [] }))
@@ -2103,8 +1877,6 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const matching = new Set<string>();
   let open = false;
   for (const [index, candidate] of candidates.entries()) {
-    // A linked reply may have no single 64-character anchor. Its complete finished reply still
-    // proves ownership under the same prompt, uniqueness and competing-prompt checks above.
     if (candidate.path === footedOwner && answersOf(parsed[index]!).some((text) => {
       const substantial = normalizeDisplay(text);
       return substantial.length >= 64 && new Set(substantial).size >= 12 && completedAnswerMatches(text, footed!.text);
@@ -2123,37 +1895,26 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   return !open && matching.size === 1 ? [...matching][0]! : null;
 }
 
-/** Text as an answer's anchor is looked for in it (answerAnchor): cut at link targets, each piece letters and digits. */
 function saidText(text: string): string[] {
   return cutAtLinkTargets(text).map((piece) => normalizeDisplay(piece.text));
 }
 
-/**
- * What a conversation said, as saidText reads it, joined, and where each of its records ends in it
- * (`ends`; for one of which every word counts against the others, loadedConversation).
- */
 interface Said { text: string; ends: readonly number[] }
 
-/** More records than this to weigh an anchor's words in, or more text, and a conversation may show it (mayShowWords). */
 const WORD_CHECKS = 2048;
 const WORD_BUDGET = 1 << 23;
 
 /**
- * Whether another conversation's screen may show an answer made of these words (an anchor's).
  * Codex renders an answer's markdown, so a screen may show its words in another order (a table's
  * rows as records), without what it leaves out or decodes (a link's folder, a query, an entity)
  * and with words joined (emphasis inside a word), but each word it shows of a record is in that
- * record's text: it may when one of its records holds every word. Past WORD_CHECKS records that
- * hold each of its longest three words, or WORD_BUDGET letters and digits weighed, it may.
+ * record's text: it may when one of its records holds every word.
  */
 function mayShowWords(words: readonly string[], { text, ends }: Said): boolean {
   const last = ends.at(-1);
   if (last === undefined || words.length === 0) return false;
-  // longest first: likeliest missing from a record that does not hold them all
   const longest = [...new Set(words)].sort((one, other) => other.length - one.length);
-  // a record with a named entity may show a word only through it (ENTITY): weighed whatever else it holds
   const entities = text.lastIndexOf(ENTITY, last - 1) >= 0;
-  // looked for at the rarest of the longest three: a record without one of them holds not all
   let rarest: string | null = longest[0]!;
   let fewest = Infinity;
   for (const word of longest.slice(0, 3)) {
@@ -2176,7 +1937,6 @@ function mayShowWords(words: readonly string[], { text, ends }: Said): boolean {
   for (const needle of [rarest, entities ? ENTITY : null]) {
     if (needle === null) continue;
     for (let at = text.indexOf(needle); at >= 0 && at < last;) {
-      // the record it is in: the first to end past it
       let record = 0;
       for (let high = ends.length - 1; record < high;) {
         const middle = (record + high) >> 1;
@@ -2201,16 +1961,10 @@ function mayShowWords(words: readonly string[], { text, ends }: Said): boolean {
  */
 const ENTITY = "\uE000";
 
-/** Steps of ENTITY matching (throughEntities) one weighing may take; past them, a record may show the word. */
 const ENTITY_STEPS = 1 << 20;
 
-/**
- * Whether `text` holds `word`, each ENTITY in it standing for up to three of its letters or none;
- * also once `steps` run out.
- */
 function throughEntities(text: string, word: string, steps: { left: number }): boolean {
   for (let entity = text.indexOf(ENTITY); entity >= 0; entity = text.indexOf(ENTITY, entity + 1)) {
-    // a match through this entity begins at most a word's length before it
     for (let start = Math.max(0, entity - word.length); start <= entity; start++) {
       let reached = new Set([0]);
       for (let at = start; at < text.length && reached.size > 0 && at - start <= 4 * word.length; at++) {
@@ -2228,15 +1982,13 @@ function throughEntities(text: string, word: string, steps: { left: number }): b
   return false;
 }
 
-/** A text with each named entity as ENTITY and the rest as normalizeDisplay reads it, or "" for one without any. */
 function entityForm(text: string): string {
   const pieces = text.split(/&[A-Za-z][A-Za-z0-9]{1,31};/);
   return pieces.length > 1 ? pieces.map(normalizeDisplay).join(ENTITY) : "";
 }
 
 /**
- * A text cut at its markdown link targets: each stretch of text with the target that follows it
- * ("" after the last). A scan, not a split at /\]\([^)\s]*\)/: that rescans to the end of the
+ * A scan, not a split at /\]\([^)\s]*\)/: that rescans to the end of the
  * text from every "](" no ")" closes, quadratic in a text full of them.
  */
 function cutAtLinkTargets(text: string): { text: string; target: string }[] {
@@ -2247,7 +1999,6 @@ function cutAtLinkTargets(text: string): { text: string; target: string }[] {
     let end = at + 2;
     // Codex renders absolute local paths with spaces as file links, shortening the target
     // relative to cwd. Those spaces are part of the path, not the end of its destination.
-    // Keep ordinary whitespace/malformed prose unchanged, and never cross a line boundary.
     const local = /^<?(?:\/|[A-Za-z]:[\\/])/.test(text.slice(end, end + 4));
     if (text[end] === "<") {
       while (end < text.length && text[end] !== ">" && !/[\r\n]/.test(text[end]!)) end++;
@@ -2257,7 +2008,6 @@ function cutAtLinkTargets(text: string): { text: string; target: string }[] {
       while (end < text.length && text[end] !== ")" && !/[\r\n]/.test(text[end]!)
         && (local || !/\s/.test(text[end]!))) end++;
     }
-    // unclosed: no "](" before `end` is closed either, so all of it stays text
     if (text[end] !== ")") { search = end; continue; }
     pieces.push({ text: text.slice(start, at), target: text.slice(at + 2, end) });
     start = search = end + 1;
@@ -2267,7 +2017,6 @@ function cutAtLinkTargets(text: string): { text: string; target: string }[] {
 }
 
 /**
- * An answer as the screen shows it, for matchShortCodexAnswers: its last 160 letters and digits.
  * null for one with a link: Codex shows `[label](target)` as "label (target)" with the target its
  * own way, so the answer is not one run of text there, and its pieces alone are short common words.
  */
@@ -2275,14 +2024,6 @@ function shownAnswer(text: string): string | null {
   return cutAtLinkTargets(text).length > 1 ? null : normalizeDisplay(text).slice(-160);
 }
 
-/**
- * A rollout's newest answers on screen, newest lowest: whole answers taken from the end of the
- * rollout one after another (the very newest may be skipped: it may not be rendered yet, or hold
- * a link), each at least 16 letters and digits, found bottom-up in order, until at least two of
- * them hold 64 with 12 distinct. The answers that did (as shown, which of `answers` and where), or
- * null. A gap ends the run: an answer of the rollout not on screen means the screen is not showing
- * this rollout's end.
- */
 function newestAnswersShown(display: string, answers: string[]): { text: string; index: number; at: number }[] | null {
   const newest = answers.slice(-5).map(shownAnswer).reverse();
   for (const skip of [0, 1]) {
@@ -2300,28 +2041,15 @@ function newestAnswersShown(display: string, answers: string[]): { text: string;
   return null;
 }
 
-/**
- * The last resort for a pane nothing else ties to a rollout (codexTranscriptPath): a session
- * whose answers are all short never has an anchor for matchCodexTranscript, yet its newest
- * answers on screen together say as much as one long one (#283). Weaker evidence, so it gives
- * up readily: every candidate must have been read whole (none `cut`: past the read budget, or
- * continuing another rollout, whose answers it shares), only one may show that way, no other
- * may have said any of the answers it showed, alone or inside a longer one, and each must show below
- * the prompt it answered: the same short answers to other prompts, or below a prompt the read does not
- * reach, may be another conversation's. Prompts on screen are never taken for answers.
- */
 export function matchShortCodexAnswers(screen: string, candidates: { path: string; text: string; cut?: boolean }[]): string | null {
   if (candidates.some((candidate) => candidate.cut)) return null;
   const lastHeader = screen.lastIndexOf("OpenAI Codex (v");
-  // the answers' letters and digits, each prompt one character none of them has, and where it was
   let display = "";
   const prompts: { at: number; text: string }[] = [];
   for (const part of codexScreenParts(lastHeader >= 0 ? screen.slice(lastHeader) : screen)) {
-    // only one typed and sent is what an answer below it answered; a queued one is not sent yet
     if (part.prompt && part.text.startsWith("\u203a")) prompts.push({ at: display.length, text: promptKey(part.text) });
     display += part.prompt || part.tool ? "\0" : normalizeDisplay(part.text);
   }
-  // every turn of what was read, not the newest 100: an answer said long ago is said; with the prompt it answered
   const exchanges = candidates.map((candidate) => {
     let prompt = "";
     return parseCodexTranscript(candidate.text, Infinity).flatMap((turn) => {
@@ -2340,8 +2068,6 @@ export function matchShortCodexAnswers(screen: string, candidates: { path: strin
   }
   if (found === null) return null;
   const only = found.index;
-  // the nearest prompt shown above each answer is the one it answered; one with none shown above (its
-  // prompt past the top of the read) may be another conversation's same answer to another prompt
   for (const answer of found.answers) {
     const above = prompts.filter((prompt) => prompt.at < answer.at).at(-1);
     if (above === undefined || above.text !== exchanges[only]![answer.index]!.prompt) return null;
@@ -2351,10 +2077,6 @@ export function matchShortCodexAnswers(screen: string, candidates: { path: strin
     if (index === only) continue;
     const said = normalizeDisplay(other.join("\n"));
     if (shown.some((answer) => said.includes(answer))) return null;
-    // an answer of the other with links shows as its text around them, the targets Codex's own
-    // way: when that text is all in a shown answer, in order, the screen may be showing the other
-    // every such answer of what was read, however short its text or many its links: one left
-    // unchecked is one the screen may be showing
     for (const text of other) {
       const pieces = cutAtLinkTargets(text);
       if (pieces.length < 2) continue;
@@ -2376,7 +2098,6 @@ interface CodexFirstExchangeCandidate {
 
 const normalizePrompt = (text: string): string => text.trim().replace(/\s+/g, " ");
 
-/** User/assistant exchanges as recorded, retaining later prompts as competing evidence. */
 function codexExchanges(text: string): CodexExchange[] {
   const turns = parseCodexTranscript(text, Infinity);
   const exchanges: CodexExchange[] = [];
@@ -2398,7 +2119,6 @@ function codexExchanges(text: string): CodexExchange[] {
   return exchanges;
 }
 
-/** The first top-level prompt and its following assistant output, after this TUI's header. */
 function displayedFirstExchange(screen: string, keepCompletionFooter = false): CodexExchange | null {
   const header = screen.lastIndexOf("OpenAI Codex (v");
   if (header < 0) return null;
@@ -2451,11 +2171,6 @@ function matchingCodexExchanges(screen: string, candidates: readonly CodexFirstE
   return matches;
 }
 
-/**
- * Match a submitted first prompt and its answer only when no competing exchange explains it.
- * `excluded`: threads other panes hold by stronger evidence, not begun here: they still
- * compete as exchanges, and are never the answer.
- */
 export function matchCodexFirstExchange(
   screen: string,
   candidates: readonly CodexFirstExchangeCandidate[],
@@ -2651,7 +2366,7 @@ export async function codexFreshSession(paneId: string, cwds: readonly string[],
   if (!codexStartScreenUnused(screen)) return null;
   const { list, key } = await codexProcessesOf(paneId).catch(() => ({ list: [], key: "" }));
   if (list.length === 0 || list.some((codex) => (codex.argv ?? []).some((word) => word === "resume" || word === "fork"))) return null;
-  // an explicit store wins, as in paneCodexHome. Else every Codex's home must be placed for
+  // Else every Codex's home must be placed for
   // certain, and the first decides: one paneCodexHome cannot place (a relative CODEX_HOME) falls
   // back to the default store, where this pane's conversation is not
   let home = configured;
@@ -2663,12 +2378,10 @@ export async function codexFreshSession(paneId: string, cwds: readonly string[],
   }
   const starts = list.map((codex) => processStartLowerBound(codex.pid));
   if (starts.some((started) => started === null)) return null;
-  // whole seconds, and one more: a start read anew may land in the second before
   const since = Math.floor(Math.min(...(starts as number[])) / 1000) - 1;
   const store = join(home, "state_5.sqlite");
   let db: Database | undefined;
   try {
-    // a store Codex has not made yet holds no thread
     if (statSync(store, { throwIfNoEntry: false }) !== undefined) {
       const opened = openCodexStore(home);
       db = opened.db;
@@ -2691,7 +2404,6 @@ export async function codexFreshSession(paneId: string, cwds: readonly string[],
   return `unwritten:codex:${paneId}:${key}`;
 }
 
-/** `codex resume <thread>`: the thread a TUI was started on, straight from its command line. */
 export function resumedThread(argvs: readonly (readonly string[])[]): string | null {
   for (const argv of argvs) {
     const at = argv.indexOf("resume");
@@ -2703,7 +2415,6 @@ export function resumedThread(argvs: readonly (readonly string[])[]): string | n
 
 /** A lock Codex takes for a thread it loads to write: `<thread>.lock` in `thread-writer-locks`. */
 const WRITER_LOCK = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.lock$/i;
-/** More threads loaded at once than this, and none of them is offered (loadedRollouts). */
 const HELD_THREAD_LIMIT = 32;
 
 /**
@@ -2740,7 +2451,7 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
         const id = line.startsWith("n") && nodePath.dirname(line.slice(1)) === folder ? WRITER_LOCK.exec(nodePath.basename(line))?.[1] : undefined;
         if (id === undefined) continue;
         let born = 0;
-        try { born = statSync(line.slice(1)).ctimeMs; } catch { /* unloaded meanwhile: loaded at the earliest */ }
+        try { born = statSync(line.slice(1)).ctimeMs; } catch {}
         holders.push({ id: id.toLowerCase(), born, pid });
       }
     } finally { clearTimeout(timer); }
@@ -2756,7 +2467,7 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
       const file = statSync(join(folder, name), { bigint: true });
       named.set(file.ino.toString(), name);
       born.set(name, Number(file.ctimeMs));
-    } catch { /* unlocked and removed meanwhile */ }
+    } catch {}
   }
   if (named.size === 0) return held;
   // the kernel hands /proc/locks out a page at a time, and a lock any process takes or drops between
@@ -2783,7 +2494,7 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
             try {
               const target = readlinkSync(`/proc/${lock[1]}/fd/${descriptor}`);
               if (nodePath.dirname(target) === folder) names.add(nodePath.basename(target));
-            } catch { /* closed while listing */ }
+            } catch {}
           }
         } catch (error) {
           // gone, and its lock with it; another user's process: what it holds cannot be told, and a
@@ -2797,7 +2508,6 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
   return held;
 }
 
-/** A process's arguments on Linux, none when they cannot be read. */
 function readArgv(pid: string): string[] {
   try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"); } catch { return []; }
 }
@@ -2819,7 +2529,7 @@ async function execRuns(pids: readonly string[]): Promise<Set<string>> {
       const [pid, ...argv] = line.trim().split(/\s+/);
       if (pid !== undefined && execRun(argv)) runs.add(pid);
     }
-  } catch { /* none taken for one */ }
+  } catch {}
   finally { clearTimeout(timer); }
   return runs;
 }
@@ -2832,15 +2542,11 @@ async function execRuns(pids: readonly string[]): Promise<Set<string>> {
  */
 const execRun = (argv: readonly string[]) => argv[1] === "exec" || argv[1] === "e";
 
-/** A thread a Codex process has loaded (loadedRollouts). */
 interface LoadedThread {
-  /** whether a pane may be showing it */
   offered: boolean;
-  /** the files its history is in (codexHistorySegments), found whole */
   segments: HistorySegment[];
   /** held by a `codex exec` run (execRun), which shows an answer only once it has written it */
   exec: boolean;
-  /** when it was loaded (heldThreadIds) */
   loadedAt: number;
 }
 
@@ -2872,8 +2578,6 @@ async function loadedRollouts(home: string): Promise<Map<string, LoadedThread> |
     for (const row of rows) {
       const path = storeRolloutPath(row.rollout_path, home);
       if (path === null) return null;
-      // the files its history is read from, every earlier rollout it continues among them: one gone
-      // would leave out what it said there
       const segments = codexHistorySegments(path, home);
       if (!chainComplete(path, home)) return null;
       const holder = ids.get(row.id.toLowerCase());
@@ -2897,31 +2601,19 @@ const SAID_RECORDS = ['"type":"message"', '"type":"user_message"', '"type":"agen
   '_call"', '"type":"reasoning"', '"type":"agent_reasoning', '"type":"task_started"', '"type":"task_complete"',
   '"type":"turn_started"', '"type":"turn_complete"', '"type":"turn_aborted"']
   .map((marker) => Buffer.from(marker));
-/**
- * What a rollout file said up to `offset` (whole lines), joined in `text`, each record with where its
- * line ends in the file and where it ends in `text`; and its turns as far as read (turnAfter).
- */
 interface SaidScan {
   ino: number;
   offset: number;
   said: { end: number; at: number }[];
   text: string;
-  /** a turn begun and not ended */
   running: boolean;
-  /** when its last turn interrupted or failed ended, 0 for none */
   abortedAt: number;
 }
 const saidScans = new Map<string, SaidScan>();
 
-/** Every string in a value, however deep. */
 const stringsIn = (value: unknown): string[] => typeof value === "string" ? [value]
   : value !== null && typeof value === "object" ? Object.values(value).flatMap(stringsIn) : [];
 
-/**
- * Every string of every record in what was read of a rollout (codexHistoryTail), whole, as saidText
- * reads it: a tool's output and a command as much as a message. The chat's own reading of them
- * shortens a long output, which another conversation's screen may show the end of.
- */
 function tailSaid(text: string): string {
   return text.split("\n").flatMap((line) => deepStrings(parseJson(line)).flatMap(saidText)).join("");
 }
@@ -2938,10 +2630,6 @@ const deepStrings = (value: unknown): string[] => stringsIn(value)
 /** What a completed item holds of its output, which a screen shows below an indented "\u2514 " if at all. */
 const ITEM_OUTPUTS = new Set(["aggregated_output", "formatted_output", "output", "result", "stdout", "stderr", "model_context"]);
 
-/**
- * What one rollout line said: a message, with the forms the chat shows it in too, a tool call or
- * reasoning; never a tool's output.
- */
 function lineForms(value: unknown): string[] {
   return lineTexts(value).flatMap((text) => [...new Set([text, withoutMemoryCitations(text), questionReply(text) ?? "", decoded(text), shownMarkup(text)])]);
 }
@@ -2969,7 +2657,6 @@ function decoded(text: string): string {
   }).replace(/(?:%[0-9A-Fa-f]{2})+/g, (escaped) => { try { return decodeURIComponent(escaped); } catch { return escaped; } });
 }
 
-/** The texts of one rollout line, before lineForms adds the forms the chat shows them in. */
 function lineTexts(value: unknown): string[] {
   const entry = record(value);
   const payload = record(entry.payload);
@@ -2985,7 +2672,6 @@ function lineTexts(value: unknown): string[] {
   } else if (entry.type === "response_item" && payload.type === "message" && (payload.role === "user" || payload.role === "assistant")) {
     texts.push(contentText(payload.content), ...stringsIn(payload.content));
   } else if (entry.type === "response_item" && typeof payload.type === "string" && payload.type.endsWith("_call")) {
-    // a tool call, as a screen shows it above its output: a command, a patch, a search, arguments
     texts.push(...deepStrings(payload));
   } else if (entry.type === "response_item" && payload.type === "reasoning") {
     texts.push(...deepStrings([payload.summary, payload.content]));
@@ -3010,20 +2696,13 @@ function turnAfter(scan: SaidScan, value: unknown): void {
   else if (payload.type === "task_complete" || payload.type === "turn_complete" || payload.type === "turn_aborted") {
     scan.running = false;
     if (payload.type !== "turn_aborted" && (payload.error === undefined || payload.error === null)) return;
-    // without a time it could have ended at any time
     const at = Date.parse(string(entry.timestamp));
     scan.abortedAt = Math.max(scan.abortedAt, Number.isNaN(at) ? Infinity : at);
   }
 }
 
-/** The read of each rollout file under way: two at once would both read from the same offset and keep its messages twice. */
 const saidQueue = new Map<string, Promise<void>>();
 
-/**
- * The messages of a rollout file, read from where the last read stopped up to `upTo` (a cut an
- * earlier rollout is continued at; what follows it is no conversation's history there), one read of
- * a file at a time.
- */
 async function scanSaid(path: string, upTo = Infinity): Promise<SaidScan> {
   const before = saidQueue.get(path);
   let done!: () => void;
@@ -3038,7 +2717,6 @@ async function scanSaid(path: string, upTo = Infinity): Promise<SaidScan> {
   }
 }
 
-/** The messages of a rollout file, read from where the last read stopped (a rollout only grows), up to `upTo`. */
 async function readSaid(path: string, upTo: number): Promise<SaidScan> {
   const { ino, size: whole } = await stat(path);
   let scan = saidScans.get(path);
@@ -3065,8 +2743,6 @@ async function readSaid(path: string, upTo: number): Promise<SaidScan> {
         if (SAID_RECORDS.some((marker) => line.includes(marker))) {
           const entry = parseJson(line.toString("utf8"));
           const forms = lineForms(entry);
-          // cut at link targets, and whole too: a screen may show a target's words (mayShowWords); and
-          // with its named entities as such (entityForm)
           const text = forms.flatMap((form) => {
             const pieces = saidText(form);
             return [...pieces, ...pieces.length > 1 ? [normalizeDisplay(form)] : [], entityForm(form)];
@@ -3099,34 +2775,21 @@ async function readSaid(path: string, upTo: number): Promise<SaidScan> {
   return scan;
 }
 
-/** More bytes than this in the histories of the loaded threads, and none of them is weighed (loadedConversation). */
 let HISTORY_BYTES = 128 * 1024 * 1024;
-/** More text than this kept of the histories read (readSaid), and none of them is weighed. */
 let HISTORY_TEXT = 2 * HISTORY_BYTES;
 
-/** Other limits for HISTORY_BYTES and HISTORY_TEXT, for tests; none for Codex's own. */
 export function limitCodexHistoryForTests(bytes = 128 * 1024 * 1024, text = 2 * bytes): void {
   HISTORY_BYTES = bytes;
   HISTORY_TEXT = text;
 }
 
-/** A file's read, unless it keeps more text than all reads may (HISTORY_TEXT): then it is dropped, and none is weighed. */
 function keptWhole(path: string, scan: SaidScan): SaidScan {
   if (scan.text.length <= HISTORY_TEXT) return scan;
   saidScans.delete(path);
   throw new Error(`${path} keeps more text than is kept`);
 }
-/** The most rollout files whose reads are kept (readSaid). */
 const SAID_SCANS = 4096;
 
-/**
- * Every message a conversation ever had, user's and agent's alike, in the files its history is in
- * (`segments`, as loadedRollouts found them whole), each as readSaid keeps it, joined, with where
- * each ends: what matchCodexTranscript weighs another candidate's answers against (mayShowWords
- * too), beyond the last 1 MiB it reads of each. Its own file is read as far as it has
- * been written, and its turns (turnAfter) as far as that too. A file gone meanwhile throws rather
- * than leave out what it said.
- */
 async function everSaid(segments: readonly HistorySegment[]): Promise<{ said: string; ends: number[]; running: boolean; abortedAt: number }> {
   const texts: string[] = [];
   const ends: number[] = [];
@@ -3135,7 +2798,6 @@ async function everSaid(segments: readonly HistorySegment[]): Promise<{ said: st
   for (const [index, segment] of segments.entries()) {
     const own = index === segments.length - 1;
     const scan = await scanSaid(segment.path, own ? Infinity : segment.end);
-    // an earlier rollout up to where this conversation continued it
     let count = scan.said.length;
     if (!own) while (count > 0 && scan.said[count - 1]!.end > segment.end) count--;
     const text = count === 0 ? "" : scan.text.slice(0, scan.said[count - 1]!.at);
@@ -3180,21 +2842,12 @@ function shownAnswers(screen: string): string {
 /**
  * The conversation a pane's screen shows among those a Codex process of the store has loaded
  * (loadedRollouts): the last resort for a pane nothing else ties to a rollout, as a resume through
- * the picker from another folder leaves one (#896). Each of them is a candidate, and only one this
- * folder's lookup did not already weigh (`weighed`) may be the answer. As the pane's conversation is
- * always among them once it is loaded, a candidate counts only on an answer the screen shows as one
- * (shownAnswers) that none of the others ever said: no message in its whole history (everSaid), a
- * prompt too, and nothing in its last 1 MiB (tailSaid), a tool's output too: matchCodexTranscript's
- * `scrutinized` with `said`. Whole histories are read only once one that may be the answer shows an
- * answer there. Codex writes an answer only once it is complete, so nothing is offered while
- * another of them may show text it has not written: a turn running, or one interrupted or failed
- * since it was loaded (`codex exec` shows an answer only once written). Never
- * remembered as a binding: the next read asks the screen again, so the chat follows the TUI to
- * another conversation.
+ * the picker from another folder leaves one (#896). Codex writes an answer only once it is complete,
+ * so nothing is offered while another of them may show text it has not written: a turn running, or
+ * one interrupted or failed since it was loaded (`codex exec` shows an answer only once written).
  */
 async function loadedConversation(screen: string, weighed: readonly string[], home: string): Promise<string | null> {
   const shown = shownAnswers(screen);
-  // no answer that long on screen (a fresh TUI, the picker): no lock need be read
   if (normalizeDisplay(shown).length < 64) return null;
   try {
     const loaded = await loadedRollouts(home);
@@ -3207,7 +2860,6 @@ async function loadedConversation(screen: string, weighed: readonly string[], ho
       return text;
     };
     if (!offered.some((path) => matchCodexTranscript(shown, [{ path, text: tail(path) }], new Set(), new Map(), true) !== null)) return null;
-    // the whole histories, within budget: past it, what is left unread could be the one that tells
     const files = new Map<string, number>();
     for (const { segments } of loaded.values()) for (const { path, end } of segments) files.set(path, Math.max(end, files.get(path) ?? 0));
     if ([...files.values()].reduce((sum, end) => sum + end, 0) > HISTORY_BYTES) return null;
@@ -3218,25 +2870,14 @@ async function loadedConversation(screen: string, weighed: readonly string[], ho
       const thread = loaded.get(path)!;
       const ever = await everSaid(thread.segments);
       said.set(path, { text: ever.said + tailSaid(text), ends: ever.ends });
-      // a turn running, or one interrupted or failed since it was loaded, may show text it has not written
       if (!thread.exec && (ever.running || ever.abortedAt >= thread.loadedAt)) unwritten.add(path);
     }
-    // offered: one that passed the check above shows an answer here too, so it is matched (two
-    // would be none) or left open (none), and a thread not offered never wins alone
     const found = matchCodexTranscript(shown, candidates, new Set(loaded.keys()), said, true);
     if (found === null) return null;
-    // what another may be showing without having written it is in no `said`, to count against this one
-    // on any screen, this one's too
     return [...unwritten].some((path) => path !== found) ? null : found;
   } catch { return null; }
 }
 
-/**
- * The rollout each pane's Codex was last matched to on screen, the processes that were running it, and
- * when; `titled` when it was the conversation only the title offered, which then holds only while the
- * title still names it (the picker may have opened another since). What a last turn alone ties (lastTurnConversation)
- * is never among them: it is proven again on every lookup.
- */
 const boundRollouts = new Map<string, { processes: string; path: string; at: number; titled?: boolean }>();
 
 /**
@@ -3252,10 +2893,8 @@ function shownScreen(screen: string): string {
 }
 
 /**
- * Threads begun in this cwd since `since` (seconds) that this pane's Codex may have moved
- * on to (/new), as their rollouts. Only interactive threads count: subagents (often with
- * a NULL agent_role) and `codex exec` runs share their parent's cwd but never replace the
- * TUI's conversation. A thread another pane is bound to is that pane's (theirs).
+ * Only interactive threads count: subagents (often with a NULL agent_role) and `codex exec` runs
+ * share their parent's cwd but never replace the TUI's conversation.
  */
 function newerThreads(db: Database, cwd: string, since: number, except: string | null, paneId: string, home: string, firsts?: Map<string, string>): string[] {
   const first = db.query("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'first_user_message'").get() !== null ? ", first_user_message" : "";
@@ -3280,15 +2919,12 @@ function interactive(db: Database): string {
     ? " AND source IN ('cli', 'vscode')" : "";
 }
 
-/** The rollouts no other pane is bound to. */
 function theirs(rollouts: string[], paneId: string, claimed: ReadonlySet<string> = new Set()): string[] {
   const elsewhere = new Set([...boundRollouts].flatMap(([pane, binding]) => pane === paneId ? [] : [binding.path]));
   return rollouts.filter((rollout) => !elsewhere.has(rollout) && !claimed.has(rollout));
 }
 
-/** Interpreter options that run code or load a module: whatever follows is not the script. */
 const CODE_OPTIONS = new Set(["eval", "print", "require", "import", "loader", "experimental-loader", "input-type"]);
-/** Interpreter and shell options that take no value, so the script may follow them directly. */
 const VALUELESS_OPTIONS = new Set([
   "", "no-warnings", "no-deprecation", "trace-warnings", "trace-deprecation", "pending-deprecation", "throw-deprecation",
   "enable-source-maps", "preserve-symlinks", "preserve-symlinks-main", "expose-gc", "abort-on-uncaught-exception",
@@ -3296,8 +2932,6 @@ const VALUELESS_OPTIONS = new Set([
   "no-experimental-fetch", "harmony", "bun", "smol", "hot", "watch", "noprofile", "norc", "posix", "login",
 ]);
 
-/** A pane's Codex executables (or interpreter scripts), and their pids as one key. */
-/** The pane's first Codex process (the one paneCodexHome decides by), or null when there is none. */
 export async function paneCodexProcess(paneId: string, known?: ProcessInfo | null): Promise<{ pid: number; argv?: string[] } | null> {
   return (await codexProcessesOf(paneId, known)).list[0] ?? null;
 }
@@ -3317,7 +2951,6 @@ export async function codexProcessesOf(paneId: string, known?: ProcessInfo | nul
       } catch { return foreground; }
     })
     .filter((foreground) => {
-      // herdr's `argv: null`, or one this read could not replace, names no executable
       const argv: string[] = Array.isArray(foreground.argv) ? foreground.argv : [];
       const executable = argv[0] ?? "";
       // also a release binary named for its target, and any letter case of Windows' file names
@@ -3364,38 +2997,29 @@ async function codexAgentInfo(paneId: string): Promise<Pick<AgentInfo, "agent_se
     const agent = await agentGet(paneId);
     let processRead: { info: ProcessInfo | undefined } | undefined;
     const info = await paneProcessInfo(paneId).then((answer) => (processRead = { info: answer }).info, () => undefined);
-    // herdr's own report that the outer PTY is Kiro's wrapper keeps the guard, whether or not one more
-    // process-table probe proves its Codex: a failed or racing probe must not make this a plain pane
     return { ...agent, ...kiroNested(info, agent.agent === "codex") ? { nestedTerminal: true as const } : {}, ...processRead ? { processRead } : {} };
   }
   catch (error) {
     if (!(error instanceof HerdrError) || error.code !== "agent_not_found") throw error;
     let processRead: { info: ProcessInfo | undefined } | undefined;
     const info = await paneProcessInfo(paneId).then((answer) => (processRead = { info: answer }).info, () => undefined);
-    // herdr's wrapper fact, as above: the process lookup that follows proves the Codex or finds none
     if (kiroWrapper(info)) {
       const pane = await paneGet(paneId);
       // Never revive an earlier occupant's session report through a shell wrapper.
       return { ...pane, agent_session: undefined, nestedTerminal: true };
     }
     const pane = await paneGet(paneId);
-    // unlabelled: its peers may carry no label either, so freshReportedThread cannot rule them out
     return { ...pane, ...(pane.agent_session?.agent === "codex" ? {} : { agent_session: undefined }), unlabelled: true as const,
       ...(kiroNested(info, false) ? { nestedTerminal: true as const } : {}), ...(processRead ? { processRead } : {}) };
   }
 }
 
-/** When each pane last looked at the other Codex panes for a set of threads, and which panes those were. */
 const claimChecks = new Map<string, { panes: string; at: number }>();
 const CLAIM_CHECK_MS = 5000;
 
 /**
- * Which of `threads` (rollouts) another Codex pane in this cwd shows, as its own: a pane
- * claims a thread when its screen shows the thread's first message (typed there) and an
- * answer of it, and the match is unique against this pane's threads and that pane's
- * binding too. A pane that shows one is bound to it, whether or not anyone opened its
- * chat, and that thread is theirs, not a /new of this pane. The same threads and panes are
- * looked at again at most every 5s: a pane whose answer is not on screen yet is tried then.
+ * The same threads and panes are looked at again at most every 5s: a pane whose answer is not on
+ * screen yet is tried then.
  *
  * Trade-off: the first message must still be in that pane's last 400 lines and read as at
  * least 8 letters or digits. After a long session with this chat closed, or for a first
@@ -3406,7 +3030,6 @@ async function claimedByOtherPanes(paneId: string, cwd: string, threads: string[
   const claimed = new Set<string>();
   const key = `${paneId}\0${[...threads].sort().join("\0")}`;
   const panes = codexPeersIn(sessionPanes ?? (await sessionSnapshot()).panes, paneId, cwd).slice(0, 8);
-  // a pane that appeared since is looked at at once
   const last = claimChecks.get(key);
   const seen = panes.map((pane) => pane.pane_id).join();
   if (panes.length === 0 || (last !== undefined && last.panes === seen && Date.now() - last.at < CLAIM_CHECK_MS)) return claimed;
@@ -3415,8 +3038,6 @@ async function claimedByOtherPanes(paneId: string, cwd: string, threads: string[
   const tail = (path: string) => { try { return [{ path, text: codexHistoryTail(path, 1024 * 1024, home) }]; } catch { return []; } };
   const candidates = threads.flatMap(tail);
   if (candidates.length === 0) return claimed;
-  // a screen is matched against this pane's own threads and that pane's too, not only the
-  // new ones: an answer of this pane quoted over there is then not unique, and claims nothing
   const known = [...new Set(own)].flatMap(tail);
   for (const pane of panes) {
     try {
@@ -3426,8 +3047,6 @@ async function claimedByOtherPanes(paneId: string, cwd: string, threads: string[
         .map((candidate) => [candidate.path, candidate])).values()];
       const shown = matchCodexTranscript(screen.text, possible, new Set(), new Map(), false, null, false);
       if (shown === null || !threads.includes(shown)) continue;
-      // and the thread's first message shows there too: typed in that pane, not only its answer
-      // quoted or pasted there (a thread whose first message is gone from that screen stays unclaimed)
       const first = normalizeDisplay(firsts.get(shown) ?? "").slice(0, 48);
       if (firsts.has(shown) && (first.length < 8 || !normalizeDisplay(screen.text).includes(first))) continue;
       claimed.add(shown);
@@ -3437,7 +3056,7 @@ async function claimedByOtherPanes(paneId: string, cwd: string, threads: string[
         boundRollouts.set(pane.pane_id, { processes, path: shown, at: Date.now() });
         if (boundRollouts.size > 64) boundRollouts.delete(boundRollouts.keys().next().value!);
       }
-    } catch { /* a pane closed meanwhile */ }
+    } catch {}
   }
   return claimed;
 }
@@ -3450,7 +3069,6 @@ interface CodexThreadRow {
 
 const SHORT_THREAD_LIMIT = 32;
 const SHORT_ROLLOUT_LIMIT = 1024 * 1024;
-/** How far a rollout was validated: `offset` bytes of whole lines; `dead` once a line can never pass. */
 interface ShortScan { offset: number; retained: number; text: string; dead: boolean }
 
 // A chat polls every 2 s and nothing binds a short match. Rollouts only grow, so an unchanged
@@ -3458,7 +3076,6 @@ interface ShortScan { offset: number; retained: number; text: string; dead: bool
 const shortScans = new Map<string, { ino: number; size: number; mtimeMs: number; scan: ShortScan }>();
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
 
-/** Validate every record, retaining only messages: tool output cannot identify a conversation. */
 async function scanShortText(path: string, size: number, from: ShortScan): Promise<ShortScan> {
   const fd = await open(path, "r");
   const buffer = Buffer.alloc(64 * 1024);
@@ -3496,7 +3113,6 @@ async function scanShortText(path: string, size: number, from: ShortScan): Promi
   } finally { await fd.close(); }
 }
 
-/** Short matching needs every competing exchange, so incomplete or unsafe rows disable it. */
 async function safeShortThreads(rows: readonly CodexThreadRow[], home: string): Promise<CodexFirstExchangeCandidate[] | null> {
   if (rows.length === 0 || rows.length > SHORT_THREAD_LIMIT) return null;
   const candidates: CodexFirstExchangeCandidate[] = [];
@@ -3523,7 +3139,6 @@ async function safeShortThreads(rows: readonly CodexThreadRow[], home: string): 
         shortScans.set(path, { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, scan });
         if (shortScans.size > 128) shortScans.delete(shortScans.keys().next().value!);
       }
-      // a line still being written leaves the rollout unread to its end
       if (scan.dead || scan.offset !== stat.size) return null;
       const text = scan.text;
       const exchanges = codexExchanges(text);
@@ -3540,12 +3155,6 @@ async function safeShortThreads(rows: readonly CodexThreadRow[], home: string): 
   return candidates;
 }
 
-/**
- * Of `threads`, those another Codex pane of the cwd holds by stronger evidence than a short
- * answer: the rollout herdr reports for that pane, and one whose long answer that pane
- * shows below the first prompt that began it (claimedByOtherPanes, which binds the pane to it,
- * so the next poll finds it bound there). Panes bound elsewhere already are left to theirs().
- */
 async function heldByOtherPanes(
   paneId: string, cwd: string, threads: string[], rows: readonly CodexThreadRow[], home: string, panes: HerdrPane[],
   rolloutOf: (row: CodexThreadRow) => string,
@@ -3563,16 +3172,6 @@ async function heldByOtherPanes(
   return held;
 }
 
-/**
- * The threads other Codex panes of the cwd show as their own first exchange, each matched the
- * way this pane's is (matchCodexFirstExchange, from that pane's own start bound), leaving out
- * those already found: the pane that started last tells first, and an earlier one in turn. A
- * pane started first never tells by its own start, since every later pane's thread began after
- * it too; that pane's first exchange, begun after it started and the only such one there, is
- * its conversation by the evidence that would bind it there. One this pane shows as well stays
- * open; null when another pane shows a thread one pane took: something is not as it seems.
- * Nothing here binds: a first exchange is read again each time.
- */
 async function peersFirstExchanges(
   own: string, candidates: readonly CodexFirstExchangeCandidate[], peers: readonly HerdrPane[], screens: readonly string[],
   excluded: ReadonlySet<string>,
@@ -3590,7 +3189,6 @@ async function peersFirstExchanges(
       if (start === null || start === undefined || [...owners.values()].includes(index)) return;
       const path = matchCodexFirstExchange(screens[index]!, candidates, start, new Set([...excluded, ...owners.keys()]));
       if (path === null) return;
-      // this pane's screen shows that exchange too: whose it is stays open
       if (matchingCodexExchanges(own, candidates.filter((candidate) => candidate.path === path), 1).length > 0) return;
       owners.set(path, index);
       found = true;
@@ -3603,10 +3201,6 @@ async function peersFirstExchanges(
   return new Set(owners.keys());
 }
 
-/**
- * A peer in a proven different native store cannot own this store's threads. Unknown stores
- * still compete, and an explicit lookup home must agree with every Codex process of this pane first.
- */
 async function withoutOtherCodexStores(
   panes: HerdrPane[], paneId: string, cwd: string, home: string, processes: readonly { pid: number; argv?: string[] }[],
 ): Promise<HerdrPane[]> {
@@ -3614,19 +3208,16 @@ async function withoutOtherCodexStores(
     list.some(({ argv }) => argv?.some((arg) => arg === "--remote" || arg.startsWith("--remote=")));
   const rival = (pane: HerdrPane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex"
     && (pane.cwd == null || sameDirectory(pane.cwd, cwd));
-  // nothing to rule out: spare the process reads
   if (processes.length === 0 || remote(processes) || !panes.some(rival)) return panes;
   const databaseIdentity = (home: string): string | null => {
     const file = statSync(realpathSync(join(home, "state_5.sqlite")), { bigint: true });
     return file.isFile() ? `${file.dev}:${file.ino}` : null;
   };
-  // each process's store, or null when one cannot be placed for certain
   const storesOf = async (list: readonly { pid: number; argv?: string[] }[]): Promise<(string | null)[]> =>
     Promise.all(list.map(async ({ pid, argv }) => {
       const named = await certainProcessCodexHome(pid, argv ?? []);
       return named === null ? null : databaseIdentity(named);
     }));
-  // a foreground process whose command line cannot be read may be a Codex of any store
   const unread = (info: ProcessInfo | undefined) => (info?.foreground_processes ?? []).some(({ pid, argv }) => {
     if (argv?.length) return false;
     if (process.platform !== "linux") return true;
@@ -3645,18 +3236,12 @@ async function withoutOtherCodexStores(
       if (unread(info)) return pane;
       const { list } = await codexProcessesOf(pane.pane_id, info ?? null);
       if (list.length === 0 || remote(list)) return pane;
-      // every Codex process of the peer must sit in a known, different store
       return (await storesOf(list)).every((theirs) => theirs !== null && theirs !== store) ? null : pane;
     } catch { return pane; }
   }));
   return kept.filter((pane) => pane !== null);
 }
 
-/**
- * The prompt is not ownership evidence on its own. Require its submitted answer,
- * compare older conversations and other same-directory panes too. A peer showing the
- * same exchange leaves ownership ambiguous. No weak binding survives a poll.
- */
 async function shortThreadFromProcess(
   paneId: string, cwd: string, home: string, screen: string,
   processes: readonly { pid: number; argv?: string[] }[], panes?: HerdrPane[],
@@ -3674,10 +3259,7 @@ async function shortThreadFromProcess(
     db = opened.db;
     const columns = new Set(db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('threads')").all().map((column) => column.name));
     if (!columns.has("first_user_message") || !columns.has("source")) return null;
-    // a time in whole seconds as the last millisecond of that second: compared with the start's
-    // lower bound, a thread made in its process's second still counts as begun since
     const created = columns.has("created_at_ms") ? "COALESCE(created_at_ms, created_at * 1000 + 999)" : "created_at * 1000 + 999";
-    // The 33rd row disables this bounded lookup, never establishes uniqueness.
     const { where, params } = storedCwdCondition(cwd);
     const rows = db.query<CodexThreadRow, string[]>(
       `SELECT rollout_path AS rolloutPath, first_user_message AS firstUserMessage, ${created} AS createdAtMs
@@ -3685,13 +3267,9 @@ async function shortThreadFromProcess(
     ).all(...params);
     opened.settled();
     if (rows.length > SHORT_THREAD_LIMIT || rows.some((row) => !Number.isFinite(row.createdAtMs))) return null;
-    // Only a thread created after this process's start bound may be its new first exchange, and
-    // not one another pane holds by stronger evidence: after A's /new, B's one word still tells
     const rolloutOf = (row: CodexThreadRow) => codexRolloutPath(row.rolloutPath, home) ?? row.rolloutPath;
     const since = rows.filter((row) => row.createdAtMs >= notBefore);
-    // one thread begun since may be another pane's too: herdr reports it for that pane, or that pane shows its long answer
     const held = since.length > 0 ? await heldByOtherPanes(paneId, cwd, since.map(rolloutOf), rows, home, peers, rolloutOf) : new Set<string>();
-    // bound to another pane, or held by it: still competing exchanges, never this pane's
     const elsewhere = new Set(since.map(rolloutOf).filter((rollout) => theirs([rollout], paneId, held).length === 0));
     const begun = since.filter((row) => !elsewhere.has(rolloutOf(row)));
     if (begun.length === 0) return null;
@@ -3700,8 +3278,6 @@ async function shortThreadFromProcess(
     const peerPanes = codexPeersIn(peers, paneId, cwd);
     const peerScreens = await Promise.all(peerPanes.map((peer) =>
       paneRead({ paneId: peer.pane_id, source: "recent", lines: 400, stripAnsi: true })));
-    // a pane that started first sees every later pane's thread begun since too: those panes show
-    // them as their own first exchange, and say so first
     let excluded = elsewhere;
     if (begun.length > 1) {
       const shown = await peersFirstExchanges(screen, candidates, peerPanes, peerScreens.map((peer) => peer.text), excluded);
@@ -3712,11 +3288,9 @@ async function shortThreadFromProcess(
     if (path === null || theirs([path], paneId, held).length !== 1) return null;
     const own = candidates.filter((candidate) => candidate.path === path);
     for (const peer of peerScreens) {
-      // Headerless exchanges can disprove ownership, but never establish it.
       const screens = peer.text.includes("OpenAI Codex (v") ? [peer.text]
         : peer.text.split(/(?=^›[ \t]+)/m).map((text) => `OpenAI Codex (v\n${text}`);
       if (screens.some((text) => matchingCodexExchanges(text, own, 1).length > 0)) return null;
-      // A missing header is unknown, not evidence of a different conversation.
       if (displayedFirstExchange(peer.text) === null) {
         const matched = matchCodexTranscript(peer.text, candidates, new Set(), new Map(), false, null, false);
         if (matched === null || matched === path) return null;
@@ -3727,7 +3301,6 @@ async function shortThreadFromProcess(
   finally { db?.close(); }
 }
 
-/** The rollout of the thread herdr reports for a pane, by its path or its id in the store; null for none. */
 function reportedRollout(session: AgentInfo["agent_session"], home: string): string | null {
   if (!session?.value) return null;
   if (session.kind === "path") return codexRolloutPath(session.value, home);
@@ -3751,9 +3324,7 @@ function reportedRollout(session: AgentInfo["agent_session"], home: string): str
  * one from below lets in a thread an earlier Codex of the pane began just before), no thread of the
  * cwd began since, no other pane is bound to it, and no other Codex pane, of any folder (`codex -C`
  * and a resume open a thread of another), was running when it began: none of them could have
- * reported it here (Codex's shared daemon reports every TUI's thread to the pane that started it). A
- * report left from an earlier Codex, or naming another pane's thread, fails one of these, and then
- * nothing is guessed.
+ * reported it here (Codex's shared daemon reports every TUI's thread to the pane that started it).
  */
 async function freshReportedThread(
   paneId: string, cwd: string, home: string, reported: string, processes: readonly { pid: number }[], panes?: HerdrPane[],
@@ -3772,8 +3343,6 @@ async function freshReportedThread(
     const opened = openCodexStore(home);
     db = opened.db;
     const columns = new Set(db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('threads')").all().map((column) => column.name));
-    // a time in whole seconds as its first millisecond to be begun since this pane's start for certain,
-    // and as its last to be begun before another pane's start for certain
     const ms = columns.has("created_at_ms");
     const earliest = ms ? "COALESCE(created_at_ms, created_at * 1000)" : "created_at * 1000";
     const latest = ms ? "COALESCE(created_at_ms, created_at * 1000 + 999)" : "created_at * 1000 + 999";
@@ -3784,13 +3353,11 @@ async function freshReportedThread(
     opened.settled();
     const row = rows.find((candidate) => (codexRolloutPath(candidate.rolloutPath, home) ?? candidate.rolloutPath) === reported);
     if (row === undefined || !Number.isFinite(row.createdAtMs) || row.createdAtMs < notBefore) return false;
-    // another thread of the cwd begun since (a /new) may be what the pane shows now
     if (rows.some((other) => other !== row && !(other.createdAtMs < row.createdAtMs))) return false;
     const peers = (panes ?? (await sessionSnapshot()).panes).filter((pane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex");
     for (const peer of peers) {
       const { list } = await codexProcessesOf(peer.pane_id);
       const bounds = list.map(({ pid }) => processStartLowerBound(pid));
-      // one whose start cannot be told may have been running then
       if (bounds.length === 0 || bounds.some((bound) => bound === null || bound <= row.createdLatestMs)) return false;
     }
     return true;
@@ -3858,7 +3425,7 @@ async function openRollouts(paneId: string, home: string, known?: ProcessInfo | 
         try {
           const proven = statSync(link, { bigint: true });
           if (readlinkSync(link) === target) identity = `${proven.dev}:${proven.ino}`;
-        } catch { /* closed meanwhile: no proof */ }
+        } catch {}
         // two files held under one path, or one whose identity could not be read, prove nothing
         if (identity === null || conflicted.has(path) || (held.has(path) && held.get(path) !== identity)) { held.delete(path); conflicted.add(path); }
         else held.set(path, identity);
@@ -3868,16 +3435,6 @@ async function openRollouts(paneId: string, home: string, known?: ProcessInfo | 
   return { codexProcesses, processes, open, held };
 }
 
-/**
- * The rollout a pane's Codex writes when that is certain without reading its screen: the one
- * rollout its processes hold open, or the one a chat read last matched to
- * the same processes while no thread begun in `cwd` since may have replaced it (/new). Nothing is
- * matched or bound here, so a reader in the background (the session plan, server/session-plan.ts)
- * never changes what codexTranscriptPath decides for the chat. Unlike the chat it does not ask the
- * other panes' screens whose a newer thread is: such a thread leaves it unsure until a chat read
- * matches the pane again. The thread herdr reports is a hint, as for the chat (codexTranscriptPath):
- * taken only as the pane's fresh conversation (freshReportedThread).
- */
 export async function codexOpenRollout(paneId: string, cwd: string | null | undefined, home = defaultCodexHome()): Promise<string | null> {
   const agent = await codexAgentInfo(paneId);
   const { codexProcesses, processes, open } = await openRollouts(paneId, home);
@@ -3885,7 +3442,6 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
   if (titled !== undefined) return titled;
   if (open.size === 1) return [...open][0]!;
   const reported = cwd ? reportedRollout(agent.agent_session, home) : null;
-  // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
   if (reported !== null && !agent.nestedTerminal && !agent.unlabelled && resumedThread(codexProcesses.map((process) => process.argv ?? [])) === null
     && await freshReportedThread(paneId, cwd!, home, reported, codexProcesses)) return reported;
   const bound = boundRollouts.get(paneId);
@@ -3901,19 +3457,11 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
     if (titledAway) return null;
     return newer.length === 0 ? bound.path : null;
   } catch (error) {
-    // a store that changed while it was read tells nothing, and keeps no binding. An immutable read that
-    // failed on a store that did not change failed as any read would (an older store's tables)
     if (error instanceof CodexStoreChanged || !storeUnchanged(opened)) return null;
-    // no store to ask, as codexTranscriptPath then keeps its binding too; one the title made cannot be checked
     return bound.titled === true ? null : bound.path;
   } finally { db?.close(); }
 }
 
-/**
- * codexHistoryTail, with the record it cuts at its start: the read drops a cut first line (readRange), and that
- * line may be what tells, an answer or a tool's output longer than the read. `lead`: what the read's budget holds
- * of it, as written in the file (the end of a record, no JSON by itself), "" when the read begins at a record.
- */
 function historyTailWithLead(path: string, budget: number, home: string): { text: string; lead: string } {
   const chunks: string[] = [];
   let lead = "";
@@ -3936,21 +3484,15 @@ function historyTailWithLead(path: string, budget: number, home: string): { text
   return { text: chunks.join("\n"), lead };
 }
 
-/** Whether a rollout fits the read and continues no earlier one, so that its read is all of it (as the short answers' `cut`). */
 function readWhole(path: string): boolean {
   try { return Object.keys(record(rolloutHeader(path)?.history_base)).length === 0 && statSync(path).size <= 1024 * 1024; } catch { return false; }
 }
 
-/** A thread that was only started: read whole, it records no turn at all, so no pane shows a turn of it. */
 const onlyStarted = (candidate: { path: string; text: string }): boolean => turnless(candidate) && readWhole(candidate.path);
 
 /**
- * What each pane's last lookup of a kind weighed (the screen, the processes and every read) and found: the same
- * screen over the same reads gives the same answer, a tie or a refusal, without a scan. A lookup comes every 2 s
- * while a pane's chat has no conversation and every 5 s after, and each scan reads every candidate
- * (lastTurnConversation, withoutStartedThreads). No binding: one read that grew, one thread loaded or unloaded,
- * and it is weighed again. A candidate's read is told by its length and hash; a rollout not read yet (the resumed
- * one, a loaded one) by its inode, size and time of change.
+ * A lookup comes every 2 s while a pane's chat has no conversation and every 5 s after, and each scan
+ * reads every candidate (lastTurnConversation, withoutStartedThreads).
  */
 const lookupAnswers = new Map<string, { weighed: string; found: unknown }>();
 
@@ -3974,7 +3516,6 @@ async function conversationsBeside(asked: string, processes: string, screen: str
   return { beside, weighed, known: new Set([...folder, ...beside]) };
 }
 
-/** The answer kept for a pane's lookup of a kind, when it asks the very same question; else what `weigh` finds, kept in its place. */
 function answerKept<Found>(kind: string, paneId: string, weighed: string, weigh: () => Found): Found {
   const key = `${kind}\0${paneId}`;
   const last = lookupAnswers.get(key);
@@ -3987,12 +3528,10 @@ function answerKept<Found>(kind: string, paneId: string, weighed: string, weigh:
 }
 
 /**
- * Whether what a lookup weighed is still all there is to weigh once it has its answer: the pane shows the same
- * screen under the same processes, and Codex has no thread loaded that was not weighed (`known`). The loaded
- * threads are read after the screen, so a pane may move on meanwhile; and a resume through the picker in that time
- * loads a thread of another folder whose replay may be this very screen. Read in this order, the screen again and
- * then the loaded threads again: a thread loaded before that last screen read is then among them. One unloaded
- * meanwhile changes nothing: it was weighed.
+ * The loaded threads are read after the screen, so a pane may move on meanwhile; and a resume through the
+ * picker in that time loads a thread of another folder whose replay may be this very screen. Read in this
+ * order, the screen again and then the loaded threads again: a thread loaded before that last screen read is
+ * then among them.
  */
 async function stillAsWeighed(paneId: string, processes: string, screen: string, home: string, known: ReadonlySet<string>): Promise<boolean> {
   try {
@@ -4003,21 +3542,8 @@ async function stillAsWeighed(paneId: string, processes: string, screen: string,
   } catch { return false; }
 }
 
-/**
- * The conversation the last finished turn on a pane's screen ties it to, where no long answer shown whole does
- * (#3262): footedShortTranscript, then footedTailTranscript. Both prove less than a long answer, so both are also
- * weighed against the conversations of other folders the pane may be running (conversationsBeside); where those
- * cannot be read, neither binds. Nor does the end of a long answer beside a candidate that continues a rollout
- * which was not found (a fork, a backtrack): it shows what its parent said, and its read holds none of it.
- *
- * Nothing found here is remembered as a binding: the screen is asked again on every lookup, so a pane that moved
- * on (a resume in the same TUI makes no thread, and may even draw the same rows) is weighed against what the
- * store holds then. Only the answer to the very same question is kept (lookupAnswers). With every rollout weighed
- * (`known`), for the caller to hold the pane's last read to (stillAsWeighed).
- */
 async function lastTurnConversation(paneId: string, processes: string, screen: string, candidates: { path: string; text: string }[], resumed: string | null, owners: ReadonlySet<string>, home: string):
   Promise<{ found: string; known: ReadonlySet<string> } | null> {
-  // nothing to read unless the screen shows its last turn finished
   const view = footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
   if (idleTurnFooter(view.split("\n").map((line) => line.replace(/\r$/, ""))) === null
     && completedCodexAnswer(screen, CODEX_TURN_FOOTER) === null) return null;
@@ -4031,9 +3557,6 @@ async function lastTurnConversation(paneId: string, processes: string, screen: s
       const every = [...candidates, ...store.beside.map((path, at) => ({ path, text: others[at]!.text }))];
       const short = footedShortTranscript(screen, every, owners, whole);
       if (short !== null) return short;
-      // The record a read cut at its start tells only what a conversation said (saidAnywhere), so it is read where
-      // that is asked: for the end of a long answer, and only once the reads as they are leave one conversation.
-      // Each is weighed as a read of its own, so that the read it was cut from keeps what was found in it
       const leads = () => [...candidates.flatMap((candidate) => whole(candidate.path) ? [] : [{ path: candidate.path, text: historyTailWithLead(candidate.path, 1024 * 1024, home).lead }]),
         ...store.beside.map((path, at) => ({ path, text: others[at]!.lead }))].filter((lead) => lead.text !== "");
       const completion = completedCodexAnswer(screen, CODEX_TURN_FOOTER);
@@ -4056,11 +3579,7 @@ async function lastTurnConversation(paneId: string, processes: string, screen: s
  * matchCodexTranscript asked again without the threads that were only started (#3262 case 3): read whole, such a
  * thread records no turn, so it cut no prompt and no pane shows a turn of it; left in, a second Codex started in
  * the folder took the match from a pane showing an answer Codex renders its own way, for as long as it was asked
- * nothing. What that second match finds must hold against the conversations of other folders the pane may be
- * running as well (conversationsBeside): one of them asked the prompt shown may be the one on screen, and where
- * they cannot be read the match is not taken. A thread of another folder that was only started is left out as this
- * folder's are. With every rollout weighed, as lastTurnConversation; or `refused`, the conversation this folder's
- * threads alone gave, where those of other folders leave the turn open: the caller then holds no binding to it.
+ * nothing.
  */
 async function withoutStartedThreads(paneId: string, processes: string, screen: string, candidates: { path: string; text: string }[], scrutinized: ReadonlySet<string>, resumed: string | null, owners: ReadonlySet<string>, home: string):
   Promise<{ found: string; known: ReadonlySet<string> } | { refused: string } | null> {
@@ -4107,22 +3626,16 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   }
   const agent = await codexAgentInfo(paneId);
   const session = agent.agent_session;
-  // the read that decides the Kiro guard failed: a later one could prove a nested Codex the guard then misses (#2774)
   if (agent.processRead === undefined && !agent.nestedTerminal) return null;
 
   // read now, never the caller's earlier answer (agent.get's own read, when herdr gave one): a screen match below
   // binds the rollout to these processes, and one read before a Codex left (or before its pid came back) would
   // bind a conversation to the wrong one
-  // (an answer without process facts is asked again, as before: a nested Codex may yet be proven from the next one)
   const { codexProcesses, processes, open, held } = await openRollouts(paneId, home, agent.processRead?.info);
-  // no Codex process of the pane proven now: what its screen still shows (an earlier occupant's, or
-  // a Codex gone since) ties it to no conversation, and the terminal stands in
   if (codexProcesses.length === 0) return null;
   // an unlabelled pane on an app server elsewhere (--remote) shows that server's conversation: nothing this store
   // holds is proof of it, by the id its command line resumed or by an answer both happen to hold
   if (agent.unlabelled && codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
-  // `home` was chosen while no Codex process of the pane was seen (paneCodexHomePlaced): one seen now
-  // must be known to write there (its environment says so), or what this store holds is not proof
   const first = codexProcesses[0];
   if (homeUnplaced && first !== undefined && await processCodexHome(first.pid, first.argv) !== home) return null;
   // `home` was placed by the Codex an earlier read named (the caller's, or paneCodexHomePlaced's own): the one seen
@@ -4147,18 +3660,13 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   let paths: string[] = [...open];
   let resumedPath: string | null = null;
   let resumedNewer: string[] = [];
-  /** the first message of each newer thread, when the store keeps it */
   const firsts = new Map<string, string>();
   const bound = boundRollouts.get(paneId);
   let boundHere = bound !== undefined && bound.processes === processes && processes !== "" ? bound : undefined;
   let boundNewer: string[] = [];
-  /** the rollout of the thread herdr has for this pane: a candidate like the others, never an answer alone */
   const reported = reportedRollout(session, home);
-  /** whether every interactive thread in this cwd is among the candidates */
   let listed = false;
-  /** the conversation only the title offers (titledCandidate), from another folder */
   let titledElsewhere: string | null = null;
-  /** this folder's conversations, as the store lists them: the only ones a footer on screen may belong to */
   let folderRollouts = new Set<string>();
   let opened: ReturnType<typeof openCodexStore> | undefined;
   try {
@@ -4178,8 +3686,6 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
       resumedPath = row ? codexRolloutPath(row.rollout_path, home) : null;
       resumedNewer = newerThreads(db, cwd, since, resumed, paneId, home, firsts);
     }
-    // the same guard for a match: after /new the process writes a thread begun since
-    // (created_at has whole seconds, so one begun in the match's second counts too)
     if (boundHere !== undefined) boundNewer = newerThreads(db, cwd, Math.floor(boundHere.at / 1000), null, paneId, home, firsts);
     const { where, params } = storedCwdCondition(cwd);
     const rows = db.query<{ rollout_path: string }, string[]>(
@@ -4187,7 +3693,6 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
       `SELECT rollout_path FROM threads WHERE ${where} AND archived = 0 AND agent_role IS NULL${interactive(db)} ORDER BY updated_at DESC LIMIT 33`,
     ).all(...params);
     const rollouts = rows.slice(0, 32).map((row) => codexRolloutPath(row.rollout_path, home));
-    // a thread whose rollout is gone or outside the store is still a conversation of this cwd
     listed = rows.length <= 32 && !rollouts.includes(null);
     folderRollouts = new Set(rollouts.filter((path): path is string => path !== null));
     // since Codex 0.157 the shared app-server daemon, not the TUI, holds the rollout open, and a resume
@@ -4197,15 +3702,10 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     if (titled !== null && !paths.includes(titled)) { titledElsewhere = titled; paths.push(titled); }
     opened.settled();
   } catch (error) {
-    // a store that changed while it was read tells nothing, and what was read of it is dropped: the terminal
-    // stands in until the next read. An immutable read that failed on a store that did not change failed as
-    // any read would (an older store's tables), and the open descriptors still tell below
     if (error instanceof CodexStoreChanged || !storeUnchanged(opened)) return null;
-    /* Older installations can still resolve their open descriptors. */
   }
   finally { db?.close(); }
   if (reported !== null && !paths.includes(reported)) paths.push(reported);
-  // a binding the title made holds only while the title still names that thread
   if (boundHere?.titled === true && titledElsewhere !== boundHere.path) {
     boundRollouts.delete(paneId);
     boundHere = undefined;
@@ -4241,31 +3741,15 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     if (boundRollouts.size > 64) boundRollouts.delete(boundRollouts.keys().next().value!);
     return matched;
   }
-  // An answer under 64 letters and digits ("확인", "ok") has no anchor for the match above; nor has one whose start
-  // scrolled off the screen, or one with a code block, whose fences Codex does not draw (#3262). The last finished
-  // turn on screen may still tell, on less (lastTurnConversation): so only against every conversation this pane may
-  // be running, each read (one left out of the 32, or whose rollout is gone, may be the one shown), and only one of
-  // this folder. Not for a nested pane, whose guard takes a substantial match alone, nor for an unlabelled one, whose
-  // peers may carry no label either, nor for a TUI of an app server elsewhere (--remote), whose conversation this
-  // store does not hold, nor while the command line resumed a thread the store cannot show (it may be the one on screen)
   if (screen !== null && listed && candidates.length === paths.length && !agent.nestedTerminal && !agent.unlabelled && (resumed === null || resumedPath !== null)
     && !codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) {
     const tied = await lastTurnConversation(paneId, processes, screen.text, candidates, resumedPath, folderRollouts, home);
     if (tied !== null) {
-      // the loaded threads were read since the screen was: a pane that moved on meanwhile is answered nothing
       if (!await stillAsWeighed(paneId, processes, screen.text, home, tied.known)) return null;
-      // Never remembered as a binding, as short answers never were: the next lookup asks the screen again. A
-      // binding to another conversation is to the one this pane left
       if (boundHere !== undefined && boundHere.path !== tied.found) boundRollouts.delete(paneId);
       return tied.found;
     }
   }
-  // Nothing on screen tells: a long run of tool output pushed the last answer out of
-  // the read, or nothing is answered yet. The same Codex process still writes the
-  // rollout it was last matched to, while no thread begun since in this cwd leaves it
-  // unsure: one another Codex pane here shows is that pane's. The binding is kept even
-  // when unsure, so it holds again once that thread turns out to be another pane's.
-  // Failing that, the thread it was resumed on, under the same rule as the binding.
   const unsure = [...new Set([...boundNewer, ...(resumedPath !== null ? resumedNewer : [])])];
   if (unsure.length > 0) {
     const own = [boundHere?.path, resumedPath].filter((path): path is string => typeof path === "string");
@@ -4274,43 +3758,28 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     resumedNewer = theirs(resumedNewer, paneId, claimed);
   }
   if (boundHere !== undefined && boundNewer.length === 0 && codexRolloutPath(boundHere.path, home) !== null) {
-    // a pane in use stays among the kept ones
     boundRollouts.delete(paneId);
     boundRollouts.set(paneId, boundHere);
     return boundHere.path;
   }
-  // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
   if (resumed === null && reported !== null && !agent.nestedTerminal && !agent.unlabelled
     && await freshReportedThread(paneId, cwd, home, reported, codexProcesses, panes)) return reported;
   if (resumed !== null) return resumedNewer.length === 0 ? resumedPath : null;
-  // Other nested terminals, and the peers of an unlabelled pane, may have no agent labels either, so the weaker
-  // exchange/peer heuristics cannot establish ownership. Only a substantial screen match (or its binding) can.
   if (agent.nestedTerminal || agent.unlabelled) return null;
-  // Nothing ties this pane to a rollout at all: no resume, no match by a long answer for this
-  // process, and so no /new to be unsure about (a session herdr names is only a candidate). Short
-  // answers on screen may tell (#283). Never remembered as a binding: what it shows is read again
-  // each time, and only a long answer binds the pane for when its screen no longer tells.
   if (boundHere !== undefined) return null;
   const short = screen === null ? null : await (async () => {
-    // and only against every conversation this pane may be running, read whole: one left out of
-    // the 32 or one whose rollout is gone may be what said the same short lines
     if (!listed || candidates.length !== paths.length) return null;
-    // read from each rollout itself, nothing remembered: one that continues another (a fork, a
-    // backtrack) shares that one's answers, and one past the budget was not read whole
     let cut: boolean[];
     try {
       cut = candidates.map((candidate) => Object.keys(record(rolloutHeader(candidate.path)?.history_base)).length > 0 || statSync(candidate.path).size > 1024 * 1024);
     } catch { return null; }
     const found = matchShortCodexAnswers(screen.text, candidates.map((candidate, index) => ({ ...candidate, cut: cut[index] })));
     if (found !== null) return found;
-    // it weighs this folder's threads only: beside a conversation the title offers from another
-    // folder, the same short exchange there would be left out of the choice
     if (titledElsewhere !== null) return null;
     return shortThreadFromProcess(paneId, cwd, home, screen.text, codexProcesses, panes);
   })();
   if (short !== null) return short;
-  // Last, after all of this folder's ways: the conversations a Codex process of the store has
-  // loaded, from any folder (#896). Not for a TUI of an app server elsewhere (--remote), which has
+  // Not for a TUI of an app server elsewhere (--remote), which has
   // its conversation loaded there, nor for one holding rollouts open itself.
   if (codexProcesses.length === 0 || open.size > 0
     || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;

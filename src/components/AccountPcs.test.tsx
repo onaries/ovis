@@ -140,7 +140,6 @@ describe("AccountSignIn", () => {
           }),
         );
       });
-      // Tap Google first so it becomes the remembered provider, then click Try again
       const googleBtn = renderer!.root.find((n) => n.type === "button" && n.props["data-provider"] === "google");
       await act(async () => { googleBtn.props.onClick(); });
       const retryBtn = renderer!.root.find((n) => n.type === "button" && n.props["data-action"] === "retry-signin");
@@ -150,7 +149,6 @@ describe("AccountSignIn", () => {
       await act(async () => { renderer?.unmount(); });
     }
 
-    // Remounted after an OAuth redirect failure with failedProvider="google" and no prior click
     const redirectRetried: string[] = [];
     try {
       await act(async () => {
@@ -173,8 +171,6 @@ describe("AccountSignIn", () => {
     }
   });
 
-  // the provider mark's placement outside a provider button (inline in the dashboard's foot) is what the browser
-  // computes: scripts/relay-dashboard-browser-qa.ts provider-mark-inline
 });
 
 describe("CheckPcsButton", () => {
@@ -225,7 +221,6 @@ describe("listedPcStateText", () => {
   const pc = (state: MyPc["state"], paired: boolean): MyPc => ({ server_id: "a".repeat(32), name: "Desk", state, last_seen_at: null, added_at: null, listed: true, paired, linked: paired });
 
   it("says a listed PC is in the account where no pairing can tell whether it waits for an approval", () => {
-    // a PC's own Settings reads the directory with no pairings, so every listed PC came out as needs-approval
     expect(listedPcStateText(pc("needs-approval", false), t as never)).toBe("In your account");
     expect(accountPcStateText(pc("needs-approval", false), t as never)).toBe("Needs approval");
   });

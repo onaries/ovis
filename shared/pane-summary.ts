@@ -45,6 +45,11 @@ type TextPart = Extract<ConversationPart, { kind: "text" }>;
 interface Words { part: TextPart; text: string }
 
 const FENCE = /^\s*(?:`{3,}[^`]*|~{3,}.*)$/u;
+/**
+ * an inline link or image, `[label](target)`, read as its label: a label of at most 200 characters, a target of at
+ * most 2000 that names a path, a file or an address (it holds `/`, `.`, `#` or `:`), so a call such as
+ * `handlers[0](event)` stays as written; the bounds keep each `[` from scanning to the line's end
+ */
 const LINK = /!?\[([^\]\n]{0,200})\]\(([^()\s]{1,2000})(?:\s+"[^"\n]{0,200}")?\)/gu;
 const LINK_TARGET = /[/.#:]/u;
 const BLOCK_MARK = /^\s*(?:#{1,6} |[-*+] |\d+[.)] |> )/u;

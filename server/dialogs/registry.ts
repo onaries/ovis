@@ -8,7 +8,6 @@ import type { DialogReader, OmoAsk } from "./shared.ts";
 import { agentPickerOwnsScreen } from "./fallback.ts";
 export type { DialogReader } from "./shared.ts";
 
-/** One read pass's view of the pane, built once per pass and never changed (onePerPass relies on it). */
 export interface ReaderContext {
   readonly agent: string;
   readonly omoAsk: OmoAsk | null;
@@ -18,7 +17,6 @@ export interface ReaderContext {
   readonly working: boolean;
 }
 
-/** The agents whose screens the prompt read parses (readKnownPrompt); any other agent's card is the fallback card alone. */
 export const SCREEN_READ_AGENTS: ReadonlySet<string> = new Set(["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", "letta", ""]);
 
 /**

@@ -35,8 +35,19 @@ describe("the shell's entry", () => {
     expect(shellEntry(`${APP}/s/not-an-id/#offer=abc`)).toEqual({ serverId: null, offer: null, damaged: true });
   });
 
+  // the mark of a code its PC pins keeps its one value, and no other
+  it("keeps the mark admission: 1 of an offer, and calls any other value of it damaged", () => {
+    const offer = { ...testOffer(), code: "123456" };
+    expect(shellEntry(encodeOffer({ ...offer, admission: 1 }, APP)).offer?.admission).toBe(1);
+    expect(shellEntry(encodeOffer(offer, APP)).offer).not.toHaveProperty("admission");
+    // an offer is written by hand here: encodeOffer would refuse these too
+    for (const value of [2, true, "1", 0]) {
+      const fragment = Buffer.from(JSON.stringify({ ...offer, admission: value })).toString("base64url");
+      expect(shellEntry(`${APP}/s/${offer.server_id}/#offer=${fragment}`)).toMatchObject({ offer: null, damaged: true });
+    }
+  });
+
   it("calls an offer forged when its key is not the one its PC's id is derived from", () => {
-    // Given a PC's real identity (server/relay/identity.ts) and a key of someone else's.
     const own = generateKeyPair().publicKey;
     const genuine = { ...testOffer(), server_id: deriveServerId(own), server_public_key: exportPublicKey(own) };
     // Then only the PC's own key passes; another key under its id, or no key at all, is forged.
@@ -52,7 +63,6 @@ describe("the shell's entry", () => {
     const link = (key: Uint8Array) => ({ key: exportPublicKey(key), from: "link" as const });
     const saved = (key: Uint8Array) => ({ key: exportPublicKey(key), from: "saved" as const });
     expect(keyMismatch(serverId, [link(own)])).toBeNull();
-    // the saved key and the link's disagree: whichever is not the id's is named, with where it came from
     expect(keyMismatch(serverId, [saved(own), link(other)])).toEqual({ expected: serverId, received: deriveServerId(other), from: "link" });
     expect(keyMismatch(serverId, [saved(other), link(own)])).toEqual({ expected: serverId, received: deriveServerId(other), from: "saved" });
     expect(keyMismatch(serverId, [{ key: "not-a-key", from: "link" }])).toEqual({ expected: serverId, received: null, from: "link" });
@@ -209,7 +219,6 @@ describe("the offer fragment", () => {
   });
 
   it("is taken off before boot loads, requests or opens anything, and the shell gets it whole", async () => {
-    // Given a page loaded with an offer, and every way boot could reach out recorded in order.
     const offer = encodeOffer(testOffer(), APP);
     const loaded = page(offer);
     const order: string[] = [];
@@ -223,18 +232,15 @@ describe("the offer fragment", () => {
       WebSocket: function () { order.push("socket"); },
     });
     try {
-      // When boot runs, with the shell's chunk loading as lib/relay.ts loads it.
       bootRelayShell({} as HTMLElement, () => ({}) as Root, () => {
         order.push("load");
         const shell = { mountRelayShell: async ({ entryUrl }: RelayShellMount) => { mounted.resolve(entryUrl); } };
         return Promise.resolve(shell as Awaited<ReturnType<typeof loadRelayShell>>);
       });
-      // Then the address changed first and synchronously, and the shell still got the offer.
       expect(order).toEqual(["address", "load"]);
       expect(loaded.replaced).toEqual([`/s/${"12".repeat(16)}/`]);
       expect(await mounted.promise).toBe(offer);
       expect(order).toEqual(["address", "load"]);
-      // And Back onto an older entry that still holds a query moves it into the fragment too.
       loaded.location.search = "?file=%2Fa.md";
       loaded.listeners.get("popstate")?.();
       expect(loaded.replaced.at(-1)).toBe(`/s/${"12".repeat(16)}/#file=%2Fa.md`);

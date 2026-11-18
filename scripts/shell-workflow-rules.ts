@@ -1,5 +1,3 @@
-// Rules shared by release.yml's and shell-preview.yml's hosted-shell jobs and their tests
-// (scripts/shell-deploy-workflow.test.ts, scripts/shell-preview-workflow.test.ts).
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, linkSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -46,7 +44,6 @@ export function unreadWorkflowFiles(paths: string[]): string[] {
   });
 }
 
-/** The entries at the top of .github/workflows and under .github/actions (symlinks listed, not followed), as paths from `base`. */
 function workflowEntries(base: string): [string, Dirent][] {
   const top = readdirSync(join(base, ".github/workflows"), { withFileTypes: true }).map((entry): [string, Dirent] => [`.github/workflows/${entry.name}`, entry]);
   const actions = (readdirSync(join(base, ".github/actions"), { recursive: true, withFileTypes: true }) as Dirent[])
@@ -54,7 +51,6 @@ function workflowEntries(base: string): [string, Dirent][] {
   return [...top, ...actions];
 }
 
-/** Every regular file at the top of .github/workflows and under .github/actions, as paths from the repository's root. */
 export function workflowAndActionFiles(): string[] {
   return workflowEntries(root).filter(([, entry]) => entry.isFile()).map(([path]) => path).sort();
 }
@@ -146,7 +142,6 @@ export function cacheProblems(workflow: Workflow): string[] {
   return problems;
 }
 
-/** What identifies each step of a job: its name, else its action without the SHA, else its script. */
 export const stepList = (job: Job): string[] => steps(job).map((step) => step.name ?? step.uses?.replace(/@.*/, "") ?? step.run!);
 
 /** Runs `script` as GitHub runs a `run:` (`bash -e -o pipefail`) in `cwd` with `env` added to a minimal environment. */

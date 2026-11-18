@@ -1,9 +1,6 @@
 .terminal-viewport-tools { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .terminal-find-hit { position: absolute; background: color-mix(in srgb, var(--accent) 25%, transparent); pointer-events: none; }
 .terminal-find-hit.is-current { background: color-mix(in srgb, var(--accent) 38%, transparent); outline: var(--hairline) solid var(--accent); outline-offset: calc(-1 * var(--hairline)); }
-/* the way back to the bottom while reading up: the chat lens' round, wordless form (its edge too, which the
-   terminal's own background would swallow: ChatView.css .chat-new-messages), anchored by its bottom-right corner
-   to the grid's visible bottom-right corner */
 .terminal-jump-bottom {
   position: absolute;
   border-color: var(--border-input);
@@ -17,7 +14,6 @@
   pointer-events: auto;
 }
 .terminal-jump-bottom svg { width: var(--icon-size); height: var(--icon-size); }
-/* a resting pointer fills it as a .btn is filled, and keeps its edge: .btn's hover edge would be the faint one again */
 @media (hover: hover) {
   .terminal-jump-bottom:hover:not(:disabled) { border-color: var(--border-input); }
 }

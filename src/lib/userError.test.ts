@@ -106,7 +106,6 @@ describe("machineErrorText", () => {
 describe("the PC proxy's unusable-answer errors", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; setCurrentLanguage("en"); });
-  // what server/machine-api.ts answers for another PC's answer it would not pass on
   const proxied = [
     { code: "remote_response_too_large", message: new RemoteResponseTooLarge().message },
     { code: "remote_response_invalid", message: new RemoteResponseInvalid().message },

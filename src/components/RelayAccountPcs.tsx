@@ -13,7 +13,6 @@ import { deviceOs } from "../lib/phone.ts";
 
 /** The account as this list uses it: its PCs that a device can pair with (key and relay from the directory), and the admission that vouches for this PC. */
 export interface AccountPcsSource {
-  /** the account's PCs with a key and relay to pair with; null when this page is not signed in */
   list(): Promise<readonly AccountPcEntry[] | null>;
   /** says, under the sign-in the list was read with, that this PC's server waits at `serverId` with `key` */
   admit(serverId: string, label: string, key: string): Promise<void>;
@@ -42,9 +41,8 @@ type Pairing = { server_id: string; digits: string | null; abort: AbortControlle
 const spaced = (digits: string): string => `${digits.slice(0, 3)} ${digits.slice(3)}`;
 
 /**
- * Add a connection → Ovis relay, signed in with this PC in the account: the account's other PCs, as the SSH tab lists
- * its PCs. One already in this app reads Connect; one that would pair reads Add, which has this PC's server pair with
- * it through the relay once a member of the account approves it on another device (docs/account.md, "Adding a PC of
+ * One already in this app reads Connect; one that would pair reads Add, which has this PC's server pair with it
+ * through the relay once a member of the account approves it on another device (docs/account.md, "Adding a PC of
  * your account"); an older or offline one says so and gets no button.
  */
 export function RelayAccountPcs({ machines, onConnectMachine, source }: { machines: readonly Machine[]; onConnectMachine: (machine: Machine) => void; source?: AccountPcsSource }) {
@@ -57,7 +55,6 @@ export function RelayAccountPcs({ machines, onConnectMachine, source }: { machin
   const [failure, setFailure] = useState<{ server_id: string; message: string } | null>(null);
   const own = machines.find((machine) => machine.kind === "local")?.server_id;
   const added = (serverId: string): Machine | undefined => machines.find((machine) => machine.kind !== "local" && (machine.relay?.server_id ?? machine.server_id) === serverId);
-  // the list as last read, and which of its PCs were asked whether they would pair: an answer for an older one is dropped
   const listed = useRef({ asked: new Set<string>() });
   useEffect(() => {
     let live = true;
@@ -71,8 +68,6 @@ export function RelayAccountPcs({ machines, onConnectMachine, source }: { machin
     });
     return () => { live = false; };
   }, [own]);
-  // a PC already in this app opens with Connect: only the others are asked whether they would pair, each on its own so a
-  // PC slow to answer (offline) holds no other row on Checking…, and one is asked once another window removed it
   useEffect(() => {
     if (pcs === null) return;
     const round = listed.current;
@@ -93,7 +88,6 @@ export function RelayAccountPcs({ machines, onConnectMachine, source }: { machin
       });
     }
   }, [pcs, machines]);
-  // closing the sheet drops answers still on their way
   useEffect(() => () => { listed.current = { asked: new Set() }; }, []);
   // closing the sheet cancels a comparison under way: that PC's server ends it, and nothing is kept
   const running = useRef<AbortController | null>(null);

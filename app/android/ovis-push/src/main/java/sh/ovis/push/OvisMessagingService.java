@@ -21,17 +21,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * Shows a PC's push. The relay sends FCM a data message whose "ovis" field is the PC's ciphertext
+ * The relay sends FCM a data message whose "ovis" field is the PC's ciphertext
  * (standard base64); it is decrypted here with this phone's keys and shown as the browser's
- * service worker shows it (public/sw.js): the PC's title and body, one notification per tag. A
- * push that cannot be decrypted still shows, with the relay's fallback line.
+ * service worker shows it (public/sw.js): the PC's title and body, one notification per tag.
  */
 public class OvisMessagingService extends FirebaseMessagingService {
-    /**
-     * The action of an alert's tap, and what it carries: the PC (the origin its endpoint was made
-     * for, and its relay ID) and the pane, which MainActivity opens when that PC is saved
-     * (PCStore.alertLink), as the browser's worker opens the pane (public/sw.js notificationclick).
-     */
     public static final String ACTION_OPEN_ALERT = "sh.ovis.push.OPEN_ALERT";
     public static final String EXTRA_ORIGIN = "sh.ovis.push.origin";
     public static final String EXTRA_SERVER_ID = "sh.ovis.push.server_id";
@@ -58,14 +52,12 @@ public class OvisMessagingService extends FirebaseMessagingService {
                 tag = payload.optString("tag", "").isEmpty() ? tag : payload.getString("tag");
                 alert = payload;
             } catch (GeneralSecurityException | IllegalArgumentException | JSONException e) {
-                // keys made again since the PC subscribed, or a damaged body: the fallback line shows
                 Log.w(TAG, "a push could not be read: " + e.getClass().getSimpleName());
             }
         }
         show(title, body, tag, alert);
     }
 
-    /** A JSON string field, or null when it is absent, null or empty. */
     private static String field(JSONObject payload, String name) {
         if (payload == null || payload.isNull(name)) return null;
         String value = payload.optString(name, "");
@@ -80,8 +72,6 @@ public class OvisMessagingService extends FirebaseMessagingService {
         Intent open = getPackageManager().getLaunchIntentForPackage(getPackageName());
         String pane = field(alert, "pane_id");
         if (open != null && pane != null) {
-            // the PC that sent it: the one its endpoint was made for. An alert from an older PC names
-            // none, and its tap opens the app as it was
             String endpoint = field(alert, "endpoint");
             open.setAction(ACTION_OPEN_ALERT)
                 .putExtra(EXTRA_ORIGIN, endpoint == null ? null : PushStore.originOf(this, endpoint))
@@ -95,7 +85,6 @@ public class OvisMessagingService extends FirebaseMessagingService {
         // and component, never its extras, so a shared one would open the latest alert's pane from
         // every notification. The tag, in the data, is what the notification is shown under, so the
         // same alert again replaces both; a request code alone (a hash of the tag) could collide.
-        // MainActivity.openAlert drops the data with the action
         if (open != null && pane != null) open.setData(Uri.fromParts("ovis-alert", tag, null));
         PendingIntent tap = open == null ? null : PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         NotificationCompat.Builder notification = new NotificationCompat.Builder(this, CHANNEL)

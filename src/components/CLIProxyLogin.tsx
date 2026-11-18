@@ -7,7 +7,6 @@ import { useT } from "../lib/i18n.ts";
 type Pending = CLIProxyLogin & { readonly provider: CLIProxyProvider };
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-/** A provider's hub sign-in, kept beside that provider's local sign-in. */
 export function CLIProxyAccountLogin({ provider, active, onStarted, onAccountsChanged }: {
   readonly provider: CLIProxyProvider;
   readonly active: boolean;

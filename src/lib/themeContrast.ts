@@ -27,7 +27,6 @@ export const CONTRAST_PAIRS: readonly ContrastPair[] = [
   { fg: "danger-text", bg: "bg-panel", floor: TEXT_FLOOR },
   ...["status-working", "status-blocked", "status-done"].map((fg) => ({ fg, bg: "bg-panel", floor: INDICATOR_FLOOR })),
   ...["bg", "bg-panel", "bg-elevated"].map((bg) => ({ fg: "notice", bg, floor: TEXT_FLOOR })),
-  // the chat's code blocks sit on the panels, the source viewer's on --bg (sourceTheme.ts)
   ...["syntax-function", "syntax-keyword", "syntax-string", "syntax-number", "syntax-type", "syntax-variable", "syntax-meta"]
     .flatMap((fg) => ["bg", "bg-panel", "bg-elevated"].map((bg) => ({ fg, bg, floor: TEXT_FLOOR }))),
   ...["notice", "text", "text-strong"].map((fg) => ({ fg, bg: "notice-tint", floor: TEXT_FLOOR })),

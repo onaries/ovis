@@ -4,7 +4,6 @@ import { agentRowTokens } from "./herdr-sidebar.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
 
-// A remote bridge that answers like the local conversation route: an ETag, then 304 while unchanged.
 const asked: (string | null)[] = [];
 const promptAsked: (string | null)[] = [];
 const PLAN_CARD = { id: "claude-plan:abc", agent: "claude", kind: "plan", title: "Plan", question: "Would you like to proceed?", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null };
@@ -23,24 +22,18 @@ const remote = Bun.serve({
     const path = new URL(request.url).pathname;
     if (path === "/api/pane/conversation/image") return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
     if (path === "/api/pane/conversation/tool-output") return new Response("complete remote output", { headers: { "content-type": "text/plain; charset=utf-8" } });
-    // a PC that answers a file, or a stat that called it a PDF, with a document of its own and a policy that lets it run
-    // a PDF's type with another one after it: not a PDF
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".mixed")) {
       return new Response("<script>document.title = 'ran'</script>", { headers: { "content-type": "application/pdf, text/html" } });
     }
-    // a PDF's type with a parameter, then another type: a PDF, by its first type
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".pdfparams")) {
       return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf;x=y, text/html" } });
     }
-    // a picture that runs a script, asked for as a page
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".svg")) {
       return new Response("<svg xmlns='http://www.w3.org/2000/svg'><script>parent.document.title = 'ran'</script></svg>", { headers: { "content-type": "image/svg+xml", "content-security-policy": "script-src *" } });
     }
-    // a page whose policy allows any host and any frame
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".loose")) {
       return new Response("<script>fetch('https://example.invalid/')</script>", { headers: { "content-type": "text/html", "content-security-policy": "default-src *; script-src 'unsafe-inline' *" } });
     }
-    // a page's type with a parameter, then a picture's
     if (path === "/api/fs/file" && new URL(request.url).searchParams.get("path")?.endsWith(".htmlparams")) {
       return new Response("<svg xmlns='http://www.w3.org/2000/svg'><script>parent.document.title = 'ran'</script></svg>", { headers: { "content-type": "text/html;x=y, image/svg+xml" } });
     }
@@ -59,7 +52,6 @@ const remote = Bun.serve({
     }
     if (path === "/api/pane/commands" || path === "/api/agent/commands") {
       commandsAsked.push(path);
-      // a PC whose skill folders are too slow to scan in time (#2254)
       if (new URL(request.url).searchParams.get("pane_id") === "busy") return Response.json({ error: { code: "file_busy", message: "the skill folders did not answer in time" } }, { status: 503, headers: { "retry-after": "1" } });
       return Response.json({ commands: [{ name: "deploy", description: "SECRET", source: "custom", id: "/work/.commandcode/commands/deploy.md" }] });
     }
@@ -93,7 +85,6 @@ const remote = Bun.serve({
     if (path === "/api/pane/prompt") {
       const search = new URL(request.url).searchParams;
       promptAsked.push(search.get("plan"));
-      // pane `old` is a PC that does not know `plan=0` and always answers with the plan file
       const screen = search.get("plan") === "0" && search.get("pane_id") !== "old";
       return Response.json({ prompt: screen
         ? { ...PLAN_CARD, body: "4. The last step that fits the pane." }
@@ -126,7 +117,6 @@ describe("PC proxy", () => {
     const unchanged = await handleMachineRequest(new Request(url, { headers: { "if-none-match": "\"v1\"" } }), manager);
     expect(unchanged.status).toBe(304);
     expect(unchanged.headers.get("etag")).toBe("\"v1\"");
-    // that PC's clock as it answered, which its turns' times are on
     expect(unchanged.headers.get("x-server-time")).toBe("2026-11-05T10:00:00.000Z");
     expect(await unchanged.text()).toBe("");
     expect(asked).toEqual([null, "\"v1\""]);
@@ -180,7 +170,6 @@ it("never asks a PC for a pane's or a folder's command rows for a watching devic
     expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
   }
   expect(commandsAsked).toEqual([]);
-  // a driving device gets the PC's rows
   const driven = await handleMachineRequest(new Request(`${base}/pane/commands?pane_id=w1:p1`), manager);
   expect(driven.status).toBe(200);
   expect(JSON.stringify(await driven.json())).toContain("SECRET");
@@ -216,7 +205,6 @@ it("never asks a PC for the paths under a pane's folder or a plugin run's output
     expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
   }
   expect(filesAsked).toEqual([]);
-  // a driving device gets the PC's answers
   for (const path of routes) {
     const driven = await handleMachineRequest(new Request(`${base}/${path}`), manager);
     expect([path, driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([path, 200, true]);
@@ -229,7 +217,6 @@ it("never asks a PC for a repository's checkouts for a watching device (#2250)",
   const watched = await handleMachineRequest(new Request(url), manager, undefined, undefined, true);
   expect([watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
   expect(worktreesAsked).toEqual([]);
-  // a driving device gets the PC's answer
   const driven = await handleMachineRequest(new Request(url), manager);
   expect([driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([200, true]);
   expect(worktreesAsked).toEqual(["/api/worktree/list"]);
@@ -391,7 +378,6 @@ it("gives a watching device a PC's plan card without Claude's plan file, even fr
     expect(watched.prompt).not.toHaveProperty("plan_file");
     expect(JSON.stringify(watched)).not.toContain("secret step");
   }
-  // a device that can drive still gets the whole plan
   expect((await poll("w1%3Ap1", false)).prompt).toMatchObject({ plan_file: "/home/u/.claude/plans/p.md", body: "1. A secret step from the plan file." });
   expect(promptAsked.slice(before)).toEqual(["0", "0", null]);
 });
@@ -409,9 +395,7 @@ it("passes a PC's session on without the token values this server's sidebar rows
   // any other method the PC answers with a body is filtered too (its session route takes them all)
   const asked = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session", { method: "OPTIONS", headers: { "x-herdr-machine": "1" } }), manager, undefined, undefined, true, sidebar);
   expect(await asked.text()).not.toContain("off · private");
-  // a HEAD has no body to filter: it is answered as before
   expect((await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session", { method: "HEAD" }), manager, undefined, undefined, true, sidebar)).status).toBe(200);
-  // a server whose config names no rows passes the session on whole
   const whole = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session"), manager, undefined, undefined, true, { get: () => null, subscribe: () => () => undefined });
   expect(await whole.text()).toContain("off · private");
 });

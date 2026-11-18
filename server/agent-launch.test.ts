@@ -15,7 +15,6 @@ const ULTRACODE = JSON.stringify({ ultracode: true });
 const PANE = "agent-launch-test-pane";
 
 describe("agentLaunch", () => {
-  /** what herdr's agent.start was asked, without a herdr */
   const starts: Parameters<typeof herdr.agentStart>[0][] = [];
   const roots: string[] = [];
   afterEach(() => {
@@ -47,7 +46,6 @@ describe("agentLaunch", () => {
     expect(started.args!.slice(0, 3)).toEqual(["--effort", "medium", "--settings"]);
     expect(dirname(started.args![3]!)).toBe(dir);
     expect(readFileSync(started.args![3]!, "utf8")).toBe(ULTRACODE);
-    // the request's own args are left as they came
     expect(args).toEqual(["--effort", "medium", "--settings", ULTRACODE]);
   });
 
@@ -65,7 +63,6 @@ describe("agentLaunch", () => {
     expect(dshEffortArgs([])).toEqual({ args: [], effort: undefined });
     expect(dshEffortArgs(["--effort", "low"])).toEqual({ args: [], effort: "low" });
     expect(dshEffortArgs(["--effort=off", "/tmp/project"])).toEqual({ args: ["/tmp/project"], effort: "off" });
-    // after -- everything is passed on as it is, as launchArgsFault stops reading there
     expect(dshEffortArgs(["--", "--effort", "bogus"])).toEqual({ args: ["--", "--effort", "bogus"], effort: undefined });
     expect(dshEffortArgs(["--effort", "high", "--", "--effort=max"])).toEqual({ args: ["--", "--effort=max"], effort: "high" });
     expect(dshEffortArgs(["--effort", "medium"]).effort).toBeUndefined();
@@ -75,7 +72,6 @@ describe("agentLaunch", () => {
     const home = (): string => dirname(settingsDir());
     const effortFile = (root: string): string => join(root, ".dsh-tui", "effort.json");
     const saved = (root: string): unknown => JSON.parse(readFileSync(effortFile(root), "utf8"));
-    /** startShellAgent stood in for: each call recorded with what the effort file held then, answered by the test */
     const shellStarts = (root: string) => {
       const calls: { kind: string; args: string[] | undefined; file: string | null; finish: (pid: number | null) => void; fail: (error: Error) => void }[] = [];
       const waiting: (() => void)[] = [];
@@ -130,7 +126,6 @@ describe("agentLaunch", () => {
         expect(refused).toMatchObject({ agent_started: false, error: { code: "agent_start_failed" } });
         expect(refused.agent_started === false && refused.error.message).toContain("effort.json");
         expect(shell.calls).toHaveLength(0);
-        // no home is not the server's working folder
         expect(existsSync(join(process.cwd(), ".dsh-tui"))).toBeFalse();
 
         const plain = agentLaunch(PANE, { kind: "dsh-tui", args: ["/tmp/project"] }, undefined, undefined, { home: "" });
@@ -178,7 +173,6 @@ describe("agentLaunch", () => {
         const kept = agentLaunch(PANE, { kind: "dsh-tui", args: ["--effort", "off"] }, undefined, undefined, { home: root });
         const made = agentLaunch(PANE, { kind: "dsh-tui", args: ["--effort", "low"] }, undefined, undefined, { home: fresh });
         await shell.called(2);
-        // the user's /effort max in another dsh-tui, while both starts wait
         for (const at of [root, fresh]) writeFileSync(effortFile(at), JSON.stringify({ effort: "max" }, null, 2));
         for (const call of shell.calls) call.fail(new Error("dsh-tui did not start in the pane"));
         expect(await Promise.all([kept, made])).toMatchObject([{ agent_started: false }, { agent_started: false }]);
@@ -197,7 +191,6 @@ describe("agentLaunch", () => {
       try {
         const answer = agentLaunch(PANE, { kind: "dsh-tui", args: ["--effort", "off"] }, undefined, undefined, { home: root });
         await shell.called(1);
-        // another dsh-tui's /effort off: the same bytes, written again (its time set apart from the clock's resolution)
         writeFileSync(effortFile(root), JSON.stringify({ effort: "off" }, null, 2));
         utimesSync(effortFile(root), new Date(2001, 0, 1), new Date(2001, 0, 1));
         shell.calls[0]!.fail(new Error("dsh-tui did not start in the pane"));

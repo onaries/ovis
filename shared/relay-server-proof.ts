@@ -1,3 +1,4 @@
+/** Relay admission only. These keys and MACs never enter the phone's Noise channel. */
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -6,16 +7,22 @@ import nacl from "tweetnacl";
 export const SERVER_PROOF_CLOSE = 4401;
 export const SERVER_PROOF_MS = 10_000;
 export const SERVER_PROOF_REQUIRED = "server proof v1 required; update Ovis on the PC";
+/** The only 4401 reasons that refuse the PC's key itself; a PC stops retrying on these and on no other 4401. */
 export const SERVER_KEY_MISMATCH = "server key does not match server_id";
 export const SERVER_KEY_INVALID = "invalid server key";
 export const PERMANENT_SERVER_PROOF_REFUSALS: readonly string[] = [SERVER_KEY_MISMATCH, SERVER_KEY_INVALID];
 
 export interface ProofRoute {
   readonly server_id: string;
+  /**
+   * `account` proves the key to the account service (docs/account.md); the relay verifies `control`, `data` and `warm`, and
+   * `pair-host` for a typed code's rendezvous, whose `connection_id` is the nameplate (relay/pair-room.ts).
+   */
   readonly role: "control" | "data" | "client" | "warm" | "account" | "pair-host";
   readonly connection_id: string | null;
 }
 
+/** Self-certifying routing name: no registration database or trust-on-first-use race. */
 export function deriveServerId(publicKey: Uint8Array): string {
   return bytesToHex(sha256(concatBytes(utf8ToBytes("ovis-relay-server-id-v1"), publicKey))).slice(0, 32);
 }
@@ -43,6 +50,7 @@ export function serverChallenge(publicKey: Uint8Array, route: ProofRoute) {
   };
 }
 
+/** Returns null for anything other than a canonical challenge. */
 export function answerServerChallenge(frame: unknown, secret: Uint8Array, route: ProofRoute): string | null {
   if (typeof frame !== "string" || frame.length > 512) return null;
   try {
@@ -53,7 +61,7 @@ export function answerServerChallenge(frame: unknown, secret: Uint8Array, route:
     const nonce = proofKey(value.nonce);
     if (!publicKey || !nonce) return null;
     return JSON.stringify({ type: "server_proof", answer: bytesToHex(mac(secret, publicKey, nonce, route)) });
-  } catch { return null; }
+  } catch { return null; } // Untrusted JSON or a low-order X25519 point.
 }
 
 export function verifyServerProof(frame: unknown, expected: string): boolean {
@@ -63,5 +71,5 @@ export function verifyServerProof(frame: unknown, expected: string): boolean {
     if (typeof value !== "object" || value === null || !("type" in value) || value.type !== "server_proof" || !("answer" in value)) return false;
     const answer = proofKey(value.answer);
     return answer !== null && nacl.verify(answer, hexToBytes(expected));
-  } catch { return false; }
+  } catch { return false; } // Malformed proof is a policy close, never a handler exception.
 }

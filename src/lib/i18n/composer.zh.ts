@@ -249,12 +249,10 @@ export const COMPOSER_ZH: Record<string, string> = {
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode 附加了另一个 Skill。聊天文本仍保留在这里。请先检查终端，再重新发送。",
   "In Grok's queue behind {count} queued before it; it goes when they do. Nothing more was pressed. This copy stays here to read and is not sent again.": "已在 Grok 的队列中，排在之前的 {count} 条之后；它们发送后才会发送。未再按任何键。此副本保留在这里供查看，不会再次发送。",
   "In Grok's queue; it goes when Grok gets to it. Nothing more was pressed. This copy stays here to read and is not sent again.": "已在 Grok 的队列中，轮到时 Grok 会发送。未再按任何键。此副本保留在这里供查看，不会再次发送。",
-  // quoting a selection into the composer (lib/chatQuote.ts)
   "Quote": "引用",
   "Quote it in your message": "引用到消息中",
   "Selection": "所选文本",
   "Too long to quote: shorten the message or the selection.": "太长，无法引用：请缩短消息或所选内容。",
-  // comments on a reply (components/ReplyComments.tsx, #511)
   "Comment on the reply": "评论回复",
   "Add a comment": "添加评论",
   "1 comment waiting": "1 条评论等待中",

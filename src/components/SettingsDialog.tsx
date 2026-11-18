@@ -84,50 +84,31 @@ import { HERDR_WINDOW_CHOICES, type HerdrWindowChoice } from "../lib/herdrWindow
 
 export interface SettingsDialogProps {
   open: boolean;
-  /** the section to open on, for a button that points at it; the top otherwise */
   section?: "updates" | null;
-  /** the page a link to Settings names (`?settings=`, lib/deepLink.ts), for this opening alone */
   linkPage?: string | null;
-  /** the group on that page a link names (`&section=`): it is scrolled to and focused, as Updates is */
   linkSection?: string | null;
-  /** the page shown, for the address; null while a phone shows its list of pages */
   onPage?: (page: string | null) => void;
   onClose: () => void;
-  /** Account login runs on this server's PC, even while another PC is selected. */
   onUsageLogin: (paneId: string) => void;
-  /** shows a pane of `machineId` in its terminal: an agent's install or sign-in tab, from Agent integrations */
   onOpenPane: (machineId: string, paneId: string) => void;
   actions: AppActions;
   updates: UpdatesModel;
-  /** how this browser got in, from the last health check */
   auth: HealthAuth | null;
-  /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
-  /** which runtime that is (herdr's TUI server, or herdr-core: the Herdr app's), from the same check; null before one answered */
   herdrRuntime?: "herdr" | "herdr-core" | null;
-  /** what the server's PC has of herdr-core, from the same check; null when it did not say */
   herdrCore?: HerdrCoreFacts | null;
-  /** which runtime the server serves and what Settings may switch it to, from the same check */
   herdrRuntimeFacts?: HerdrRuntimeFacts | null;
-  /** the PC shown now passes pictures (herdr-core, its panes attached): what Pictures in the terminal does there until a device chooses */
   picturesByDefault?: boolean;
-  /** the server's boot id from the same check: a new one after a switch is the restarted server */
   bootId?: string | null;
-  /** a runtime switch's restarted server answers: the app reads its facts and terminals again */
   onServerRestarted?: () => void;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
   onEnableNotifications: () => Promise<PushActionResult>;
-  /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
-  /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
   savePaused: boolean;
-  /** a Retry of that save is waiting for its answer */
   saveRetrying: boolean;
   onRetrySave: () => void;
-  /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
-  /** every PC of the roster, the hidden ones too: Remote PCs lists them with their Show in sidebar switch */
   machines?: readonly Machine[];
 }
 
@@ -152,7 +133,6 @@ const UI_FONT_PLACEHOLDER = '"Noto Sans JP", "Segoe UI"';
  */
 function FontFamilyInput({ value, label, onCommit, placeholder = FONT_FAMILY_PLACEHOLDER, fixedWidthFor = null }: { value: string; label: string; onCommit: (family: string) => void; placeholder?: string; /** the surface that needs every glyph on one advance: a proportional pick from the list is refused in its name */ fixedWidthFor?: "terminal" | null }) {
   const t = useT();
-  // the field and Browse are this component's own: each is described by the sentence of the row they sit in
   const sentence = useSettingsRowSentence();
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
@@ -173,7 +153,7 @@ function FontFamilyInput({ value, label, onCommit, placeholder = FONT_FAMILY_PLA
   const [query, setQuery] = useState("");
   const [refused, setRefused] = useState("");
   const [unavailable, setUnavailable] = useState(false);
-  // the click is the gesture the permission prompt needs; where the API is missing there is no button
+  // the click is the gesture the permission prompt needs
   const browse = async (): Promise<void> => {
     if (browsing) {
       setBrowsing(false);
@@ -246,7 +226,6 @@ function FontFamilyInput({ value, label, onCommit, placeholder = FONT_FAMILY_PLA
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-                // closes the list, not the dialog behind it
                 event.stopPropagation();
                 setBrowsing(false);
               }
@@ -273,15 +252,12 @@ function FontFamilyInput({ value, label, onCommit, placeholder = FONT_FAMILY_PLA
 
 type SettingsPage = SettingsPageId;
 
-/** A group a link or the palette lands on may sit in a page's folded part (SettingsFold): it is opened first. */
 function openFolds(group: HTMLElement): void {
   for (let fold = group.closest("details"); fold !== null; fold = fold.parentElement?.closest("details") ?? null) fold.open = true;
 }
 
-/** how to show the Herdr app's terminals here: the steps About's runtime line leaves out (G-101) */
 const RUNTIME_HELP = "https://github.com/devswha/ovis/blob/main/docs/guide.md#herdr-app-terminals";
 
-/** The pages in the order the list shows them: what is looked at first, then what is set once. */
 export const PAGES: readonly { id: SettingsPage; icon: LucideIcon }[] = [
   { id: "appearance", icon: Palette },
   { id: "chat", icon: MessageSquare },
@@ -294,10 +270,7 @@ export const PAGES: readonly { id: SettingsPage; icon: LucideIcon }[] = [
   { id: "about", icon: Info },
 ];
 
-/**
- * The one dim line under a page's title: what the page holds (G-173). About has none: it is a page of
- * facts without sentences on purpose. Literal `t()` calls, so the dictionaries' checks find each key.
- */
+/** Literal `t()` calls, so the dictionaries' checks find each key. */
 function pageNote(t: Translate, page: SettingsPage): string | null {
   switch (page) {
     case "appearance": return t("Theme and language apply on every device; fonts, sizes and density on this device.");
@@ -312,7 +285,6 @@ function pageNote(t: Translate, page: SettingsPage): string | null {
   }
 }
 
-/** The sheet's own breakpoint (`.modal`, styles.css): under it the list and a page take turns. */
 const NARROW_QUERY = "(max-width: 640px)";
 
 function useNarrow(): boolean {
@@ -328,7 +300,6 @@ function useNarrow(): boolean {
   return narrow;
 }
 
-/** What a Settings entry of the history shows, when it names a page this version has. */
 function shownBy(entry: SettingsLevel | null): { page: SettingsPage | null; keyBar: boolean } | null {
   if (entry === null) return null;
   const page = PAGES.find(({ id }) => id === (entry.page === null ? null : currentSettingsPage(entry.page)))?.id ?? null;
@@ -336,7 +307,6 @@ function shownBy(entry: SettingsLevel | null): { page: SettingsPage | null; keyB
 }
 
 
-/** Sidebar rows, drawn: a workspace on one line, or its agent's line above it */
 function SidebarRowsPreview({ rows }: { rows: "one" | "two" }) {
   return (
     <span className={rows === "two" ? "sidebar-rows-preview is-two" : "sidebar-rows-preview"}>
@@ -345,28 +315,17 @@ function SidebarRowsPreview({ rows }: { rows: "one" | "two" }) {
   );
 }
 
-/**
- * The themes of one side in one row of cards that scrolls sideways (a trackpad, Shift and the wheel, a
- * swipe, or the arrows at its ends), the chosen one brought into view: the row stays one card tall
- * however many themes there are. The side drawn now opens first; Dark and Light switch it. The side's
- * own kind comes first, then after a rule the other kind, which that side draws as it is (a dark theme
- * chosen for light mode draws dark, as in herdr). The themes imported from a file come before both, and one
- * of them chosen for a side is drawn in place of that side's built-in theme, which stays as it was under it.
- * Arrow keys, Home and End pick along the row, as a radio group's do.
- */
 function ThemePicker() {
   const { settings, update } = useSettings();
   const t = useT();
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
   const drawn: Mode = settings.theme === "system" ? (systemDark ? "dark" : "light") : settings.theme;
-  // the side drawn now, until Dark or Light here is chosen
   const [picked, setPicked] = useState<Mode | null>(null);
   const side = picked ?? drawn;
   const strip = useRef<HTMLDivElement>(null);
   const [ends, setEnds] = useState({ start: true, end: true });
   const custom = settings.customThemes;
   const imported = chosenTheme(custom, side);
-  // the card that is checked: the imported theme drawn on this side, else the side's built-in theme
   const current = imported ? customRowId(imported.id) : side === "dark" ? settings.darkTheme : settings.lightTheme;
   const other: Mode = side === "dark" ? "light" : "dark";
   const own = THEME_IDS.filter((id) => rowFor(id, side).mode === side);
@@ -376,8 +335,6 @@ function ThemePicker() {
     const el = strip.current;
     if (el) setEnds({ start: el.scrollLeft <= 1, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 });
   }, []);
-  // the chosen card in view when it is not (a side switched, a reset), by the row's own scroll so the
-  // page stays put; a pick already in view leaves the row where it is
   useLayoutEffect(() => {
     const el = strip.current;
     const card = el?.querySelector<HTMLElement>(`[data-theme-card="${current}"]`);
@@ -392,11 +349,9 @@ function ThemePicker() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [measure]);
-  // onto the settings as they are now: another tab may have imported or removed a theme since this was drawn
   const pick = (id: ThemeId): void => update((latest) => ({ ...pickTheme(latest, side, id), customThemes: { ...latest.customThemes, [side]: null } }));
   const pickImported = (id: string): void => update((latest) => latest.customThemes.themes.some((entry) => entry.id === id) ? { customThemes: { ...latest.customThemes, [side]: id } } : {});
   const card = (id: ThemeId) => <ThemeCard key={id} card={id} name={t(THEME_NAMES[id])} row={rowFor(id, side)} side={side} checked={current === id} onPick={() => pick(id)} />;
-  // two imported themes of one name (a dark file and a light file nobody renamed) say which sides each has (themeLabel)
   const importedCard = (theme: CustomTheme) => <ThemeCard key={theme.id} card={customRowId(theme.id)} name={themeLabel(t, theme, custom.themes)} row={customRow(theme, side)} side={side} checked={current === customRowId(theme.id)} onPick={() => pickImported(theme.id)} />;
   const step = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
@@ -404,7 +359,6 @@ function ThemePicker() {
     const at = cards.indexOf(document.activeElement as HTMLElement);
     const next = event.key === "Home" ? 0 : event.key === "End" ? cards.length - 1 : (at + (event.key === "ArrowRight" ? 1 : -1) + cards.length) % cards.length;
     event.preventDefault();
-    // a radio group's arrows pick as they move
     const id = cards[next]?.dataset["themeCard"];
     const theme = custom.themes.find((entry) => customRowId(entry.id) === id);
     if (theme) pickImported(theme.id);
@@ -439,16 +393,11 @@ function ThemePicker() {
   );
 }
 
-/**
- * Settings → Appearance → Interface font: the built-in stack, the device's own interface font, Noto Sans, or a
- * list typed like the chat's. Custom opens the field and keeps what is drawn until a list is typed.
- */
 function InterfaceFontRows() {
   const { settings, update } = useSettings();
   const t = useT();
   const preset = uiFontPreset(settings.uiFontFamily);
   const [customOpen, setCustomOpen] = useState(preset === "custom");
-  // a family put back from elsewhere (the row's ↺) closes the custom field it was typed in
   useEffect(() => { if (settings.uiFontFamily === DEFAULT_SETTINGS.uiFontFamily) setCustomOpen(false); }, [settings.uiFontFamily]);
   const custom = customOpen || preset === "custom";
   const interfaceFontDescription = t("The font of menus, lists, dialogs and the sidebar; chat text follows it until Chat font names one. System is this device's own interface font, and the terminal and code keep theirs.");
@@ -478,7 +427,6 @@ function InterfaceFontRows() {
 function AppearancePage() {
   const { settings, update } = useSettings();
   const t = useT();
-  // herdr-app's Look page: theme, then size and fonts (the terminal's and the chat's too), each row a label and its control
   return (
     <SettingsBare.Provider value={true}>
     <SettingsGroup>
@@ -522,7 +470,7 @@ function AppearancePage() {
     </SettingsGroup>
 
     <SettingsGroup title={t("Sidebar")} section="sidebar">
-      <SettingsRow icon={PanelLeft} preview={<SidebarRowsPreview rows={settings.sidebarRows} />} label={t("Sidebar rows")} description={t("One line gives each workspace and each agent in the sidebar a single line with its name; Two lines show what the agent is doing, with the workspace's name under it. The choice applies on every device.")} wide reset={["sidebarRows"]}>
+      <SettingsRow icon={PanelLeft} preview={<SidebarRowsPreview rows={settings.sidebarRows} />} label={t("Sidebar rows")} description={t("One line gives each workspace and each agent in the sidebar a single line with its name; Two lines add a second line: under a workspace's name, what its pane is on, and in the Agents list, under an agent's task, its workspace. The choice applies on every device.")} wide reset={["sidebarRows"]}>
         <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })} options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
       </SettingsRow>
       {/* the scope differs within the one control: said on the row, where the sentences are not (G-097) */}
@@ -575,7 +523,6 @@ function AppearancePage() {
   );
 }
 
-/** Wrap long lines, drawn: one long line of code wrapped onto the next, or running past the edge. */
 function WrapPreview({ wrap }: { wrap: boolean }) {
   return <span className={wrap ? "settings-wrap-preview is-wrapped" : "settings-wrap-preview"}><code>{WRAP_PREVIEW_CODE}</code></span>;
 }
@@ -587,14 +534,12 @@ function ChatPage() {
   const touch = useMediaQuery("(pointer: coarse)");
   const filePanelAvailable = useMediaQuery(FILE_PANEL_DOCK_QUERY);
   const chip = (Icon: LucideIcon, label: string, on: boolean, change: (on: boolean) => void) => <button type="button" className="settings-chip" aria-pressed={on} onClick={() => change(!on)}><Icon aria-hidden="true" />{label}</button>;
-  // herdr-app rows (a label and its control) under short group headings; the sentences stay for search only
   return (
     <SettingsBare.Provider value="rows">
       <SettingsGroup title={t("Conversation")} section="conversation">
         <SettingsRow icon={AppWindow} label={t("Panes open in")} description={t("Whether a pane first shows its chat or its terminal, on this device. A pane you switch yourself stays as you left it; changing this choice puts every pane back on it.")} condition={<span className="settings-condition">{t("Auto: the chat on a touch screen, the terminal elsewhere.")}</span>} wide reset={["defaultView"]} resetAlso={{ changed: false, restore: forgetPaneViews }}>
           <Segmented label={t("Panes open in")} value={settings.defaultView} options={[{ value: "auto", label: t("Auto") }, { value: "chat", label: t("Chat") }, { value: "terminal", label: t("Terminal") }]} onChange={(defaultView) => {
             if (settings.defaultView === defaultView) return;
-            // one choice for every pane: what each one remembered gives way to it
             forgetPaneViews();
             update({ defaultView });
           }} />
@@ -763,7 +708,6 @@ function AlertsPage({ onEnableNotifications, machines }: { onEnableNotifications
   const filters = useAlertFilters();
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off
   const alertSoundWanted = useRef(settings.alertSound);
-  // herdr-app's rows: each a name and its control. Which alerts come is one decision, so one line of chips
   return (
     <SettingsBare.Provider value={true}>
     <SettingsGroup note={t("For this device. An alert waits a little first, and none comes when the pane changes meanwhile, as when you answer at the PC.")}>
@@ -781,8 +725,7 @@ function AlertsPage({ onEnableNotifications, machines }: { onEnableNotifications
         <Toggle label={t("Play sounds")} checked={settings.alertSound} onChange={(alertSound) => {
           update({ alertSound });
           alertSoundWanted.current = alertSound;
-          // this tap is the gesture the page needs to play audio; the chime is the preview,
-          // unless the switch went off again while the audio was getting ready
+          // this tap is the gesture the page needs to play audio
           if (alertSound) void unlockAlertSound().then((ready) => { if (ready && alertSoundWanted.current) previewAlertSound(); });
         }} />
       </SettingsRow>
@@ -794,7 +737,6 @@ function AlertsPage({ onEnableNotifications, machines }: { onEnableNotifications
   );
 }
 
-/** The switches still being shaped, on a page of their own as herdr-app and T3 Code keep them. */
 function ExperimentalPage() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -834,11 +776,6 @@ function ExperimentalPage() {
   );
 }
 
-/**
- * Which PCs alert this device, the Host first: one turned off here sends it nothing, on any channel.
- * Shown with two PCs or more; kept by the PC's relay ID where it has one, else its name (shared/machines.ts
- * pcAlertKey), and a PC an earlier version turned off by name stays off until turned on again.
- */
 function AlertPcsGroup({ machines }: { machines: readonly Machine[] }) {
   const t = useT();
   const { pcsOff } = useAlertFilters();
@@ -859,7 +796,6 @@ function AlertPcsGroup({ machines }: { machines: readonly Machine[] }) {
   );
 }
 
-/** A language tag's name in the UI language (`hu-HU` is "Hungarian (Hungary)"), or the tag where the browser cannot name it. */
 function languageName(names: Intl.DisplayNames | null, tag: string): string {
   try { return names?.of(tag) ?? tag; } catch { return tag; }
 }
@@ -879,7 +815,6 @@ function DictationLanguageSelect() {
   );
 }
 
-/** Settings → Chat → Voice input: whether the microphone button shows; the language it listens for is in Chat's folded part (VoiceMore). */
 function VoiceMain() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -911,7 +846,7 @@ function VoiceMore() {
   const { settings, update } = useSettings();
   const t = useT();
   // the server only says whether it holds a key; the key typed here lives in its field alone, read at
-  // Save and cleared once saved, never in state (src/AGENTS.md, G-108). Save is offered once the field has text.
+  // Save and cleared once saved, never in state (src/AGENTS.md, G-108).
   const [voice, setVoice] = useState<VoiceStatus | null>(null);
   const voiceKeyRef = useRef<HTMLInputElement>(null);
   const [hasVoiceKey, setHasVoiceKey] = useState(false);
@@ -1051,9 +986,7 @@ function ShortcutsPage() {
   const platformIsMac = isMacPlatform();
   const [query, setQuery] = useState("");
   const [recording, setRecording] = useState<{ id: ShortcutId; problem: string | null } | null>(null);
-  // a recorded chord the terminal or the browser also uses waits here for Save anyway or Cancel
   const [pending, setPending] = useState<{ id: ShortcutId; value: string; risk: "terminal" | "browser" } | null>(null);
-  // Save anyway and Cancel leave with the prompt: focus goes back to the row's Record button
   const recordButtons = useRef(new Map<ShortcutId, HTMLButtonElement>());
   const settlePending = (id: ShortcutId): void => {
     setPending(null);
@@ -1063,7 +996,6 @@ function ShortcutsPage() {
   const riskText = (risk: "terminal" | "browser", keys: string): string => risk === "terminal"
     ? t("{keys} is a terminal key: shells, editors and agents use it. Once saved, it no longer reaches the pane.", { keys })
     : t("Your browser or operating system may intercept {keys}.", { keys });
-  // while a row records, the chord pressed is read here and the app's own dispatcher stands down
   useEffect(() => {
     if (recordingId === null) return;
     setShortcutRecording(true);
@@ -1123,10 +1055,7 @@ function ShortcutsPage() {
           const defaultKeys = shortcutDisplayKeys(shortcut.id, {});
           const defaultKey = defaultKeys[defaultKeys.length - 1];
           const defaultReserved = defaultKey !== undefined && isReservedShortcutKey(defaultKey, platformIsMac);
-          // a binding without a default key is off by default: its Default row reads Off, with no second Off
           const unbound = defaultKeys.length === 0;
-          // a chord the browser or the terminal also uses says so on its row, a default one too: the list's
-          // " — Reserved" alone did not say whose it is (G-112)
           const rowText = recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : confirming ? riskText(confirming.risk, compactKeys(bindingDisplayKeys(confirming.value))) : selectedRisk ? riskText(selectedRisk, compactKeys(displayedKeys)) : undefined;
           // a terminal app's close key is the browser's tab close, which Record refuses (exactChordRefusal); and
           // the two closes differ: the tab's leaves the pane running, the pane's ends it
@@ -1184,7 +1113,6 @@ function ShortcutsPage() {
   );
 }
 
-/** What each herdr action runs here (lib/herdrKeys.ts runHerdrAction), named as the app names it. */
 const HERDR_ACTION_LABELS: Readonly<Record<HerdrPrefixAction, string>> = {
   help: "Command palette",
   settings: "Settings",
@@ -1204,7 +1132,6 @@ const HERDR_ACTION_LABELS: Readonly<Record<HerdrPrefixAction, string>> = {
   toggle_sidebar: "Toggle sidebar",
 };
 
-/** The opt-in to herdr's prefix keys, and the bindings it read from this PC's herdr config while on. */
 function HerdrPrefixKeys() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -1245,10 +1172,7 @@ function HerdrPrefixKeys() {
   );
 }
 
-/**
- * Read-only: each fact on its own line and none of them a verdict. Public reachability stays
- * unknown unless this request proved it, since a proxy or router in front can expose any bind.
- */
+/** Public reachability stays unknown unless this request proved it, since a proxy or router in front can expose any bind. */
 function AccessFacts({ facts }: { facts: SecurityFacts }) {
   const t = useT();
   const fact = (label: string, value: string, description: string) => (
@@ -1289,16 +1213,8 @@ function AccessFacts({ facts }: { facts: SecurityFacts }) {
   );
 }
 
-/**
- * Groups of Devices and PCs that merged into My devices (Connect a device holds the ways in, Portal among them),
- * by their old link names (`?settings=devices&section=…`).
- */
 const MOVED_GROUPS: Readonly<Record<string, string>> = { phone: "devices", remote: "devices", portal: "devices", "chat-more": "conversation" };
 
-/**
- * What a paired device is, read from the label the app first gave it (lib/phone.ts deviceLabel, "iPhone · Safari");
- * a device renamed since says nothing of what it is, so its row carries no pill rather than a guess.
- */
 function deviceKind(label: string, t: ReturnType<typeof useT>): string | null {
   const named = /^(iPhone|iPad|Android|Mac|Windows|Chromebook|Linux|Device)( · (Edge|Firefox|Chrome|Safari))?$/.exec(label);
   if (named === null) return null;
@@ -1307,15 +1223,8 @@ function deviceKind(label: string, t: ReturnType<typeof useT>): string | null {
   return t("Browser");
 }
 
-/** a relay ID in groups of four, as KeyId draws it, on one line */
 const groupedId = (id: string): string => id.match(/.{1,4}/g)?.join(" ") ?? id;
 
-/**
- * Settings → Devices and PCs, as WhatsApp's Linked devices: the account on top, then one list of everything
- * that uses or joins this PC (this PC with its ID, the other PCs shown here and, signed in, the account's,
- * then the paired phones and browsers), with one Connect a device whose dialog holds every way in. What few
- * people change waits in More settings.
- */
 function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSettings, pcSettingsError, onPcSettings, openAddPc, connectPc }: {
   auth: HealthAuth | null; security: SecurityFacts; onSignOut: (() => Promise<void>) | null; onRevokedAll: () => void;
   machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void; openAddPc: (preset?: AddPcPreset) => void; connectPc: (machine: Machine) => void;
@@ -1323,13 +1232,9 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   const { settings, update } = useSettings();
   const t = useT();
   const installPrompt = useInstallPrompt();
-  // the iOS app (app/) holds this page: its way back to the app's list of PCs
   const nativeApp = inNativeApp();
-  // the hosted shell (app.ovis.sh) shows one PC per page: its front page lists the others, and the
-  // phone's key for this PC can be forgotten here (lib/relay/shell.tsx)
   const relayPc = shellMode() === "relay" ? serverIdOfPath(window.location.pathname) : null;
   const [confirmForget, setConfirmForget] = useState(false);
-  // the server says what Tailscale on its PC already serves
   const [access, setAccess] = useState<RemoteAccess | null | undefined>(undefined);
   const loadAccess = useCallback(() => {
     setAccess(undefined);
@@ -1337,34 +1242,23 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   }, []);
   useEffect(() => { loadAccess(); }, [loadAccess]);
   const plan = phonePlan({ protocol: window.location.protocol, hostname: window.location.hostname, origin: window.location.origin, secure: window.isSecureContext, shell: inRelayShell() }, access ?? null);
-  // where a phone can open this app now, for the pairing QR code: the served address, else this one when it is not loopback
   const pairUrl = plan.kind === "here" || plan.kind === "served" ? plan.url : isLoopbackHost(window.location.hostname) ? null : window.location.origin;
-  // what keeps the switch from working here, only while it does (lib/wakeLock.ts asks for the same two)
   const wakeLockProblem = !window.isSecureContext ? t("Needs HTTPS or localhost.") : !("wakeLock" in navigator) ? t("This browser can't keep the screen on.") : null;
   const relay = useRelay();
   const relayReadOnly = auth?.role === "watch" || auth?.via === "portal";
   const closesGate = security.state === "known" && security.summary.pairing_gate === "open" && !security.summary.token_configured;
   const [connecting, setConnecting] = useState(false);
-  // each opening of Add a connection asks the account service again, so a service back from an outage signs in there,
-  // and a sign-in its relay tab finished is read again
   const [accountChecks, setAccountChecks] = useState(0);
   const searching = useContext(SettingsQuery).length > 0;
-  /** More settings' place for the device list's notes and Revoke every device (DevicesPanel `more`) */
   const [devicesMore, setDevicesMore] = useState<HTMLDivElement | null>(null);
-  /** the end of this PC's own row, for the device list's Check now (DevicesPanel `checkSlot`) */
   const [devicesCheck, setDevicesCheck] = useState<HTMLDivElement | null>(null);
   const closeConnect = useCallback(() => setConnecting(false), []);
-  // the relay tab's QR code may have put this PC in an account: Add a connection stays up to say which, and by which device
   const pairingHeld = useRef(false);
   const holdPairing = useCallback((held: boolean) => { pairingHeld.current = held; }, []);
   const closeConnectOnPair = useCallback(() => { if (!pairingHeld.current) setConnecting(false); }, []);
   const accountService = accountServiceHere();
-  // a reset relay identity is a new ID for this PC: My devices reads it again
   const [identityResets, setIdentityResets] = useState(0);
-  // the account as AccountSection reads it: signed in or not, and the account's PCs for the list
   const [account, setAccount] = useState<AccountState>({ signedIn: false, account: null, pcs: null, provider: null, noPcs: false, reachable: true });
-  // the relay tab's QR code let a device in after it came down (lib/accountQrWatch.ts): Add a connection opens again
-  // to say so, where its relay tab can
   const tellsQrNotice = accountService !== null && account.reachable && relayOffered(relay) && !relayReadOnly;
   useEffect(() => {
     if (!tellsQrNotice) return;
@@ -1374,7 +1268,7 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
     return () => window.removeEventListener(ACCOUNT_QR_WATCH_EVENT, open);
   }, [tellsQrNotice]);
   // a new device joins by signing in only to a PC in the account this browser is signed in to (docs/account.md
-  // "Joining through the account"): read again each time the dialog opens, since this PC may have joined meanwhile
+  // "Joining through the account")
   const [pcAccount, setPcAccount] = useState<string | null>(null);
   useEffect(() => {
     if (account.account === null) { setPcAccount(null); return; }
@@ -1385,13 +1279,11 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   const joinBySignIn = account.account !== null && pcAccount === account.account && relay.status?.phase === "online";
   const openAccount = useCallback(() => {
     setConnecting(false);
-    // the account's own group, at the top of this page: the sign-in and Add this PC are there
     const group = document.querySelector<HTMLElement>('.settings-dialog [data-section="account"]');
     group?.scrollIntoView({ block: "start" });
     group?.querySelector<HTMLElement>("button")?.focus();
   }, []);
   const readAccountAgain = useCallback(() => setAccountChecks((count) => count + 1), []);
-  // a touch phone on this PC's own address pairs itself through the relay in one tap: beside its own row
   const touchPhone = useMediaQuery("(pointer: coarse)");
   const selfRelay = touchPhone && relayOffered(relay) && relay.status?.phase === "online" && !relayReadOnly ? <UseRelayHere /> : null;
   return (
@@ -1481,7 +1373,6 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   );
 }
 
-/** This phone through the relay, from its own row: its offer opens here as a QR code would on a phone that scanned it. */
 function UseRelayHere() {
   const t = useT();
   const [opening, setOpening] = useState(false);
@@ -1498,10 +1389,9 @@ function UseRelayHere() {
   );
 }
 
-/** The relay's switch and its identity reset: rarely touched once it is on, so in More settings (Connect a device turns it on). */
 function RelayControls({ relay, closesGate, onReset }: { relay: RelayState; closesGate: boolean; onReset: () => void }) {
   const t = useT();
-  // the switch says what it does, not the service's name (G-140); the English name stays the one the scripts know
+  // the English name stays the one the scripts know
   const switchLabel = t("Ovis relay|relay switch");
   const { status, pending, request } = relay;
   const [error, setError] = useState<string | null>(null);
@@ -1532,7 +1422,6 @@ function RelayControls({ relay, closesGate, onReset }: { relay: RelayState; clos
             await request("reset-identity");
             setConfirmingReset(false);
             onReset();
-            // the confirmation hands focus back only when it is dismissed: after the reset it goes back here
             window.requestAnimationFrame(() => resetButton.current?.focus());
           }} />
       )}
@@ -1540,31 +1429,16 @@ function RelayControls({ relay, closesGate, onReset }: { relay: RelayState; clos
   );
 }
 
-/** a PC this app added (over SSH or the relay) that is not connected now: removable from the list; herdr's and herdr-core's own are managed there */
 const removablePc = (machine: Machine): boolean => machine.state !== "connected" && machine.herdr_profile_id === undefined && (machine.kind === "ssh" || machine.kind === "relay");
 
-/**
- * The PCs at the top of My devices: this PC with its relay ID (what a device that typed this PC's code compares,
- * AddRelayPc and the hosted app's code screen), the PCs this app shows (SSH, relay, herdr-core machines), and,
- * signed in, the account's other PCs. One PC is one row: an account PC this app already shows is not listed twice.
- * The ID is read again whenever the relay's state or identity changes (`relayKey`): turning the relay on can make
- * this PC's first ID, and a reset makes a new one, before the roster's next read would say so; a new ID in the roster
- * (a reset in another window) is read again too. Removing a PC stays
- * in the sidebar's PC menu, which moves the selection off it first and knows the PCs herdr manages.
- */
 function MyPcRows({ machines, account, accountPcs, onAccountChanged, relayKey, watching, selfAction, children }: { machines: readonly Machine[]; accountPcs: readonly MyPc[] | null; relayKey: string;
-  /** the account whose PCs these are; null signed out */
   account: string | null;
-  /** a PC was taken out of the account: its list is read again */
   onAccountChanged: () => void;
   /** a watching device: the server refuses it the removal, so it is not offered */
   watching: boolean;
-  /** takes the end of this PC's own row, where the device list puts its Check now */
   selfAction?: (slot: HTMLDivElement | null) => void;
-  /** the paired phones and browsers, the one in use first: right under this PC, above the other PCs */
   children?: ReactNode }) {
   const t = useT();
-  // a PC that is not connected, offered for removal from its own row (the sidebar's PC menu removes it too)
   const [removing, setRemoving] = useState<Machine | null>(null);
   const local = machines.find((machine) => machine.kind === "local");
   const [ownId, setOwnId] = useState<string | null>(null);
@@ -1614,10 +1488,6 @@ function MyPcRows({ machines, account, accountPcs, onAccountChanged, relayKey, w
   );
 }
 
-/**
- * Which PCs this device shows in its sidebar, Agents list and command palette, the Host first. The
- * choice stays in this browser; the last PC shown cannot be hidden (lib/hiddenMachines.ts).
- */
 function SidebarPcsGroup({ machines }: { machines: readonly Machine[] }) {
   const t = useT();
   const hidden = useHiddenMachines();
@@ -1637,13 +1507,10 @@ function SidebarPcsGroup({ machines }: { machines: readonly Machine[] }) {
   );
 }
 
-/** a set-aside copy of machines.json (the PCs added in this app), not of herdr-profile-state.json */
 const heldAddedPcs = (name: string): boolean => name.startsWith("machines.json.");
 
-/** A crash can leave the saved PCs unreadable: the server set the file aside and started without them. */
 function DamagedPcFiles({ pcSettings }: { pcSettings: MachineSettings | null }) {
   const t = useT();
-  // machines.json held the PCs added here; herdr-profile-state.json only the permission to connect to herdr's own
   return (
     <>
       {pcSettings?.set_aside?.some(heldAddedPcs) && <p className="settings-item settings-hint">
@@ -1656,7 +1523,6 @@ function DamagedPcFiles({ pcSettings }: { pcSettings: MachineSettings | null }) 
   );
 }
 
-/** The PCs' rarely changed rows, in the page's More settings fold: the server's bridge updates and the load line. */
 function RemotePcsMore({ machines, pcSettings, pcSettingsError, onPcSettings }: { machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void }) {
   const t = useT();
   return (
@@ -1674,10 +1540,6 @@ function RemotePcsMore({ machines, pcSettings, pcSettingsError, onPcSettings }: 
   );
 }
 
-/**
- * The herdr plugins of the PC on screen and what each can do, to read only: installing, enabling
- * and removing a plugin stay with herdr. Nothing is drawn where there is none to list.
- */
 function PluginsGroup() {
   const t = useT();
   const api = useMachineApi();
@@ -1689,7 +1551,6 @@ function PluginsGroup() {
   }, [api]);
   const bare = useContext(SettingsBare);
   if (plugins.length === 0) return null;
-  // one line: the plugins by name, a disabled one marked
   if (bare) return (
     <SettingsGroup className="settings-plugins">
       <SettingsRow label={t("herdr plugins")} description={t("The herdr plugins on this PC, to read only: a plugin is installed, enabled or removed in herdr.")} icon={Puzzle}>
@@ -1708,36 +1569,22 @@ function PluginsGroup() {
   );
 }
 
-/**
- * Which runtime this PC's terminals come from, and the switch between herdr's TUI and the Herdr
- * app when this PC has both and nothing else decides it. A switch asks first, saves the choice and
- * restarts Ovis on it; once a new server answers, the app reads it again in place (no reload). Where the switch cannot run,
- * one quiet line says why, or how to switch by hand. The move of the whole herdr session to herdr-core
- * (RuntimeMove) is one more row, whose dialog outlives the restart its own switch starts.
- */
 function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onServerRestarted, onOpenPane }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null; facts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; onOpenPane: (machineId: string, paneId: string) => void }) {
   const t = useT();
   const [confirming, setConfirming] = useState(false);
-  // the wait for the restarted server outlives this page of Settings (lib/runtimeSwitch.ts)
   const restarting = useSyncExternalStore(subscribeRestart, restartState);
-  // the bridge's own answer needs no herdr: with herdr's TUI stopped it still says what to switch back to
   const [bridgeFacts, setBridgeFacts] = useState<HerdrRuntimeFacts | null>(null);
   useEffect(() => {
     if (restarting !== null) return;
     let live = true;
-    // unanswered: the whole health answer's facts stand, as they did before this read. Read again while
-    // About is open: the server's first look for hc may end later, and with herdr stopped nothing else tells
     const read = () => fetchBridgeHealth().then((health) => { if (live) setBridgeFacts(health.herdr_runtime ?? null); }, () => {});
     void read();
     const timer = setInterval(() => void read(), 10_000);
     return () => { live = false; clearInterval(timer); };
   }, [restarting, bootId]);
   const facts = bridgeFacts ?? healthFacts;
-  // the runtime the bridge serves now; the last health answer's version only when it was about that runtime
   const served = facts?.serving ?? runtime;
   const known = served === runtime ? version : null;
-  // the move's row goes with the rows while the page waits for the restarted server; its dialog stays:
-  // the key keeps the one element across both lists below
   const move = <RuntimeMove key="move" bootId={bootId} hidden={restarting !== null} onServerRestarted={onServerRestarted} onOpenPane={onOpenPane} />;
   if (restarting !== null) {
     return (
@@ -1751,23 +1598,18 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
   if (served === null || (known === null && facts === null)) return null;
   const onCore = served === "herdr-core";
   const target = facts?.switch_to ?? null;
-  // under the fact, not beside it: the fact keeps its one line on a phone
   const hint = facts?.fallback === "no_herdr_core" ? t("The Herdr app was chosen here, but no herdr-core answered, so herdr TUI is shown.")
     : facts?.fallback === "no_alt_runtime" ? t("alt-runtime was chosen here, but this Ovis cannot start it, so herdr TUI is shown.")
     : facts?.locked === "env" ? t("OVIS_RUNTIME in Ovis's environment decides which terminals this PC shows; change it there to switch.")
     // where the OS does not serve herdr-core, setting OVIS_RUNTIME=herdr-core would stop Ovis: no how-to
     : target !== null || onCore || !core?.version || facts?.locked === "platform" ? null
-    // what it switches, in one line; the steps are in the guide (G-101)
     : <span>{t("The Herdr app's core (hc {version}) is on this PC too. Ovis can show its terminals instead of herdr's.", { version: core.version })} <a className="settings-link" href={RUNTIME_HELP} target="_blank" rel="noreferrer">{t("How to switch")}</a></span>;
   const toCore = target === "herdr-core";
-  // what this PC's server reports, never guessed: the runtime it serves with its version, then the
-  // others it found installed. With two installed the choice between them is right on the first line.
   const coreInstalled = core?.version != null;
   const tuiInstalled = facts?.tui.installed ?? !onCore;
   const name = (runtime: RuntimeName) => runtime;
   const versionOf = (runtime: RuntimeName) => (runtime === served ? known ?? (onCore ? core?.version ?? null : null) : runtime === "herdr-core" ? core?.version ?? null : null);
   const titled = (runtime: RuntimeName) => [name(runtime), versionOf(runtime)].filter(Boolean).join(" ");
-  // the switch names both runtimes with their versions; another one installed gets its own line only when there is no switch
   const others = (["herdr", "herdr-core"] as const).filter((runtime) => runtime !== served && runtime !== target && (runtime === "herdr-core" ? coreInstalled : tuiInstalled));
   return (
     <SettingsGroup title={t("Terminals")} section="runtime">
@@ -1793,15 +1635,12 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
             : `${t("Ovis restarts and shows herdr TUI's terminals instead of the Herdr app's; this page reconnects by itself. The app's terminals keep running.")}${facts?.tui.running === false ? ` ${t("herdr's TUI server is not running: start herdr after the switch.")}` : ""}`}
           confirmLabel={t("Switch and restart")}
           onConfirm={async () => {
-            // the bridge answering now (its boot id needs no herdr): any other one after the switch is the restarted server
             const from = await fetchBridgeHealth().then((health) => health.web_ui?.boot_id ?? bootId, () => bootId);
             await switchRuntime(target);
-            // this PC's panes come from the other runtime next, which may be one the page drew before
             paneLifetimes.runtimeSwitched(LOCAL_MACHINE);
             setConfirming(false);
             awaitRestart(target, {
               from,
-              // the bridge's own answer needs no herdr, and says whether the launcher took it as its own
               boot: () => fetchBridgeHealth().then((health) => health.web_ui ? { id: health.web_ui.boot_id, accepted: health.accepted === true } : null),
               onBack: () => { paneLifetimes.runtimeSwitched(LOCAL_MACHINE); onServerRestarted?.(); },
             });
@@ -1815,7 +1654,6 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
 
 function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntimeFacts, bootId, onServerRestarted, onOpenPane, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; herdrRuntimeFacts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; onOpenPane: (machineId: string, paneId: string) => void; bridgesFollow: boolean }) {
   const t = useT();
-  // herdr-app's About: each line a name and its value or action, no group captions or sentences
   return (
     <SettingsBare.Provider value={true}>
       {/* the facts read as one list, as herdr-app's About */}
@@ -1846,22 +1684,14 @@ function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntim
 }
 
 export function SettingsDialog(props: SettingsDialogProps) {
-  // mounted per opening: every opening starts on the list, with nothing left from the last one
-  // a page that cannot be drawn closes to the app instead of blanking it; the next opening tries again
   return props.open ? <RenderBoundary resetKey={null} fallback={() => <SettingsCrash onClose={props.onClose} overPreview={props.overPreview ?? false} />}>
     <CrashProbe region="settings" />
     <OpenSettingsDialog {...props} />
   </RenderBoundary> : null;
 }
 
-/**
- * Still a modal: Escape, the swipe down on a phone, the system Back button and the kept focus
- * close it as they close Settings, and it sits over a file preview as Settings does.
- */
 function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPreview: boolean }) {
   const t = useT();
-  // one entry of the history, whatever the crashed dialog had recorded: Back takes it off and the
-  // app closes Settings (lib/settingsHistory.ts). Not settingsLevels: a wide dialog's list is none
   useEffect(() => { recordSettings([{ page: null, keyBar: false }]); }, []);
   const closeRef = useRef<HTMLButtonElement>(null);
   const surface = useFocusTrap<HTMLDivElement>(true, { initialFocus: closeRef });
@@ -1884,13 +1714,6 @@ function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPrev
   );
 }
 
-/**
- * A change the server refused to save, on whichever page is open: the plain sentence (lib/userError.ts),
- * the server's own words behind Details, and where the change is now with the Retry that sends it.
- * It stays until a save lands; the change is sent again every few seconds meanwhile, and after three
- * failures on Retry, a reconnect or once a longer wait ends (lib/preferencesSync.ts). Only this page
- * holds the change until then: a reload takes the server's values again.
- */
 function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; paused: boolean; retrying: boolean; onRetry: () => void }) {
   const t = useT();
   return <div className="settings-save-error" role="alert" data-paused={paused || undefined}>
@@ -1905,11 +1728,6 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-/**
- * The groups a search result page shows a matched row in, their `data-section` names: a group that
- * holds every word of the query first, so the page lands on the row the words name, then the rest
- * in page order. A group drawn with no row of its own (its rows all filtered out) is not one.
- */
 function matchedGroups(result: Element | null, words: readonly string[]): string[] {
   if (!result) return [];
   const groups = [...result.querySelectorAll<HTMLElement>("[data-section]")].filter((group) => group.querySelector(".settings-row, .settings-item") !== null);
@@ -1920,25 +1738,16 @@ function matchedGroups(result: Element | null, words: readonly string[]): string
 function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, herdrRuntimeFacts = null, picturesByDefault = false, bootId = null, onServerRestarted, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
-  // one PC of the phone app's list or the relay shell's: a phone's list of pages ends in the way back to them, which
-  // its drawer no longer holds (MachineSidebar.tsx), so it is two taps from the drawer: the gear, then Change PC
   const pcExit = useMemo(() => pcListExit({ nativeApp: inNativeApp(), relayShell: shellMode() === "relay", pathname: window.location.pathname }), []);
-  // at the drawer's widths, whose foot has no Change PC row, the same as the drawer: not only where the list is a page of its own
   const drawerWidth = useMediaQuery(DRAWER_QUERY);
-  // opened by Forward, the dialog shows what that entry of the history showed
   const [restored] = useState(() => shownBy(settingsEntry(window.history.state)));
-  // a phone opens on the list of pages; a wider dialog shows the list beside the first page. A
-  // button that points at Updates opens on About whatever an entry still landing would restore
   const linked = PAGES.find((candidate) => candidate.id === currentSettingsPage(linkPage))?.id ?? null;
-  // a page the command palette named opens first, on the group it named; the request is read, not
-  // taken, so a remount in development finds it again
+  // the request is read, not taken, so a remount in development finds it again
   const [asked] = useState(requestedSettingsPage);
   useEffect(() => requestSettingsPage(null), []);
   const [chosen, setChosen] = useState<SettingsPage | null>(section === "updates" ? "about" : asked?.page ?? (restored ? restored.page : linked));
   const page = chosen ?? (narrow ? null : PAGES[0]!.id);
   const [keyBarOpen, setKeyBarOpen] = useState(section === "updates" ? false : restored?.keyBar ?? false);
-  // every step in is an entry of the history, so the system Back button takes one step out
-  // (lib/settingsHistory.ts); the Back control, the X and Escape take the same entries off
   useEffect(() => { recordSettings(settingsLevels(narrow, page, keyBarOpen)); }, [narrow, page, keyBarOpen]);
   useEffect(() => { onPage?.(page); }, [onPage, page]);
   useEffect(() => onSettingsHistory((entry, own) => {
@@ -1952,34 +1761,24 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   const tabsRef = useRef<HTMLDivElement>(null);
   const settingsBodyRef = useRef<HTMLDivElement>(null);
   const settingsScrollRef = useRef(0);
-  // Tab stays inside the dialog, and the focus returns to whatever opened it
   const surface = useFocusTrap<HTMLElement>(true, { initialFocus: backRef });
   useSheetSwipe(surface, onClose);
   const shown = useRef<{ page: SettingsPage | null; keyBar: boolean } | null>(null);
-  // the group a landing named, followed into view until the reader moves the page
   const following = useRef<{ group: HTMLElement; page: SettingsPage | null } | null>(null);
-  // the group a landing named that was not drawn yet, waited for until the reader moves the page
   const awaited = useRef<{ named: string; page: SettingsPage | null } | null>(null);
   const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "alerts" ? "Alerts" : id === "agents" ? "Agents" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Devices and PCs" : id === "experimental" ? "Experimental" : "About");
   const openPage = (id: SettingsPage): void => { setKeyBarOpen(false); setChosen(id); };
-  // Settings' search: every page's rows that hold all the words typed, each where it can be changed
-  // at once, under its page's name, as Zed's and VS Code's settings searches show them
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const words = useMemo(() => settingsQueryWords(query), [query]);
   const searching = words.length > 0 && !keyBarOpen && (!narrow || page === null);
-  // where a search result leads: the page, and the groups that matched on it. The page opens every
-  // fold that holds one, scrolls the first into view and puts the focus on it, so no row found hides
-  // again and the focus does not fall to the body (G-110)
   const landing = useRef<{ page: SettingsPage; sections: string[] } | null>(null);
   const openFromSearch = (id: SettingsPage, groups: string[] = []): void => {
-    // a press on the page already open changes nothing to land: a landing kept for it would take a later Back's focus
     if (id === page && !searching && !keyBarOpen) return;
     landing.current = { page: id, sections: groups }; setQuery(""); openPage(id);
   };
   const openKeyBar = (): void => {
     settingsScrollRef.current = settingsBodyRef.current?.scrollTop ?? 0;
-    // from a search, the editor opens over its own page, so Back steps out to that page as from there
     if (query !== "") {
       setQuery("");
       setChosen("terminal");
@@ -2009,7 +1808,6 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       } else {
         if (narrow) backRef.current?.focus();
         else tab(page)?.focus();
-        // a group drawn only once the server answers (Also send to) is landed on when it comes
         const named = landed.sections[0];
         if (named !== undefined) awaited.current = { named, page };
       }
@@ -2017,10 +1815,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       if (settingsBodyRef.current) settingsBodyRef.current.scrollTop = settingsScrollRef.current;
       keyBarButtonRef.current?.focus({ preventScroll: true });
     } else if (before === null) {
-      // a button that points at Updates opens on it, and the focus goes there too; so does a link
-      // to a group, and a group the palette named
       const asName = section === "updates" ? "updates" : asked?.section ?? (linked && linkSection ? linkSection : null);
-      // a group that moved keeps its old links: they land where its rows went
       const named = asName === null ? null : MOVED_GROUPS[asName] ?? asName;
       const pointed = named ? settingsBodyRef.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(named)}"]`) : null;
       if (pointed) {
@@ -2030,18 +1825,14 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
         following.current = { group: pointed, page };
       } else {
         tab(page)?.focus();
-        // a group drawn only once the server answers (Anonymous usage counts) is landed on when it comes
         if (named) awaited.current = { named, page };
       }
     } else if (before.page !== page && narrow) {
-      // a phone shows one of the two: the focus follows into the page, and back onto its row
       if (page !== null) backRef.current?.focus();
       else tab(before.page)?.focus();
     }
-    // a group filled in after it opens (the OpenAI key's form waits for the server's answer) grows
-    // past the fold: it is brought back into view until the reader moves the page or leaves it.
     // The subscription is made again whenever this runs, so development's replay of the effect
-    // keeps following; the reader's move or another page ends it for good
+    // keeps following
     const body = settingsBodyRef.current;
     const wait = awaited.current;
     if (wait !== null && (wait.page !== page || keyBarOpen)) awaited.current = null;
@@ -2077,10 +1868,8 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
     for (const move of moves) body?.addEventListener(move, stop, { passive: true });
     return unsubscribe;
   }, [page, keyBarOpen, narrow, section, searching]);
-  // server-side: the web server updates PC bridges, so it keeps this choice
   const [pcSettings, setPcSettings] = useState<MachineSettings | null>(null);
   const [pcSettingsError, setPcSettingsError] = useState<string | null>(null);
-  // asked when a page that shows them opens, so a request that failed earlier is made again
   useEffect(() => {
     if (page !== "devices" && page !== "about" && !searching) return;
     let live = true;
@@ -2097,16 +1886,11 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       // an Escape that cancels an IME composition (the editor's Character field) is the IME's, and one that
       // closed Files drawn over Settings (focused by a click) is spent: one Escape closes one dialog
       if (event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      // Files opened from the palette over Settings holds the focus: its Escape, though this listener runs first.
-      // A preview under Settings (a file opened from that Files) waits for Settings to close, focused or not
       if (!overPreview && focusInOtherModal(surface.current)) return;
       event.preventDefault();
-      // out of the key bar editor first, then out of a search, wherever the focus is in it; from
-      // any page, a phone's included, it closes the dialog
       if (keyBarOpen) setKeyBarOpen(false);
       else if (query !== "") {
         setQuery("");
-        // the result that held the focus goes with the search: the field keeps it
         searchRef.current?.focus();
       } else onClose();
     };
@@ -2114,7 +1898,6 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose, keyBarOpen, overPreview, query]);
 
-  /** the list is one Tab stop: the arrows walk it, and beside an open page they turn the page too */
   const onTabKey = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
     const to = event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index - 1 : event.key === "Home" ? 0 : event.key === "End" ? PAGES.length - 1 : null;
     if (to === null) return;

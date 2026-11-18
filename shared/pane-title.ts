@@ -5,6 +5,7 @@ export function shortPathTitle(title: string): string {
   return PATH_TITLE.test(trimmed) ? folderName(trimmed) : title;
 }
 
+/** A path's last folder, split on either platform's separator: "C:\\work\\api" is "api" as "/work/api" is. */
 export function folderName(path: string): string {
   const last = path.split(/[\\/]+/).filter((part) => part !== "").at(-1);
   if (last === undefined) return path;
@@ -22,8 +23,13 @@ export function codexThreadTitle(title: string): string {
 }
 
 export const SHELL_PREFIX = /^[^:@\s]+@[^:@\s]+:/;
+/** Herdr's agent glyph and spinner are already represented by the row mark and badge. */
 export const AGENT_CHROME = /^π\s*[^\p{L}\p{N}\s]?\s*/u;
 
+/**
+ * A pane's live title without what is drawn beside it: a shell's `user@host:`, an agent's glyph and
+ * spinner, and the folder Codex adds after its thread.
+ */
 export function stripPaneChrome(title: string, agent: string | null | undefined, whole = false): string {
   const shellStripped = title.replace(SHELL_PREFIX, "");
   if (!agent) return shellStripped;

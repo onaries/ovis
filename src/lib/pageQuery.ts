@@ -8,7 +8,6 @@
  */
 import { shellMode, type ShellMode } from "./shellMode.ts";
 
-/** This page's query, `?` and all, or "". */
 export function pageSearch(location: { search: string; hash: string } = window.location, mode: ShellMode = shellMode()): string {
   if (mode !== "relay") return location.search;
   // an address from before the fragment carried it (a link, or an older entry of the history) is
@@ -36,7 +35,7 @@ export function reloadOnPlainClick(event: LinkClick, page: Reloadable = window, 
 /**
  * An address of the hosted shell with a query left from an older build, the load's own or an
  * entry Back or Forward lands on: the query moves into the fragment, so a reload or the page's
- * next request does not carry it again. Returns whether it moved.
+ * next request does not carry it again.
  */
 export function moveQueryToFragment(page: { location: { pathname: string; search: string }; history: { state: unknown; replaceState(data: unknown, unused: string, url: string): void } }): boolean {
   if (page.location.search.length <= 1) return false;
@@ -44,7 +43,6 @@ export function moveQueryToFragment(page: { location: { pathname: string; search
   return true;
 }
 
-/** The address that says `search` (as pageSearch gives it) at `pathname`: what history.pushState takes. */
 export function pageAddress(pathname: string, search: string, hash: string, mode: ShellMode = shellMode()): string {
   if (mode !== "relay") return `${pathname}${search}${hash}`;
   const query = search.startsWith("?") ? search.slice(1) : search;

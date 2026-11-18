@@ -10,11 +10,8 @@ import { expandMachineEvent, wireMachineEvent } from "../../shared/compact-agent
 
 const local = (state: Machine["state"] = "connected"): Machine => ({ id: "local", name: "This PC", kind: "local", enabled: true, state, error: null, snapshot: null });
 const noop = () => {};
-/** what the loader says of the stream, as the inbox mode's list says it */
 let said: string | null = null;
-/** the roster the probe draws */
 let shown: Machine[] = [];
-// The real loader and event hooks, with a tab's visibility and interval clock driven without sleeps.
 describe("roster and health polling beside the event stream", () => {
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const transport = getTransport();
@@ -27,7 +24,6 @@ describe("roster and health polling beside the event stream", () => {
   let next: number;
   let timers: Map<number, { at: number; every: number; run(): void }>;
   let reads: string[];
-  // The local terminal socket: it offers no machine events unless a test says so, so SSE carries them.
   let socketEvents: boolean | undefined;
   let socketListeners: Set<(message: ServerMessage) => void>;
   let disconnectListeners: Set<() => void>;
@@ -37,13 +33,11 @@ describe("roster and health polling beside the event stream", () => {
     onDisconnect(listener: () => void) { disconnectListeners.add(listener); return () => { disconnectListeners.delete(listener); }; },
   };
   const machineSessions = { get: () => ({ socket }), closeAll: noop } as unknown as MachineSessionRegistry;
-  // what the server answers: health and this PC's state in a roster read
   let healthUp: boolean;
   let readState: Machine["state"];
   function Probe() {
     const lockedRef = useRef(locked); lockedRef.current = locked;
     const refetchTimer = useRef<number | null>(null);
-    // as App's: the last health read's outcome
     const [healthFailing, setHealthFailing] = useState(false);
     const loadHealth = useCallback(async () => {
       await getTransport().fetch("/api/health?scope=bridge");
@@ -75,7 +69,6 @@ describe("roster and health polling beside the event stream", () => {
       location: { hash: "" },
       setInterval(run: () => void, every: number) { const id = next++; timers.set(id, { at: now + every, every, run }); return id; },
       clearInterval(id: number) { timers.delete(id); },
-      // a one-shot timer: `every` 0 runs it once
       setTimeout(run: () => void, ms: number) { const id = next++; timers.set(id, { at: now + ms, every: 0, run }); return id; },
       clearTimeout(id: number) { timers.delete(id); },
     } });
@@ -90,7 +83,7 @@ describe("roster and health polling beside the event stream", () => {
       return path === "/api/health" && !healthUp ? Response.json({ error: { code: "down" } }, { status: 500 }) : Response.json({ ok: true });
     } });
     await act(async () => { renderer = create(createElement(Probe)); });
-    reads.length = 0; // opening reads are not part of the steady-state minute
+    reads.length = 0;
   });
   afterEach(async () => {
     await act(async () => { renderer?.unmount(); });
@@ -143,7 +136,6 @@ describe("roster and health polling beside the event stream", () => {
   it("shows the full read's snapshot for a PC whose compact ones cannot be read, while such events come every 100 ms for 5 s", async () => {
     const remote = (version: string): Machine => ({ id: "remote", name: "Away", kind: "ssh", enabled: true, state: "connected", error: null,
       snapshot: { version, protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [], agents: [] } });
-    // a full read answers when the test says: each one is still out when the next event comes
     const fullReads: { promise: Promise<void>; resolve: () => void }[] = [];
     setTransport({ ...transport, openEventSource: () => source, async fetch(input) {
       const path = String(input); reads.push(path);
@@ -164,7 +156,6 @@ describe("roster and health polling beside the event stream", () => {
     for (let at = 0; at < 5_000; at += 100) {
       const out = fullReads.splice(0);
       await act(async () => { source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ type: "machines", machines: [local(), unreadable] }) })); });
-      // the reads that were out when this event came answer now
       await act(async () => { for (const read of out) read.resolve(); });
       await advance(100);
     }
@@ -173,7 +164,6 @@ describe("roster and health polling beside the event stream", () => {
     expect(remoteShown()).toBe("full read");
   });
 
-  /** A PC "remote" with one pane, its full reads answering when the test says, with what `answer` holds then. */
   function recoveryFixture() {
     const remote = (version: string, status: "idle" | "working" = "idle") => ({ id: "remote", name: "Away", kind: "ssh", enabled: true, state: "connected", error: null,
       snapshot: { version, protocol: 22, workspaces: [], tabs: [], layouts: [], agents: [],
@@ -202,7 +192,6 @@ describe("roster and health polling beside the event stream", () => {
     await stream([local(), unreadable]);
     await advance(500);
     expect(fullReads).toHaveLength(1);
-    // newer than the read out: then the PC's compact snapshot cannot be read again, which keeps this one
     await stream([local(), remote("newer")]);
     await stream([local(), unreadable]);
     expect(shownRemote()?.version).toBe("newer");
@@ -220,7 +209,6 @@ describe("roster and health polling beside the event stream", () => {
     await act(async () => { source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ type: "machine-message", machine_id: "remote",
       message: { type: "pane-status", pane_id: "r1", agent_status: "working", finish_epoch: "e", finish_id: 1 } }) })); });
     expect(shownRemote()?.panes[0]?.agent_status).toBe("working");
-    // the read out answers with the pane as it was before that status
     await act(async () => { fullReads[0]!.resolve(); });
     expect(shownRemote()?.panes[0]?.agent_status).toBe("working");
     await advance(500);
@@ -242,14 +230,12 @@ describe("roster and health polling beside the event stream", () => {
     for (const [index, agentStatus] of ["working", "blocked", "done"].entries()) {
       await advance(500);
       expect(fullReads).toHaveLength(index + 1);
-      // a status for the PC while its read is out; the read answers with the pane as it was before it
       await status(agentStatus, index + 1);
       answer.machine = remote(`read ${index + 1}`);
       await act(async () => { fullReads[index]!.resolve(); });
     }
     expect(shownRemote()?.version).toBe("read 3");
     expect(shownRemote()?.panes[0]?.agent_status).toBe("done");
-    // the recovery has ended: a later status is shown as it comes and asks for no full read
     await status("idle", 4);
     await advance(5_000);
     expect(fullReads).toHaveLength(3);
@@ -290,7 +276,7 @@ describe("roster and health polling beside the event stream", () => {
       expect(counts()).toEqual([1, 1, 1]);
       await advance(5_000);
       expect(counts()).toEqual([2, 2, 2]);
-      await stream("opened"); // a reopen alone cannot reuse a roster from the lost stream
+      await stream("opened");
       if (failure === "lost" || failure === "closed") {
         await advance(5_000);
         expect(counts()).toEqual([3, 3, 3]);
@@ -356,18 +342,16 @@ describe("roster and health polling beside the event stream", () => {
     await advance(5_000);
     expect(counts()).toEqual([2, 2, 2]);
     readState = "connected";
-    await advance(30_000); // a read alone never slows it again: that waits for a pushed roster
+    await advance(30_000);
     expect(counts()).toEqual([8, 8, 8]);
   });
 
   it("says Reconnecting while the stream that feeds the roster is lost after it was had, and Connected when it is back", async () => {
-    // a stream not yet had is no reconnect, nor its first opening
     expect(said).toBeNull();
     await healthyStream();
     expect(said).toBeNull();
     await stream("lost");
     expect(said).toBe("reconnecting");
-    // the rosters a reconnecting stream still hands over say nothing of it
     await stream([local()]);
     expect(said).toBe("reconnecting");
     await stream("opened");
@@ -378,7 +362,6 @@ describe("roster and health polling beside the event stream", () => {
     socketEvents = true;
     await onSocket({ type: "features", features: ["machine-events"] } as ServerMessage);
     expect(said).toBeNull();
-    // a lost socket says nothing of its events until it reconnects
     socketEvents = undefined;
     await onSocket("disconnect");
     expect(said).toBe("reconnecting");

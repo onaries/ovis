@@ -15,7 +15,6 @@ describe("first-start hints", () => {
     expect(hintsPending(storage)).toBe(true);
     finishHints(storage);
     expect(hintsPending(storage)).toBe(false);
-    // a later first run (the guide opened again from Settings, another workspace) does not bring them back
     armHints(storage);
     expect(storage.values.get(FIRST_HINTS_KEY)).toBe("done");
   });
@@ -30,7 +29,6 @@ describe("first-start hints", () => {
 describe("the sidebar's setup row", () => {
   it("shows only once a begun guide closed, and stays hidden once hidden", () => {
     const storage = memory();
-    // an older guide's record, or I've used Ovis before: no row
     expect(setupRowState(storage)).toBeNull();
     setupRowOn(storage);
     expect(setupRowState(storage)).toBe("on");

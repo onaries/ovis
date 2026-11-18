@@ -54,7 +54,6 @@ test("gives a multiple choice a new card when its ticks change in the terminal",
 });
 
 test("refuses ticks with typed text for a card whose own steps cannot take both", () => {
-  // a multiple choice that says it takes ticks with text, as pi-ask's form does, but has no steps of its own for them
   const parsed = finishPrompt("pi", { kind: "question", title: "Question", question: "Which?", body: null, options: [{ label: "A", description: null }, { label: "B", description: null }], multi_select: true, checks_with_text: true, custom_option_index: 2 },
     { responder: "pi-ask-question", menuLabels: ["A", "B", "Other"], selectedIndex: 0, checkedOptionIndices: [], customMenuIndex: 2, rejectWithEscapeIndex: null });
   expect(() => answerKeys(publicPrompt(parsed), { option_indices: [0], custom_text: "C" })).toThrow("This prompt does not take ticks and typed text together.");

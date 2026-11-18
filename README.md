@@ -49,7 +49,7 @@ On Windows, in PowerShell:
 irm https://ovis.sh/install.ps1 | iex
 ```
 
-**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on, choose **Show the QR code** and scan it. A computer in an Ovis account asks the phone to sign in instead. The iPhone app is on the [App Store](https://apps.apple.com/app/id6824664162) and the Android app is on [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app). [Phone setup →](docs/guide.md#on-your-phone)
+**On your phone:** on the computer, open **Settings → Devices and PCs → Add a connection → Ovis relay**, switch it on, and scan its QR code with the phone. Where the tab asks you to sign in first, sign in and add this computer to your account, then choose **Show the QR code** and scan it with a phone signed in to the same account: the computer is then in the account, and it asks any other phone to sign in to that account instead of scanning. The iPhone app is on the [App Store](https://apps.apple.com/app/id6824664162) and the Android app is on [Google Play](https://play.google.com/store/apps/details?id=sh.ovis.app). [Phone setup →](docs/guide.md#on-your-phone)
 
 <a href="https://apps.apple.com/app/id6824664162"><img src="ovis-site/assets/app-store/badge-en.svg" alt="Download on the App Store" height="48"></a> <a href="https://play.google.com/store/apps/details?id=sh.ovis.app"><img src="ovis-site/assets/google-play/badge-en.svg" alt="Get it on Google Play" height="48"></a>
 

@@ -13,7 +13,6 @@ afterEach(() => {
   if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window");
 });
 
-/** A window with a history of `entries`, on its last one, with the Navigation API when `listed`. */
 function browser(entries: string[], listed: boolean, refused = false) {
   const went: Array<number | string> = [];
   const window = {

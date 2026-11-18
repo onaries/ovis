@@ -1,4 +1,3 @@
-/** Browser-only regression fixture, bundled by chat-history-browser-qa.ts. */
 import React, { Profiler, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { HISTORY_PROMPTS, SettingsProvider } from "../src/lib/settings.ts";
@@ -18,7 +17,6 @@ window.qa = { requests: [], commits: [], answered: [], target: () => {}, chat: (
 /** the session the roster last named per pane, as App hands it to PaneTerminal */
 const rosterSessions = new Map<string, string>();
 let rosterChanged = () => {};
-// the roster naming a pane's session (useMachineRoster), as it does before any chat renders from it
 window.qa.session = (pane, value) => {
   const named = { pane_id: pane, agent: "claude", agent_session: { agent: "claude", kind: "id", source: "herdr:claude", value } };
   observePaneSessions([{ id: "local", snapshot: { panes: [named] } }]);
@@ -29,8 +27,6 @@ window.fetch = (input, init) => {
   const url = String(input);
   if (!url.includes("tool-output") && !url.startsWith("/qa-output")) {
     const answer = nativeFetch(input, init);
-    // "machine/pane" of every conversation request that ended, answered or cancelled: the
-    // script waits on it before it says a late answer changed nothing
     if (url.includes("/conversation?")) {
       const parsed = new URL(url, location.href);
       const key = `${/\/api\/machines\/([^/]+)\//.exec(parsed.pathname)?.[1] ?? "local"}/${parsed.searchParams.get("pane_id")}`;
@@ -43,7 +39,6 @@ window.fetch = (input, init) => {
   return new Promise((resolve, reject) => window.qa.requests.push({ url, signal: init!.signal as AbortSignal,
     resolve: (text) => resolve(new Response(text)), reject: () => reject(new Error("late failure")) }));
 };
-/** The app's update line as App mounts it, without a server to poll: math-browser-qa.ts reads its reload line. */
 function UpdatesLine() {
   return <UpdateNotice updates={useUpdates(false)} onOpen={() => {}} />;
 }
@@ -69,7 +64,6 @@ function Product({ pane, machine, agent }: { pane: string; machine: string; agen
   const [, setRoster] = useState(0);
   window.qa.view = setChat;
   rosterChanged = () => setRoster((value) => value + 1);
-  // a press on a tab or sidebar row (usePaneLens): the chat it opens reads a page of history
   window.qa.press = (pressed) => prefetchPaneConversation(pressed, "local", HISTORY_PROMPTS);
   return <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><Profiler id="product-pane" onRender={() => {
     window.qa.commits.push(Array.from(document.querySelectorAll(".chat-turn"), (turn) => turn.textContent ?? ""));

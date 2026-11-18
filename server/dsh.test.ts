@@ -39,7 +39,6 @@ async function fixture(run: (path:string)=>Promise<void>) {
  try {await run(join(dir,"session.v4.jsonl.zstd"));} finally {await rm(root,{recursive:true,force:true});}
 }
 const linuxTest = process.platform === "linux" ? test : test.skip;
-/** What herdr reports for a TUI launched through the npm-installed launcher. */
 const DSH_ARGV = ["node", "/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js", "--profile", "tui"];
 const DSH_TUI_ARGV = ["node", "/home/user/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/lib/types/dsh-adapter/host-entry.js"];
 const otherId = "87654321-4321-4321-4321-cba987654321";
@@ -280,7 +279,6 @@ describe("native dsh conversation",()=>{
  await writeFile(path,Bun.zstdCompressSync(log()));const lock=await open(join(path,"..","session.lock"),"w");
  const info={foreground_processes:[{pid:process.pid,argv:DSH_ARGV}]};
  try {expect((await resolveDshTranscript(info)).path).toBe(path);expect((await boundConversation(await resolveDshTranscript(info))).turns).toHaveLength(0);await expect(resolveDshTranscript({foreground_processes:[{pid:process.pid,argv:["unrelated"]}]})).rejects.toBeInstanceOf(ConversationUnavailable);}finally{await lock.close();}
- // a process seen holding a lock is no new chat once it lets go, even when it started after this server
  await expect(resolveDshTranscript(info,0n)).rejects.toBeInstanceOf(ConversationUnavailable);
  }));
 });
@@ -426,7 +424,6 @@ test("matches only a dsh launcher that boots a chat profile", () => {
   ]) expect(isDshProcess(argv)).toBe(true);
   for (const argv of [
     ["vim", "dsh"],
-    // a program merely named dsh is no dsh launcher
     ["node", "/srv/app/dsh", "--profile", "tui"],
     ["/srv/app/dsh", "--profile", "tui"],
     // Debian's distributed shell, and any launcher not run by node
@@ -540,7 +537,6 @@ test("shows the error a recorded dsh-tui turn ended on (a provider with no balan
   const turns = projectDsh(text, "inode").turns;
   const sent = turns.findIndex((turn) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text === "Reply with exactly: SHOULD-FAIL"));
   expect(turns[sent + 1]?.parts).toEqual([{ kind: "text", failed: true, text: "Error: Insufficient Balance (request_id: ef4dff0b-9860-485e-bf1e-2adc49608099)" }]);
-  // the turns after it read as before
   expect(turns[sent + 2]?.role).toBe("user");
 });
 
@@ -574,7 +570,6 @@ for (const failure of ["environ", "sessions", "descriptors", "birth", "final-bir
     try {
       expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
       const info = { foreground_processes: [{ pid: process.pid, argv: DSH_ARGV }, { pid: child.pid, argv: DSH_ARGV }] };
-      // Both locks are real; only the selected inspection step is made unreadable.
       await expect(resolveDshTranscript(info)).rejects.toBeInstanceOf(ConversationUnavailable);
       memory.mockImplementation(async pid => pid === child.pid && failure === "environ" ? null : {
         argv: [], environ: pid === child.pid && failure === "sessions" ? ["DSH_HOME=relative"] : [`DSH_HOME=${home}`],

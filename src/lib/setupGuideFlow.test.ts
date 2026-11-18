@@ -16,7 +16,6 @@ const memory = (): Pick<Storage, "getItem" | "setItem"> & { values: Map<string, 
 describe("autoOpen", () => {
   it("opens the welcome on a fresh install only", () => {
     expect(autoOpen(FRESH)).toBe(true);
-    // a server whose pairing state is not known has no paired device to show for it
     expect(autoOpen({ ...FRESH, pairingGate: "unavailable" })).toBe(true);
   });
 
@@ -57,7 +56,6 @@ describe("readGuide and saveGuide", () => {
     expect(readGuide(storage)).toBeNull();
     saveGuide(storage, REOPENED);
     expect(readGuide(storage)).toEqual({ status: "open", state: REOPENED });
-    // reopened at a later step, from the sidebar's Setup: N left: a reload resumes there
     saveGuide(storage, { ...REOPENED, at: "phone" });
     expect(readGuide(storage)).toEqual({ status: "open", state: { ...REOPENED, at: "phone" } });
     storage.setItem(GUIDE_STORAGE_KEY, JSON.stringify({ status: "open", state: { ...REOPENED, at: "elsewhere" } }));
@@ -68,7 +66,6 @@ describe("readGuide and saveGuide", () => {
 
   it("reads a damaged record as closed, never as a guide to show", () => {
     const storage = memory();
-    // a record of the old multi-step guide is no guide to show either
     for (const raw of ["{", "[]", "{\"status\":\"open\",\"state\":{\"step\":\"nowhere\"}}", "{\"status\":\"open\"}", "{\"status\":\"open\",\"state\":{\"step\":\"agent\"}}", "{\"status\":\"open\",\"state\":{\"step\":\"welcome\",\"outcomes\":{},\"plan\":null,\"agent\":null,\"signedIn\":false}}"]) {
       storage.values.set("ovis:setup-guide", raw);
       expect(readGuide(storage)).toEqual({ status: "closed" });
@@ -80,7 +77,6 @@ describe("readGuide and saveGuide", () => {
 const MISSING: AgentInstallState = { installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null };
 const row = (id: string, state: Partial<AgentInstallState> = {}): AgentCatalogRow => catalogRow(AGENT_CATALOG.find((entry) => entry.id === id)!, "linux", { ...MISSING, ...state });
 const installed = (id: string, version: string | null = "1.0.0"): AgentCatalogRow => row(id, { installed: true, binary: id, on_path: true, version });
-/** what the PC answered: every catalog agent, none installed but those given */
 const answer = (...found: AgentCatalogRow[]): AgentCatalogRow[] => AGENT_CATALOG.map((entry) => found.find((one) => one.id === entry.id) ?? row(entry.id));
 const check = (patch: Partial<PcCheck>): PcCheck => ({ checking: false, catalog: null, failed: false, ...patch });
 
@@ -88,7 +84,6 @@ describe("the setup screen after the PC check", () => {
   it("shows the check while it runs, and before it has started", () => {
     expect(setupView(check({ checking: true }))).toBe("checking");
     expect(setupView(check({}))).toBe("checking");
-    // the answer is in but still settling on screen
     expect(setupView(check({ checking: true, catalog: answer(installed("claude")) }))).toBe("checking");
   });
 
@@ -100,7 +95,6 @@ describe("the setup screen after the PC check", () => {
 
   it("lists every coding agent: Claude Code and Codex first, then the others installed, then the rest", () => {
     const catalog = [row("codex"), installed("pi"), row("claude"), installed("hermes"), row("opencode"), row("devin", { installed: null })];
-    // an assistant is not a coding agent for a workspace
     expect(agentRows(catalog, []).map((agent) => agent.id)).toEqual(["claude", "codex", "pi", "opencode", "devin"]);
     expect(agentRows(null, [])).toEqual([]);
   });
@@ -125,11 +119,9 @@ describe("the setup screen after the PC check", () => {
     const account = (id: ProviderUsage["id"], key: string, problem: ProviderUsage["problem"]): ProviderUsage => ({ id, key, account: null, plan: null, windows: [], problem, checked_at: null });
     expect(signedInAgents([])).toEqual([]);
     expect(signedInAgents([account("claude", "a", null), account("claude", "b", "rate_limited"), account("codex", "c", "expired"), account("copilot", "d", null)])).toEqual(["claude", "copilot"]);
-    // an account another tool recorded is that tool's sign-in: Claude Code is still to be signed in
     const recorded = (signedIn: boolean, problem: ProviderUsage["problem"] = null): ProviderUsage =>
       ({ ...account("claude", "r", problem), checked_at: "2026-09-29T12:00:00Z", recorded: { by: "omp", stale: false, signed_in: signedIn } });
     expect(signedInAgents([recorded(false), account("copilot", "d", null)])).toEqual(["copilot"]);
-    // this PC's own sign-in stays one while a record stands in for its numbers, unless it is to be signed in again
     expect(signedInAgents([recorded(true), account("copilot", "d", null)])).toEqual(["claude", "copilot"]);
     expect(signedInAgents([recorded(true, "rate_limited")])).toEqual(["claude"]);
     expect(signedInAgents([recorded(true, "expired")])).toEqual([]);
@@ -157,7 +149,6 @@ describe("the setup screen after the PC check", () => {
     const answered = checkList(AGENT_CATALOG, answer(installed("codex", "0.163.0")));
     expect(answered.find((one) => one.id === "codex")).toEqual({ id: "codex", name: "Codex", status: { kind: "installed", version: "0.163.0" } });
     expect(answered.find((one) => one.id === "claude")?.status).toEqual({ kind: "missing" });
-    // an agent the PC answered that this page's list lacks still shows
     const extra = { ...installed("claude"), id: "newcomer", name: "Newcomer" };
     expect(checkList(AGENT_CATALOG, [...answer(), extra]).at(-1)).toEqual({ id: "newcomer", name: "Newcomer", status: { kind: "installed", version: "1.0.0" } });
   });
@@ -184,7 +175,6 @@ describe("openSetupGuide", () => {
 });
 
 describe("readSignedIn", () => {
-  /** a scheduler the test runs by hand: each retry waits here until \`run()\`, or is cancelled */
   const scheduler = () => {
     const waiting: (() => void)[] = [];
     let cancelled = 0;
@@ -211,12 +201,10 @@ describe("readSignedIn", () => {
     const late = Promise.withResolvers<number>();
     const cancel = readSignedIn(() => { reads += 1; return reads === 1 ? Promise.reject(new Error("offline")) : late.promise; }, (count) => found.push(count), timer.schedule);
     await settled();
-    // the guide closed while the retry waited
     cancel();
     expect(timer.cancelled()).toBe(1);
     expect(reads).toBe(1);
 
-    // and an answer already on its way when the guide closed is dropped too
     const second = scheduler();
     const stop = readSignedIn(() => late.promise, (count) => found.push(count), second.schedule);
     stop();
@@ -252,7 +240,6 @@ describe("tileState", () => {
   const tab = { pane_id: "w1:p2", workspace_id: "w1", command: "curl -fsSL https://claude.ai/install.sh | bash", shell: "posix" as const };
   it("a tile the PC has is installed, whatever its own install says", () => {
     expect(tileState(true, { kind: "idle" }, false, 0)).toBe("installed");
-    // the catalog read for another agent found this one first: done, not still installing
     expect(tileState(true, { kind: "installing", tab }, false, 1000)).toBe("installed");
   });
 
@@ -270,9 +257,7 @@ describe("tileState", () => {
     expect(tileState(false, { kind: "installing", tab }, false, INSTALL_GIVE_UP_MS)).toBe("stuck");
     expect(tileState(false, { kind: "failed", message: "offline", after: "install" }, false, 0)).toBe("failed");
     expect(tileState(false, { kind: "idle" }, false, 0)).toBe("missing");
-    // Try again after a failure: the new request turns the ring at once, over the old failure
     expect(tileState(false, { kind: "failed", message: "offline", after: "install" }, true, 0)).toBe("installing");
-    // the request itself never answered: stuck too, not back to Install
     expect(tileState(false, { kind: "idle" }, true, INSTALL_GIVE_UP_MS)).toBe("stuck");
   });
 });
@@ -280,7 +265,6 @@ describe("tileState", () => {
 describe("phoneBoxOpensFirst and phoneBoxStays", () => {
   it("opens Connect your phone by itself on a first run on the PC only", () => {
     expect(phoneBoxOpensFirst({ step: "setup" }, true)).toBe(true);
-    // a page another device opened (a phone), or the guide reopened from Settings
     expect(phoneBoxOpensFirst({ step: "setup" }, false)).toBe(false);
     expect(phoneBoxOpensFirst(REOPENED, true)).toBe(false);
   });
@@ -288,7 +272,6 @@ describe("phoneBoxOpensFirst and phoneBoxStays", () => {
   it("keeps a box that came open by itself only while the relay may lead; a tapped one always", () => {
     expect(phoneBoxStays("first-run", "wait", false)).toBe(true);
     expect(phoneBoxStays("first-run", "relay", false)).toBe(true);
-    // never sent to Settings → Phone without a tap
     expect(phoneBoxStays("first-run", "other", false)).toBe(false);
     expect(phoneBoxStays("tap", "other", false)).toBe(true);
   });
@@ -377,7 +360,6 @@ describe("otherDevice", () => {
   it("names a device paired here other than this browser, and none for this browser alone", () => {
     const device = (id: string, current: boolean) => ({ id, label: `device ${id}`, role: "drive" as const, created_at: "2026-11-15T00:00:00Z", last_seen_at: null, current });
     expect(otherDevice([])).toBeNull();
-    // this browser paired itself (the relay's start, Pair this device): no phone yet
     expect(otherDevice([device("self", true)])).toBeNull();
     expect(otherDevice([device("self", true), device("phone", false)])).toBe("device phone");
   });
@@ -394,7 +376,6 @@ describe("setupLeft", () => {
     expect(setupLeft({ workspace: true, phone: true, alerts: true })).toEqual({ done: 4, total: 4, at: null });
     expect(setupLeft({ workspace: true, phone: false, alerts: true })).toEqual({ done: 3, total: 4, at: "phone" });
     expect(setupLeft({ workspace: true, phone: true, alerts: false })).toEqual({ done: 3, total: 4, at: "phone" });
-    // a theme is always drawn: it is never left
     expect(setupLeft({ workspace: false, phone: false, alerts: false })).toEqual({ done: 1, total: 4, at: "agent" });
   });
 });
@@ -409,9 +390,6 @@ describe("alertsFailed", () => {
 });
 
 describe("alertsHere: what the step, Done and Setup: N left say of this device's alerts", () => {
-  // Every case the #3907 reviews found, by what the page knows and what the PC recorded. The rule reads nothing the
-  // page remembers of its own presses, so a reload or a reopen gives the same answer from the same record (rows marked
-  // "reload" are what that record is by then).
   const record = (fields: Partial<AlertsFacts["push"]> = {}): AlertsFacts["push"] => ({ checked: true, problem: null, delivered: true, ...fields });
   const base: AlertsFacts = { alertsOn: true, notifications: "granted", desktop: false, pushSupported: true, pushOn: true, push: record(), confirmed: null };
   const rows: [string, Partial<AlertsFacts>, AlertsHere][] = [
@@ -447,9 +425,7 @@ describe("alertsHere: what the step, Done and Setup: N left say of this device's
   it("shows each answer the same way on the step, Done and the row", () => {
     expect(alertsSurfaces("on")).toEqual({ step: "send-test", done: "done", row: "done" });
     expect(alertsSurfaces("off")).toEqual({ step: "turn-on", done: "not-yet", row: "left" });
-    // nothing said either way, and the row waits, as it waits for the device list
     expect(alertsSurfaces("checking")).toEqual({ step: "checking", done: "checking", row: "wait" });
-    // nothing to set up here: the row does not count it as left
     expect(alertsSurfaces("unavailable")).toEqual({ step: "note", done: "not-yet", row: "done" });
   });
 });

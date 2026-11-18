@@ -10,6 +10,7 @@ import { applyAccountRecords, applyEnrollment, applyLink, type LinkRefusal } fro
 const LINK_STATUS: Record<LinkRefusal, number> = {
   record_invalid: 400, signature_invalid: 400, account_mismatch: 409, signer_not_member: 403,
   tombstoned: 409, link_not_owner: 403, key_in_use: 409, account_unavailable: 503, enrolling: 409, removal_pending: 409,
+  link_required: 403, unverified_device: 403, pairing_ended: 409,
 };
 
 /**
@@ -21,13 +22,24 @@ export async function handleAccountRequest(request: Request, pathname: string, c
   const fail = (code: string, message: string, status: number) => reply({ error: { code, message } }, status);
   const devices = context.services.devices;
   const peer = context.peer;
+  // a device that waits to link (it paired with a code made for a PC in no account; docs/account.md, "Who may admit
+  // a device") makes two calls here: it reads its own status, and sends its link
+  const waiting = peer.kind === "relay" && peer.device.provisional === true ? peer.device.id : null;
   // the one route a watching device may use: its own introduction, over its own session
   if (pathname === "/api/account/introduction" && request.method === "GET") {
     setRequestRoute(pathname);
     const pcs = peer.kind === "relay" ? context.services.accountIntroductions.get(peer.key) : null;
     return pcs ? reply({ pcs }) : fail("introduction_none", "No introduction waits for this device", 404);
   }
-  if (access.level !== "full" || access.role !== "drive") return fail("read_only", "this device can only watch", 403);
+  if (waiting !== null && pathname === "/api/account/status" && request.method === "GET") {
+    setRequestRoute(pathname);
+    // this one body, whatever else the PC holds: it names no account, and no mailbox is read for it (`fresh` is
+    // ignored). The read is a moment the device's time is judged at
+    if (!devices.provisionalStands(waiting)) return fail("link_required", "This device did not link itself into an account in time. Pair it again.", 403);
+    return reply({ account: null, members: 0, unlinked: [waiting], own_word: [], removals: [], adds: [], blocked: [], enrolling: false, blocked_all: false, mailbox: { last_pull_at: null, error: null } });
+  }
+  const ownLink = waiting !== null && pathname === "/api/account/link" && request.method === "POST";
+  if (!ownLink && (access.level !== "full" || access.role !== "drive")) return fail("read_only", "this device can only watch", 403);
   if (pathname === "/api/account/status" && request.method === "GET") {
     setRequestRoute(pathname);
     const mailbox = context.services.accountMailbox;
@@ -69,15 +81,32 @@ export async function handleAccountRequest(request: Request, pathname: string, c
       setRequestRoute(pathname);
       // a link proves the key of the row whose session sends it, and only the relay carries a row's key
       if (peer.kind !== "relay") return fail("link_not_owner", "Link a device from its own connection through the relay", 403);
+      // what stood when the link arrived, before its signature is checked: its checks are held to it. A row that
+      // waits to link sends five links, whatever each is answered; the next turned it away
+      const arrival = devices.linkArrived(peer.device.id, peer.device.provisional === true);
+      if (arrival === null) return fail("link_required", "The link was refused: link_required", LINK_STATUS.link_required);
       // a link that may bring this PC into an account: account adds wait until its member enrolls it. On disk
       // first, so a stop keeps them waiting; never lifted by a refused link, as another may be on its way
       // (with no account here no add applies anyway, and the next first member takes the barrier over)
       if (context.services.accountHolds.error !== null) return fail("account_unavailable", context.services.accountHolds.error, 503);
       const first = devices.account() === null;
-      // a barrier confirmed by a member who has since left (the PC has no account again) is this link's to take over
-      if (first) context.services.accountHolds.startEnrolling(peer.device.id, { stale: true });
-      const linked = await applyLink(devices, body.record, { deviceId: peer.device.id, serverId: peer.serverId, sessionKey: peer.key, sessionId: peer.sessionId }, context.services.accountMailbox.gates());
-      if ("refused" in linked) return fail(linked.refused, `The link was refused: ${linked.refused}`, LINK_STATUS[linked.refused]);
+      // a barrier confirmed by a member who has since left (the PC has no account again) is this link's to take over.
+      // Nothing of a device that waits to link is written before its link has passed every check: its barrier goes to
+      // disk in the turn that writes its row, before it (applyLink). So one whose link is refused, or outlives its
+      // time, leaves none
+      if (first && !arrival.provisional) context.services.accountHolds.startEnrolling(peer.device.id, { stale: true });
+      const linked = await applyLink(devices, body.record, { deviceId: peer.device.id, serverId: peer.serverId, sessionKey: peer.key, sessionId: peer.sessionId }, arrival, {
+        gates: context.services.accountMailbox.gates(),
+        barrier: () => context.services.accountHolds.startEnrollingBeforeRow(peer.device.id),
+        setUpFor: () => context.services.relay.savedRelayAccount(),
+        vouch: (account, key, firstLink) => context.services.accountMailbox.vouch(account, key, firstLink),
+      });
+      if ("refused" in linked) {
+        const refused = fail(linked.refused, linked.message ?? `The link was refused: ${linked.refused}`, LINK_STATUS[linked.refused]);
+        // when the PC may ask the account service again: the device sends the same link after it
+        if (linked.retryAfter !== undefined) refused.headers.set("retry-after", String(linked.retryAfter));
+        return refused;
+      }
       // the wait is this device's to end: a link refused meanwhile may have named another; the first link that succeeds keeps it
       if (first) context.services.accountHolds.confirmEnrolling(peer.device.id);
       return reply({ device: linked.device });
@@ -119,7 +148,6 @@ export async function handleAccountRequest(request: Request, pathname: string, c
       const undecided = results.some((result) => result.outcome === "refused" && result.code === "account_unavailable");
       if (last !== false && !undecided && linker) {
         holds.endEnrolling();
-        // adds the barrier held back now pass every gate in their turn
         await mailbox.settle();
       }
       return reply({ results });

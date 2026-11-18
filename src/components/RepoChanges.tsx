@@ -17,7 +17,6 @@ import { routeMissing } from "../lib/api.ts";
 
 export interface RepoChangesProps {
   paneId: string;
-  /** the pane's folder, read when the pane is gone */
   directory: string;
   onOpenDiff: (comparison: RepoComparison, file: RepoDiffFile, directory: string) => void;
 }
@@ -67,7 +66,6 @@ export function RepoChanges(props: RepoChangesProps) {
 type Load = { status: "pending" } | { status: "failed"; error: unknown } | { status: "ready"; listing: RepoDiffFileList };
 const PENDING: Load = { status: "pending" };
 
-/** The branches offered as a base: read when the picker opens, never before. */
 type Refs = { status: "idle" } | { status: "pending" } | { status: "failed"; error: unknown } | { status: "ready"; listing: RepoDiffRefs };
 const NO_REFS: Refs = { status: "idle" };
 
@@ -77,13 +75,6 @@ const NO_REFS: Refs = { status: "idle" };
  * that base and HEAD, as Codex's review pane compares a branch), one file per row with its status
  * and counts, each opened as its diff, under the folders they sit in (lib/changeTree.ts): every
  * folder starts open, and what the reader folds stays folded across refreshes and comparisons.
- * The list is read on each choice and on Refresh, never polled; while it is read, the last list's
- * repository line stays and placeholder rows hold its height. A base is never guessed: the
- * Branch scope starts empty, offers the repository's branches when its picker opens, and compares
- * on Compare alone; the identity a branch list answers with (HEAD, base, merge base) is what each
- * of its files is read from, so a base that moves on changes nothing until Refresh. Another PC,
- * pane or folder starts the Branch scope over (no base, nothing compared until Compare), and an
- * answer read for a target or comparison no longer shown is dropped.
  */
 function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: RepoChangesProps & { scope: RepoDiffScope; setScope: (scope: RepoDiffScope) => void }) {
   const t = useT();
@@ -94,17 +85,14 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
   // the comparison read last: a commit or branch comparison waits for Compare, the others read on choice
   const [asked, setAsked] = useState<RepoComparison | null>(scope === "branch" || scope === "commit" ? null : { scope, base: null, head: null, comparison: null });
   const [load, setLoad] = useState<Load>(PENDING);
-  // the last listing, kept while the next is read: its repository line stays and its rows size the placeholders
   const [last, setLast] = useState<RepoDiffFileList | null>(null);
   const request = useRef(0);
 
-  // the base picker: the typed text, the row picked from the list (while the text still reads as it), and the list itself
   const [baseRef, setBaseRef] = useState("");
   const [picked, setPicked] = useState<RepoDiffRefs["refs"][number] | null>(null);
   const [refs, setRefs] = useState<Refs>(NO_REFS);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [active, setActive] = useState(0);
-  // Back closes the list of branches, as Escape does, not the Files dialog it is in
   usePhoneSheetBack(() => setPickerOpen(false), pickerOpen);
   const refsRequest = useRef(0);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -113,7 +101,6 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
   const listId = useId();
   const baseLabelId = useId();
 
-  // another PC, pane or folder: nothing read or chosen for the last one is an answer for this one.
   // Reset while rendering, so the read below never starts the last target's branch comparison here.
   const target = useMemo(() => ({ paneId, directory }), [fetchRepoDiffFiles, fetchRepoDiffRefs, paneId, directory]);
   const [shownTarget, setShownTarget] = useState(target);
@@ -127,7 +114,6 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
     setLoad(PENDING);
     if (scope === "branch") setAsked(null);
   }
-  // and what is still on its way for the last target (or for a closed view) is dropped when it lands
   useEffect(() => () => { request.current += 1; refsRequest.current += 1; }, [target]);
 
   const read = useCallback((comparison: RepoComparison) => {
@@ -162,7 +148,6 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
 
   useEffect(() => {
     if (!pickerOpen) return;
-    // the list sits in the form, under the field and Compare, so it moves with them and covers neither;
     // a click anywhere else closes it once the click is done: closing on the press would move Compare
     // (and what is under it) away from the pointer before it is released
     const onClick = (event: MouseEvent): void => {
@@ -204,12 +189,10 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
       const last = Math.max(0, options.length - 1);
       setActive((index) => (event.key === "ArrowDown" ? Math.min(last, index + 1) : Math.max(0, index - 1)));
     } else if (event.key === "Escape" && pickerOpen) {
-      // cancel: close the list only, not the dialog around it
       event.preventDefault();
       event.stopPropagation();
       setPickerOpen(false);
     } else if (event.key === "Enter" && pickerOpen && activeOption !== undefined) {
-      // a row on the list is taken; with none, Enter submits the typed name
       event.preventDefault();
       pick(activeOption);
     } else if (event.key === "Tab") {
@@ -220,7 +203,6 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
   const choose = (next: RepoDiffScope): void => {
     setScope(next);
     setPickerOpen(false);
-    // a list still on its way is no answer for a scope that waits for Compare
     if (next === "commit" || next === "branch") { request.current += 1; setAsked(null); setLoad(PENDING); return; }
     setAsked({ scope: next, base: null, head: null, comparison: null });
   };
@@ -239,15 +221,12 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
   };
 
   const listing = load.status === "ready" ? load.listing : null;
-  // the Branch scope before its first Compare: nothing is read, so nothing is shown as loading
   const awaitingBase = scope === "branch" && asked === null;
-  // a file is read from the comparison the list answered for: a commit comparison's hashes, a branch comparison's identity
   const answered: RepoComparison | null = listing === null ? null
     : listing.scope === "branch" ? { scope: "branch", base: refName(asked?.base ?? ""), head: null, comparison: listing.comparison ?? null }
     : { scope: listing.scope, base: listing.base, head: listing.head, comparison: null };
   const repository = listing?.repository ?? last?.repository ?? null;
   const branch = repository === null ? null : repository.branch ?? (repository.unborn ? t("No commits yet") : t("Detached HEAD"));
-  // the last list's folders keep the fold-all control steady while the next list is read
   const shown = listing ?? last;
   const tree = useMemo(() => changeTree(shown === null ? [] : shown.files.map((file) => file.path)), [shown]);
   const folders = useMemo(() => changeTreeFolders(tree), [tree]);
@@ -275,9 +254,7 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
     }
     const file = files[entry.index]!;
     const word = statusWord(t, file.status);
-    // the folder is said, not shown: the row sits under it, and assistive tech (and the browser scripts) read the whole path
     const folder = file.path.slice(0, file.path.length - entry.name.length);
-    // a rename within the folder names only the old file; one from elsewhere says where from
     const sameFolder = file.old_path !== null && file.old_path.slice(0, file.old_path.lastIndexOf("/") + 1) === folder;
     return <li key={file.path}>
       <button type="button" className="repo-change" style={indent} onClick={() => onOpenDiff(comparison, file, directory)}>
@@ -346,7 +323,6 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
             </div>
           </div>
           <button type="submit" className="btn btn-primary" disabled={typed === ""}>{t("Compare")}</button>
-          {/* a row is made active by a pointer moving over it, not by the list opening under a resting one */}
           {pickerOpen && (
             <div id={listId} ref={refsRef} className="menu repo-changes-refs" role="listbox" aria-labelledby={baseLabelId} aria-busy={refs.status === "pending"}>
               {refs.status === "pending" && <div className="repo-changes-refs-note" role="status">{t("Loading…")}</div>}

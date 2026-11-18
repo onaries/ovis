@@ -25,7 +25,6 @@ export function Visualization({ path, title }: VisualizationReference) {
           line for a span, so the name and the title would run together there; the page draws them as two rows */}
       {second !== null && <><br hidden /><span className="markdown-visualization-title">{second}</span></>}
     </div>
-    {/* several cards have the same words on their button: each says which file it opens */}
     {open && <button type="button" className="btn btn-ghost" aria-describedby={named} onClick={() => open(path)}>{t("Open preview")}</button>}
   </div>;
 }

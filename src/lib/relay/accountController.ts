@@ -1,4 +1,3 @@
-/** Account sign-in, directory refresh and authenticated PC enrollment for the hosted shell. */
 import { ACCOUNT_FEATURE } from "../../../shared/relay-mux.ts";
 import { importPublicKey } from "../../../shared/relay-e2ee.ts";
 import { newRecordId } from "../../../shared/account-records.ts";
@@ -20,18 +19,31 @@ import { DEVICES_CHANGED_EVENT } from "../useRelay.ts";
 import { indexedDeviceStore, type SavedDevice, type EnrollmentState, type RelayDevice, type RelayDeviceStore } from "./device.ts";
 import { offerOf } from "./shellState.ts";
 import type { AccountView, EnrollmentCompletion } from "./shellState.ts";
+import { AdmissionRefusedError, firstLinkRefusal, refusalOf } from "./firstLink.ts";
 import type { RelayShellMount } from "./shell.tsx";
 import { openRelayTransport, type RelayTransport } from "./transport.ts";
 
 const INTRODUCTION_WAIT_MS = 60_000;
 const INTRODUCTION_POLL_MS = 3_000;
 const DIRECTORY_REFRESH_MS = 60_000;
+/** How long a pairing waits for the account service to answer its admission: one that never answers must not hold it. */
+export const ADMISSION_WAIT_MS = 8_000;
+/** A row's links in all, the first included, and the longest wait between two after a 503. */
+const LINK_SENDS = 5;
+export const LINK_RETRY_MAX_MS = 15_000;
 /**
- * `consent`: whose account the pairing was confirmed for. `settled`: told once, when nothing more of this enrollment
- * ends or renews the session it was given (its link and renewal are done, or it stopped before them).
+ * `consent`: whose account the pairing was confirmed for. `signal`: the pairing in front of the person was cancelled.
+ * From then on the enrollment sends nothing more to the PC or the account service and writes nothing: every step
+ * checks it as it checks the pairing it belongs to.
  */
-interface EnrollOptions { readonly consent?: PairingConsent; readonly settled?: () => void }
-const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
+interface EnrollOptions { readonly consent?: PairingConsent; readonly settled?: () => void; readonly signal?: AbortSignal }
+/** Waits `ms`, or less when `signal` aborts, which it then throws. */
+const wait = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  signal?.throwIfAborted();
+  const stop = (): void => { clearTimeout(timer); reject(signal?.reason); };
+  const timer = setTimeout(() => { signal?.removeEventListener("abort", stop); resolve(); }, ms);
+  signal?.addEventListener("abort", stop, { once: true });
+});
 /** A sign-in again, made to delete an account, landed in another account: nothing is deleted. */
 class AnotherAccountError extends Error {
   constructor() { super("The sign-in is for another account"); this.name = "AnotherAccountError"; }
@@ -64,14 +76,14 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
   const label = mount.label ?? deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0);
   const open = mount.open ?? openRelayTransport;
   const forgotten = new Map<string, number>();
-  // enrollments still running, with their PC: leaving the account cancels each, and waits for none
   const running = new Map<Promise<unknown>, string>();
   const cancelEnrollment = (id: string): void => { forgotten.set(id, (forgotten.get(id) ?? 0) + 1); };
+  // the account key a pairing's admission named, by PC: a link that would name another (a leave in another tab replaced
+  // the stored key meanwhile) posts that key first, once
+  const vouched = new Map<string, string>();
   let accountView: AccountView | null = accountService === null ? null : { kind: "signed-out", error: null };
   let directory: readonly DirectoryPc[] = [];
-  // whom `directory` was last read for, so a failed read can age its rows again without reading it
   let listedFor: { readonly epoch: number; readonly accountKey: string; readonly account: string } | undefined;
-  // the sign-in the signed-in view was last read as
   let shownFor: AccountSession | undefined;
   let generation = 0;
   let leaving = false;
@@ -80,12 +92,10 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
    * it after a wait (the sign-in again, the second delete, what is drawn) goes on only while it is still this one.
    */
   let deletion: object | undefined;
-  // the read out now and the sign-in it is for: a read of an earlier sign-in never holds back the next one's
   let reading: { readonly epoch: number; readonly read: Promise<void> } | undefined;
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   const changed = async (): Promise<void> => { await view.changed(); armRefresh(); };
   const refresh = async (initial = false, forced = false): Promise<void> => {
-    // a delete in flight draws what it ends in itself: no background read replaces its notice, only its own reads go on
     if (reading?.epoch === generation || leaving || (deletion !== undefined && !initial && !forced) || accountService === null || (!initial && !forced && (!view.active() || accountView?.kind !== "signed-in"))) return;
     const epoch = generation;
     let current = accountView;
@@ -118,7 +128,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
           if (!live()) return;
         }
         shownFor = session;
-        // the list of the sign-in read above: one stored meanwhile is not shown under this one's heading
         const listed = await account.forSignIn(session).listPcs();
         const devices = await store.list();
         const key = await accountStore.key();
@@ -134,7 +143,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
         sendQueuedAdds({ service: account, store: accountStore, account: session.account }).catch((error: unknown) => console.warn("Ovis: kept adds could not be sent", error instanceof Error ? error.name : error));
       } catch (error) {
         if (!live()) return;
-        // the sign-in this read began with is gone; another one stored meanwhile (another tab) is read in its place
         const next = error instanceof SignedOutError ? await account.session().catch(() => undefined) : undefined;
         if (next !== undefined) { if (live()) replacedBy(next); return; }
         if (!live()) return;
@@ -143,10 +151,8 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
           console.warn("Ovis: the account's PCs could not be read", error instanceof Error ? error.name : error);
           const devices = await store.list();
           if (!live()) return;
-          // the rows kept from the last read, with their time-based states aged to now (a PC unseen for long goes Offline)
           const kept = current?.kind === "signed-in" && current.pcs !== null && listedFor?.epoch === epoch
             ? myPcs(directory, devices, { now: Date.now(), outdated: view.outdated(), accountKey: listedFor.accountKey, account: listedFor.account })
-            // nothing kept (a first read, or rows dropped with the sign-in they were of): the PCs this device is paired with
             : current?.kind === "signed-in" && current.pcs !== null ? current.pcs : myPcs([], devices, { now: Date.now(), outdated: view.outdated() });
           if (accountView?.kind === "signed-in") accountView = { ...accountView, pcs: kept, error: t("The account service could not be reached. The PCs this device is paired with still work.") };
         }
@@ -161,16 +167,13 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
   };
   /**
    * The sign-in and its directory, read again now whatever screen is up: for a consent about to be acted on, which
-   * no timer keeps fresh (the confirm is not the front page). A sign-in still finishing is left to its own read.
+   * no timer keeps fresh (the confirm is not the front page).
    */
   const reread = async (): Promise<void> => {
     while (reading !== undefined) await reading.read.catch(() => undefined);
     if (accountView?.kind !== "signing-in") await refresh(accountView?.kind !== "signed-in", true);
   };
-  // the read a person asked for (Check again, Try again) that waits for the one out to land: later asks join it
   let asked: Promise<void> | undefined;
-  /** Reads the directory because the person asked: a read already out may have been answered before what they just did
-   *  (a PC added a moment ago), so the list is read once more after it. Settles when a read begun after the ask has landed. */
   const refreshNow = (): Promise<void> => {
     if (asked !== undefined) return asked;
     const out = reading;
@@ -178,7 +181,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     const queued = (async () => {
       await out.read.catch(() => {});
       asked = undefined;
-      // a read that began meanwhile (the next sign-in's, after the one waited for) began after the ask too
       const next = reading;
       if (next?.epoch === generation) await next.read.catch(() => {});
       else await refresh();
@@ -213,7 +215,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
       if (session === undefined) throw new SignedOutError();
       return leaveAccount({ service: account, accountStore, relayStore: store, session });
     }).then(async ({ unconfirmed }) => {
-      // signed out, or in again, meanwhile: that view is not this leave's to change
       if (epoch !== generation) return;
       // a PC the account does not list kept this device: say so, rather than claim it is gone everywhere
       const names = new Map((await store.list()).map((device) => [device.server_id, device.name ?? device.server_id.slice(0, 8)]));
@@ -228,7 +229,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     }).finally(() => { leaving = false; });
   };
 
-  /** What the service said to a delete it refused, in the person's words. */
   const deleteFailure = (error: unknown): string => {
     if (error instanceof AccountServiceError && error.code === "reauth_required") return t("To delete your account, sign out, sign in again, then delete it within ten minutes.");
     if (error instanceof AccountServiceError && error.code === "subscription_active") return t("Cancel your subscription first, then delete the account.");
@@ -236,8 +236,7 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     return t("The account could not be deleted. Try again.");
   };
   /**
-   * Deletes the signed-in account at the account service (account/deleteAccount.ts), then shows the signed-out
-   * front page. The service wants a sign-in from the last ten minutes: the phone app signs in again in place, with
+   * The service wants a sign-in from the last ten minutes: the phone app signs in again in place, with
    * the method this sign-in used, and deletes only if that is the same account; a browser is told to sign in again.
    */
   const deleteAccount = (): Promise<void> => {
@@ -249,7 +248,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     // the sign-in the signed-in view on screen speaks of, not the one stored now: one another tab stored meanwhile is
     // never deleted (deleteAccount.ts), and the view then reads it
     const from = accountView?.kind === "signed-in" ? shownFor : undefined;
-    // a refusal of an earlier press is not this one's
     if (accountView?.kind === "signed-in" && accountView.deleteError !== undefined) { const { deleteError: _earlier, ...rest } = accountView; accountView = rest; }
     return Promise.resolve(from).then(async (session) => {
       if (session === undefined) throw new SignedOutError();
@@ -270,24 +268,19 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
         await deleteAccountOf({ service: account, accountStore, session: again });
       }
     }).then(async () => {
-      // signed out or in meanwhile: that view is not this delete's to change
       if (!current()) return;
       // a sign-in that took the deleted one's place while the delete was out stays (deleteAccount.ts): it is shown
       if (await account.session().catch(() => undefined) !== undefined) { await refresh(true); return; }
       if (!current()) return;
-      // the account is gone: a PC being brought into it is not
       for (const serverId of running.values()) cancelEnrollment(serverId);
       directory = [];
       accountView = { kind: "signed-out", error: null, notice: t("Your account was deleted.") };
       armRefresh();
       await changed();
     }, async (error: unknown) => {
-      // called off by a sign-out or a sign-in: what that drew stays
       if (!current()) return;
       console.warn("Ovis: the account was not deleted", error instanceof AccountServiceError ? error.code : error instanceof Error ? error.name : error);
-      // the sign-in ended meanwhile, or a sign-in again landed in another account: read what is stored now
       if (error instanceof SignedOutError || error instanceof AnotherAccountError) await refresh(true);
-      // a sign-out or a sign-in while that read was out: what it drew stays
       if (!current()) return;
       if (error instanceof SignedOutError && await account.session().catch(() => undefined) === undefined) {
         // nothing is stored any more: the signed-out page. Whether the account went with it is not known here (a delete whose
@@ -299,9 +292,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
         await changed();
         return;
       }
-      // a sign-in that ended or was replaced deleted nothing, and the page now shown is not the one asked about: no
-      // failure is drawn on it to try again
-      // said on Devices alone, where Delete account was pressed: the directory's own failure keeps `error`
       if (accountView?.kind === "signed-in" && !(error instanceof SignedOutError)) accountView = { ...accountView, deleteError: deleteFailure(error) };
       await changed();
     }).finally(() => { if (deletion === mine) deletion = undefined; });
@@ -345,10 +335,57 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     const key = session !== undefined ? await accountStore.key() : undefined;
     signal.throwIfAborted();
     let intent: "pc" | "account" = "pc";
-    if (key && offer.code === undefined && (await store.get(offer.server_id))?.device_id == null) {
+    vouched.delete(offer.server_id);
+    // a code that carries the mark: its PC takes the device only once the account service holds its admission, so the
+    // admission is posted, and answered, before the pairing; a failure stops here, where nothing has reached the PC and
+    // the code keeps its uses. Nothing signs the mark, so it only chooses the screen: the person's own press of Add and
+    // pair, on the confirm that named this PC and this account (`consent`), is what lists the PC in the account when it
+    // does not list it yet, and nothing is listed without that press. The account service and the PC decide the rest.
+    // Only a new PC's code carries the mark, so its admission asks to be taken quietly; the account service decides
+    // whether it is
+    if (offer.code !== undefined && offer.admission === 1) {
+      if (session === undefined || key === undefined) throw new AdmissionRefusedError("sign-in");
+      // whatever this device saved for the PC: a marked code's PAIR always makes a new row there, whose link the PC
+      // checks with the account service. The post ends at its bound or at the person's Cancel, the request itself and
+      // not only the wait for it (the wait for the account's lock included): a slow service rings nobody after the
+      // person was told
+      const directory = account.forSignIn(session);
+      const bounded = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(ADMISSION_WAIT_MS)]);
+      if (consent !== undefined) {
+        try {
+          if (!(await directory.listPcs(bounded())).some((pc) => pc.server_id === offer.server_id)) {
+            const publicKey = Array.from(importPublicKey(offer.server_public_key), (byte) => byte.toString(16).padStart(2, "0")).join("");
+            await directory.putPc(offer.server_id, { label: (offer.name ?? offer.server_id.slice(0, 8)).slice(0, 48), public_key: publicKey, relay: offer.relay }, bounded());
+          }
+        } catch (error) {
+          if (error instanceof SignedOutError) throw new ConsentChangedError();
+          signal.throwIfAborted();
+          console.warn("Ovis: this PC could not be listed in the account before pairing", error instanceof AccountServiceError ? error.code : error instanceof Error ? error.name : error);
+          throw new AdmissionRefusedError(error instanceof AccountServiceError && error.status === 429 ? "busy" : error instanceof AccountServiceError && error.status < 500 ? "refused" : "unanswered");
+        }
+      }
+      try {
+        await directory.postAdmission(offer.server_id, label.slice(0, 48), key.public_spki, deviceOs(navigator.userAgent, navigator.maxTouchPoints ?? 0), bounded(), { quiet: true });
+      } catch (error) {
+        // the sign-in the person said yes under is no longer the stored one: nothing more goes out, and the question is
+        // asked again (shell.tsx)
+        if (error instanceof SignedOutError) throw new ConsentChangedError();
+        signal.throwIfAborted();
+        console.warn("Ovis: the account service did not take the admission", error instanceof AccountServiceError ? error.code : error instanceof Error ? error.name : error);
+        if (!(error instanceof AccountServiceError)) throw new AdmissionRefusedError("unanswered");
+        throw new AdmissionRefusedError(error.code === "unknown_pc" ? "unlisted" : error.status === 429 ? "busy" : error.status >= 500 ? "unanswered" : "refused");
+      }
+      // another tab signed out or in to another account while the post was out: no PAIR goes under the old one
+      const now = await account.session();
+      signal.throwIfAborted();
+      if (now === undefined || !sameSignIn(now, session)) throw new ConsentChangedError();
+      vouched.set(offer.server_id, key.public_spki);
+    } else if (key && session !== undefined && offer.code === undefined && (await store.get(offer.server_id))?.device_id == null) {
+      // any other offer pairs as it does without the mark: a code's posts nothing, a join without one posts as before
+      // (an ordinary admission, never a quiet one) and is paired with the PC alone when the post fails
       signal.throwIfAborted();
       // announced by the sign-in read above: one stored meanwhile is refused, and this PC is paired alone
-      try { await account.forSignIn(session!).postAdmission(offer.server_id, label.slice(0, 48), key.public_spki, deviceOs(navigator.userAgent, navigator.maxTouchPoints ?? 0)); intent = "account"; }
+      try { await account.forSignIn(session).postAdmission(offer.server_id, label.slice(0, 48), key.public_spki, deviceOs(navigator.userAgent, navigator.maxTouchPoints ?? 0)); intent = "account"; }
       catch (error) { console.warn("Ovis: the account service did not take the join; pairing this PC only", error instanceof Error ? error.name : error); }
     }
     signal.throwIfAborted();
@@ -359,16 +396,17 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
    * hands an introduction over a moment later. A QR or code pairing gets none, and is not kept waiting for one.
    */
   const enroll = (opened: RelayTransport, serverId: string, fresh: boolean, introducible = false, options: EnrollOptions = {}): Promise<"local" | EnrollmentCompletion> => {
-    // told once: after the session's last renewal, or when the enrollment ends without reaching it
     let told = false;
     const settled = (): void => { if (told) return; told = true; options.settled?.(); };
     const done = enrollOwned(opened, serverId, fresh, introducible, { ...options, settled });
-    void done.then(settled, settled);
+    // a link the PC refused leaves the session to whoever says why (shell.tsx), rather than opening the app over it
+    void done.then(settled, (error: unknown) => { if (refusalOf(error) === null) settled(); });
     running.set(done, serverId);
     void done.then(() => running.delete(done), () => running.delete(done));
     return done;
   };
-  const enrollOwned = async (opened: RelayTransport, serverId: string, fresh: boolean, introducible: boolean, { consent, settled }: EnrollOptions): Promise<"local" | EnrollmentCompletion> => {
+  const enrollOwned = async (opened: RelayTransport, serverId: string, fresh: boolean, introducible: boolean, { consent, settled, signal }: EnrollOptions): Promise<"local" | EnrollmentCompletion> => {
+    signal?.throwIfAborted();
     const epoch = forgotten.get(serverId);
     if (leaving || accountService === null || consent === null || !opened.server?.features?.includes(ACCOUNT_FEATURE)) return "local";
     const session = await account.session();
@@ -379,6 +417,7 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     if (saved === undefined || saved.device_id === null) return "local";
     let pairing = saved;
     const assertPairing = (current: RelayDevice | undefined): RelayDevice => {
+      signal?.throwIfAborted();
       if (epoch !== forgotten.get(serverId) || current === undefined || current.device_id !== pairing.device_id || current.public_spki !== pairing.public_spki || current.server_public_key !== pairing.server_public_key) throw new DOMException("The pairing was forgotten or replaced", "AbortError");
       return current;
     };
@@ -399,6 +438,7 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
       await enrollmentStore.update(serverId, (current) => ({ ...assertPairing(current), account_enrollment: { account: session.account, state } } satisfies SavedDevice));
       await refresh();
     };
+    signal?.throwIfAborted();
     if (fresh) await record("pending");
     // a session that just paired has not proved its key to the PC, which then refuses a link and
     // keeps an introduction from it: the account's steps take a connection of their own, signed in
@@ -406,6 +446,8 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
     let admitted: number | undefined;
     try {
       const key = await accountStore.key();
+      const posted = vouched.get(serverId);
+      vouched.delete(serverId);
       let device = await store.get(serverId);
       if (device === undefined || device.device_id === null) return "local";
       if (fresh) own = await open(offerOf(device), { store: enrollmentStore, label });
@@ -420,8 +462,22 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
       const linking = needsLink(status, device, session.account);
       // a PC this link brings into the account, or one still waiting for the member that linked it (who may be gone),
       // gets this client's enrollment: the account's removals first, read from its other PCs
+      signal?.throwIfAborted();
       if (linking && (status.account === null || status.enrolling === true)) await planEnroll(accountStore, serverId, session.account);
       if (linking) {
+        // the admission named another key than this link does: the key it names now is posted first, once. A post that
+        // fails sends no link, which the PC would refuse and spend a use on
+        if (posted !== undefined && posted !== key.public_spki) {
+          signal?.throwIfAborted();
+          try {
+            await account.forSignIn(session).postAdmission(serverId, label.slice(0, 48), key.public_spki, deviceOs(navigator.userAgent, navigator.maxTouchPoints ?? 0), signal ? AbortSignal.any([signal, AbortSignal.timeout(ADMISSION_WAIT_MS)]) : AbortSignal.timeout(ADMISSION_WAIT_MS), { quiet: true });
+          } catch (error) {
+            signal?.throwIfAborted();
+            console.warn("Ovis: the account service did not take the admission of the new key", error instanceof AccountServiceError ? error.code : error instanceof Error ? error.name : error);
+            throw new AdmissionRefusedError("new-key");
+          }
+        }
+        signal?.throwIfAborted();
         // in one transaction with a leave's mark (leave.ts): a link recorded here is in that leave's snapshot, and
         // none goes out once a leave of this key has begun, in any tab, or for a sign-in that has ended
         const link = newRecordId();
@@ -431,9 +487,29 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
           return recorded ? { ...current, linking: { ...current.linking, [link]: serverId } } : current;
         });
         if (!recorded) throw new DOMException("This device is leaving the account", "AbortError");
-        try { device = await linkThisDevice({ fetch, device, key, account: session.account, store: enrollmentStore }); }
-        finally {
-          // settled: the pairing itself (pending_key) names a link whose answer was lost
+        // a PC that could not ask the account service in time keeps the row: the same link goes again after the wait it
+        // named, on this session, and nothing is paired again
+        const unlinked = device;
+        // only a marked pairing, or a PC that named its wait, sends the link again: any other link is answered once, as before
+        const marked = posted !== undefined;
+        const sendLink = async (sent: number): Promise<RelayDevice> => {
+          try { return await linkThisDevice({ fetch, device: unlinked, key, account: session.account, store: enrollmentStore }); } catch (error) {
+            if (!(error instanceof AccountPcError && error.code === "account_unavailable" && (marked || error.retryAfterMs !== null)) || sent >= LINK_SENDS) throw error;
+            // fixed wait: the time the PC named before it asks the account service again (retry-after), bounded
+            await wait(Math.min(error.retryAfterMs ?? 3_000, LINK_RETRY_MAX_MS), signal);
+            // the same sign-in, and no leave of this key begun meanwhile, or the link goes no more
+            const current = await accountStore.get("session"), leaving = await accountStore.get("leaving");
+            if (current === undefined || !sameSignIn(current, session) || Object.values(leaving ?? {}).includes(key.public_spki)) throw new DOMException("The sign-in changed while the link waited", "AbortError");
+            return sendLink(sent + 1);
+          }
+        };
+        try { device = await sendLink(1); } catch (error) {
+          // a marked pairing's link the PC turned away, ending its new row: the code ended, the account did not confirm
+          // the device, or, on a PC that was in no account, the link named another account than the one named for it.
+          // Any other refusal, and every refusal of an unmarked pairing, goes as before: the device keeps what it paired
+          if (marked && error instanceof AccountPcError && firstLinkRefusal(error.code, status.account)) throw new AccountPcError(error.status, error.code, error.retryAfterMs, true);
+          throw error;
+        } finally {
           await accountStore.update("linking", (current) => {
             const { [link]: _settled, ...rest } = current ?? {};
             return Object.keys(rest).length > 0 ? rest : undefined;
@@ -444,10 +520,8 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
       if (linking || fresh) {
         await opened.renew();
         assertPairing(await store.get(serverId));
-        // a Devices panel open since before the link reads the list again, over the session that proved the new key
         if (linking) window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
       }
-      // the link ended the PC's other sessions of this row, and the renewal reconnected this one: nothing below does either
       settled?.();
       // a PC of another account is not this account's to list or introduce from
       if (device.public_spki !== key.public_spki || (!linking && status.account !== session.account)) throw new AccountPcError(409, "enrolling");
@@ -494,7 +568,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
               assertPairing(await store.get(serverId));
               return response;
             }, store: accountStore, account: session.account, serverId, pc, listed, assertOwned: async () => { assertPairing(await store.get(serverId)); },
-            // a PC that could not be opened is one more that was not checked
             others: reached.map((result) => result.status === "fulfilled" ? result.value : { serverId: "", fetch: () => Promise.reject(result.reason) }),
           });
           if (enrollment?.finished !== true) throw new AccountPcError(409, "enrolling");
@@ -504,7 +577,6 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
           for (const peer of peers) peer.close();
         }
       }
-      // the approver hands the introduction over once this device's row exists, which may be a moment after it
       const deadline = Date.now() + (introducible ? INTRODUCTION_WAIT_MS : 0);
       for (;;) {
         if ((await takeIntroduction({ fetch, key, label, store: enrollmentStore, relay: device.relay })).length > 0 || Date.now() >= deadline) break;
@@ -527,6 +599,5 @@ export function createAccountController(mount: RelayShellMount, view: { readonly
    */
   const stored = async (): Promise<AccountSession | undefined> => accountService === null ? undefined : await account.session().catch(() => undefined);
   return { get state() { return accountView; }, get directory() { return directory; },
-    /** the sign-in the signed-in view speaks of; none while signed out, or before a new sign-in's first read */
     get signedInAs() { return accountView?.kind === "signed-in" ? shownFor : undefined; }, enabled: accountService !== null, providers, load, refresh, refreshNow, reread, stored, signIn, signOut, leave, deleteAccount, prepare, enroll, cancelEnrollment, armRefresh };
 }

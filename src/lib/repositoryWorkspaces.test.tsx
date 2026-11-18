@@ -9,17 +9,14 @@ import { useRepositoryWorkspaces, worktreesStartHere } from "./repositoryWorkspa
 const unmarked = (id: string): WorkspaceInfo => ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, pane_count: 1, tab_count: 1, agent_status: "idle", focused: false, worktree: null });
 const snapshot = { protocol: 22, version: "test", agents: [], workspaces: [unmarked("w1"), unmarked("w2")], tabs: [], panes: [] } as unknown as SessionSnapshot;
 const herdr = (lifetime: string): SessionSnapshot => ({ ...snapshot, herdr_lifetime: lifetime });
-// herdr's connection closing before it answered: the question failed, and nothing was refused
 const closed = () => new ApiError("worktree/list", 404, "herdr closed the connection before answering worktree.list", "closed");
 
 describe("useRepositoryWorkspaces", () => {
   let renderer: ReactTestRenderer | undefined;
   let shown: ReadonlySet<string> = new Set();
-  // what each render returned, with the herdr its snapshot is of: a render comes before any effect of it
   let drawn: { lifetime: string | undefined; shown: string[]; startsWorktrees: boolean }[] = [];
   let pending: { id: string; answer: () => void; refuse: (error: unknown) => void }[] = [];
   let descriptor: PropertyDescriptor | undefined;
-  // each question waits until the test answers it: git answers for both folders
   const listWorktrees = (id: string) => new Promise<unknown>((resolve, reject) => { pending.push({ id, answer: () => resolve({ worktrees: [] }), refuse: reject }); });
   const answer = async (only?: string) => {
     const now = pending.filter((question) => only === undefined || question.id === only);
@@ -40,7 +37,6 @@ describe("useRepositoryWorkspaces", () => {
     return null;
   }
 
-  // several readers of the one PC, as the sidebar's roster and the palette are
   function Readers({ count }: { count: number }) {
     return <>{Array.from({ length: count }, (_, index) => <Reader key={index} online />)}</>;
   }
@@ -112,8 +108,6 @@ describe("useRepositoryWorkspaces", () => {
     expect([...shown].sort()).toEqual(["w1", "w2"]);
     drawn = [];
     await act(async () => { renderer!.update(<Reader online roster={herdr("b")} />); });
-    // the new herdr has answered nothing yet, and its w2 may be another folder: no render of its
-    // snapshot shows an answer, the one before the effect that drops the old answers included
     expect(drawn.length).toBeGreaterThan(0);
     expect(drawn.filter((render) => render.lifetime !== "b")).toEqual([]);
     expect(drawn.flatMap((render) => render.shown)).toEqual([]);
@@ -127,7 +121,6 @@ describe("useRepositoryWorkspaces", () => {
     expect(worktreesStartHere("pc", unmarked("w2"), "a")).toBe(true);
     drawn = [];
     await act(async () => { renderer!.update(<Reader online roster={herdr("b")} />); });
-    // as App's Open worktree action asks, from the render that first has the new snapshot on
     expect(drawn.length).toBeGreaterThan(0);
     expect(drawn.filter((render) => render.startsWorktrees)).toEqual([]);
     expect(worktreesStartHere("pc", unmarked("w2"), "b")).toBe(false);
@@ -140,7 +133,6 @@ describe("useRepositoryWorkspaces", () => {
     const twice = { ...snapshot, workspaces: [unmarked("w1"), unmarked("w1"), unmarked("w2")] } as unknown as SessionSnapshot;
     await act(async () => { renderer = create(<Reader online roster={twice} />); });
     expect(asked()).toEqual(["w1", "w2"]);
-    // the set drawn stays the same object while its ids do: a longer list of the same ids is no other set
     await answerAll();
     expect([...shown].sort()).toEqual(["w1", "w2"]);
     const renders = drawn.length;
@@ -186,7 +178,6 @@ describe("useRepositoryWorkspaces", () => {
     await act(async () => { renderer = create(<Reader online />); });
     await answer("w2");
     await act(async () => { renderer!.update(<Reader online={false} />); });
-    // the round that asked it is over: its failure says nothing of the next round's question
     await refuse("w1", closed());
     await act(async () => { renderer!.update(<Reader online />); });
     expect(asked()).toEqual(["w1", "w2"]);

@@ -34,7 +34,6 @@ it.each([
   const timers = new Map<number, () => void>();
   const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
   const mocks = [
-    // Hold retry deadlines, not the setup or test deadlines: advance them explicitly, without a sleep.
     spyOn(globalThis, "setTimeout").mockImplementation(new Proxy(set, {
       apply(target, _receiver, [fn, delay, ...args]: unknown[]) {
         if (typeof fn !== "function" || delay !== undefined && typeof delay !== "number") throw new Error("Expected timer callback and delay");
@@ -59,11 +58,9 @@ it.each([
     spyOn(windowsHost, "inspect").mockRejectedValue(new Error("Not a Windows PC")),
     spyOn(posixHost, "herdrVersion").mockResolvedValue("herdr 0.9.3"),
     spyOn(posixHost, "alive").mockResolvedValue(true),
-    // a chosen socket the PC verifies as this account's and answering
     spyOn(posixHost, "chosenSocketStatus").mockResolvedValue("usable"),
     spyOn(posixHost, "start").mockImplementation(async () => { oldStarts++; resumed.resolve(); throw new Error("Old bridge unavailable"); }),
     spyOn(posixHost, "installBundle").mockResolvedValue(undefined),
-    // the SSH tunnel to a bridge (machine-tunnel.fixture.ts)
     ...tunnelRelays(relays, (remotePort) => {
       const socket = remotePort === 12345 ? a.herdr_socket : b.herdr_socket;
       return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request, server) {

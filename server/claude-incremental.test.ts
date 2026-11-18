@@ -38,7 +38,6 @@ function handbackRecords(lines = ["## Verdict", "", "**No.** The path is not che
   return { handback, pointer, ended, report: lines.join("\n").trim() };
 }
 
-/** Check every append and speculative final line, including older returned snapshots. */
 function appendRecords(records: unknown[], options: Options = {}): ConversationTurn[] {
   const parser = createClaudeTranscriptParser(options);
   const initiallyNoticed = new Set(options.noticed);
@@ -221,7 +220,6 @@ describe("incremental Claude transcripts", () => {
       expect(turns.flatMap((turn) => turn.parts.filter((part) => part.kind === "notice"))).toEqual([]);
       expect(tasks(turns).map(({ id, title, result }) => ({ id, title, result }))).toEqual([{ id: "a3e6", title: "Price the path", result: report }]);
     }
-    // another session's message is still its own notice, and a pointer whose report never came stays as written
     const turns = appendRecords([{ ...handback, origin: { ...handback.origin, senderTaskId: undefined, from: "other" } }, user(notification("b1", "toolu_b1", pointer.replace("a3e6", "b1")))]);
     expect(turns.flatMap((turn) => turn.parts.filter((part) => part.kind === "notice")).length).toBe(1);
     expect(tasks(turns).map((task) => task.result)).toEqual([pointer.replace("a3e6", "b1").trim()]);
@@ -299,7 +297,6 @@ describe("a subagent's hand-back through the page reader (#3658)", () => {
       const { handback, ended, report } = handbackRecords();
       const records = order === "notification first" ? [enqueue(ended), handback, user(ended)]
         : order === "hand-back first" ? [handback, user(ended)]
-        // the agent answers the report before the notification comes: the card stays where the report came, before that answer
         : [handback, assistant([{ type: "text", text: "Summary of the report" }], "end_turn"), user(ended)];
       const root = mkdtempSync(join(tmpdir(), "ovis-handback-page-")); roots.push(root);
       const path = join(root, "session.jsonl");
@@ -307,7 +304,6 @@ describe("a subagent's hand-back through the page reader (#3658)", () => {
       const cold = transcriptPage("claude-transcript", path).turns;
       expect(shown(cold)).toEqual({ notices: 0, results: [report] });
       if (order === "hand-back, reply, notification") expect(rows(cold)).toEqual(["Price it", "Started.", "card:## Verdict", "Summary of the report"]);
-      // the next prompt settles that turn: a warm read keeps what a cold one shows
       appendFileSync(path, `${jsonl(user("Thanks"), assistant([{ type: "text", text: "Sure." }], "end_turn"))}\n`);
       const warm = transcriptPage("claude-transcript", path).turns;
       forgetTranscriptState();
@@ -323,7 +319,6 @@ describe("a subagent's hand-back through the page reader (#3658)", () => {
       const root = mkdtempSync(join(tmpdir(), "ovis-handback-page-")); roots.push(root);
       const path = join(root, "session.jsonl");
       const head = [user("Price it"), assistant([{ type: "text", text: "Started." }], "end_turn")];
-      // each way round: the hand-back before the turn opener and the notification after, and the reverse
       for (const [first, second] of [[[handback], [user(ended)]], [[enqueue(ended), user(ended)], [handback]]] as const) {
         writeFileSync(path, `${jsonl(...head, ...first)}\n`);
         transcriptPage("claude-transcript", path);

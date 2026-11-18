@@ -50,7 +50,9 @@ export function withoutTrailingBreaks(text: string): string {
   return end === text.length ? text : text.slice(0, end);
 }
 
+/** terminal control characters a queued message may not carry; TAB, LF and CR are text there */
 const MESSAGE_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
+/** every control character, TAB and line breaks included: one argument on a command line is one line */
 const ARGUMENT_CONTROLS = /[\u0000-\u001f\u007f-\u009f]/u;
 
 export const hasNoControlCharacters = (text: string): boolean => !ARGUMENT_CONTROLS.test(text);
@@ -66,6 +68,7 @@ export function firstMessageFault(value: unknown, agent: unknown): string | null
 }
 
 type LaunchFlag = "model" | "effort" | "config";
+/** the flags whose values are checked, by agent: Codex's `-c`/`--config` sets `model` and `model_reasoning_effort` too */
 const LAUNCH_FLAGS: Record<"claude" | "codex" | "dsh-tui", Record<string, LaunchFlag>> = {
   claude: { "--model": "model", "--effort": "effort" },
   codex: { "--model": "model", "-m": "model", "--config": "config", "-c": "config" },
@@ -73,6 +76,10 @@ const LAUNCH_FLAGS: Record<"claude" | "codex" | "dsh-tui", Record<string, Launch
 };
 const LAUNCH_EFFORTS: Record<keyof typeof LAUNCH_FLAGS, readonly string[]> = { claude: CLAUDE_EFFORT_ARGS, codex: CODEX_EFFORTS, "dsh-tui": DSH_EFFORTS };
 
+/**
+ * Which checked flag `arg` is, as the CLIs' parsers read it: `--flag value`, `--flag=value`, and for a
+ * short flag `-f value`, `-fvalue` or `-f=value`.
+ */
 function launchFlag(arg: string, flags: Record<string, LaunchFlag>): { flag: LaunchFlag; value?: string } | null {
   for (const [name, flag] of Object.entries(flags)) {
     if (arg === name) return { flag };
@@ -111,6 +118,7 @@ export function launchArgsFault(kind: string, args: readonly string[]): string |
     }
     const read = launchFlag(arg, LAUNCH_FLAGS[kind]);
     if (read === null) continue;
+    // the flag's value is the flag's own, a "--" there included: it is not read again as an argument
     let value = read.value;
     if (value === undefined) { at += 1; value = args[at] ?? ""; }
     let model: string | null = read.flag === "model" ? value : null;

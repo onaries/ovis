@@ -20,6 +20,7 @@ export class CompactAgentsError extends Error {
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+/** A row that names its pane, with no key a plain object would read as its prototype. */
 const namedRow = (row: unknown): row is { pane_id: string } =>
   isRecord(row) && typeof row.pane_id === "string" && !Object.hasOwn(row, "__proto__") && !Object.hasOwn(row, "constructor");
 
@@ -27,6 +28,10 @@ const REFS_KEY_EXTRA = "agent_refs".length - "agents".length;
 
 const ownOmit = (row: unknown): row is Record<string, unknown> => isRecord(row) && Object.hasOwn(row, "_omit");
 
+/**
+ * `agent_refs` and a row's `_omit` are this server's alone: those a PC put in its own snapshot are removed
+ * before any wire form, or the decoder would read them as the encoder's.
+ */
 function withoutCompactMarkers(snapshot: SessionSnapshot): SessionSnapshot {
   const { agents }: { agents: unknown } = snapshot;
   const omitted = Array.isArray(agents) && agents.some(ownOmit);

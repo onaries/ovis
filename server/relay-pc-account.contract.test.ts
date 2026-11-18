@@ -34,7 +34,6 @@ function stateDir(): string {
 
 const ACCOUNT = "acct_1";
 
-/** PC B in ACCOUNT (one drive member, its relay on), PC A, the local relay between them, and the account service. */
 async function accountPcs(options: { clock?: () => number; aIdentity?: boolean } = {}) {
   const relay = startBunRelay({ port: 0, limiters: {
     perAddress: { async limit() { return { success: true }; } },
@@ -54,7 +53,6 @@ async function accountPcs(options: { clock?: () => number; aIdentity?: boolean }
   };
   const service = new FakeAccountService(options.clock ?? Date.now);
   const token = service.issueToken(ACCOUNT);
-  // B's account member, in devices.json before B starts, as a PC an account device linked to holds it
   const bState = stateDir();
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
   const memberKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
@@ -70,7 +68,6 @@ async function accountPcs(options: { clock?: () => number; aIdentity?: boolean }
   await bounded(synced.promise);
   const offered = await fetch(`${bBase}/api/relay/offer`, { method: "POST", headers: { origin: bBase, "x-herdr-update": "1" } });
   const { code: _code, ...offer } = decodeOffer((await offered.json() as { url: string }).url)!;
-  // B in the account's directory, as the page of any signed-in device reads it
   await service.fetch(new Request(`https://account.test/v1/pcs/${offer.server_id}`, { method: "PUT", headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ label: "Desk", public_key: bytesToHex(importPublicKey(offer.server_public_key)), relay: offer.relay }) }));
   const aState = stateDir();
@@ -106,7 +103,6 @@ function post(base: string, path: string, body: unknown, signal?: AbortSignal): 
   return fetch(`${base}/api/machines/relay/account/${path}`, { method: "POST", headers: machineHeaders(base), body: JSON.stringify(body), ...(signal ? { signal } : {}) });
 }
 
-/** The lines A's pair answer sends, read one at a time. */
 function lines(response: Response) {
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
@@ -121,7 +117,6 @@ function lines(response: Response) {
   };
 }
 
-/** The next comparison B shows its account members. */
 function remotePrompt(b: ReturnType<typeof createServer>, check: (list: RemotePairingRequest[]) => boolean = (list) => list.length > 0): Promise<RemotePairingRequest[]> {
   const found = deferred<RemotePairingRequest[]>();
   const stop = b.context.services.relay.approvals.subscribeRemote((list) => { if (check(list)) found.resolve(list); });
@@ -167,7 +162,6 @@ it("adds a PC of the account once a member there picked the digits: a plain row 
   expect(service.mailbox(pc.server_id, ACCOUNT)).toEqual([]);
   expect(existsSync(join(aState, "account-pending.json"))).toBe(false);
 
-  // A keeps the PC as any PC added through the relay: in its machine list and on disk, once
   expect(readFileSync(join(aState, "relay-pcs.json"), "utf8")).toContain(machine!.id);
   expect(relayKeys(aState)).toEqual([`${machine!.id}.json`]);
   const listed = await (await fetch(`${aBase}/api/machines`, { headers: { origin: aBase } })).json() as { machines: Machine[] };
@@ -286,7 +280,6 @@ it("asks a PC once when two windows add it together: the second is told it is be
   expect(b.context.services.relay.approvals.remoteList()).toHaveLength(1);
 }, 60_000);
 
-/** Every PC's sessions from here on read HELLO as an older Ovis does, knowing no pair-intent-pc-vouched; the frames they were sent. */
 function olderB(): number[] {
   const admit = Object.getOwnPropertyDescriptor(RelaySession.prototype, "admit")!.value as (this: RelaySession, frame: SessionFrame) => Promise<void>;
   const asked: number[] = [];

@@ -1,11 +1,10 @@
 id = "devswha.ovis"
 name = "Ovis"
-version = "0.5.4"
+version = "0.5.5"
 min_herdr_version = "0.9.0"
 description = "Ovis, the browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
 platforms = ["linux", "macos", "windows"]
 
-# what is missing, in one line, before a later step would fail
 [[build]]
 command = ["sh", "scripts/preflight.sh"]
 platforms = ["linux", "macos"]

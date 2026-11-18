@@ -44,14 +44,9 @@ function harness({ deviceId, readOnly = false, relay, revokedAlready = false, st
   return { client, clients, present, log, revoke: () => revocations.forEach((close) => close()), ...connections };
 }
 
-/**
- * A connection whose observe processes are stand-ins: `kill` only asks one to end, and it has exited once `exit`
- * is called, as a real process ends some time after its signal. `started`: every process started, in order.
- */
 function watching() {
   const started: Array<{ paneId: string; cols: number; killed: number; exit: () => Promise<void>; end: () => void }> = [];
   const frames: { type: string; code?: string; pane_id?: string; message?: string }[] = [];
-  /** the next process cannot be started */
   const next = { fails: false };
   const client: Client = {
     data: connectionData({ deviceId: undefined, readOnly: true }), readyState: WebSocket.OPEN, close() {}, getBufferedAmount: () => 0,
@@ -75,15 +70,11 @@ const GRID = { cols: 80, rows: 24 };
 
 it("holds no more than 64 observe processes for one connection, and ends the view of a pane past them at once", async () => {
   const w = watching();
-  // each watch is a `herdr terminal session observe` process with three descriptors: a page watches the panes of four tabs
   for (let index = 0; index < 64; index++) w.watchPane(w.client, `w1:p${index}`, GRID);
   expect([w.started.length, w.frames]).toEqual([64, []]);
-  // one more pane: nothing is started for it, and its view is told it ended, as any view that cannot start is. No
-  // error is sent with it: a page writes an error it does not know into every terminal it shows
   w.watchPane(w.client, "w1:p64", GRID);
   expect(w.started).toHaveLength(64);
   expect(w.frames).toEqual([{ type: "watch-end", pane_id: "w1:p64" }]);
-  // and the connection's end stops them all
   w.end(w.client, "closed");
   expect(w.started.filter((process) => process.killed > 0)).toHaveLength(64);
 });
@@ -91,17 +82,13 @@ it("holds no more than 64 observe processes for one connection, and ends the vie
 it("starts a view asked for at the limit once a pane given up before it has ended its process, and tells it no end meanwhile", async () => {
   const w = watching();
   for (let index = 0; index < 64; index++) w.watchPane(w.client, `w1:p${index}`, GRID);
-  // a tab left the page's recent ones and another came: its panes are given up and the next tab's asked for in one read
   w.unwatchPane(w.client, "w1:p0");
   w.unwatchPane(w.client, "w1:p1");
   w.watchPane(w.client, "w1:p64", GRID);
   w.watchPane(w.client, "w1:p65", GRID);
-  // 64 processes still: the two views wait for the two that were asked to end, and are told nothing
   expect([w.started.length, w.frames]).toEqual([64, []]);
-  // a third has no place to wait for
   w.watchPane(w.client, "w1:p66", GRID);
   expect(w.frames).toEqual([{ type: "watch-end", pane_id: "w1:p66" }]);
-  // asked for again while it waits: it starts at the grid asked for last
   w.watchPane(w.client, "w1:p65", { cols: 100, rows: 30 });
   await w.started[0]!.exit();
   expect(w.started.slice(64).map((process) => [process.paneId, process.cols])).toEqual([["w1:p64", 80]]);
@@ -113,7 +100,6 @@ it("starts a view asked for at the limit once a pane given up before it has ende
 it("counts a view that ended by itself no more: the next view asked for takes its place once its process has exited", async () => {
   const w = watching();
   for (let index = 0; index < 64; index++) w.watchPane(w.client, `w1:p${index}`, GRID);
-  // a pane closed: herdr says so before its observe process is gone
   w.started[0]!.end();
   w.watchPane(w.client, "w1:p64", GRID);
   expect([w.started.length, w.frames]).toEqual([64, [{ type: "watch-end", pane_id: "w1:p0" }]]);
@@ -126,7 +112,6 @@ it("keeps the place a waiting view was given: the pane given up for it is not wa
   for (let index = 0; index < 64; index++) w.watchPane(w.client, `w1:p${index}`, GRID);
   w.unwatchPane(w.client, "w1:p0");
   w.watchPane(w.client, "w1:p64", GRID);
-  // 63 views run and one waits: the pane given up is a 65th
   w.watchPane(w.client, "w1:p0", GRID);
   expect(w.frames).toEqual([{ type: "watch-end", pane_id: "w1:p0" }]);
   await w.started[0]!.exit();
@@ -141,7 +126,6 @@ it("forgets a view that waits for a place when it is given up, and when its conn
   w.unwatchPane(w.client, "w1:p64");
   await w.started[0]!.exit();
   expect(w.started).toHaveLength(64);
-  // the place is free now: a view asked for starts at once
   w.watchPane(w.client, "w1:p64", GRID);
   expect(w.started).toHaveLength(65);
   w.unwatchPane(w.client, "w1:p1");
@@ -154,10 +138,8 @@ it("forgets a view that waits for a place when it is given up, and when its conn
 it("holds no more than 64 processes for frames that ask for panes and give them up over and over", async () => {
   const w = watching();
   for (let index = 0; index < 10; index++) w.watchPane(w.client, `w1:p${index}`, GRID);
-  // each is given up at once, and its process is still there until the event loop turns
   for (let index = 0; index < 3000; index++) { w.watchPane(w.client, `x${index}`, GRID); w.unwatchPane(w.client, `x${index}`); }
   expect([w.started.length, w.frames]).toEqual([64, []]);
-  // as they end, nothing starts in their places: none of those views is wanted any more
   for (const process of w.started.slice(10)) await process.exit();
   expect(w.started).toHaveLength(64);
 });
@@ -171,17 +153,13 @@ it("runs one observe process for a pane at a time: watched again, it starts once
   expect(w.started.map((process) => [process.cols, process.killed])).toEqual([[80, 1]]);
   await w.started[0]!.exit();
   expect(w.started.map((process) => process.cols)).toEqual([80, 400]);
-  // the page hears of no end: its view was replaced, as before
   expect(w.frames).toEqual([]);
-  // an unwatch while the replacement waits: nothing starts in its place
   w.watchPane(w.client, "w1:p1", { cols: 90, rows: 24 });
   w.unwatchPane(w.client, "w1:p1");
   await w.started[1]!.exit();
   expect(w.started).toHaveLength(2);
-  // and the pane can be watched afresh
   w.watchPane(w.client, "w1:p1", GRID);
   expect(w.started).toHaveLength(3);
-  // given up and watched again, over and over, before its process has exited: still that one process, asked to end once
   for (let cols = 81; cols <= 400; cols++) { w.unwatchPane(w.client, "w1:p1"); w.watchPane(w.client, "w1:p1", { cols, rows: 24 }); }
   expect([w.started.length, w.started[2]!.killed]).toEqual([3, 1]);
   await w.started[2]!.exit();
@@ -193,21 +171,17 @@ it("tells the page once of a view that ended by itself, and starts one asked for
   const w = watching();
   const end = { type: "watch-end", pane_id: "w1:p1" };
   w.watchPane(w.client, "w1:p1", GRID);
-  // its pane closed: herdr says so before the process is gone, and the page hears at once, and once
   w.started[0]!.end();
   expect(w.frames).toEqual([end]);
   await w.started[0]!.exit();
   expect(w.frames).toEqual([end]);
-  // nothing is left of it: watched again, the pane's view starts at once
   w.watchPane(w.client, "w1:p1", { cols: 100, rows: 30 });
   expect(w.started.map((process) => process.cols)).toEqual([80, 100]);
-  // watched again while a view that ended by itself still has its process: that is asked to end, and waited for
   w.started[1]!.end();
   w.watchPane(w.client, "w1:p1", { cols: 90, rows: 28 });
   expect([w.started.length, w.started[1]!.killed, w.frames]).toEqual([2, 1, [end, end]]);
   await w.started[1]!.exit();
   expect(w.started.map((process) => process.cols)).toEqual([80, 100, 90]);
-  // a process that exits without a word (it crashed) ends its view too
   await w.started[2]!.exit();
   expect([w.started.length, w.frames]).toEqual([3, [end, end, end]]);
 });
@@ -249,7 +223,6 @@ it("a stall ends the connection once and leaves its presence to the socket's clo
 
 it("sends one frame larger than the transport budget and keeps the client while it drains, but not a backlog past the budget (#2566)", () => {
   const { client, log } = harness();
-  // the socket queues what it is given and drains from the front only when the test says so
   let buffered = 0;
   const sent: number[] = [];
   Object.assign(client, { getBufferedAmount: () => buffered, send: (raw: string) => { sent.push(raw.length); buffered += Buffer.byteLength(raw); return -1; } });
@@ -260,10 +233,8 @@ it("sends one frame larger than the transport budget and keeps the client while 
   const halfBytes = Buffer.byteLength(JSON.stringify(half));
   expect(send(client, big)).toBe(-1);
   expect(backlog(client)).toBe(0);
-  // what follows the large frame is still sent while it drains, and counts in full
   expect(send(client, half)).toBe(-1);
   expect(backlog(client)).toBe(halfBytes);
-  // all but the large frame's last 10 bytes drained: what queued behind it is still a backlog
   buffered -= bigBytes - 10;
   expect(backlog(client)).toBe(halfBytes);
   expect(send(client, half)).toBe(0);
@@ -281,12 +252,10 @@ it("excuses a second large frame sent while the first still drains, and counts w
   const smallBytes = Buffer.byteLength(JSON.stringify(small));
   expect(send(client, big)).toBe(-1);
   expect(send(client, small)).toBe(-1);
-  // a mirrored screen whose JSON escaping takes it past the budget, while the snapshot is queued
   expect(send(client, big)).toBe(-1);
   expect(backlog(client)).toBe(smallBytes);
   expect(send(client, small)).toBe(-1);
   expect(backlog(client)).toBe(2 * smallBytes);
-  // the first drained, and part of the second
   buffered -= bigBytes + smallBytes + 100;
   expect(backlog(client)).toBe(smallBytes);
   expect(log).toEqual([]);
@@ -346,14 +315,12 @@ it("ends the machine-event subscription, never the terminal connection, rather t
     setMachineEvents(client, true);
     return { client, log, sent, queue: (bytes: number) => { buffered = bytes; } };
   };
-  // a backlog with no room left even for the ending notice: still told, and the terminal kept
   for (const queued of [OUTPUT_HARD_BYTES - 10, OUTPUT_LOW_BYTES - 100]) {
     const { log, sent } = subscribe(queued);
     expect(log).toEqual([]);
     expect(sent).toEqual(["machine-events-ended"]);
     expect(listeners.size).toBe(0);
   }
-  // a small document on an empty queue goes out; a live event that would pass the cap ends it
   const small = subscribe(0);
   expect(small.sent).toEqual(["machine-event"]);
   expect(listeners.size).toBe(1);
@@ -362,8 +329,6 @@ it("ends the machine-event subscription, never the terminal connection, rather t
   expect(small.log).toEqual([]);
   expect(small.sent).toEqual(["machine-event", "machine-events-ended"]);
   expect(listeners.size).toBe(0);
-  // a roster of 768 KiB-1 MiB on an empty queue never rides the socket: the page moves to SSE, and
-  // the 256 KiB of terminal output that follows is sent with nothing of it in front
   initial = 900 * 1024;
   const large = subscribe(0);
   expect(large.sent).toEqual(["machine-events-ended"]);
@@ -414,7 +379,6 @@ it("sends a roster that crosses 64 KiB over seven compact subscriptions while le
 
 it("sends no client a PC's own agent_refs, so none restores a row or a value this PC's redaction hid", () => {
   const panes: HerdrPane[] = [{ pane_id: "pA", terminal_id: "tA", workspace_id: "w1", tab_id: "w1:t1", focused: false, revision: 1, agent_status: "idle" }];
-  // a sparse row sharing no value with its pane: nothing is worth compacting, so the snapshot goes out as it came
   const agents = [{ pane_id: "pA", agent: "codex", agent_status: "working", tokens: { quota: "SECRET" } }] as unknown as AgentInfo[];
   const snapshot = { version: "test", protocol: 22, workspaces: [], tabs: [], layouts: [], panes, agents,
     agent_refs: [{ pane_id: "pA", agent: "codex", agent_status: "done", tokens: { quota: "SECRET" } }] } as SessionSnapshot;
@@ -497,13 +461,11 @@ it("revoking every device ends local and relayed device connections alike, and a
     expect(store.revokeAll().sort()).toEqual([phone.device.id, tablet.device.id].sort());
     expect(local.log).toEqual(["detach claimed", "drop claims", "closed 1008 Device access revoked"]);
     expect(remote.log).toEqual(["detach claimed", "drop claims", "closed 1008 Device access revoked"]);
-    // the relayed connection's relay is closed with the revocation itself, before its socket's own close
     expect(relayed).toEqual(["relay closed"]);
     expect(local.mayType(local.client)).toBe(false);
     expect(() => remote.authorizeSocket(remote.client)).toThrow("this device's access was revoked");
     remote.end(remote.client, "closed");
     expect(relayed).toEqual(["relay closed", "relay closed"]);
-    // a socket that opens with a revoked device's cookie after the fact is closed at once
     const late = harness({ deviceId: phone.device.id, store });
     expect(late.admit(late.client)).toBe(false);
     expect(late.log.at(-1)).toBe("closed 1008 Device access revoked");
@@ -516,22 +478,18 @@ it("ends a connection the open LAN let in once the gate closes, and admits none 
     const store = new DeviceStore(root);
     const relayed: string[] = [];
     const relay = { close: () => relayed.push("relay closed") } as unknown as MachineRelay;
-    // another machine on the LAN while nothing is paired, and its connection to a remote PC through this one
     const stranger = harness({ open: true, store });
     const proxied = harness({ open: true, relay, store });
     // let in another way (this PC itself, a token, a Tailscale login): not the gate's to end
     const local = harness({ store });
-    // one that closed by itself before the gate did
     const gone = harness({ open: true, store });
     for (const each of [stranger, proxied, local, gone]) expect(each.admit(each.client)).toBe(true);
     gone.end(gone.client, "closed");
     gone.log.length = 0;
     expect(stranger.mayType(stranger.client)).toBe(true);
-    // the first device: its cookie is taken only once it came back, and that write closes the gate
     const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
     expect([store.gated, stranger.log]).toEqual([false, []]);
     store.match(phone.token);
-    // told right after the call that closed the gate, with the store saying so
     expect([store.gated, stranger.log]).toEqual([true, []]);
     await Promise.resolve();
     expect(stranger.log).toEqual(["detach claimed", "drop claims", "closed 1008 Pairing required"]);
@@ -540,7 +498,6 @@ it("ends a connection the open LAN let in once the gate closes, and admits none 
     expect([stranger.clients.has(stranger.client), stranger.present.has(stranger.client), stranger.mayType(stranger.client)]).toEqual([false, false, false]);
     expect(() => stranger.authorizeSocket(stranger.client)).toThrow("pair this device");
     expect([local.log, local.mayType(local.client), gone.log]).toEqual([[], true, []]);
-    // told once: a second device, and revoking them all, find no open connection left to end
     const tablet = store.pair(store.startPairing().code, "Tablet", "drive")!;
     store.match(tablet.token);
     store.revokeAll();

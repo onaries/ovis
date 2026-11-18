@@ -12,6 +12,7 @@ describe("button counts", () => {
       expect(TELEMETRY_COUNTERS).toContain(`view_chat_${harness}`);
       expect(TELEMETRY_COUNTERS).toContain(`view_terminal_${harness}`);
     }
+    // no name says more than a word list can: no free text ever becomes a name
     for (const name of TELEMETRY_COUNTERS) expect(name).toMatch(/^[a-z_]+$/);
   });
 

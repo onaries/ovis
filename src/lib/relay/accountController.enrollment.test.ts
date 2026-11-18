@@ -20,7 +20,7 @@ import { SettingsProvider } from "../settings.ts";
 import { setCurrentLanguage, translate } from "../i18n.ts";
 import { ConsentChangedError, createAccountController } from "./accountController.ts";
 import { offerOf } from "./shellState.ts";
-import { enrollmentOf, type RelayDevice, type RelayDeviceStore } from "./device.ts";
+import { enrollmentOf, type RelayDevice, type ShellDeviceStore } from "./device.ts";
 import { dashboardModel, dashboardPcs } from "./dashboard.ts";
 import { createShellTestPage } from "./shell.test.tsx";
 import { RelayTransport } from "./transport.ts";
@@ -49,8 +49,8 @@ describe("account enrollment ownership", () => {
     const key = await accountStore.key();
     const original: RelayDevice = { ...offer, device_id: "12".repeat(8), private_key: key.private_key, public_spki: key.public_spki, label: "Phone", account: "account" };
     const devices = new Map([[offer.server_id, original]]);
-    const store: RelayDeviceStore = {
-      get: async (id) => devices.get(id), list: async () => [...devices.values()], remove: async (id) => { devices.delete(id); },
+    const store: ShellDeviceStore = {
+      get: async (id) => devices.get(id), list: async () => [...devices.values()], remove: async (id) => { devices.delete(id); }, removeRow: async (id, row) => { if (devices.get(id)?.device_id !== row) return false; devices.delete(id); return true; },
       update: async (id, change, source) => { source?.assert(devices.get(source.serverId)); const next = change(devices.get(id)); devices.set(id, next); return next; },
     };
     const records: AddRecord[] = [];
@@ -66,7 +66,6 @@ describe("account enrollment ownership", () => {
     const renewalRequested = Promise.withResolvers<void>();
     const renewalResponse = Promise.withResolvers<void>();
     const putPcs: string[] = [];
-    // the first account service request `heldAccount` names ("GET /v1/pcs") waits for accountRelease
     const accountRequested = Promise.withResolvers<void>();
     const accountRelease = Promise.withResolvers<void>();
     const signOutAsked = Promise.withResolvers<void>();
@@ -117,7 +116,6 @@ describe("account enrollment ownership", () => {
     };
   }
   type Run = Awaited<ReturnType<typeof fixture>>;
-  // a pairing just made with its own key, which an enrollment links to the account key
   const unlinked = async (run: Run): Promise<void> => {
     const own = await memoryAccountStore().key();
     const { account: _account, ...rest } = run.original;
@@ -130,7 +128,6 @@ describe("account enrollment ownership", () => {
   const laterSignIn = async (run: Run) => {
     const first = await run.accountStore.get("session");
     if (first === undefined) throw new TypeError("Missing sign-in");
-    // a sign-in of its own, as the service's answer makes one (sessionOf): the stored one may carry an id by now
     return { first, later: { ...first, access_token: run.service.issueToken("account"), refresh_token: "later", sign_in_id: "later" } };
   };
 
@@ -147,11 +144,9 @@ describe("account enrollment ownership", () => {
   it.each(["while that leave runs", "after that leave ends"] as const)("sends no link from another tab once this tab's leave has its snapshot, %s", async (moment) => {
     const run = await fixture("/api/account/status", { linking: true, heldAccount: "GET /v1/pcs" });
     await unlinked(run);
-    // the other tab's enrollment waits on the PC's status, before its link
     const linking = run.otherController.enroll(await run.open(), run.original.server_id, false).catch((error: unknown) => error);
     await run.requested.promise;
     run.controller.leave();
-    // marked and snapshotted: the leave now reads the directory
     await run.accountRequested.promise;
     if (moment === "after that leave ends") { run.accountRelease.resolve(); await run.viewChanged; }
     run.response.resolve(run.answer("/api/account/status"));
@@ -174,7 +169,6 @@ describe("account enrollment ownership", () => {
     run.controller.leave();
     await run.viewChanged;
     if (held === "renewal") {
-      // linked and listed: the removal went to its mailbox, and its pairing is forgotten here
       expect(run.service.mailbox(run.original.server_id, "account")).toMatchObject([{ kind: "remove", account: "account", key: run.key.public_spki }]);
       expect(await run.store.get(run.original.server_id)).toBeUndefined();
       expect(run.controller.state).toEqual({ kind: "signed-out", error: null });
@@ -197,7 +191,6 @@ describe("account enrollment ownership", () => {
     const { later } = await laterSignIn(run);
     run.controller.leave();
     await run.accountRequested.promise;
-    // signed out and in again meanwhile (the phone app's page stays open)
     await run.accountStore.set("session", later);
     run.accountRelease.resolve();
     await run.viewChanged;
@@ -214,7 +207,6 @@ describe("account enrollment ownership", () => {
     const run = await fixture("unused");
     const lock = memoryLock();
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { ...navigator, locks: { request: (_name: string, work: () => Promise<unknown>) => lock(work) } } });
-    // another tab holds the account lock (a refresh on its way)
     const holding = Promise.withResolvers<void>();
     const held = lock(() => holding.promise);
     const { first, later } = await laterSignIn(run);
@@ -223,7 +215,6 @@ describe("account enrollment ownership", () => {
     holding.resolve();
     await held;
     await run.signOutAsked.promise;
-    // the sign-out's own turn under the lock is over once this one runs
     await lock(async () => undefined);
     expect(await run.accountStore.get("session")).toEqual(later);
     expect(await tokenStatus(run, later.access_token)).toBe(200);
@@ -385,7 +376,6 @@ describe("account enrollment ownership", () => {
   it("finishes a code pairing after one look for an introduction, with no wait", async () => {
     jest.useFakeTimers();
     const run = await fixture("unused");
-    // no clock moves here: an enrollment that waited would never settle
     expect(await run.controller.enroll(await run.open(), run.original.server_id, true)).toEqual({ state: "complete", admitted: 2 });
     expect(run.introductions()).toBe(1);
     expect(enrollmentOf((await run.store.get(run.original.server_id))!)).toBe("complete");
@@ -397,7 +387,6 @@ describe("account enrollment ownership", () => {
     const began = Date.now();
     let outcome: unknown;
     const pending = run.controller.enroll(await run.open(), run.original.server_id, true, true).then((value) => { outcome = value; });
-    // the enrollment signs and reads between its waits, which no faked clock runs: each turn lets that work land
     for (let turn = 0; outcome === undefined && turn < 5_000; turn++) {
       if (jest.getTimerCount() > 0) jest.advanceTimersByTime(3_000);
       await crypto.subtle.digest("SHA-256", new Uint8Array(1));
@@ -422,7 +411,6 @@ describe("account enrollment ownership", () => {
     expect(await run.controller.enroll(await run.open(), run.original.server_id, true, false, { consent: null })).toBe("local");
     expect(run.putPcs).toEqual([]);
     expect(enrollmentOf((await run.store.get(run.original.server_id))!)).toBeUndefined();
-    // the sign-in the confirm named, still stored: the pairing goes on
     expect((await run.controller.prepare({ ...offer, code: "123456" }, signal, later)).accountKey).toBeDefined();
     expect(await run.controller.enroll(await run.open(), run.original.server_id, true, false, { consent: later })).toEqual({ state: "complete", admitted: 2 });
   });
@@ -431,12 +419,10 @@ describe("account enrollment ownership", () => {
     const run = await fixture("/api/account/enroll", { linking: true, holdRenewal: true });
     let settled = 0;
     const enrolling = run.controller.enroll(await run.open(), run.original.server_id, true, false, { settled: () => { settled++; } });
-    // linked, and the renewal that follows is out: the session is still to reconnect
     await run.renewalRequested.promise;
     expect(run.linked()).toBe(true);
     expect(settled).toBe(0);
     run.renewalResponse.resolve();
-    // the PC's enrollment is still unanswered: nothing after the renewal touches the session
     await run.requested.promise;
     expect(settled).toBe(1);
     run.response.resolve(run.answer("/api/account/enroll"));

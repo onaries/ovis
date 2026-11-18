@@ -1,7 +1,12 @@
+/**
+ * Account records (docs/account.md, "Records"): `add`, `remove` and `link`, each signed on its own
+ * by a client's account key.
+ */
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { fromBase64Url, toBase64Url } from "./relay-pair-sas.ts";
 
+/** Signing bytes start with this; `AUTH` signs `ovis-relay-auth/1 ...`, which differs at the sixth byte. */
 export const ACCOUNT_RECORD_PREFIX = "ovis-account/1";
 /** Records one `/api/account/records` request may carry. */
 export const ACCOUNT_RECORDS_MAX = 32;
@@ -37,6 +42,7 @@ export type AccountRecord = AddRecord | RemoveRecord | LinkRecord;
 type Unsigned<T> = T extends AccountRecord ? Omit<T, "signature"> : never;
 export type UnsignedAccountRecord = Unsigned<AccountRecord>;
 
+/** Every field after `v` that the signature covers, in signing order. */
 const SIGNED_FIELDS = {
   add: ["kind", "account", "key", "label", "role", "issued_at", "id", "signer"],
   remove: ["kind", "account", "key", "issued_at", "id", "signer"],
@@ -51,6 +57,7 @@ function fail(message: string): never {
   throw new AccountRecordError(message);
 }
 
+/** Whether `text` is a P-256 public key as SPKI in canonical base64url; whether the point is on the curve is WebCrypto's to say. */
 export function isAccountKeyEncoding(text: unknown): text is string {
   if (typeof text !== "string" || !/^[A-Za-z0-9_-]{122}$/.test(text)) return false;
   const bytes = fromBase64Url(text);
@@ -63,6 +70,7 @@ const checks: Record<string, (value: unknown) => boolean> = {
   key: isAccountKeyEncoding,
   signer: isAccountKeyEncoding,
   old_key: isAccountKeyEncoding,
+  // the form normalizeLabel (server/devices.ts) leaves, so a PC stores exactly what was signed
   // a lone surrogate encodes as U+FFFD, so two labels would share one signature
   label: (v) => typeof v === "string" && v.length >= 1 && v.length <= ACCOUNT_LABEL_MAX
     && !/[\p{Cc}\p{Cs}]/u.test(v) && v === v.replace(/\s+/g, " ").trim(),
@@ -74,6 +82,7 @@ const checks: Record<string, (value: unknown) => boolean> = {
   signature: (v) => typeof v === "string" && /^[A-Za-z0-9_-]{86}$/.test(v) && toBase64Url(fromBase64Url(v)) === v,
 };
 
+/** A record from the wire, with every field checked and nothing extra; throws AccountRecordError. Says nothing about the signature. */
 export function parseAccountRecord(value: unknown): AccountRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("A record is a JSON object");
   const object = value as Record<string, unknown>;
@@ -92,6 +101,7 @@ export function parseAccountRecord(value: unknown): AccountRecord {
   return object as unknown as AccountRecord;
 }
 
+/** `ovis-account/1`, then `v` and every field in signing order, each as a 4-byte big-endian length and its UTF-8 bytes. */
 export function recordSigningBytes(record: UnsignedAccountRecord): Uint8Array {
   const encoder = new TextEncoder();
   const fields = SIGNED_FIELDS[record.kind] as readonly (keyof typeof record)[];
@@ -109,6 +119,7 @@ export function recordSigningBytes(record: UnsignedAccountRecord): Uint8Array {
   return bytes;
 }
 
+/** Signs with the client's account key; `record.signer` must be that key's public half. */
 export async function signAccountRecord<T extends UnsignedAccountRecord>(record: T, privateKey: CryptoKey): Promise<T & { signature: string }> {
   const signature = new Uint8Array(await crypto.subtle.sign(SIGN, privateKey, recordSigningBytes(record) as Uint8Array<ArrayBuffer>));
   const signed = { ...record, signature: toBase64Url(signature) };
@@ -116,6 +127,7 @@ export async function signAccountRecord<T extends UnsignedAccountRecord>(record:
   return signed;
 }
 
+/** Whether `record.signature` is `record.signer`'s over its signing bytes. False, never a throw, for a key off the curve. */
 export async function verifyAccountRecord(record: AccountRecord): Promise<boolean> {
   try {
     const key = await crypto.subtle.importKey("spki", fromBase64Url(record.signer) as Uint8Array<ArrayBuffer>, P256, false, ["verify"]);
@@ -127,6 +139,7 @@ export async function verifyAccountRecord(record: AccountRecord): Promise<boolea
   }
 }
 
+/** Parses and verifies; throws AccountRecordError for a malformed record and returns null for a bad signature. */
 export async function readAccountRecord(value: unknown): Promise<AccountRecord | null> {
   const record = parseAccountRecord(value);
   return await verifyAccountRecord(record) ? record : null;
@@ -140,6 +153,7 @@ export async function exportAccountKey(publicKey: CryptoKey): Promise<string> {
   return toBase64Url(new Uint8Array(await crypto.subtle.exportKey("spki", publicKey)));
 }
 
+/** The id a PC gives a device an `add` puts there; the client works out the same to sign in (docs/account.md, "Account members"). */
 export function accountDeviceId(serverId: string, devicePublicKey: string): string {
   return bytesToHex(sha256(utf8ToBytes(`ovis-account-device/1${serverId}${devicePublicKey}`))).slice(0, 16);
 }

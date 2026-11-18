@@ -5,10 +5,6 @@ import { join } from "node:path";
 import { CI_JOBS, matrixJobs } from "./release-ci-reuse.ts";
 import { DEPLOY_ACTIONS, type Job, parseWorkflow, root, runScript, scriptProblems, type Step, stepList } from "./shell-workflow-rules.ts";
 
-// A Release run tags a commit only after release-validate.yml names what validated it: ci.yml run
-// there, or main's own push run that scripts/release-ci-reuse.ts verified, with Fast checks run
-// again on GitHub's runner. These tests hold the shape that makes a skipped, failed or cancelled job
-// stop a release instead of passing it, and run the two scripts that decide.
 type CallJob = Job & { name?: string; with?: Record<string, unknown>; "continue-on-error"?: boolean };
 interface Input { description?: string; required?: boolean; default?: unknown; type?: string }
 const wrapper = parseWorkflow(join(root, ".github/workflows/release-validate.yml"));
@@ -24,7 +20,6 @@ const publish = job(release, "publish");
 const REVALIDATE: Input = { required: false, default: false, type: "boolean" };
 const READS = { contents: "read", actions: "read" };
 const STATUS_FUNCTION = /\b(?:always|cancelled|failure|success)\s*\(/;
-/** The jobs and steps of `workflow` that carry `continue-on-error`, whatever its value. */
 const carrying = (workflow: typeof wrapper): string[] => Object.entries(workflow.jobs).flatMap(([id, candidate]) => [
   ...("continue-on-error" in candidate ? [id] : []),
   ...(candidate.steps ?? []).flatMap((entry, index) => ("continue-on-error" in entry ? [`${id}.steps[${index}]`] : [])),
@@ -33,7 +28,6 @@ const carrying = (workflow: typeof wrapper): string[] => Object.entries(workflow
 const scratch = mkdtempSync(join(tmpdir(), "release-validate-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 let files = 0;
-/** Runs a step's script with `env` and returns its exit code, its log and what it wrote to $GITHUB_OUTPUT. */
 async function runStep(script: string, env: Record<string, string>): Promise<{ code: number; log: string; output: string }> {
   const output = join(scratch, `output-${files++}`);
   const result = await runScript(script, scratch, { ...env, GITHUB_OUTPUT: output });
@@ -57,7 +51,6 @@ describe("release-validate.yml", () => {
     expect(Object.keys(wrapper.jobs)).toEqual(["reuse", "fast", "ci", "verdict"]);
     expect(wrapper.permissions).toEqual({ contents: "read" });
     expect(reuse.permissions).toEqual(READS);
-    // the workflow's own: what ci.yml gives its Fast checks
     expect(fast.permissions).toBeUndefined();
     expect(ci.permissions).toEqual(READS);
     expect(verdict.permissions).toEqual({});
@@ -78,7 +71,6 @@ describe("release-validate.yml", () => {
     expect(reuse["runs-on"]).toBe("ubuntu-24.04");
     expect(reuse.needs).toBeUndefined();
     expect(reuse.if).toBeUndefined();
-    // a reuse job that fails gives no answer, and no answer runs ci.yml
     expect(reuse["continue-on-error"]).toBe(true);
     expect(reuse.outputs).toEqual({ green: "${{ steps.decide.outputs.green }}", run: "${{ steps.decide.outputs.run }}" });
     expect(stepList(reuse)).toEqual(["actions/checkout", "oven-sh/setup-bun", "Ask whether main's CI already passed this commit"]);
@@ -97,24 +89,19 @@ describe("release-validate.yml", () => {
     const wait = Number(step(reuse, (candidate) => candidate.id === "decide").env!["RELEASE_CI_WAIT_SECONDS"]);
     expect(wait).toBeGreaterThan(0);
     expect(reuse["timeout-minutes"]).toBe(45);
-    // checkout, Bun and a last look at GitHub after the wait
     expect(reuse["timeout-minutes"]! * 60).toBeGreaterThanOrEqual(wait + 240);
   });
 
   test("runs Fast checks itself, on GitHub's runner, beside the question about main's run", () => {
     expect(fast.name).toBe("Fast checks (GitHub-hosted)");
-    // not after the reuse job: main's run may still be going, and Fast checks would come on top of that wait
     expect(fast.needs).toBeUndefined();
-    // with revalidate ci.yml runs its own, and nothing reads this one
     expect(fast.if).toBe("${{ !inputs.revalidate }}");
     // never a runner variable: the self-hosted runner skips the tests this job is here for
     expect(fast["runs-on"]).toBe("ubuntu-24.04");
-    // its answer: written by a step no failed step lets run
     expect(fast.outputs).toEqual({ passed: "${{ steps.passed.outputs.passed }}" });
     const passed = step(fast, (candidate) => candidate.id === "passed");
     expect(passed.if).toBeUndefined();
     expect(passed.run).toBe('echo "passed=true" >> "$GITHUB_OUTPUT"');
-    // after every check, and before the one step that runs whatever happened
     const ids = fast.steps!.map((candidate) => candidate.id ?? candidate.name ?? candidate.run ?? candidate.uses);
     expect(ids.indexOf("passed")).toBe(ids.indexOf("Release guards") + 1);
     expect(fast.steps!.slice(0, ids.indexOf("passed")).every((candidate) => candidate.if === undefined)).toBe(true);
@@ -134,22 +121,17 @@ describe("release-validate.yml", () => {
       const { cache: _cache, ...inputs } = candidate.with;
       return { ...candidate, with: inputs };
     };
-    // ci.yml's ratchets compare with the pull request's base or the commit before a push, which a Release run never has:
-    // the copy leaves out EVENT_BASE and the step that fetches the base, and compares with nothing, as ci.yml's own would there
     const RATCHET_STEP = "Fetch the base the ratchets compare with";
     expect(stepList(theirs)).toContain(RATCHET_STEP);
     const { EVENT_BASE: _base, ...ciEnv } = theirs.env!;
-    /** All of a job but where it runs and when, its artifact's name, ci.yml's hosted_only cache, the ratchets' base and this workflow's own answer left out. */
     const checks = ({ name: _name, needs: _needs, if: _if, "runs-on": _runner, "continue-on-error": _may, outputs: _outputs, env, ...rest }: CallJob): object =>
       ({ ...rest, env: env && (({ EVENT_BASE: _eventBase, ...kept }) => kept)(env), steps: rest.steps!.filter((candidate) => candidate.id !== "passed" && candidate.name !== RATCHET_STEP).map(withoutCache).map((candidate) => (uploads(candidate) ? { ...candidate, with: { ...candidate.with, name: "" } } : candidate)) });
     expect(checks(fast), UPDATE).toEqual(checks(theirs));
     expect(fast["timeout-minutes"], UPDATE).toBe(theirs["timeout-minutes"]!);
     expect(fast.env, UPDATE).toEqual(ciEnv);
     expect(stepList(fast)).toEqual(["actions/checkout", "./.github/actions/setup-ci", "bun install --frozen-lockfile", "bun run check fast", "Release guards", "Say that Fast checks passed", "Preserve check report and verification logs"]);
-    // what a copy cannot follow: a step that reads the jobs ci.yml's own needs, or an environment set for all of ci.yml
     expect(JSON.stringify(checks(theirs)), UPDATE).not.toMatch(/\b(?:needs|matrix|strategy)\./);
     expect([ciYml.env, (ciYml as { defaults?: unknown }).defaults], UPDATE).toEqual([wrapper.env, (wrapper as { defaults?: unknown }).defaults]);
-    // one artifact, under a name no job of ci.yml uploads
     const names = (candidate: Job): string[] => (candidate.steps ?? []).filter(uploads).map((upload) => upload.with!["name"]!);
     expect(names(theirs)).toEqual(["check-fast-${{ github.run_id }}-${{ github.run_attempt }}"]);
     expect(names(fast)).toEqual(["check-fast-hosted-${{ github.run_id }}-${{ github.run_attempt }}"]);
@@ -160,7 +142,6 @@ describe("release-validate.yml", () => {
     expect(ci.needs).toBe("reuse");
     expect(ci.if).toBe("${{ !cancelled() && (inputs.revalidate || needs.reuse.result != 'success' || needs.reuse.outputs.green != 'true') }}");
     expect(ci.uses).toBe("./.github/workflows/ci.yml");
-    // the Release run is GitHub-hosted and cacheless as a whole (scripts/privileged-jobs-workflow.test.ts)
     expect(ci.with?.["hosted_only"]).toBe(true);
   });
 
@@ -188,7 +169,6 @@ describe("release-validate.yml", () => {
 });
 
 describe("release.yml", () => {
-  /** Every job that runs after `name`: the jobs that need it, and the jobs that need those. */
   const after = (name: string): string[] => {
     const found = new Set<string>();
     for (let grew = true; grew;) {
@@ -211,7 +191,6 @@ describe("release.yml", () => {
     expect(validate.with).toEqual({ revalidate: "${{ inputs.revalidate }}" });
     expect(validate.permissions).toEqual(READS);
     expect((release.on["workflow_dispatch"] as { inputs: Record<string, Input> }).inputs["revalidate"]).toMatchObject(REVALIDATE);
-    // ci.yml runs for a release only where the verdict can see its result
     expect(Object.entries(release.jobs).filter(([, candidate]) => candidate.uses?.endsWith("/ci.yml")).map(([id]) => id)).toEqual([]);
   });
 
@@ -247,7 +226,6 @@ describe("release.yml", () => {
     expect(before).toEqual([["preflight", []], ["validate", []], ["pty-sidecar", ["id-token", "attestations"]], ["server-binary", []], ["server-binary-sign", []], ["server-binary-attest", ["id-token", "attestations"]]]);
     expect(release.jobs["pty-sidecar"]!.permissions).toEqual({ contents: "read", "id-token": "write", attestations: "write" });
     expect(writes(publish)).toEqual(["contents"]);
-    // the rule itself
     expect(writes({ permissions: { contents: "write", actions: "read", packages: "none" } })).toEqual(["contents"]);
     expect(writes({}, { permissions: { contents: "write" } })).toEqual(["contents"]);
     expect(writes({ permissions: {} }, { permissions: { contents: "write" } })).toEqual([]);
@@ -269,7 +247,6 @@ describe("release.yml", () => {
 describe.skipIf(process.platform === "win32")("the reuse job's answer", () => {
   const decide = step(reuse, (candidate) => candidate.id === "decide").run!;
   const NO = "green=false\nrun=\n";
-  /** Runs the decide step with a `bun` that prints `stdout` and exits with `exit`. */
   async function answer(stdout: string, exit = 0): Promise<{ code: number; output: string; called: string }> {
     const bin = mkdtempSync(join(scratch, "bin-"));
     writeFileSync(join(bin, "bun"), "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CALLED\"\nprintf '%s' \"$FAKE_STDOUT\"\nexit \"$FAKE_EXIT\"\n", { mode: 0o755 });
@@ -286,7 +263,6 @@ describe.skipIf(process.platform === "win32")("the reuse job's answer", () => {
   test("writes a no for a no, a crash, half an answer or anything else", async () => {
     for (const [stdout, exit] of [
       ["green=false\nrun=\n", 0], ["green=false\nrun=42426987381\n", 0], ["", 0], ["", 1], ["", 127],
-      // a yes from a script that then failed
       ["green=true\nrun=42426987381\n", 1], ["green=true\nrun=42426987381\n", 139],
       ["green=true\n", 0], ["green=true\nrun=\n", 0], ["run=42426987381\n", 0], ["run=42426987381\ngreen=true\n", 0],
       ["green=true\nrun=0\n", 0], ["green=true\nrun=042\n", 0], ["green=true\nrun=42a\n", 0], ["green=true\nrun=-1\n", 0], ["green=true\nrun=4 2\n", 0],
@@ -301,12 +277,10 @@ describe.skipIf(process.platform === "win32")("the reuse job's answer", () => {
   }, 60_000);
 
   test("writes a no when bun or the script is not there to ask", async () => {
-    // no bun on this path, or the system's own with no script under the step's directory
     const result = await runStep(decide, { PATH: "/usr/bin:/bin" });
     expect([result.code, result.output]).toEqual([0, NO]);
   });
 
-  /** Runs the decide step from the repository, with the real script and a local server in GitHub's place. */
   async function ask(respond: (url: URL) => Response): Promise<{ code: number; output: string; log: string; paths: string[] }> {
     const paths: string[] = [];
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => { const url = new URL(request.url); paths.push(url.pathname); return respond(url); } });
@@ -351,15 +325,11 @@ describe.skipIf(process.platform === "win32")("the verdict", () => {
   const guard = publish.steps![0]!.run!;
   const RESULTS = ["success", "failure", "cancelled", "skipped", ""];
   interface Case { ci: string; fast: string; reuse: string; green: string; run: string; revalidate: string }
-  /** `fast`: what Fast checks' `passed` step wrote, "true" or nothing (it failed, was cancelled or did not run). */
   const decide = (c: Case) => runStep(script, { CI_RESULT: c.ci, FAST_PASSED: c.fast, REUSE_RESULT: c.reuse, REUSE_GREEN: c.green, REUSE_RUN: c.run, REVALIDATE: c.revalidate });
   const PASSED = ["true", "", "false", "TRUE", "success"];
   const publishes = async (validatedBy: string): Promise<boolean> => (await runStep(guard, { VALIDATED_BY: validatedBy })).code === 0;
-  /** What the verdict job hands release.yml: the output of a step that passed, nothing from one that failed. */
   const handed = (result: { code: number; output: string }): string => (result.code === 0 ? /^validated_by=(.*)\n$/.exec(result.output)?.[1] ?? "" : "");
-  /** Main's run verified: ci.yml skipped for it, and Fast checks passed in this run. */
   const yes: Case = { ci: "skipped", fast: "true", reuse: "success", green: "true", run: "42426987381", revalidate: "false" };
-  /** No verified run: ci.yml runs in this run; Fast checks ran beside the question and passed too. */
   const no: Case = { ...yes, green: "false", run: "" };
 
   test("names ci.yml when it passed in this run, whatever the reuse job and Fast checks said", async () => {
@@ -386,7 +356,6 @@ describe.skipIf(process.platform === "win32")("the verdict", () => {
     expect(result.log).toBe("::error::Not validated: ci.yml ended 'skipped' in this run, and main's own run was not verified with Fast checks passed here (revalidate 'false', its job 'success', green 'true', run '42426987381', Fast checks passed '').\n");
   });
 
-  // release.yml's table of what can happen, each row with what publish may do
   for (const [name, c, validatedBy] of [
     ["main's run verified, Fast checks passed here, ci.yml skipped", yes, "main-run-42426987381"],
     ["main's run verified, Fast checks failed, was cancelled or never ran here (it wrote no answer)", { ...yes, fast: "" }, ""],
@@ -452,7 +421,6 @@ describe.skipIf(process.platform === "win32")("the verdict", () => {
     }
     expect(wrong).toEqual([]);
     expect(cases).toHaveLength(9000);
-    // ci.yml passed: 1 result of 5, whatever the others say; main's run: the one combination
     expect(named).toEqual({ ci: 1800, main: 1 });
   }, 120_000);
 

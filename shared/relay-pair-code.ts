@@ -1,4 +1,18 @@
-/** draft-irtf-cfrg-cpace-21, cipher suite CPACE-RISTR255-SHA512, initiator-responder */
+/**
+ * The code is Crockford base32. Its first NAMEPLATE_CHARS characters are a public rendezvous name
+ * (the relay sees them and pairs the two sockets by them, relay/pair-room.ts); the rest is the
+ * password, which never leaves either end. The password keys CPace (draft-irtf-cfrg-cpace-21,
+ * cipher suite CPACE-RISTR255-SHA512, initiator-responder), a balanced PAKE: someone who reads the
+ * frames, the relay included, cannot test password guesses offline, and an active attacker gets one
+ * guess per exchange.
+ *
+ *   PC -> device   M1 { v: 1, sid, ya }       the PC is CPace's initiator A
+ *   device -> PC   M2 { yb, confirm }         confirm = HKDF(ISK, "device confirm")
+ *   PC -> device   M3 { box }                 the offer, ChaCha20-Poly1305 under HKDF(ISK, "offer")
+ *
+ * The PC checks `confirm` before it sends anything that depends on the password, so a wrong guess
+ * costs the guesser one live try (server/relay/pair-code.ts counts them).
+ */
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { ristretto255, ristretto255_hasher } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
@@ -7,13 +21,18 @@ import { concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
 type RistrettoPoint = InstanceType<typeof ristretto255.Point>;
 
+/** Crockford base32: no I, L, O or U. */
 export const PAIR_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** 3 public nameplate characters and a 35-bit password (design: a fleet-wide guessing budget, not one code's) */
 export const PAIR_CODE_CHARS = 10;
+/** the public part, which routes the two sockets on the relay */
 export const NAMEPLATE_CHARS = 3;
 export const NAMEPLATE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{3}$/;
+/** Wrong codes before the PC spends it. */
 export const PAIR_CODE_TRIES = 3;
 export const PAIR_CODE_MAX_FRAME = 4096;
 
+/** the relay's attempt id that scopes each frame on the rendezvous (relay/pair-room.ts) */
 export const PAIR_ATTEMPT_BYTES = 16;
 
 export const PAIR_CLOSE = {
@@ -37,12 +56,18 @@ const AD_DEVICE = utf8ToBytes("ovis-pair-code/1 device");
 const CONFIRM_INFO = utf8ToBytes("ovis-pair-code/1 device confirm");
 const OFFER_INFO = utf8ToBytes("ovis-pair-code/1 offer key");
 const OFFER_AAD = utf8ToBytes("ovis-pair-code/1 offer");
+/** what M3 seals instead of an offer when the six-digit code it was bound to is gone; never valid offer JSON */
 const EXPIRED = "expired";
 const SID_BYTES = 16;
 const POINT_BYTES = 32;
 const ZERO_NONCE = new Uint8Array(12);
 const GROUP_ORDER = ristretto255.Point.Fn.ORDER;
 
+/**
+ * Case, spaces and dashes do
+ * not matter, and O, I and L read as 0, 1 and 1 (Crockford's decoding), so a code read aloud or
+ * copied by eye still works.
+ */
 export function normalizePairCode(input: string): string | null {
   if (input.length > 32) return null;
   const text = input.toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
@@ -59,12 +84,14 @@ export function randomPairCode(random: (bytes: number) => Uint8Array = (n) => cr
   let code = "";
   while (code.length < PAIR_CODE_CHARS) {
     for (const byte of random(16)) {
+      // 256 is a multiple of 32: the low five bits of any byte are uniform
       if (code.length < PAIR_CODE_CHARS) code += PAIR_CODE_ALPHABET[byte & 31];
     }
   }
   return code;
 }
 
+/** Throws on anything normalizePairCode does not take, so both ends always run on the canonical code. */
 export function splitPairCode(input: string): { nameplate: string; password: string } {
   const code = normalizePairCode(input);
   if (code === null) throw new PairCodeProtocolError("not a pairing code");
@@ -134,6 +161,7 @@ export function cpaceIsk(sid: Uint8Array, k: Uint8Array, ya: Uint8Array, adA: Ui
   return sha512(concatBytes(lvCat(ISK_DSI, sid, k), lvCat(ya, adA), lvCat(yb, adB)));
 }
 
+/** CI binds the exchange to this protocol and to the rendezvous it met on. */
 function channelIdentifier(nameplate: string): Uint8Array {
   return lvCat(CI_LABEL, utf8ToBytes(nameplate));
 }
@@ -175,6 +203,11 @@ function decodeMessage(frame: Uint8Array): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/**
+ * The PC's side of one exchange (one device's try). `hello` is M1; `answer` takes M2 and returns
+ * M3 when the device knew the password, or null when it did not (a wrong code: one try spent).
+ * Throws PairCodeProtocolError on a malformed M2 or an invalid point, which also spends the try.
+ */
 export class PairCodeHost {
   private readonly scalar = sampleScalar();
   private readonly sid = crypto.getRandomValues(new Uint8Array(SID_BYTES));
@@ -190,6 +223,10 @@ export class PairCodeHost {
     return encodeMessage({ v: 1, sid: toBase64Url(this.sid), ya: toBase64Url(this.ya) });
   }
 
+  /**
+   * `offer` is the pairing offer's JSON (shared/relay-offer.ts), sent only to a device that knew the
+   * code; null when its six-digit code is no longer pending, which that device is told instead.
+   */
   answer(frame: Uint8Array, offer: string | null): Uint8Array<ArrayBuffer> | null {
     if (this.done) throw new PairCodeProtocolError("this exchange is over");
     this.done = true;
@@ -200,11 +237,17 @@ export class PairCodeHost {
     if (k === null) throw new PairCodeProtocolError("invalid point");
     const isk = cpaceIsk(this.sid, k, this.ya, AD_PC, yb, AD_DEVICE);
     if (!sameBytes(confirm, derive(isk, CONFIRM_INFO))) return null;
+    // sealed like an offer, so only the PC can tell the device its code is gone
     const box = chacha20poly1305(derive(isk, OFFER_INFO), ZERO_NONCE, OFFER_AAD).encrypt(utf8ToBytes(offer ?? EXPIRED));
     return encodeMessage({ box: toBase64Url(box) });
   }
 }
 
+/**
+ * The device's side: `answer` takes M1 and returns M2; `open` takes M3 and returns the offer's
+ * JSON, still to be checked like a scanned link's (validateOffer, forgedOffer). An M3 that does not
+ * open throws: whoever answered did not know the code.
+ */
 export class PairCodeGuest {
   private readonly scalar = sampleScalar();
   private isk: Uint8Array | null = null;
@@ -236,6 +279,7 @@ export class PairCodeGuest {
     let plain: Uint8Array;
     try { plain = chacha20poly1305(derive(this.isk, OFFER_INFO), ZERO_NONCE, OFFER_AAD).decrypt(box); }
     catch { throw new PairCodeProtocolError("the offer did not open"); }
+    // one offer per exchange: the key is never used again
     this.isk = new Uint8Array(0);
     const text = new TextDecoder("utf-8", { fatal: true }).decode(plain);
     if (text === EXPIRED) throw new PairCodeExpiredError("the PC's pairing code is no longer valid");

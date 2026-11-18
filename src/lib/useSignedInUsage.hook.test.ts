@@ -3,7 +3,6 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useSignedInUsage } from "./useSetupGuide.ts";
 
-// The real hook with the guide's Start screen life: the first usage read fails, a retry waits, the guide closes.
 describe("plan usage turned on by the setup guide", () => {
   const saved = new Map<string, PropertyDescriptor | undefined>();
   let timers: Map<number, () => void>;

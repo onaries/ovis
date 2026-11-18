@@ -18,10 +18,8 @@ export interface TypedKeysDeps {
   composingRef: RefObject<boolean>;
   inputLineRef: RefObject<boolean>;
   modifiersRef: RefObject<StickyModifiers>;
-  /** the held modifiers that stay after a key (lib/keys.ts ModifierLatch) */
   lockedRef: RefObject<StickyModifiers>;
   setLatch: (latch: ModifierLatch) => void;
-  /** after a key that carried the held modifiers: lets go of those held for one key */
   consumeModifiers: () => void;
   paneId: string | null;
   reassertIfStaleRef: RefObject<() => void>;
@@ -34,15 +32,11 @@ export interface TypedKeysDeps {
 
 export function useTypedKeys(deps: TypedKeysDeps) {
   const { agent, agentStatus, barKeyRef, coarseRef, commitPendingText, compositionCommitPendingRef, composingRef, inputLineRef, modifiersRef, lockedRef, setLatch, consumeModifiers, paneId, reassertIfStaleRef, setInputError, socketRef, stopKeyRef, tRef, termRef } = deps;
-  // key-bar taps go through xterm so the onData -> socket path above is reused. A held key's repeats
-  // (`repeat`) keep a modifier held for one key until the finger lifts (KeyBar's onKeyHoldEnd)
   const pressKey = useCallback((item: KeyBarKeyItem, repeat = false) => {
     const term = termRef.current;
     if (!term) return;
     if (composingRef.current || compositionCommitPendingRef.current) return;
     const active = item.modifiers ?? modifiersRef.current;
-    // A saved combination is exact; an ordinary key inherits the held modifiers.
-    // The built-in interrupt remains its dedicated Ctrl+C action.
     const modified = (item.key !== "ctrl-c" || item.modifiers !== undefined) && (hasModifiers(active) || item.modifiers !== undefined);
     const chord = modified ? terminalChord(item.key, active) : null;
     const input = (modified ? navigationSequence(item.key, active) : null)
@@ -53,10 +47,6 @@ export function useTypedKeys(deps: TypedKeysDeps) {
     barKeyRef.current = { key: item.key, chord };
     try { term.input(input); } finally { barKeyRef.current = null; }
     if (item.modifiers === undefined && !repeat) consumeModifiers();
-    // with the input line, the keyboard belongs to it: a key tap must not move it to the grid. On a
-    // touch screen a key tap never takes the focus at all: focusing the grid raises the soft
-    // keyboard, and a key pressed with the keyboard put away (after dictating, say) must leave it
-    // away. Only the keyboard key, or a tap on the line or the grid, brings it up.
     if (!inputLineRef.current && !coarseRef.current) term.focus();
   }, [commitPendingText]);
 
@@ -74,7 +64,6 @@ export function useTypedKeys(deps: TypedKeysDeps) {
   // when this pane last sent Hermes a Ctrl+C: status flicker or a quick new turn resets the
   // guard above, so a second Ctrl+C inside Hermes' 2 s force-quit window is refused by time
   const hermesCtrlCAtRef = useRef<number | null>(null);
-  // a turn waiting on an approval (blocked) is still the same turn
   useEffect(() => { if (agentStatus !== "working" && agentStatus !== "blocked") hermesStopSentRef.current = false; }, [agentStatus]);
   useEffect(() => { hermesStopSentRef.current = false; hermesCtrlCAtRef.current = null; }, [paneId, agent]);
   // the second Escape of a two-Escape Stop, still to be sent: it belongs to the pane and connection of the first

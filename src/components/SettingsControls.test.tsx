@@ -6,7 +6,6 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { SettingsProvider } from "../lib/settings.ts";
 import { inputWas, placeSentence, sentenceHoles, sentenceRoom, SettingsBare, SettingsRow, Stepper, Toggle, typedStep, useRowSentence } from "./SettingsControls.tsx";
 
-/** A key on the size field, as React hands it over: `composing` while an IME still holds the draft. */
 const key = (name: string, composing: boolean) => ({
   key: name,
   nativeEvent: { isComposing: composing, keyCode: composing ? 229 : name === "Enter" ? 13 : 27 },
@@ -32,7 +31,6 @@ describe("the typed font size (G-179)", () => {
   it("keeps a valid size typed when the field goes without a blur, and nothing after Escape", () => {
     const { changes, field } = mount();
     act(() => field().props.onChange({ target: { value: "16" } }));
-    // Settings closed by a swipe or the system Back: no blur comes
     act(() => renderer!.unmount());
     renderer = undefined;
     expect(changes).toEqual([16]);
@@ -50,7 +48,6 @@ describe("the typed font size (G-179)", () => {
     act(() => field().props.onChange({ target: { value: "16" } }));
     act(() => button("Larger").props.onClick());
     expect(changes).toEqual([17]);
-    // the draft is resolved: a later blur does not put 16 back
     act(() => field().props.onBlur());
     expect(changes).toEqual([17]);
   });
@@ -58,7 +55,6 @@ describe("the typed font size (G-179)", () => {
   it("says an end's button goes no further without disabling it, and a press there changes nothing", () => {
     const { changes, field, button } = mount();
     expect(button("Larger").props["aria-disabled"]).toBeUndefined();
-    // the end the field's size reaches, as the buttons step from it
     act(() => field().props.onChange({ target: { value: "22" } }));
     expect(button("Larger").props["aria-disabled"]).toBe(true);
     // a disabled button would drop the keyboard's focus to the page
@@ -87,11 +83,9 @@ describe("the typed font size (G-179)", () => {
   it("leaves Enter and Escape to an IME while it composes, then commits the finished number", () => {
     const { changes, field } = mount();
     act(() => field().props.onChange({ target: { value: "16" } }));
-    // the IME's own Enter confirms its text: the draft is not committed yet
     act(() => field().props.onKeyDown(key("Enter", true)));
     expect(changes).toEqual([]);
     expect(field().props.value).toBe("16");
-    // nor does its Escape throw the draft away
     act(() => field().props.onKeyDown(key("Escape", true)));
     expect(field().props.value).toBe("16");
     act(() => field().props.onKeyDown(key("Enter", false)));
@@ -109,14 +103,12 @@ describe("the typed font size (G-179)", () => {
   it("takes the full-width digits an IME types as the number, and shows it in plain digits once committed", () => {
     const { changes, field, range } = mount();
     act(() => field().props.onChange({ target: { value: "１６" } }));
-    // the text is the IME's until the commit: it is not rewritten under the composition
     expect(field().props.value).toBe("１６");
     expect(field().props["aria-invalid"]).toBeUndefined();
     act(() => field().props.onKeyDown(key("Enter", false)));
     expect(changes).toEqual([16]);
     expect(range().props.className).toBe("visually-hidden");
     expect(field().props.value).toBe("14");
-    // the -/+ buttons step from a full-width size still in the field
     act(() => field().props.onChange({ target: { value: "１８" } }));
     act(() => renderer!.root.findByProps({ "aria-label": "Larger" }).props.onClick());
     expect(changes).toEqual([16, 19]);
@@ -149,7 +141,6 @@ describe("where a row's sentence goes (#3275)", () => {
   const screen = { width: 1280, height: 800 };
 
   it("above the row on the name's left edge, ending over the row's own control", () => {
-    // the control beside the name starts higher (312) than the name does: the sentence ends above it
     expect(placeSentence(row, name, 312, 346, size, screen)).toEqual({ left: 140, top: 258, side: "above" });
   });
 
@@ -168,7 +159,6 @@ describe("where a row's sentence goes (#3275)", () => {
     const lies = { left: 140, top: 258, right: 440, bottom: 308 };
     expect(sentenceRoom(lies, [])).toBeNull();
     expect(sentenceRoom(lies, [{ left: 400, top: 250, right: 600, bottom: 284 }])).toBe(252);
-    // a control it does not reach
     expect(sentenceRoom(lies, [{ left: 400, top: 100, right: 600, bottom: 134 }])).toBeNull();
     // 152px beside the control: narrower than a sentence is worth, so it keeps its width
     expect(sentenceRoom(lies, [{ left: 300, top: 250, right: 600, bottom: 284 }])).toBeNull();
@@ -177,12 +167,8 @@ describe("where a row's sentence goes (#3275)", () => {
   it("is cut out, for the pointer, in exactly the parts that lie on another row's control", () => {
     const lies = { left: 140, top: 258, right: 440, bottom: 308 };
     expect(sentenceHoles(lies, [])).toEqual([]);
-    // a control it does not reach
     expect(sentenceHoles(lies, [{ left: 400, top: 100, right: 600, bottom: 134 }])).toEqual([]);
-    // the control of the row above starts inside the sentence and ends past it: the hole is the part they share,
-    // from the sentence's own corner
     expect(sentenceHoles(lies, [{ left: 300, top: 270, right: 600, bottom: 304 }])).toEqual([{ left: 160, top: 12, right: 300, bottom: 46 }]);
-    // two controls of that row (a field, a button): a hole each, and the gap between them stays the sentence's
     expect(sentenceHoles(lies, [{ left: 300, top: 270, right: 380, bottom: 304 }, { left: 390, top: 270, right: 600, bottom: 304 }]))
       .toEqual([{ left: 160, top: 12, right: 240, bottom: 46 }, { left: 250, top: 12, right: 300, bottom: 46 }]);
   });
@@ -198,7 +184,6 @@ describe("where a row's sentence goes (#3275)", () => {
 describe("a row's sentence, as its hook keeps it (#3275)", () => {
   const names = ["window", "document", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "IS_REACT_ACT_ENVIRONMENT"];
   const saved = new Map<string, PropertyDescriptor | undefined>();
-  /** an element of the page, as the hook asks about it: the dialog it is in, and whether text is typed in it */
   class HTMLElement {
     isContentEditable = false;
     constructor(readonly dialog: object | null) {}
@@ -210,7 +195,6 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
   class HTMLTextAreaElement extends HTMLElement {}
   interface Key { key: string; isComposing: boolean; keyCode: number; stopped: boolean; preventDefault(): void; stopPropagation(): void }
   interface Heard { type: string; run: (event: Key) => void; capture: boolean }
-  /** the window or the document: who listens there, and on which leg of a key's way through the page */
   class Target {
     heard: Heard[] = [];
     addEventListener(type: string, run: Heard["run"], capture: boolean = false): void { this.heard.push({ type, run, capture }); }
@@ -220,7 +204,6 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
   const palette = { name: "the palette, opened over Settings" };
   let win: Target & { setTimeout(run: () => void): number; clearTimeout(id?: number): void };
   let doc: Target & { activeElement: HTMLElement | null };
-  /** the rests of resting mice, by timer: run by the test when the rest is over */
   let rests: Map<number, () => void>;
   let renderer: ReactTestRenderer | undefined;
   const rows = new Map<string, ReturnType<typeof useRowSentence>>();
@@ -230,30 +213,22 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
     rows.set(name, useRowSentence(on));
     return null;
   }
-  /** the rows of a page: each by its name, with a sentence of its own or (false) without one */
   async function draw(page: Record<string, boolean> = { a: true }): Promise<void> {
     const tree = createElement(Fragment, null, ...Object.entries(page).map(([name, on]) => createElement(Row, { key: name, name, on })));
     await act(async () => { if (renderer) renderer.update(tree); else renderer = create(tree); });
     for (const name of Object.keys(page)) (row(name).row as { current: unknown }).current ??= new HTMLElement(settings);
   }
   const does = (run: () => void): Promise<void> => act(async () => { run(); });
-  /** the focus comes to the row's control after `key`, which the window heard first */
   const focusAfter = (key: string, name = "a") => does(() => { inputWas({ key }); row(name).rowEvents.onFocus?.({} as never); });
   const focusLeaves = (name = "a") => does(() => row(name).rowEvents.onBlur?.({ relatedTarget: null } as never));
-  /** whether the sentence is drawn on the screen, as RowSentence says once it has placed it, or found its row out of view */
   const drawn = (is = true, name = "a"): void => { (row(name).drawn as { current: boolean }).current = is; };
   const mouseEnters = (name = "a") => does(() => row(name).rowEvents.onPointerEnter?.({ pointerType: "mouse" } as never));
   const restEnds = () => does(() => { for (const run of [...rests.values()]) run(); rests.clear(); });
-  /** a finger's tap on the row's name: the press, then the click it makes */
   async function tapName(name = "a"): Promise<void> {
     const target = { closest: (selector: string) => selector === ".settings-row-text" ? {} : null };
     await does(() => row(name).rowEvents.onPointerDown?.({ pointerType: "touch", target } as never));
     await does(() => row(name).rowEvents.onClick?.({ target, currentTarget: row(name).row.current, preventDefault() {} } as never));
   }
-  /**
-   * Escape on its way through the page: the window's capturing listeners, the document's, and back out. True when
-   * Settings' own listener heard it: the window's, on the way back out (SettingsDialog.tsx closeOnEscape).
-   */
   async function escape(over: Partial<Key> = {}): Promise<boolean> {
     let heard = false;
     const closeSettings = (): void => { heard = true; };
@@ -309,23 +284,19 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
     expect(await escape()).toBe(false);
     expect(row().shown).toBeNull();
 
-    // in a text field the Escape is the field's too, and goes on
     await show();
     doc.activeElement = new HTMLInputElement(settings);
     expect(await escape()).toBe(true);
     expect(row().shown).toBeNull();
 
-    // an IME's Escape drops its composition: the sentence stays
     await show();
     expect(await escape({ isComposing: true })).toBe(true);
     expect(row().shown).toBe("focus");
 
-    // a dialog opened over Settings has the keyboard: the Escape is that dialog's, and the sentence under it goes
     doc.activeElement = new HTMLElement(palette);
     expect(await escape()).toBe(true);
     expect(row().shown).toBeNull();
 
-    // shown for a row the page is not scrolled to, it is drawn nowhere: nothing of its own to close
     doc.activeElement = new HTMLElement(settings);
     await focusLeaves();
     await focusAfter("Tab");
@@ -347,7 +318,6 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
 
     drawn();
     await escape();
-    // the pointer comes in from outside: a new visit, also where Escape removed the sentence under it and no leave came
     await mouseEnters();
     await restEnds();
     expect(row().shown).toBe("hover");
@@ -374,7 +344,6 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
     await restEnds();
     expect([row("a").shown, row("b").shown]).toEqual([null, "focus"]);
 
-    // the mouse leaves, comes back and rests: asked after the keyboard's sentence opened, it takes its place
     await does(() => row("a").rowEvents.onPointerLeave?.());
     await mouseEnters("a");
     await restEnds();
@@ -397,7 +366,6 @@ describe("a row's sentence, as its hook keeps it (#3275)", () => {
     await draw({ a: false });
     expect(row().opened).toBe(false);
     expect(await escape()).toBe(true);
-    // the description is back: the sentence is not
     await draw({ a: true });
     expect(row().opened).toBe(false);
   });

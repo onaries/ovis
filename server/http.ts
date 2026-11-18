@@ -12,13 +12,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { FileBusyError } from "./file-pool.ts";
 import { faultOf, HerdrError, type HerdrFailureView } from "./herdr/client.ts";
 
-/** The outer HTTP boundary also correlates errors caught inside route handlers. */
 export const requestIdContext = new AsyncLocalStorage<{ readonly id: string; route: string; herdrFailure?: HerdrFailureView; herdrReason?: (reason: string) => string }>();
 
-/**
- * For the rest of this request, a failed call to herdr is answered as `view` words it, and a layout answer's reason as
- * `reason` words it (the machine profile's).
- */
 export function wordHerdrFailures(view: HerdrFailureView, reason: (reason: string) => string): void {
   const context = requestIdContext.getStore();
   if (context === undefined) return;
@@ -33,7 +28,6 @@ export function layoutResponse<T extends { reason: string | null }>(body: T): Re
   if (word === undefined) return jsonResponse(body);
   return jsonResponse({ ...body, reason: body.reason === null ? null : word(body.reason) }, 200, wordedHeaders());
 }
-/** The code and message this request answers for a fault (`code` for one that is no HerdrError): as faultOf words it by this request's view. */
 export const requestFault = (error: unknown, code: string): { code: string; message: string } => faultOf(error, code, requestIdContext.getStore()?.herdrFailure);
 
 /** Call only from a matched dispatch branch, with a fixed template or a finite matched literal. */
@@ -46,7 +40,6 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** A non-negative integer: a row, a column or a scroll offset. */
 export function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -68,7 +61,6 @@ export function errorResponse(error: unknown): Response {
     }
     return jsonResponse({ error: { code: error.code, message: error.message } }, status);
   }
-  // every file thread busy, or the disk too slow to answer in time (file-pool.ts): worth another try soon
   if (error instanceof FileBusyError) return jsonResponse({ error: { code: error.code, message: error.message } }, 503, { "retry-after": "1" });
   // A system error carries absolute paths, the herdr socket and whatever a dependency
   // throws; the client is told none of it but a handle to quote in a bug report, and the
@@ -87,7 +79,6 @@ export function badRequest(code: string, message: string): Response {
   return jsonResponse({ error: { code, message } }, 400);
 }
 
-/** A JSON route's body as an object, or the 400 that says it is not JSON or not an object. */
 export async function readJsonObject<T extends object = Record<string, unknown>>(request: Request): Promise<T | Response> {
   let body: unknown;
   try {

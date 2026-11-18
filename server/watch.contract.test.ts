@@ -11,12 +11,11 @@ async function until(predicate: () => boolean, label: string, ms = 10_000): Prom
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`${label} not observed within ${ms}ms`);
     // These are real CLI processes and WebSocket deliveries; fake timers cannot
-    // advance their external lifecycle. Poll the named condition to a deadline.
+    // advance their external lifecycle.
     await Bun.sleep(25);
   }
 }
 
-/** Capture real wire frames, with bounded waits rather than assuming delivery timing. */
 class RecordingSocket {
   readonly seen: ServerMessage[] = [];
   private readonly ws: WebSocket;
@@ -148,7 +147,6 @@ describe("WebSocket read-only live watch", () => {
       await until(() => observeCount() === 1, "live observe process");
       socket.send({ type: "unwatch", pane_id: paneId });
       await until(() => observeCount() === 0, "observer gone after unwatch");
-      // A subsequent answered frame proves this connection is still usable.
       socket.send({ type: "role", mode: "observe" });
       await socket.waitFor((message) => message.type === "role-ack", "role after unwatch");
       expect(socket.seen.some((message) => message.type === "watch-end" && message.pane_id === paneId)).toBe(false);
@@ -161,7 +159,6 @@ describe("WebSocket read-only live watch", () => {
       socket.send({ type: "watch", pane_id: paneId, cols: 100, rows: 30 });
       await socket.waitFor((message) => message.type === "watch-data" && message.pane_id === paneId, "initial watch frame");
       await until(() => observeCount() === 1, "live observe process");
-      // the tab's window was resized: the view starts again once the first process has ended
       socket.send({ type: "watch", pane_id: paneId, cols: 90, rows: 28 });
       await until(() => processCount(`terminal session observe ${paneId} --cols 90 --rows 28`) === 1, "the observe process of the new grid", 5_000);
       await until(() => observeCount() === 1, "the first observe process gone");

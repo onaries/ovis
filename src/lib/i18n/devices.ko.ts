@@ -209,6 +209,7 @@ export const DEVICES_KO: Record<string, string> = {
   "Show the QR code": "QR 코드 표시",
   "Show a new code": "새 코드 표시",
   "Sign in above first; then this PC can show its QR code.": "먼저 위에서 로그인하세요. 그러면 이 PC가 QR 코드를 표시할 수 있습니다.",
+  "Add this PC to your account first; then it can show its QR code.": "먼저 이 PC를 계정에 추가하세요. 그러면 이 PC가 QR 코드를 표시할 수 있습니다.",
   "This PC joined an Ovis account ({id}).": "이 PC가 Ovis 계정({id})에 들어갔습니다.",
   "Added by {device}.": "추가한 기기: {device}.",
   "Not me: revoke every device": "내가 아님: 모든 기기 폐기",
@@ -251,4 +252,5 @@ export const DEVICES_KO: Record<string, string> = {
   "Allow notifications in your browser settings, then try again.": "브라우저 설정에서 알림을 허용한 뒤 다시 시도하세요.",
   "Allow notifications for Ovis in the phone's Settings, then try again.": "휴대폰 설정에서 Ovis 알림을 허용한 뒤 다시 시도하세요.",
   "Could not send the test notification. Try again.": "테스트 알림을 보내지 못했습니다. 다시 시도하세요.",
+  "Run ovis add on this machine, then scan its QR code with a signed-in device.": "이 머신에서 ovis add를 실행한 뒤, 로그인된 기기로 그 QR 코드를 스캔하세요.",
 };

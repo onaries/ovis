@@ -46,7 +46,6 @@ test("the signing key reaches one step, on GitHub's runner, with no package inst
 const SERVER_FILES = [...SERVER_PLATFORMS.map(releaseFile), DIST_ARCHIVE, "ovis-server.json", "ovis-server.json.sig", "ovis-server.SHA256SUMS"];
 const sources = { server: "a".repeat(40), shared: "b".repeat(40) };
 
-/** a release folder for version 1.2.3 under `temp`/server-binary, signed by a key made for the test */
 function signedFolder(temp: string): { publicKey: string; privateKeyPem: string } {
   const dir = join(temp, "server-binary");
   mkdirSync(dir, { recursive: true });
@@ -59,17 +58,12 @@ function signedFolder(temp: string): { publicKey: string; privateKeyPem: string 
   return { publicKey, privateKeyPem };
 }
 
-/** `script` with each build-server.ts sign and verify line naming `publicKey`: the test's copy, never the job's */
 function trusting(script: string, publicKey: string): string {
   const copy = script.replace(/(bun scripts\/build-server\.ts (?:sign|verify) "\$RUNNER_TEMP\/server-binary")/g, `$1 --public-key ${publicKey}`);
   expect(copy).not.toBe(script);
   return copy;
 }
 
-/**
- * publish's own lines from the server files to `gh release create`, run with a `gh` that records its arguments: what
- * the release would get, or the refusal. `trust` runs them trusting the test's key instead of the committed one.
- */
 function runAttach(prepare: (dir: string, privateKeyPem: string) => void, trust = true, builtHost?: string): { code: number; attached: string[]; err: string } {
   const temp = mkdtempSync(join(tmpdir(), "ovis-attach-step-"));
   try {
@@ -77,7 +71,6 @@ function runAttach(prepare: (dir: string, privateKeyPem: string) => void, trust 
     prepare(join(temp, "server-binary"), privateKeyPem);
     mkdirSync(join(temp, "pty-sidecar"));
     writeFileSync(join(temp, "pty-sidecar", "ovis-pty-sidecar.json"), "{}");
-    // the hosts pty-sidecar.yml built, which the signed manifest names
     for (const build of PTY_ASSETS) if (existsSync(join(temp, "server-binary", ptyFile(build)))) copyFileSync(join(temp, "server-binary", ptyFile(build)), join(temp, "pty-sidecar", ptyFile(build)));
     if (builtHost !== undefined) writeFileSync(join(temp, "pty-sidecar", ptyFile("linux-x64")), builtHost);
     mkdirSync(join(temp, "stub"));
@@ -134,7 +127,6 @@ test("publish refuses server files signed for another version than the one it re
   expect(attached).toEqual([]);
 });
 
-/** the sign step's own script, run as the job runs it (or trusting `trust`), in a folder of stand-in files */
 function runSignStep(key: string, trust?: string): { code: number; err: string; dir: string } {
   const temp = mkdtempSync(join(tmpdir(), "ovis-sign-step-"));
   const dir = join(temp, "server-binary");
@@ -154,7 +146,6 @@ test("without the secret the sign step fails and names it, and leaves nothing si
   const { code, err, dir } = runSignStep("");
   try {
     expect(code).toBe(1);
-    // the job's own annotation, which GitHub shows on the run's page, before the script is even started
     expect(err).toContain("::error title=Server binary not signed::");
     expect(err).toContain("OVIS_SERVER_SIGNING_KEY");
     expect(existsSync(join(dir, "ovis-server.json.sig"))).toBe(false);
@@ -174,7 +165,6 @@ test("a key in the secret that is not the committed one fails the sign step, and
   }
 });
 
-/** every file under `dir`, however deep */
 const filesUnder = (dir: string): string[] => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 
 test("with the key it expects, the sign step writes a signature that key verifies, and writes no key", () => {

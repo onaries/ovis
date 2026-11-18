@@ -22,9 +22,7 @@ const { paneSendText, paneSendKeys, paneRead } = herdr;
 const originalTranscriptPath = pi.piTranscriptPath;
 let lookup: { at: "identity" | "transcript"; entered: () => void; release: Promise<void> } | null = null;
 type Processes = { shell_pid: number; foreground_processes: { pid: number; name: string; argv0?: string; argv?: string[] }[] };
-/** what herdr's process read answers for a pane a case sets up */
 const processes = new Map<string, Processes>();
-/** each text, key, screen read or pty write the bridge asks for in such a pane, where no herdr answers */
 const calls: string[] = [];
 mock.module("../herdr/client.ts", () => ({
   ...herdr,
@@ -134,7 +132,6 @@ it.each(["delivery first", "withdrawal first", "ambiguous delivery first", "ambi
 it.each(["same browser", "no device", "wrong browser", "wrong device", "read-only", "revoked", "no resume id", "expired", "uncertain",
   "settled after reattach", "late wrong browser", "late wrong device", "late read-only", "late revoked"] as const)(
   "replays a follow-up's exact receipt only to the browser that sent it (#2421): %s", (name) => {
-    // "late": the reload attaches before the Enter's reply settles the send, so the receipt is pushed to it
     const late = name === "settled after reattach" || name.startsWith("late ");
     const scenario = name.replace(/^late /, "");
     let now = Date.now();
@@ -160,7 +157,6 @@ it.each(["same browser", "no device", "wrong browser", "wrong device", "read-onl
       });
       const item = delivery.pending.enqueue(first, "p", 1, "follow-up", null, { agent: "codex", terminalId: "p", session: null });
       expect(delivery.pending.claim(item, false)).toBe(true);
-      // an Enter nobody confirmed leaves an uncertain copy, which only ever ages out as dismissed
       if (scenario === "uncertain") delivery.pending.settle(item, { code: "submit_changed", message: "Enter was not confirmed" }, true);
       else if (!late) delivery.pending.settle(item);
       clients.delete(first); delivery.closeConnection(first);
@@ -175,16 +171,11 @@ it.each(["same browser", "no device", "wrong browser", "wrong device", "read-onl
     } finally { clock.mockRestore(); }
   });
 
-/**
- * The PC's clock and the forward-only clock the bridge times its receipts and resend records by, read from one
- * value unless `run` gives the second its own (a PC clock that was set forward while the time that passed stood still).
- */
 function clocks(wall: () => number, run: () => number = wall): { mockRestore: () => void } {
   const date = spyOn(Date, "now").mockImplementation(wall), elapsed = spyOn(performance, "now").mockImplementation(run);
   return { mockRestore: () => { date.mockRestore(); elapsed.mockRestore(); } };
 }
 
-/** A bridge with one pane `p` and tabs of one browser, for what its receipts answer after the follow-up's own connection is gone. */
 function heldCopyBridge(submit: () => Promise<void> = async () => {}) {
   const token = crypto.randomUUID(), frames = new Map<Client, ServerMessage[]>(), clients = new Set<Client>();
   const tab = (...panes: string[]): Client => {
@@ -194,7 +185,6 @@ function heldCopyBridge(submit: () => Promise<void> = async () => {}) {
     for (const pane of panes.length ? panes : ["p"]) owner.data.attached.set(pane, { keepSize: false, receiptResumeId: token });
     clients.add(owner); frames.set(owner, output); return owner;
   };
-  // a turn is its pane ID's, as in the bridge (server/core/input.ts): a request that names another ID does not wait for it
   const turns = new Map<string, Promise<void>>();
   const typed: string[] = [];
   const delivery = createPendingDelivery({
@@ -212,10 +202,8 @@ function heldCopyBridge(submit: () => Promise<void> = async () => {}) {
     heldIds: (to: Client): string[] => told(to).flatMap((frame) => frame.type === "pending-messages" ? frame.held ?? [] : []),
     removed: (to: Client) => told(to).flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : []),
     answer: (to: Client, id: number) => frames.get(to)!.find((frame) => frame.type === "submit-result" && frame.id === id),
-    /** a tab's Send now of its saved copy of `pending` */
     resend: (to: Client, id: number, pending: string, pane = "p", generation?: number) => delivery.pendingFrames.submit(to, { type: "submit", id, pane_id: pane, text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: pending,
       ...(generation !== undefined ? { resend_generation: generation } : {}) }),
-    /** a queued follow-up whose own connection then closes: the bridge holds it and keeps its held receipt */
     heldAsItsConnectionClosed: () => {
       const first = tab();
       const item = delivery.pending.enqueue(first, "p", 1, "follow-up", null, identity);
@@ -233,29 +221,24 @@ it("carries a pane's receipts to its new ID when herdr moves it: the sent one st
     const id = bridge.heldAsItsConnectionClosed();
     const one = bridge.tab(), other = bridge.tab();
     bridge.delivery.attached(one, "p"); bridge.delivery.attached(other, "p");
-    // another follow-up of that browser, held the same way and never sent
     const unsentOwner = bridge.tab();
     const unsent = bridge.delivery.pending.enqueue(unsentOwner, "p", 7, "left for later", null, bridge.identity).message.id;
     bridge.clients.delete(unsentOwner); bridge.delivery.closeConnection(unsentOwner);
     now += 60_001; bridge.delivery.pending.expire();
     await bridge.resend(one, 2, id);
     expect(bridge.typed).toEqual(["p"]);
-    // herdr moves the pane to another workspace, under a new ID; a minute later the resend record is gone
     bridge.delivery.movePendingPane("p", "q");
     now += 60_001; bridge.delivery.pending.expire();
-    // the other tab opens the moved pane: it is told the copy was sent, and its own Send now there types nothing
     const moved = bridge.tab("q");
     bridge.delivery.attached(moved, "q");
     expect(bridge.removed(moved).filter((entry) => entry.id === id)).toEqual([{ id, outcome: "sent", resumed: true }]);
     await bridge.resend(moved, 3, id, "q");
     expect(bridge.typed).toEqual(["p"]);
     expect(bridge.answer(moved, 3)).toMatchObject({ ok: true });
-    // and the follow-up that was never sent is still told held under the new ID
     expect(bridge.heldIds(moved)).toEqual([unsent]);
   } finally { clock.mockRestore(); }
 });
 
-/** a first send the test lets through when it says so: `started` once its text is on its way, `finish` to let it end; later sends are not held up */
 function gatedSend(end: () => void = () => {}) {
   let begin!: () => void, finish!: () => void;
   const started = new Promise<void>((resolve) => { begin = resolve; }), gate = new Promise<void>((resolve) => { finish = resolve; });
@@ -274,21 +257,17 @@ for (const outcome of ["sent", "uncertain", "not typed"] as const) {
       const id = bridge.heldAsItsConnectionClosed();
       const one = bridge.tab(), other = bridge.tab();
       bridge.delivery.attached(one, "p"); bridge.delivery.attached(other, "p");
-      // the closed owner's record is gone: only the receipt stands for the copy
       now += 60_001; bridge.delivery.pending.expire();
       const going = bridge.resend(one, 2, id);
       await send.started;
-      // herdr moves the pane while the text is on its way
       bridge.delivery.movePendingPane("p", "q");
       const moved = bridge.tab("q");
       bridge.delivery.attached(moved, "q");
-      // the other tab's Send now on the pane's new ID, another generation of the copy: refused while the first is on its way
       await bridge.resend(moved, 3, id, "q", 1);
       expect(bridge.answer(moved, 3)).toMatchObject({ ok: false, code: "pending_busy" });
       send.finish();
       await going;
       expect(bridge.typed).toEqual(outcome === "sent" ? ["p"] : []);
-      // a minute later the resend record is gone; what the send ended as is known under the new ID
       now += 60_001; bridge.delivery.pending.expire();
       const late = bridge.tab("q");
       bridge.delivery.attached(late, "q");
@@ -305,7 +284,6 @@ for (const outcome of ["sent", "uncertain", "not typed"] as const) {
         expect(bridge.answer(late, 4)).toMatchObject({ ok: false, code: "pending_uncertain" });
         expect(bridge.typed).toEqual([]);
       } else {
-        // nothing was typed: the held receipt is the copy's again, under the pane's new ID, and its Send now there types it once
         expect(bridge.heldIds(late)).toEqual([id]);
         fail = null;
         await bridge.resend(late, 4, id, "q", 1);
@@ -325,12 +303,10 @@ it("keeps the note of a Send now that may have typed the copy when its owner's r
     const id = bridge.heldAsItsConnectionClosed();
     const one = bridge.tab(), other = bridge.tab();
     bridge.delivery.attached(one, "p"); bridge.delivery.attached(other, "p");
-    // two seconds after the reload, while the closed owner's record still stands, one tab's Send now ends without an answer
     now += 2_000;
     await bridge.resend(one, 2, id);
     expect(bridge.answer(one, 2)).toMatchObject({ ok: false, code: "submit_changed" });
     fail = false;
-    // the record ages out as dismissed, and more than a thousand other receipts come
     now += 60_001; bridge.delivery.pending.expire();
     const busy = bridge.tab();
     for (let n = 0; n < 1100; n++) {
@@ -338,7 +314,6 @@ it("keeps the note of a Send now that may have typed the copy when its owner's r
       expect(bridge.delivery.pending.discard(bridge.delivery.pending.enqueue(busy, "p", 10 + n, `other ${n}`, null, bridge.identity))).toBe(true);
     }
     now += 60_001; bridge.delivery.pending.expire();
-    // the other tab, inside its ten minutes: still not confirmed, nothing typed
     await bridge.resend(other, 3, id);
     expect(bridge.answer(other, 3)).toMatchObject({ ok: false, code: "pending_uncertain" });
     expect(bridge.typed).toEqual([]);
@@ -351,22 +326,18 @@ it("gives no held receipt of a pane that ended to the pane that has its ID next"
   try {
     const bridge = heldCopyBridge();
     const ended = { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" };
-    // held as its connection closed, then the pane ends
     const before = bridge.heldAsItsConnectionClosed();
-    // held on a connection that is still there when the pane ends, and closes after it
     const live = bridge.tab();
     const after = bridge.delivery.pending.enqueue(live, "p", 5, "held by request", null, bridge.identity, true).message.id;
     now += 30_000;
     bridge.delivery.holdPendingPane("p", ended);
     bridge.delivery.pending.forget("p");
     bridge.clients.delete(live); bridge.delivery.closeConnection(live);
-    // herdr gives the ID to a new pane two minutes later: the same browser there is told nothing is held
     now += 120_000; bridge.delivery.pending.expire();
     const reused = bridge.tab();
     bridge.delivery.attached(reused, "p");
     expect(bridge.heldIds(reused)).toEqual([]);
     expect(bridge.removed(reused).filter((entry) => entry.id === before || entry.id === after)).toEqual([]);
-    // a follow-up taken for the new pane is held and told as before
     const fresh = bridge.heldAsItsConnectionClosed();
     const again = bridge.tab();
     bridge.delivery.attached(again, "p");
@@ -384,22 +355,18 @@ it("remembers a Send now that may have typed the copy for its ten minutes: a sec
     const one = bridge.tab(), other = bridge.tab();
     bridge.delivery.attached(one, "p"); bridge.delivery.attached(other, "p");
     now += 60_001; bridge.delivery.pending.expire();
-    // one tab's Send now ends without an answer that says whether Enter arrived
     await bridge.resend(one, 2, id);
     expect(bridge.answer(one, 2)).toMatchObject({ ok: false, code: "submit_changed" });
     fail = false;
-    // the resend record is gone after a minute, and more than a thousand other receipts have come
     now += 60_001; bridge.delivery.pending.expire();
     const busy = bridge.tab();
     for (let n = 0; n < 1100; n++) {
       if (n > 0 && n % 400 === 0) { now += 60_001; bridge.delivery.pending.expire(); }
       expect(bridge.delivery.pending.discard(bridge.delivery.pending.enqueue(busy, "p", 10 + n, `other ${n}`, null, bridge.identity))).toBe(true);
     }
-    // the other tab, inside its ten minutes, sends its copy: refused as not confirmed, nothing typed
     await bridge.resend(other, 3, id);
     expect(bridge.answer(other, 3)).toMatchObject({ ok: false, code: "pending_uncertain" });
     expect(bridge.typed).toEqual([]);
-    // a connection that attaches is not told the copy is settled or held: it stays not confirmed there
     const late = bridge.tab();
     bridge.delivery.attached(late, "p");
     expect([bridge.removed(late).filter((entry) => entry.id === id), bridge.heldIds(late)]).toEqual([[], []]);
@@ -411,7 +378,6 @@ it("counts only held and discarded receipts against the limit: under a thousand 
   const clock = clocks(() => now);
   try {
     const bridge = heldCopyBridge();
-    // more than a thousand follow-ups sent inside ten minutes, each leaving its sent receipt
     const sender = bridge.tab();
     for (let n = 0; n < 1100; n++) {
       if (n > 0 && n % 400 === 0) { now += 60_001; bridge.delivery.pending.expire(); }
@@ -419,13 +385,11 @@ it("counts only held and discarded receipts against the limit: under a thousand 
       expect(bridge.delivery.pending.claim(item, false)).toBe(true);
       bridge.delivery.pending.settle(item);
     }
-    // a queued follow-up is held as its connection closes, and another the same browser discarded just before its own closed
     const id = bridge.heldAsItsConnectionClosed();
     const discarder = bridge.tab();
     const dropped = bridge.delivery.pending.enqueue(discarder, "p", 2, "not after all", null, bridge.identity);
     expect(bridge.delivery.pending.discard(dropped)).toBe(true);
     bridge.clients.delete(discarder); bridge.delivery.closeConnection(discarder);
-    // a reload of that browser, some time later, is told both
     now += 5_000;
     const reload = bridge.tab();
     bridge.delivery.attached(reload, "p");
@@ -446,11 +410,9 @@ it("times a sent receipt by the time that passed, not by the PC's clock: a clock
     wall += 60_001; run += 60_001; bridge.delivery.pending.expire();
     await bridge.resend(one, 2, id);
     expect(bridge.typed).toEqual(["p"]);
-    // the PC's clock is corrected forward by ten minutes; two minutes really pass
     wall += 10 * 60 * 1000 + 120_000; run += 120_000; bridge.delivery.pending.expire();
     const late = bridge.tab();
     bridge.delivery.attached(late, "p");
-    // the other tab's proof still runs on its own clock: its Send now types nothing
     await bridge.resend(other, 3, id);
     expect(bridge.typed).toEqual(["p"]);
     expect(bridge.removed(late).filter((entry) => entry.id === id)).toEqual([{ id, outcome: "sent", resumed: true }]);
@@ -482,32 +444,25 @@ it("keeps a held copy's sent receipt through a thousand other receipts, so a sec
     const identity = { agent: "codex", terminalId: "p", session: null };
     const heldIds = (to: Client): string[] => frames.get(to)!.flatMap((frame) => frame.type === "pending-messages" ? frame.held ?? [] : []);
     const resend = (to: Client, id: number, pending: string) => delivery.pendingFrames.submit(to, { type: "submit", id, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: pending });
-    // a queued follow-up, held as its connection closes; two tabs of that browser are told it is held, for ten minutes
     const first = client();
     const item = delivery.pending.enqueue(first, "p", 1, "follow-up", null, identity);
     clients.delete(first); delivery.closeConnection(first);
     const one = client(), other = client();
     delivery.attached(one, "p"); delivery.attached(other, "p");
     expect([heldIds(one), heldIds(other)]).toEqual([[item.message.id], [item.message.id]]);
-    // the old owner's record is gone after a minute; one tab sends the copy
     now += 60_001; delivery.pending.expire();
     await resend(one, 2, item.message.id);
     expect(typed).toBe(1);
-    // more than a thousand other follow-ups come and are discarded meanwhile, each leaving its receipt
     const busy = client();
     for (let n = 0; n < 1100; n++) {
-      // the bridge keeps a withdrawal a minute: its own limit is passed a few hundred at a time
       if (n > 0 && n % 400 === 0) { now += 60_001; delivery.pending.expire(); }
       expect(delivery.pending.discard(delivery.pending.enqueue(busy, "p", 10 + n, `other ${n}`, null, identity))).toBe(true);
     }
-    // the resend record of that send is long gone too
     now += 60_001; delivery.pending.expire();
     expect(now - Date.parse(item.message.created_at)).toBeLessThan(10 * 60 * 1000);
-    // the other tab still holds its copy inside its ten minutes and sends it: nothing is typed again
     await resend(other, 3, item.message.id);
     expect(typed).toBe(1);
     expect(frames.get(other)!.filter((frame) => frame.type === "submit-result" && frame.id === 3)).toMatchObject([{ ok: true }]);
-    // and a connection that attaches now is still told it was sent
     const late = client();
     delivery.attached(late, "p");
     expect(frames.get(late)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : []).filter((entry) => entry.id === item.message.id))
@@ -535,19 +490,15 @@ it.each(["read-only", "revoked"] as const)(
       omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
     });
     const identity = { agent: "codex", terminalId: "p", session: null };
-    // one message on its way, one the bridge holds, both taken while the connection could still resume
     const going = delivery.pending.enqueue(first, "p", 1, "on its way", null, identity);
     const held = delivery.pending.enqueue(first, "p", 2, "held", null, identity, true);
     expect(delivery.pending.claim(going, false)).toBe(true);
-    // the connection turns read-only, or its device is revoked, and then closes
     if (why === "revoked") revoked.add(first); else first.data.readOnly = true;
     clients.delete(first); delivery.closeConnection(first);
-    // the Enter's reply comes after the close
     delivery.pending.settle(going);
     const resumed = client();
     delivery.attached(resumed, "p");
     const told = frames.get(resumed)!.filter((frame) => frame.type === "pending-messages");
-    // the same browser's next connection is told the send went, so its saved copy is settled, and is told of no held message
     expect(told.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : [])).toEqual([{ id: going.message.id, outcome: "sent", resumed: true }]);
     expect(told.some((frame) => "held" in frame && (frame.held as string[]).includes(held.message.id))).toBe(false);
   });
@@ -567,7 +518,6 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
       };
       const first = client("device", token);
       let failResend = false;
-      // one turn at a time, as the server serializes a pane's sends
       let turns: Promise<void> = Promise.resolve();
       const typing = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
       let typed = 0;
@@ -586,7 +536,6 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
       const heldIds = (to: Client): string[] => frames.get(to)!.flatMap((frame) => frame.type === "pending-messages" ? frame.held ?? [] : []);
       const item = delivery.pending.enqueue(first, "p", 1, "follow-up", null, { agent: "codex", terminalId: "p", session: null }, scenario === "live owner's sibling tab" || scenario === "held before close");
       if (scenario === "live owner's sibling tab") {
-        // the tab that holds it alone may send it while it lives: a sibling told it is held could offer it again later
         const sibling = client("device", token);
         delivery.attached(sibling, "p");
         expect(item.message.state).toBe("held");
@@ -604,16 +553,13 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
       if (scenario === "revoked") revoked.add(resumed);
       if (!overlap) delivery.attached(resumed, "p");
       if (scenario === "held after reattach") delivery.pending.settle(item, { code: "disconnected", message: "The pending message's connection closed" }, false);
-      // its own field: a client that predates it reads any resumed removal as settled
       expect(frames.get(resumed)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : [])).toEqual([]);
-      // with how long the bridge keeps each: its whole window, as nothing waited since the close
       for (const id of heldIds(resumed)) expect(frames.get(resumed)!.some((frame) => frame.type === "pending-messages" && frame.held_ms?.[id] === 10 * 60 * 1000)).toBe(true);
       expect(heldIds(resumed)).toEqual(["held on close", "held before close", "overlapping reload", "held after reattach", "resent after closed-owner expiry", "ambiguous resend after closed-owner expiry", "attach during resend after closed-owner expiry", "replayed resend after its record expired",
         "concurrent resends after closed-owner expiry", "resend to another pane", "resend refused at its limit"].includes(scenario)
         ? [item.message.id] : []);
       if (scenario === "resend refused at its limit") {
         now += 60_001; delivery.pending.expire();
-        // the bridge refuses the resend before anything is typed: the copy's held receipt is still its own
         const refuse = spyOn(delivery.pending, "resend").mockImplementation(() => { throw new PendingInputError("pending_limit", "Too many held-copy sends are still retained; try again later"); });
         try {
           await delivery.pendingFrames.submit(resumed, { type: "submit", id: 2, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: item.message.id });
@@ -626,7 +572,6 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
       }
       if (scenario === "concurrent resends after closed-owner expiry") {
         now += 60_001; delivery.pending.expire();
-        // the same held copy sent twice at once (two tabs, or a retry), generations 0 and 1: typed once
         const frame = (id: number, resend_generation: number) => ({ type: "submit" as const, id, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate" as const, resend_id: item.message.id, resend_generation });
         await Promise.all([delivery.pendingFrames.submit(resumed, frame(2, 0)), delivery.pendingFrames.submit(resumed, frame(3, 1))]);
         expect(typed).toBe(1);
@@ -636,13 +581,11 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
       }
       if (scenario === "resend to another pane") {
         now += 60_001; delivery.pending.expire();
-        // a send to pane q carrying p's held ID claims nothing of p's
         resumed.data.attached.set("q", { keepSize: false, receiptResumeId: token });
         await delivery.pendingFrames.submit(resumed, { type: "submit", id: 2, pane_id: "q", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: item.message.id });
         const back = client("device", token);
         delivery.attached(back, "p");
         expect(heldIds(back)).toEqual([item.message.id]);
-        // its own pane's Send now then records its sent receipt there: a replay after the resend ledger expired types nothing
         await delivery.pendingFrames.submit(back, { type: "submit", id: 3, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: item.message.id });
         const typedBefore = typed;
         now += 60_001; delivery.pending.expire();
@@ -657,7 +600,6 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
           type: "submit", id: 2, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: item.message.id,
         });
         if (scenario === "attach during resend after closed-owner expiry") {
-          // a tab that attaches while the held copy is being typed is not told it is still held
           await typing.promise;
           const during = client("device", token);
           delivery.attached(during, "p");
@@ -667,13 +609,11 @@ it.each(["held on close", "overlapping reload", "held after reattach", "wrong br
         await sent;
         if (scenario === "replayed resend after its record expired") {
           expect(typed).toBe(1);
-          // the same frame again once its resend record expired: its sent receipt keeps it from typing twice
           now += 60_001; delivery.pending.expire();
           await delivery.pendingFrames.submit(resumed, {
             type: "submit", id: 2, pane_id: "p", text: "follow-up", payload: "follow-up", delivery: "immediate", resend_id: item.message.id,
           });
           expect(typed).toBe(1);
-          // other text under that ID is not the copy that went: the receipt does not answer for it
           await delivery.pendingFrames.submit(resumed, {
             type: "submit", id: 3, pane_id: "p", text: "edited", payload: "edited", delivery: "immediate", resend_id: item.message.id,
           });
@@ -761,12 +701,10 @@ it.each(["before close", "after close", "overlapping reload", "same live browser
       .find((message) => message.error?.code === "pi_transcript_pending")!;
     expect(sent).toBeDefined();
     if (when === "confirmation budget") {
-      // An oversized partial record is permanently beyond this receipt's scan budget.
       appendFileSync(path, "x".repeat(16 * 1024 * 1024 + 1));
       await delivery.reconcilePiDeliveries("p");
       expect(frames.get(first)!.flatMap((frame) => frame.type === "pending-messages" ? frame.messages : [])
         .some((message) => message.id === sent.id && message.error?.code === "transcript_unconfirmed")).toBe(true);
-      // A small, valid tail lets a new send capture its own bounded anchor.
       appendFileSync(path, "\n" + JSON.stringify({ type: "message", id: "new-base", parentId: "base", message: { role: "assistant", content: [] } }) + "\n");
       await delivery.pendingFrames.submit(first, { type: "submit", id: 2, pane_id: "p", text: "released", payload: "released", delivery: "immediate" });
       expect(frames.get(first)!.find((frame) => frame.type === "submit-result" && frame.id === 2)).toMatchObject({ ok: true });
@@ -909,7 +847,6 @@ it.each(["identity", "transcript"] as const)("does not release another pane's sl
     && frame.removed?.some((item) => item.outcome === "consumed"))).toBe(false);
 }, 10_000);
 
-// pids no process of this PC has: their start is read as unknown, as for an ended process
 const SHELL = 4_194_001, AGENT = 4_194_002;
 const shellIn = (name: string): Processes => ({ shell_pid: SHELL, foreground_processes: [{ pid: SHELL, name }] });
 const agentIn: Processes = { shell_pid: SHELL, foreground_processes: [{ pid: AGENT, name: "codex" }] };
@@ -920,7 +857,6 @@ it.each([
   ["bound at its queueing, then replaced by an agent of its kind exec'd at the shell's pid", "queueing", "codex", "pending_target_changed"],
 ] as const)("a first message whose launched agent was %s is held with that reason, keeps it, is refused by Send now, and is never typed", async (_case, bound, front, code) => {
   let named: string | null = null;
-  /** what runs in the pane from the `leaveAt`-th identity read on (each starts with the session snapshot) */
   let snapshots = 0, leaveAt = 0, left: Processes | null = null;
   const frames: ServerMessage[] = [];
   const owner = {
@@ -937,7 +873,6 @@ it.each([
   };
   const delivery = createPendingDelivery({
     options: {}, clients: new Set([owner]), attachments: new Map(),
-    // a page attached and ready to type, so that only the message's own checks keep it from the pane
     sight: (): TerminalSighting => ({ origin: null, pty: null, claim: null, facts: () => READY, write: (data: string) => { calls.push(`pty ${data}`); } }),
     serialize, lastTyped: new Map(),
     submitText: async (pane) => { calls.push(`submit ${pane}`); },
@@ -949,29 +884,23 @@ it.each([
     omo: { sessionOf: () => null },
     SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
-  /** a pane event: its drain, and every drain it asks for, has run */
   const event = async () => { delivery.drainPending("L"); await serialize("L", () => {}); };
   const reasons = () => frames.flatMap((frame) => frame.type === "pending-messages" && frame.pane_id === "L" ? frame.messages.map((item) => item.error?.code) : []);
   let message;
   if (bound === "event") {
-    // queued while the shell is still in front; the agent comes up under herdr's name, and an event learns it
     processes.set("L", shellIn("bash"));
     message = await delivery.queueFirstMessage("L", "FIRST", "codex");
     processes.set("L", agentIn); named = "codex";
     await event();
     processes.set("L", shellIn(front));
   } else {
-    // the launch names its process, which the reads at its queueing see in front under herdr's name; from the
-    // next identity read on, whichever drain makes it, it is gone
     named = "codex";
     processes.set("L", agentIn);
     leaveAt = 2; left = shellIn(front);
     message = await delivery.queueFirstMessage("L", "FIRST", "codex", null, AGENT);
   }
   await event();
-  // the first reason it is held with once its agent is gone
   expect(reasons().find((reason) => reason === "first_message_launch_ended" || reason === "pending_target_changed")).toBe(code);
-  // an agent that ended: herdr lets go of its name, and the card keeps its reason
   if (code === "first_message_launch_ended") { named = null; await event(); }
   expect(reasons().at(-1)).toBe(code);
   const steer = async (id: number, launchEnded: boolean) => {
@@ -979,7 +908,6 @@ it.each([
     return frames.find((frame) => frame.type === "pending-result" && frame.id === id);
   };
   expect(await steer(1, true)).toMatchObject({ ok: false, code });
-  // an older client, which takes a code it does not know as maybe typed, gets the one it knows
   expect(await steer(2, false)).toMatchObject({ ok: false, code: "pending_target_changed" });
   await serialize("L", () => {});
   expect(reasons().at(-1)).toBe(code);
@@ -1008,18 +936,14 @@ it.each([
     clientSnapshot: async () => ({ panes: [{ pane_id: "L", terminal_id: "L", agent: named, agent_status: "working" }] }) as SessionSnapshot,
     omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
-  // queued with no page, so held as unattended from the start: only a later reason can replace that one
   processes.set("L", { shell_pid: SHELL, foreground_processes: [...front] });
   await delivery.queueFirstMessage("L", "FIRST", "codex");
-  // the child has ended, and herdr names the agent (or not yet)
   processes.set("L", { shell_pid: SHELL, foreground_processes: [{ pid: next, name: "codex" }] }); named = later;
   delivery.drainPending("L");
   await serialize("L", () => {});
   expect(frames.flatMap((frame) => frame.type === "pending-messages" && frame.pane_id === "L" ? frame.messages.map((item) => item.error?.code) : []).at(-1)).toBe(code);
 });
 
-// the launched agent wherever it is listed in front, by its own program: a child it runs as it starts may be listed
-// first (#2525), so the message is bound to the agent, typed into it, and held from a later agent of its kind (#2222)
 const MAC_CLAUDE = (pid: number) => ({ pid, name: "2.1.3", argv0: "Claude", argv: ["Claude"] });
 const DSH_HOST = { pid: AGENT, name: "node", argv: ["/usr/bin/node", "/home/u/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/lib/types/dsh-adapter/host-entry.js"] };
 it.each([
@@ -1027,11 +951,9 @@ it.each([
   ["codex behind a child, unnamed, then replaced", "codex", null, [{ pid: CHILD, name: "git" }, { pid: AGENT, name: "codex" }], { pid: REPLACEMENT, name: "codex" }, "pending_target_changed"],
   ["macOS native Claude behind a child, named, then replaced", "claude", "claude", [{ pid: CHILD, name: "security" }, MAC_CLAUDE(AGENT)], MAC_CLAUDE(REPLACEMENT), "pending_target_changed"],
   ["dsh-tui's host, unnamed, then replaced", "dsh-tui", null, [DSH_HOST], { pid: REPLACEMENT, name: "dsh-tui" }, "pending_target_changed"],
-  // herdr names the agent, whose listing has no argv to show its program, beside a child: the pick is still the agent
   ["codex named, listed without argv beside a child, stays in front", "codex", "codex", [{ pid: AGENT, name: "node" }, { pid: CHILD, name: "git" }], { pid: AGENT, name: "node" }, "sent"],
   ["codex named, listed without argv beside a child, then replaced", "codex", "codex", [{ pid: AGENT, name: "node" }, { pid: CHILD, name: "git" }], { pid: REPLACEMENT, name: "codex" }, "pending_target_changed"],
 ] as const)("a first message queued with in front %s: %s", async (_case, kind, namedAtQueue, front, next, outcome) => {
-  // dsh-tui is a shell-started agent once DeepSeek Harness can be started (#2524); its own test is what knows its host
   const registered = Object.hasOwn(SHELL_AGENTS, "dsh-tui");
   if (!registered) SHELL_AGENTS["dsh-tui"] = isDshProcess;
   try {
@@ -1049,23 +971,18 @@ it.each([
       clientSnapshot: async () => ({ panes: [{ pane_id: "L", terminal_id: "L", agent: named, agent_status: "idle" }] }) as SessionSnapshot,
       omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
     });
-    // queued by the page that launched it, which stays to type it
     processes.set("L", { shell_pid: SHELL, foreground_processes: [...front] });
     const message = await delivery.queueFirstMessage("L", "FIRST", kind, owner.data.connectionId);
-    // bound at its queueing to the launched agent, not the child listed before it
     delivery.pending.status("L", "idle");
     expect(delivery.pending.next("L")).toMatchObject({ message: { id: message.id }, identity: { processPid: AGENT } });
-    // the child has ended, and herdr names the agent: the launched one, or a later one of its kind
     processes.set("L", { shell_pid: SHELL, foreground_processes: [next] }); named = kind;
     delivery.drainPending("L");
     await serialize("L", () => {});
     const codes = frames.flatMap((frame) => frame.type === "pending-messages" && frame.pane_id === "L" ? frame.messages.filter((item) => item.id === message.id).map((item) => item.error?.code) : []);
     if (outcome === "sent") {
-      // every check passed and it went on to the pane: the screen read before typing (which no herdr answers here)
       expect(calls).toEqual(["read L"]);
       expect(codes).not.toContain("pending_target_changed");
     } else {
-      // a later agent of its kind: held with that reason, and nothing reaches the pane
       expect(calls).toEqual([]);
       expect(codes.at(-1)).toBe(outcome);
     }
@@ -1085,7 +1002,6 @@ it("keeps the owner's held row sendable when its own Send now fails before anyth
     sight: (): TerminalSighting => ({ origin: null, pty: null, claim: null, facts: () => READY, write: () => {} }),
     submitText: async (_pane, text) => { typed.push(text); },
     authorizeSocket: () => {},
-    // herdr unreachable before any write: the dispatch's own answer says nothing was typed
     clientSnapshot: async (): Promise<SessionSnapshot> => { throw new Error("herdr unreachable before any write"); },
     omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
@@ -1097,16 +1013,13 @@ it("keeps the owner's held row sendable when its own Send now fails before anyth
   expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null, { agent: null, terminalId: "p", session: null })).not.toThrow();
 });
 
-// the test process stands in for the attach client; its own CLAUDE_CONFIG_DIR would name another store
 it.skipIf(Boolean(process.env["CLAUDE_CONFIG_DIR"]))("holds a message queued for a claude attach job's session once that job's state cannot be read before Send now (#2125)", async () => {
   const JOB = "dc5643bd", SESSION_A = "0b8e6f0e-8d3f-4c1a-9a53-6c2b7a1d9e42";
   const home = mkdtempSync(join(tmpdir(), "ovis-pending-attach-")); roots.push(home);
   const state = join(home, ".claude", "jobs", JOB, "state.json");
   mkdirSync(join(home, ".claude", "jobs", JOB), { recursive: true });
   writeFileSync(state, JSON.stringify({ sessionId: `${JOB}-6228-4376-a66c-ad9820b26f37`, resumeSessionId: SESSION_A }));
-  // the real lookup, in this test's own Claude store
   const real = claudeStore.claudeForegroundSession;
-  /** reads that find no session, as a record caught while being rewritten does, before the real lookup again */
   let missed = 0;
   const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (found) => {
     if (missed === 0) return real(found, home);
@@ -1130,23 +1043,19 @@ it.skipIf(Boolean(process.env["CLAUDE_CONFIG_DIR"]))("holds a message queued for
   processes.set("p", { shell_pid: SHELL, foreground_processes: [{ pid: process.pid, name: "claude", argv: ["claude", "attach", JOB] }] });
   try {
     const item = delivery.pending.enqueue(owner, "p", 1, "for session A", null, { agent: "claude", terminalId: "p", session: null, claudeSession: SESSION_A }, true);
-    // each Send now a new attempt, as the client numbers them: the same generation would replay the last reply
     const steer = async (id: number) => {
       await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id, pane_id: "p", pending_id: item.message.id, action: "steer", resend_generation: id });
       return output.find((frame) => frame.type === "pending-result" && frame.id === id);
     };
-    // control: the job still names session A, so the check goes on to read the screen (which this pane answers with an error)
     expect(await steer(10)).not.toMatchObject({ code: "pending_target_changed" });
     expect(calls).toEqual(["read p"]);
-    // control: one read that misses it is read again, and finds session A
     missed = 1;
     expect(await steer(11)).not.toMatchObject({ code: "pending_target_changed" });
     expect(missed).toBe(0);
     expect(calls).toEqual(["read p", "read p"]);
-    // the job's state no longer readable: the session it shows is not known any more
     writeFileSync(state, '{"sessionId":');
     expect(await steer(12)).toMatchObject({ ok: false, code: "pending_target_changed" });
-    expect(calls).toEqual(["read p", "read p"]); // no text, no Enter, not even a screen read for it
+    expect(calls).toEqual(["read p", "read p"]);
     expect(delivery.pending.list(owner, "p")).toMatchObject([{ id: item.message.id, state: "held" }]);
   } finally { session.mockRestore(); }
 });

@@ -7,7 +7,6 @@ import type { StatusDotState } from "./StatusDot.tsx";
 export type DashboardRow = ReturnType<typeof dashboardModel>["rows"][number];
 type MapNode = ReturnType<typeof dashboardModel>["map"]["hubs"][number]["nodes"][number];
 
-/** The model's state, with the answering route when known. Needs you stays the group's name. */
 export function mapStateWord(node: MapNode, t: Translate): string {
   if (node.check?.kind === "checking") return t("Checking…");
   switch (node.state) {
@@ -21,7 +20,6 @@ export function mapStateWord(node: MapNode, t: Translate): string {
   }
 }
 
-/** The tooltip's detail: the state word with what to do and the measured answering route. */
 export function mapStateDetail(node: MapNode, t: Translate): string {
   const route = node.check?.kind === "answered" ? ` · ${routeText(node.check, t)}` : "";
   switch (node.state) {
@@ -31,7 +29,6 @@ export function mapStateDetail(node: MapNode, t: Translate): string {
   }
 }
 
-/** The glyph uses the model's state, with transient work shown while it runs. */
 export function pcDotState(row: DashboardRow, updating = false): StatusDotState {
   if (updating) return "updating";
   if (row.check?.kind === "checking") return "checking";
@@ -42,7 +39,6 @@ export function pcDotState(row: DashboardRow, updating = false): StatusDotState 
   }
 }
 
-/** The state word of a paired PC the account does not list: what this device's own check found, since no directory speaks for it; the Relay cell carries the way and the round trip. */
 export function localStateWord(check: PcStatus | null, t: Translate): string {
   if (check === null) return t("Paired · not checked");
   if (check.kind === "checking") return t("Checking…");
@@ -50,11 +46,9 @@ export function localStateWord(check: PcStatus | null, t: Translate): string {
 }
 
 /**
- * What a listed PC not offered Add (past its 10-minute window, or already seen by the directory) asks of this device, in the same words wherever it is drawn,
- * or null when it has no such line: a PC the account never listed, or one whose directory row gives no route
- * to join by, so no Join button stands beside it. It names the button it sits next to and the only two ways in: a
- * connected device of the account approves, or someone types the number the PC's own screen shows. The directory cannot
- * say whether such a device exists now (Revoke all keeps the row seen), so neither is claimed.
+ * It names the button it sits next to and the only two ways in: a connected device of the account approves, or
+ * someone types the number the PC's own screen shows. The directory cannot say whether such a device exists now
+ * (Revoke all keeps the row seen), so neither is claimed.
  */
 export function askToJoinReason(pc: { readonly added_at: string | null; readonly join?: unknown }, t: Translate): string | null {
   if (pc.added_at === null || pc.join === undefined) return null;
@@ -72,7 +66,6 @@ export function formatProbeLine(check: PcStatus | null, t: Translate): string | 
   return t("This device: no answer");
 }
 
-/** One short label for how this device reaches a PC right now, as GOAT lists each environment's routes: the way (the same network, Tailscale, or the host of the relay that answered) with its round trip, or why there is none. */
 export function routeText(check: PcStatus | null, t: Translate): string {
   if (check === null) return t("Not checked");
   if (check.kind === "checking") return t("Checking…");
@@ -81,7 +74,6 @@ export function routeText(check: PcStatus | null, t: Translate): string {
   return `${way} · ${t("{n} ms", { n: check.rttMs })}`;
 }
 
-/** routeText as a one-line cell: the answering relay's host as its chip, the round trip in tabular figures, the state colour left to the dot. */
 export function routeNode(check: PcStatus | null, t: Translate): ReactNode {
   const text = routeText(check, t);
   const relayed = check?.kind === "answered" && check.route === "relay" && check.relay !== undefined ? { host: relayHost(check.relay), ms: check.rttMs } : null;

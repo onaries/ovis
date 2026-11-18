@@ -221,7 +221,12 @@ Fast checks, Integration tests and both Browser regression jobs each run `bun ru
 commit: about 60 CPU seconds apiece on the P620. `run.sh --build-cache DIR --build-cache-writer LOGIN`
 lets the first of them build it and the others restore its `dist/` in a fraction of a second
 (`scripts/build-cache.ts`). Point it at RAM (`/dev/shm/ovis-build-cache`); `--build-cache-mb`
-(default 2048, about 50 builds) bounds it, least recently used first. Measured (four builds of one
+(default 2048, about 50 builds) bounds it, least recently used first. Under SELinux the launcher labels
+the cache and each slot's outbox `container_file_t` as it starts (new files keep their directory's
+label), or runs without the cache when it cannot. A label set this way lasts until the next
+`restorecon` or full relabel, so on such a host put the cache in a directory a `semanage fcontext`
+rule labels `container_file_t` (on disk it is read through the page cache, as fast as `/dev/shm`),
+and give the outboxes (`~/.local/state/ovis-ci-runner/build-outbox`) such a rule too. Measured (four builds of one
 commit, as one run's jobs do): 246-266 CPU s without it, 53-70 CPU s with it; four started at once
 build once.
 
@@ -301,17 +306,17 @@ old; one it cannot even move is emptied where it is, and logged once a day while
 ## Routing jobs to it
 
 `ci.yml`'s Linux jobs of a push go to `["self-hosted","self-hosted-ovis"]` by default, the launcher's
-default label. A same-repository pull request goes there only while at most
-`CI_SELF_HOSTED_CAPACITY` (default 10) minus its six Linux jobs (Fast checks, Integration tests and the
-browser jobs: ui-regression and the three parts of the other scripts) are queued or running on that label,
-and GitHub-hosted otherwise. Set the capacity to the number of `self-hosted-ovis` runners you keep
-online. The repository variable overrides the choice:
+default label. A same-repository pull request goes there too, and GitHub-hosted only when a job has
+waited more than four minutes for that label, or more than a minute while none of its jobs runs (no
+runner looks online). There is no runner count to keep up to date: a host that takes no more work
+simply leaves jobs queued, and the next run overflows. Detect changes, which makes that choice, runs on
+the same label unless `CI_LIGHT_LABELS` names others, so with every runner gone a run waits there:
+then set `CI_SELF_HOSTED_LABELS` to `"ubuntu-24.04"`, and `CI_LIGHT_LABELS` too when it holds labels. The repository variable overrides the choice:
 
 ```sh
 gh variable set CI_SELF_HOSTED_LABELS --body '"ubuntu-24.04"'   # PC offline: everything GitHub-hosted
 gh variable set CI_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis"]'   # every pull request and release.yml too
 gh variable delete CI_SELF_HOSTED_LABELS   # back to the default
-gh variable set CI_SELF_HOSTED_CAPACITY --body 10   # self-hosted-ovis runners online
 ```
 
 Pushes to main can have runners of their own, so a merge's CI never queues behind pull request runs.
@@ -367,6 +372,15 @@ replace the workflow's values for the run, and a host without the file keeps `ci
 those CPUs, the runners and the cache builds alike, so work beside them keeps the rest. A list docker
 cannot give is refused at start (exit 2), before any slot asks for a registration token.
 
+`run.sh --cgroup-parent SLICE` (docker run's own option) starts every container it starts, and the
+image build's steps, under that cgroup instead of docker's own: with docker's systemd cgroup driver
+on cgroup v2 (`docker info` says `systemd` and `2`), a system slice such as
+`ovis-ci.slice`, which sits under `ovis.slice`. Give that top slice a low CPU weight
+(`/etc/systemd/system/ovis.slice` with `[Slice]` and `CPUWeight=20`, then `systemctl daemon-reload`)
+and the jobs run at full speed while the CPU is free, but yield to the PC's own sessions (weight 100)
+when both want it. Weights compare siblings only, so the weight goes on the top-level slice. A parent
+docker cannot use is refused at start, like a CPU list.
+
 Every runner of a host must read the same file, since they share the slots. The launcher hands
 `CHECK_HOST_MAX_RUNS` on as `CHECK_SLOTS_MAX_RUNS` ([Check slots](#check-slots)); the file keeps the
 name. Keep it outside this
@@ -409,7 +423,7 @@ of six workers before the split peaked at 9.2 GiB), the three parts of one run a
 together, and the hosts' available memory never fell below 79.9 GiB on the P620 or 77.8 GiB on the
 second host, so two runs' spikes at once fit on either.
 
-A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted, except `ci.yml`'s Native macOS session identity job, which follows the repository variable `CI_MAC_LABELS` to the self-hosted Mac when it is set ([docs](../../docs/development.md)).
+A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted, except the `macos-15` jobs that hold no secret (`ci.yml`'s Native macOS session identity job, and for pull requests from this repository the `macos-15` entries of `remote-bundles.yml` and `pty-sidecar.yml`), which follow the repository variable `CI_MAC_LABELS` to the self-hosted Mac when it is set ([docs](../../docs/development.md)).
 
 ## Cloud VM runners
 
@@ -536,7 +550,8 @@ Every job of `.github/workflows` as of this change (2026-11-17). LIGHT is the li
 fork's pull request gets `ubuntu-24.04`; otherwise main takes `CI_MAIN_SELF_HOSTED_LABELS`, then
 `CI_LIGHT_LABELS`, `CI_SELF_HOSTED_LABELS`, `["self-hosted","self-hosted-ovis"]`); ROUTE is
 `scripts/ci-runner-route.sh`'s output; MAC is the macOS job's expression (`CI_MAC_LABELS` in ci.yml's own
-runs off main, else `macos-15`); HO is the `hosted_only` prefix, taken in `pages.yml`'s and
+runs, else `macos-15`); MACPR is the matrix form (`CI_MAC_LABELS` for the `macos-15` entry of a pull request
+from this repository, else the entry's own label); HO is the `hosted_only` prefix, taken in `pages.yml`'s and
 `release-validate.yml`'s calls. Write permissions without "(workflow)" are the
 job's own; a call's jobs are listed under its workflow. No test reads this table; the test above holds
 the rules.
@@ -559,7 +574,6 @@ the rules.
 | ci.yml | browser-main | HO ubuntu-24.04, else ROUTE linux | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only; actions/cache (Cache Playwright browser, hosted runners, off under hosted_only) |
 | ci.yml | browser-other | HO ubuntu-24.04, else ROUTE linux | yes under hosted_only; else as routed: self-hosted or hosted | - | setup-ci save, none under hosted_only; actions/cache (Cache Playwright browser, hosted runners, off under hosted_only) |
 | ci.yml | integration-browser | HO ubuntu-24.04, else LIGHT | yes under hosted_only; else no: self-hosted unless a fork PR | - | none |
-| cla.yml | cla | `ubuntu-24.04` | yes | actions, contents, pull-requests write (workflow) | none |
 | desktop.yml | build | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025 | yes | secrets MAC_NOTARY_KEY_P8, MAC_DEVELOPER_ID_P12, MAC_DEVELOPER_ID_P12_PASSWORD, MAC_NOTARY_KEY_ID, MAC_NOTARY_ISSUER, WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD | none |
 | desktop.yml | feed | `ubuntu-24.04` | yes | - | none |
 | desktop.yml | attach | `ubuntu-24.04` | yes | contents write | none |
@@ -577,7 +591,7 @@ the rules.
 | pty-sidecar-attach.yml | gate | `ubuntu-24.04` | yes | - | none |
 | pty-sidecar-attach.yml | build | calls `pty-sidecar.yml` | (its jobs) | id-token, attestations write | (its jobs) |
 | pty-sidecar-attach.yml | attach | `ubuntu-24.04` | yes | contents write | none |
-| pty-sidecar.yml | build | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15 | yes | - | none |
+| pty-sidecar.yml | build | MACPR over matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15 | yes unless a same-repository pull request while CI_MAC_LABELS is set | - | none |
 | pty-sidecar.yml | manifest | `ubuntu-24.04` | yes | - | none |
 | pty-sidecar.yml | attest | `ubuntu-24.04` | yes | id-token, attestations write | none |
 | relay-deploy.yml | validate | calls `ci.yml` | (its jobs) | - | (its jobs) |
@@ -599,7 +613,7 @@ the rules.
 | release.yml | windows-app | calls `windows-app.yml` | (its jobs) | contents write | (its jobs) |
 | release.yml | desktop | calls `desktop.yml` | (its jobs) | contents write; passes 7 secrets | (its jobs) |
 | release.yml | mac-dmg | calls `mac-dmg.yml` | (its jobs) | contents write; passes secrets: inherit | (its jobs) |
-| remote-bundles.yml | bundle | matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel | yes | - | none |
+| remote-bundles.yml | bundle | MACPR over matrix: ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel | yes unless a same-repository pull request while CI_MAC_LABELS is set | - | none |
 | remote-bundles.yml | bundle-windows | `ubuntu-24.04` | yes | - | none |
 | remote-bundles.yml | smoke-windows | `windows-latest` | yes | - | none |
 | remote-bundles.yml | ssh | `ubuntu-24.04` | yes | - | none |
@@ -635,6 +649,10 @@ the base branch's workflow, since such a workflow may check out the fork's head;
 `workflow_run` whose triggering run came from a fork, as it may use that run's artifacts. Each of
 these is refused when its payload names no head repository, and a job with no event name always.
 
+- The Mac runs two runners side by side (two remote bundle jobs together took 53 s each against 49 s
+  alone, with no thermal limit over five minutes), each in its own directory with its own LaunchAgent,
+  `.env` and hook. Their `.path` puts a `cargo` and `rustup` with the `aarch64-apple-darwin` and
+  `x86_64-apple-darwin` targets first, for `remote-bundles.yml` and `pty-sidecar.yml`.
 - Install: copy the file to `<runner>/hooks/job-started.sh` (mode 755) and set
   `ACTIONS_RUNNER_HOOK_JOB_STARTED=<runner>/hooks/job-started.sh` (an absolute path) in the
   runner's `.env`. The runner reads `.env` at its start (restart the LaunchAgent after changing

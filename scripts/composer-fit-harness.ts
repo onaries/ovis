@@ -5,17 +5,12 @@ import type { Browser, Page } from "playwright-core";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
+import { serveDemo } from "./demo-server.ts";
 
-// The model label in the input card's last row, fitted to what is measured there, on the
-// unmodified app over the demo's fixture transport. The demo's panes name no context window and
-// run no task, so the page's data is patched here, in the test only: the pane is a Claude or Codex one with
-// two background tasks, in the state a case asks for, and its conversation names that case's
-// model, the level xhigh and a context window; an upload never answers, so its sentence stays.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 
 // an id the composer cannot name is drawn as received, in the mono face: the widest label there is
 const LONG_MODEL = "gpt-5.6-sol-codex-preview-2026-10";
-// ids it names: "GPT-5.6" and "Opus 5.5"; null: the conversation names no model
 const NAMED = ["gpt-5.6", "claude-opus-5-5"] as const;
 
 interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; provider?: string; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; suggestionChip?: boolean; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark"; scale?: number; autoSend?: boolean }
@@ -35,16 +30,12 @@ const measure = (page: Page) => page.evaluate(() => {
     const box = item.getBoundingClientRect();
     return { top: box.top, bottom: box.bottom, width: box.width, clipped: item.scrollWidth > item.clientWidth };
   };
-  // everything drawn in the last row: no two of them may share a pixel
   const drawn = [...document.querySelectorAll<HTMLElement>(".composer-controls-left > *:not(input), .composer-status-meta > *, .composer-status-hint, .composer-controls-right > *")]
-    // the pill and what it holds: its parts are compared with each other too, in every draw (a
-    // pill without a box, the label out or no model, has no size and is filtered out below)
     .flatMap((item) => item.classList.contains("composer-pill") ? [item, ...item.children] as HTMLElement[] : [item])
     .flatMap((item) => item.classList.contains("composer-model-info") && getComputedStyle(item).display === "contents" ? [...item.children] as HTMLElement[] : [item])
     .filter((item) => item.getBoundingClientRect().width > 1.5 && item.getBoundingClientRect().height > 1.5);
   const overlaps: string[] = [];
   for (const [index, one] of drawn.entries()) for (const other of drawn.slice(index + 1)) {
-    // the pill is around its own parts
     if (one.classList.contains("composer-pill") && one.contains(other)) continue;
     const a = one.getBoundingClientRect(), b = other.getBoundingClientRect();
     if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5) overlaps.push(`${one.className} | ${other.className}`);
@@ -66,13 +57,11 @@ const measure = (page: Page) => page.evaluate(() => {
         holds: inside(".agent-mark") && inside(".composer-model") && (pill.querySelector(".composer-context") === null || inside(".composer-context"))
           // the level too, wherever it is drawn (stepped out or not recorded it is a 1px box that is only read)
           && ((pill.querySelector<HTMLElement>(".composer-reasoning")?.getBoundingClientRect().width ?? 0) <= 1.5 || inside(".composer-reasoning")),
-        // it only shows: nothing about it says it can be pressed
         inert: pill.tagName === "SPAN" && !pill.hasAttribute("role") && !pill.hasAttribute("tabindex") && style.cursor === "auto",
       };
     })(),
     name: document.querySelector<HTMLElement>(".composer-model")?.textContent ?? null, named: !document.querySelector(".composer-model")?.classList.contains("is-id"),
     label: part(".composer-model-info"), model: part(".composer-model"), effort: part(".composer-reasoning"), ring: part(".composer-context"),
-    // the ring's track, and the two tokens it can be: the bare ring's and the one on the pill's fill
     track: (() => {
       const track = document.querySelector(".composer-context-track");
       const token = (name: string): string => {
@@ -99,14 +88,11 @@ const drawn = async (page: Page, draw: Draw, what: string): Promise<Row> => {
   await page.waitForFunction((want) => (document.querySelector(".composer-status")?.getAttribute("data-model") ?? "full") === want, draw, { timeout: 5_000 })
     .catch(async () => assert.fail(`${what}: the model label is drawn "${(await measure(page)).draw}", not "${draw}": ${JSON.stringify(await measure(page))}`));
   const row = await measure(page);
-  // a label that is drawn whole is whole; with Queue it is never drawn in part
   if (draw === "full" || row.queue) assert.ok(!row.model?.clipped && !row.effort?.clipped, `${what}: no word of the model label is cut: ${JSON.stringify(row)}`);
   if (draw === "no-effort") assert.ok((row.effort?.width ?? 0) <= 1, `${what}: the level is read, not drawn: ${JSON.stringify(row)}`);
   if (draw === "out") assert.ok((row.label?.width ?? 0) <= 1, `${what}: the name and the level are read, not drawn: ${JSON.stringify(row)}`);
-  // the pill goes with the label: no empty pill is left around the ring. Drawn, it holds the mark, the name and the ring
   if (draw === "out") assert.equal(row.pill.width, 0, `${what}: no pill is drawn without its label: ${JSON.stringify(row)}`);
   else assert.ok(row.pill.width > 1 && row.pill.inRow && row.pill.holds && row.pill.inert, `${what}: the mark, the name and the ring sit in one pill that is not a control: ${JSON.stringify(row)}`);
-  // the ring's track is the stronger one only on the pill's fill: bare on the card it is the bare ring's
   if (row.track) assert.equal(row.track.stroke, draw === "out" ? row.track.bare : row.track.onFill, `${what}: the ring's track is the one for where it stands: ${JSON.stringify(row.track)}`);
   assert.deepEqual(row.overlaps, [], `${what}: nothing overlaps its neighbour`);
   assert.equal(row.overflowing, false, `${what}: the page does not scroll sideways`);
@@ -123,18 +109,11 @@ const upload = async (page: Page): Promise<void> => {
   assert.equal(await page.locator(".composer-status-hint").textContent(), "· Uploading file…");
 };
 
-/**
- * The demo app built into `app` with its page's data patched as described above, served on 127.0.0.1
- * at a free port: `url` opens the patched pane, and `withCard` runs one check on a fresh page of it.
- * The composer scripts (composer-fit-, composer-send- and composer-draft-demo-regression.ts) all
- * start here, so the patch and the case a card defaults to are the same in each.
- */
 export async function composerFitDemo(app: string) {
   await buildDemoApp(app);
   const index = join(app, "index.html");
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
-  // What the demo answers, rewritten as it is read (`window.fitCase` is set per browser context).
   const patch = `<script>(() => {
     const TARGET = ${JSON.stringify(panes.api)};
     const fix = (value) => {
@@ -190,20 +169,9 @@ export async function composerFitDemo(app: string) {
       };
       return socket; }; Object.assign(Wrapped, { CONNECTING: Socket.CONNECTING, OPEN: Socket.OPEN, CLOSING: Socket.CLOSING, CLOSED: Socket.CLOSED }); window.WebSocket = Wrapped; const demoFetch = window.fetch; window.fetch = (input, init) => String(typeof input === "string" ? input : input.url ?? input).includes("/pane/image") ? new Promise(() => {}) : demoFetch(input, init); })();</script>\n    <script type="module"`));
 
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith("/herdr-web-ui/demo/app/")) return new Response("not found", { status: 404 });
-    let file: string;
-    try { file = decodeURIComponent(path.slice("/herdr-web-ui/demo/app/".length)); }
-    catch { return new Response("bad path", { status: 400 }); }
-    if (!file || file.endsWith("/")) file += "index.html";
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app);
   const url = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.api)}`;
 
-  /** One card: a phone (390px, touch) or a mouse-driven window of `width`. */
   const withCard = async (browser: Browser, width: number, state: Case, run: (page: Page) => Promise<void>): Promise<void> => {
     const touch = width <= 480;
     const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: touch, isMobile: touch, locale: state.language ?? "en-US", ...(state.scale ? { deviceScaleFactor: state.scale } : {}) });
